@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Store tests skip themselves without a database, so CI supplies one.
+    # The schema invariant they check — every resource table is owner-scoped —
+    # only has to be forgotten once to be expensive.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yacht
+          POSTGRES_PASSWORD: yacht
+          POSTGRES_DB: yacht
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify templ output is current
+        run: |
+          go tool templ generate
+          git diff --exit-code -- '*_templ.go' \
+            || (echo "::error::templ output is stale — run 'make generate' and commit" && exit 1)
+
+      # The compiled stylesheet is committed so `go build` works without the
+      # Tailwind CLI. That only holds if it is actually kept in sync, so CI
+      # rebuilds it and fails on any drift.
+      - name: Verify stylesheet is current
+        run: |
+          make css
+          git diff --exit-code -- internal/web/assets/css/app.css \
+            || (echo "::error::stylesheet is stale — run 'make css' and commit" && exit 1)
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -race -count=1
+
+      - name: Build
+        run: CGO_ENABLED=0 go build ./...
+
+      # The engine must remain useful standalone at a single owner. If it ever
+      # grows a commercial concept, the open-core boundary has leaked and the
+      # wrapping layer's only options become fork or rewrite.
+      #
+      # Checks declarations rather than free text, so prose like "a wrapping
+      # application is multi-tenant" in a doc comment does not trip it.
+      - name: Boundary check — no commercial concepts declared in the engine
+        run: |
+          if grep -rnE '^[[:space:]]*(type|func|var|const)[[:space:]]+[A-Za-z_]*(Tenant|tenant|Wallet|wallet|Billing|billing|Invoice|invoice|Subscription)' \
+               --include='*.go' ./cmd ./internal 2>/dev/null; then
+            echo "::error::engine declares a commercial-layer concept — it belongs in the wrapping layer"
+            exit 1
+          fi
+          echo "boundary clean: no commercial declarations in engine code"

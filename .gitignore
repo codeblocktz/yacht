@@ -1,0 +1,26 @@
+# Binaries
+/bin/
+/dist/
+yacht
+
+# Go
+*.test
+*.out
+coverage.*
+
+# templ generated files are committed so `go build` works without the templ CLI.
+# If you prefer generating in CI instead, uncomment:
+# *_templ.go
+
+# Local config / secrets
+.env
+.env.*
+!.env.example
+*.kubeconfig
+kubeconfig
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,30 @@
+version: "2"
+
+# sqlc generates type-safe Go from the SQL in queries/, checked against the
+# schema in migrations/. A query that filters on a column that does not exist —
+# or forgets owner_id and returns a type that no longer matches — fails at
+# `sqlc generate`, not at runtime.
+#
+# Known limitation: sqlc does not generate dynamically-composed queries
+# (runtime WHERE/ORDER BY). Filterable list views should use pgx directly
+# rather than contorting the schema around this. That hybrid is expected, not a
+# workaround.
+sql:
+  - engine: "postgresql"
+    schema: "internal/store/migrations"
+    queries: "internal/store/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/store/dbgen"
+        sql_package: "pgx/v5"
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: true
+        emit_empty_slices: true
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "timestamptz"
+            go_type: "time.Time"

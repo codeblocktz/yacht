@@ -1,0 +1,352 @@
+@import "tailwindcss";
+
+/* Class-based dark mode rather than prefers-color-scheme, so the toggle in the
+   top bar can override the OS. See themeScript() in layout.templ. */
+@custom-variant dark (&:is(.dark *));
+
+/* Tailwind v4 auto-detects sources, but templ's generated Go files are the
+   ones that actually contain the class strings at build time. Both are listed
+   so a class used only in a .templ file is never dropped. */
+@source "../../internal/web/**/*.templ";
+@source "../../internal/web/**/*_templ.go";
+
+/* Token system from templUI / shadcn, so components copied from
+   `templui add <component>` inherit this theme with no changes.
+
+   Kept deliberately monochrome: primary is near-white in dark and near-black
+   in light. A saturated primary button reads as consumer software; the flat
+   neutral one is what makes Linear, Railway and Vercel look like tools. Colour
+   is reserved for state, where it carries information. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-brand: var(--brand);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+:root {
+  /* Tighter than the shadcn default of 0.625rem. Large radii read as
+     friendly; small ones read as precise, which suits an infrastructure
+     tool. */
+  --radius: 0.375rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.505 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.52 0.13 158);
+  --warning: oklch(0.62 0.13 68);
+  --info: oklch(0.55 0.16 258);
+  --brand: oklch(0.55 0.11 178);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.988 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.955 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.185 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.245 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.245 0 0);
+  --muted-foreground: oklch(0.66 0 0);
+  --accent: oklch(0.255 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.68 0.17 22.2);
+  --success: oklch(0.74 0.15 158);
+  --warning: oklch(0.79 0.14 76);
+  --info: oklch(0.7 0.14 258);
+  --brand: oklch(0.76 0.11 178);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.165 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.235 0 0);
+  --sidebar-border: oklch(1 0 0 / 9%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground text-[13px] leading-relaxed antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  /* Tabular figures everywhere numbers are compared down a column. Proportional
+     digits make a table of replica counts or byte sizes impossible to scan. */
+  table, .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    @apply bg-foreground/15;
+  }
+}
+
+/*
+  Semantic component classes.
+
+  Two reasons these exist rather than repeating utilities inline:
+
+  1. Density is a system decision. Row height, label size and border treatment
+     need to agree across every table in the product, and a shared class is the
+     only way that survives a second contributor.
+  2. Go helpers return class names (see format.go). A name computed in Go is
+     invisible to Tailwind's scanner, so anything a helper can return has to be
+     declared here in CSS where the scanner always sees it.
+*/
+@layer components {
+
+  /* ---- surfaces ---------------------------------------------------- */
+
+  .panel {
+    @apply bg-card border border-border rounded-md;
+  }
+  .panel-header {
+    @apply flex items-center justify-between gap-3 px-4 h-11 border-b border-border;
+  }
+  .panel-title {
+    @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
+  }
+  .panel-body {
+    @apply p-4;
+  }
+
+  /* ---- dense rows -------------------------------------------------- */
+
+  .rows {
+    @apply divide-y divide-border;
+  }
+  .row-item {
+    @apply flex items-center gap-4 px-4 py-3 transition-colors;
+  }
+  /* Utilities are repeated rather than @apply-ing .row-item: Tailwind v4 only
+     resolves real utilities inside @apply, not other custom classes. */
+  .row-link {
+    @apply flex cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-accent/60;
+  }
+
+  /* ---- tables ------------------------------------------------------ */
+
+  .dtable {
+    @apply w-full text-[13px];
+  }
+  .dtable thead th {
+    @apply text-left text-[10.5px] font-semibold uppercase tracking-[0.07em]
+           text-muted-foreground px-4 py-2 border-b border-border whitespace-nowrap;
+  }
+  .dtable tbody td {
+    @apply px-4 py-2.5 border-b border-border align-middle;
+  }
+  .dtable tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .dtable tbody tr {
+    @apply transition-colors hover:bg-accent/50;
+  }
+
+  /* ---- status ------------------------------------------------------ */
+
+  /* A dot plus a word, not a filled pill. At the density of an
+     infrastructure list, a page of coloured pills becomes noise and the one
+     that matters stops standing out. */
+  .status {
+    @apply inline-flex items-center gap-1.5 text-[12px] whitespace-nowrap;
+  }
+  .status::before {
+    @apply content-[''] size-[6px] rounded-full bg-current shrink-0;
+  }
+  .status-ok      { @apply text-success; }
+  .status-warn    { @apply text-warning; }
+  .status-err     { @apply text-destructive; }
+  .status-info    { @apply text-info; }
+  .status-neutral { @apply text-muted-foreground; }
+
+  .tag {
+    @apply inline-flex items-center rounded border border-border bg-muted/60
+           px-1.5 py-px text-[11px] text-muted-foreground whitespace-nowrap;
+  }
+
+  /* ---- metric strip ----------------------------------------------- */
+
+  /* Replaces a grid of stat cards. Same numbers, one border, a quarter of the
+     vertical space — which means the actual content is above the fold. */
+  .metrics {
+    @apply flex flex-wrap items-stretch divide-x divide-border border border-border
+           rounded-md overflow-hidden bg-card;
+  }
+  .metric {
+    @apply flex-1 min-w-[128px] px-4 py-3;
+  }
+  .metric-k {
+    @apply text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
+  }
+  .metric-v {
+    @apply text-[19px] font-semibold tracking-tight mt-0.5 tabular-nums;
+  }
+  .metric-sub {
+    @apply text-[11.5px] text-muted-foreground mt-px;
+  }
+
+  /* ---- meters ------------------------------------------------------ */
+
+  .meter {
+    @apply h-1 rounded-full bg-muted overflow-hidden mt-2;
+  }
+  .meter > i {
+    @apply block h-full rounded-full bg-foreground/70;
+  }
+  .meter-ok > i   { @apply bg-success; }
+  .meter-warn > i { @apply bg-warning; }
+  .meter-err > i  { @apply bg-destructive; }
+
+  /* ---- buttons ----------------------------------------------------- */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-md
+           border border-border bg-card text-[12.5px] font-medium
+           whitespace-nowrap transition-colors cursor-pointer
+           hover:bg-accent focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-ring/50 disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-primary text-primary-foreground border-transparent hover:bg-primary/90;
+  }
+  .btn-danger {
+    @apply text-destructive hover:bg-destructive/10 hover:border-destructive/40;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-accent;
+  }
+  .btn-sm {
+    @apply h-7 px-2 text-[12px];
+  }
+  .btn-icon {
+    @apply size-8 p-0 shrink-0;
+  }
+
+  /* ---- tabs -------------------------------------------------------- */
+
+  /* Underline rather than a pill group: it survives eight tabs without
+     wrapping, and it is what the tools this borrows from all settled on. */
+  .tabs {
+    @apply flex items-center gap-1 border-b border-border -mb-px overflow-x-auto;
+  }
+  .tab {
+    @apply relative px-3 py-2 text-[13px] text-muted-foreground whitespace-nowrap
+           transition-colors hover:text-foreground;
+  }
+  .tab-active {
+    @apply text-foreground after:absolute after:inset-x-2 after:-bottom-px
+           after:h-[2px] after:bg-foreground after:rounded-full;
+  }
+
+  /* ---- navigation -------------------------------------------------- */
+
+  .nav-group {
+    @apply px-2 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.09em]
+           text-muted-foreground/70;
+  }
+  .nav-item {
+    @apply flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px]
+           text-muted-foreground transition-colors hover:bg-sidebar-accent
+           hover:text-foreground;
+  }
+  .nav-active {
+    @apply bg-sidebar-accent text-foreground font-medium;
+  }
+
+  /* ---- forms ------------------------------------------------------- */
+
+  .field {
+    @apply flex flex-col gap-1.5;
+  }
+  .label {
+    @apply text-[12px] font-medium;
+  }
+  .hint {
+    @apply text-[11.5px] text-muted-foreground;
+  }
+  .control {
+    @apply w-full h-8 rounded-md border border-input bg-background px-2.5
+           text-[13px] transition-shadow placeholder:text-muted-foreground/60
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  textarea.control {
+    @apply h-auto py-2 leading-relaxed font-mono text-[12.5px];
+  }
+
+  /* ---- misc -------------------------------------------------------- */
+
+  .mono {
+    @apply font-mono text-[12px];
+  }
+  .micro {
+    @apply text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
+  }
+  .callout {
+    @apply flex gap-3 rounded-md border border-border border-l-2 bg-card px-4 py-3 text-[12.5px];
+  }
+  .callout-warn { @apply border-l-warning; }
+  .callout-err  { @apply border-l-destructive; }
+  .empty {
+    @apply flex flex-col items-center gap-1 px-6 py-12 text-center text-muted-foreground;
+  }
+  .kv {
+    @apply grid grid-cols-[minmax(120px,180px)_1fr] gap-x-6 gap-y-2.5 text-[13px];
+  }
+  .kv > dt {
+    @apply text-muted-foreground;
+  }
+  .kv > dd {
+    @apply m-0 min-w-0;
+  }
+}

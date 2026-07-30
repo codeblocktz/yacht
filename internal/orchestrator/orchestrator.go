@@ -1,0 +1,262 @@
+// Package orchestrator defines the contract between Yacht's control plane and
+// whatever actually runs workloads.
+//
+// SEAM 1 of 3. This interface is the primary extension point of the engine.
+// The engine ships a single-cluster Kubernetes implementation (subpackage k8s)
+// and a no-op implementation for tests. A wrapping application can supply its
+// own — for example one that selects a cluster from a registry and applies
+// per-owner scheduling — without the engine knowing anything about it.
+//
+// Two rules keep this seam usable:
+//
+//  1. No Kubernetes types appear in this package. Everything crossing the
+//     boundary is a plain Go type defined here. An implementation backed by
+//     something other than Kubernetes stays possible, and callers never import
+//     client-go.
+//  2. Naming policy lives with the caller, not the implementation. The caller
+//     decides namespaces and resource names; implementations only apply them.
+//     A wrapping layer needs different naming, and this is what lets it.
+package orchestrator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"regexp"
+)
+
+// ErrNotFound is returned when a requested workload does not exist.
+var ErrNotFound = errors.New("orchestrator: not found")
+
+// OwnerID identifies who owns a resource.
+//
+// The engine runs with exactly one owner (see package identity). A wrapping
+// application maps this to whatever its own principal is. The orchestrator
+// never interprets the value: it labels resources with it and otherwise treats
+// it as opaque.
+type OwnerID string
+
+// Ref uniquely identifies a workload.
+type Ref struct {
+	Owner     OwnerID
+	Namespace string
+	Name      string
+}
+
+func (r Ref) String() string { return fmt.Sprintf("%s/%s", r.Namespace, r.Name) }
+
+// Validate checks that a Ref is well formed and safe to send to a cluster.
+func (r Ref) Validate() error {
+	if r.Owner == "" {
+		return errors.New("ref: owner is required")
+	}
+	if err := ValidateDNSLabel("namespace", r.Namespace); err != nil {
+		return err
+	}
+	return ValidateDNSLabel("name", r.Name)
+}
+
+// dnsLabel matches RFC 1123 DNS labels, which is what Kubernetes requires for
+// most object names.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// ValidateDNSLabel reports whether s is a legal Kubernetes object name.
+//
+// Callers are expected to generate names rather than pass user input straight
+// through, but this is the backstop: a name that reaches a cluster and collides
+// with another owner's resource is the failure mode that matters most, so the
+// check is here at the boundary rather than trusted to every caller.
+func ValidateDNSLabel(field, s string) error {
+	switch {
+	case s == "":
+		return fmt.Errorf("%s: is required", field)
+	case len(s) > 63:
+		return fmt.Errorf("%s: must be at most 63 characters, got %d", field, len(s))
+	case !dnsLabel.MatchString(s):
+		return fmt.Errorf("%s: %q must be a lowercase RFC 1123 label", field, s)
+	}
+	return nil
+}
+
+// NamespaceSpec describes an isolation boundary for one owner's workloads.
+type NamespaceSpec struct {
+	Owner OwnerID
+	Name  string
+
+	// Limits become a default LimitRange in the namespace, so a workload that
+	// specifies no resources of its own still cannot run unbounded. Zero value
+	// means DefaultLimits is used; it is deliberately not possible to create a
+	// namespace with no limits at all.
+	Limits ResourceLimits
+}
+
+// Validate checks the spec.
+func (s NamespaceSpec) Validate() error {
+	if s.Owner == "" {
+		return errors.New("namespace spec: owner is required")
+	}
+	return ValidateDNSLabel("namespace", s.Name)
+}
+
+// ResourceLimits expresses CPU and memory bounds using Kubernetes quantity
+// strings ("500m", "512Mi").
+type ResourceLimits struct {
+	DefaultCPU    string // applied to containers that request nothing
+	DefaultMemory string
+	MaxCPU        string // ceiling any single container may request
+	MaxMemory     string
+}
+
+// DefaultLimits is the fallback applied when a NamespaceSpec leaves Limits
+// empty. Modest on purpose: a self-hoster running a single node should not have
+// one runaway container evict everything else.
+var DefaultLimits = ResourceLimits{
+	DefaultCPU:    "100m",
+	DefaultMemory: "128Mi",
+	MaxCPU:        "2",
+	MaxMemory:     "4Gi",
+}
+
+// OrEmpty returns l, substituting DefaultLimits for any unset field.
+func (l ResourceLimits) OrDefaults() ResourceLimits {
+	if l.DefaultCPU == "" {
+		l.DefaultCPU = DefaultLimits.DefaultCPU
+	}
+	if l.DefaultMemory == "" {
+		l.DefaultMemory = DefaultLimits.DefaultMemory
+	}
+	if l.MaxCPU == "" {
+		l.MaxCPU = DefaultLimits.MaxCPU
+	}
+	if l.MaxMemory == "" {
+		l.MaxMemory = DefaultLimits.MaxMemory
+	}
+	return l
+}
+
+// AppSpec is the desired state of a long-running workload.
+//
+// Note what is absent: there is no field for privileged execution, host
+// networking, host paths, or a service account token. Those are not omissions
+// to be filled in later — the engine does not offer them, and the Kubernetes
+// implementation hard-codes a restricted security context regardless of what a
+// caller asks for.
+type AppSpec struct {
+	Ref
+
+	Image    string
+	Replicas int32
+
+	// Port the container listens on. Zero means the workload takes no traffic.
+	Port int32
+
+	Env map[string]string
+
+	// Resource requests and limits, as Kubernetes quantity strings. Empty
+	// fields fall back to the namespace LimitRange.
+	CPURequest    string
+	CPULimit      string
+	MemoryRequest string
+	MemoryLimit   string
+
+	// WritableRootFilesystem disables the read-only root filesystem.
+	//
+	// The default (false) is correct and should stay the default: it is one of
+	// the cheapest real defences available. But some images genuinely cannot
+	// run without writing outside /tmp, and the honest choice is an explicit,
+	// visible escape hatch rather than silently weakening the default for
+	// everyone. /tmp is always writable — see the k8s implementation.
+	WritableRootFilesystem bool
+}
+
+// Validate checks the spec well enough to avoid sending nonsense to a cluster.
+func (s AppSpec) Validate() error {
+	if err := s.Ref.Validate(); err != nil {
+		return err
+	}
+	if s.Image == "" {
+		return errors.New("app spec: image is required")
+	}
+	if s.Replicas < 0 {
+		return fmt.Errorf("app spec: replicas must be >= 0, got %d", s.Replicas)
+	}
+	if s.Port < 0 || s.Port > 65535 {
+		return fmt.Errorf("app spec: port must be within 0-65535, got %d", s.Port)
+	}
+	return nil
+}
+
+// Phase is a coarse lifecycle state, deliberately smaller than the set of
+// conditions Kubernetes reports.
+type Phase string
+
+const (
+	PhasePending  Phase = "pending"
+	PhaseRunning  Phase = "running"
+	PhaseDegraded Phase = "degraded"
+	PhaseStopped  Phase = "stopped"
+)
+
+// AppStatus is the observed state of a workload.
+type AppStatus struct {
+	Phase     Phase
+	Desired   int32
+	Ready     int32
+	Available int32
+	Message   string
+}
+
+// Orchestrator applies desired state to a runtime and reports back what it
+// observes.
+//
+// Implementations must be safe to call repeatedly with the same arguments:
+// every method is expected to converge rather than fail on "already exists".
+type Orchestrator interface {
+	// EnsureNamespace creates or updates an owner's namespace, including the
+	// security posture and default limits that go with it.
+	EnsureNamespace(ctx context.Context, spec NamespaceSpec) error
+
+	// DeleteNamespace removes a namespace and everything in it. It returns nil
+	// if the namespace is already gone.
+	DeleteNamespace(ctx context.Context, name string) error
+
+	// ApplyApp converges a workload to the given spec.
+	ApplyApp(ctx context.Context, spec AppSpec) error
+
+	// DeleteApp removes a workload. It returns nil if already gone.
+	DeleteApp(ctx context.Context, ref Ref) error
+
+	// AppStatus reports observed state. It returns ErrNotFound if the workload
+	// does not exist.
+	AppStatus(ctx context.Context, ref Ref) (AppStatus, error)
+
+	// Ping verifies the runtime is reachable. Used by health checks and at
+	// startup, so a misconfigured cluster fails loudly instead of at first
+	// deploy.
+	Ping(ctx context.Context) error
+
+	ClusterInspector
+}
+
+// ClusterInspector reports on the runtime itself rather than on workloads.
+//
+// Read-only by design. Everything that mutates a cluster goes through the
+// workload methods above, so an implementation can serve inspection from a
+// cache, a read replica, or a restricted credential without that choice
+// leaking into the deploy path.
+type ClusterInspector interface {
+	// ClusterSummary returns headline capacity and utilisation.
+	ClusterSummary(ctx context.Context) (ClusterSummary, error)
+
+	// Nodes lists the machines backing the runtime.
+	Nodes(ctx context.Context) ([]NodeInfo, error)
+
+	// Pods lists running pods.
+	Pods(ctx context.Context, opts PodListOptions) ([]PodInfo, error)
+
+	// Events lists recent cluster events, newest first, capped at limit.
+	Events(ctx context.Context, limit int) ([]EventInfo, error)
+
+	// Volumes lists persistent volume claims.
+	Volumes(ctx context.Context) ([]VolumeInfo, error)
+}

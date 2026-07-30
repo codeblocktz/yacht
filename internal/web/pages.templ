@@ -1,0 +1,947 @@
+package web
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
+)
+
+// ---------------------------------------------------------------- shared
+
+templ pageHead(title, subtitle string, actions templ.Component) {
+	<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
+		<div class="min-w-0">
+			<h1 class="text-[19px] font-semibold tracking-tight">{ title }</h1>
+			if subtitle != "" {
+				<p class="mt-0.5 text-[12.5px] text-muted-foreground">{ subtitle }</p>
+			}
+		</div>
+		if actions != nil {
+			<div class="flex flex-wrap items-center gap-2">
+				@actions
+			</div>
+		}
+	</div>
+}
+
+templ statusDot(label, class string) {
+	<span class={ "status", class }>{ label }</span>
+}
+
+templ meter(percent int, class string) {
+	<div class={ "meter", class }>
+		<i style={ fmt.Sprintf("width:%d%%", clampPercent(percent)) }></i>
+	</div>
+}
+
+templ metric(label, value, sub string) {
+	<div class="metric">
+		<div class="metric-k">{ label }</div>
+		<div class="metric-v">{ value }</div>
+		if sub != "" {
+			<div class="metric-sub">{ sub }</div>
+		}
+	</div>
+}
+
+templ metricUsage(label string, percent int, known bool, detail string) {
+	<div class="metric">
+		<div class="metric-k">{ label }</div>
+		if known {
+			<div class="metric-v">{ strconv.Itoa(percent) }%</div>
+			@meter(percent, meterClass(percent))
+			if detail != "" {
+				<div class="metric-sub">{ detail }</div>
+			}
+		} else {
+			<div class="metric-v text-muted-foreground/50">&mdash;</div>
+			<div class="metric-sub">no metrics-server</div>
+		}
+	</div>
+}
+
+templ clusterCallout(msg string) {
+	<div class="callout callout-err mb-5">
+		<div class="min-w-0">
+			<div class="font-medium">Cluster unreachable</div>
+			<p class="mt-0.5 text-muted-foreground">
+				Records below come from the database. Live status is unavailable until
+				the cluster answers.
+			</p>
+			if msg != "" {
+				<p class="mono mt-1.5 break-all text-muted-foreground">{ msg }</p>
+			}
+		</div>
+	</div>
+}
+
+// ---------------------------------------------------------------- overview
+
+type OverviewData struct {
+	OwnerName    string
+	ClusterOK    bool
+	ClusterError string
+	AppCount     int64
+	Summary      orchestrator.ClusterSummary
+	Apps         []app.App
+}
+
+templ Overview(d OverviewData) {
+	@pageHead("Overview", "Signed in as "+d.OwnerName, deployButton())
+	if !d.ClusterOK {
+		@clusterCallout(d.ClusterError)
+	}
+	<div class="metrics mb-6">
+		@metric("Apps", strconv.FormatInt(d.AppCount, 10), "")
+		@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
+			fmt.Sprintf("%d ready", d.Summary.NodesReady))
+		@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
+		@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
+			clusterCPUDetail(d.Summary))
+		@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
+			clusterMemDetail(d.Summary))
+	</div>
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Apps</span>
+			<a href="/apps" class="text-[12px] text-muted-foreground hover:text-foreground">
+				View all
+			</a>
+		</div>
+		if len(d.Apps) == 0 {
+			@emptyApps()
+		} else {
+			@appRows(d.Apps)
+		}
+	</div>
+}
+
+templ deployButton() {
+	<a class="btn btn-primary" href="/apps/new">Deploy app</a>
+}
+
+templ emptyApps() {
+	<div class="empty">
+		<p class="font-medium text-foreground">No apps yet</p>
+		<p>Deploy a container image to get started.</p>
+		<a class="btn btn-primary mt-3" href="/apps/new">Deploy app</a>
+	</div>
+}
+
+// ---------------------------------------------------------------- apps list
+
+templ AppList(apps []app.App) {
+	@pageHead("Apps", "Workloads managed by this install.", deployButton())
+	<div class="panel">
+		if len(apps) == 0 {
+			@emptyApps()
+		} else {
+			@appRows(apps)
+		}
+	</div>
+}
+
+// appRows is the dense list that replaced a grid of cards.
+//
+// One row per workload, aligned columns, a single border between them. At ten
+// apps a card grid is already unreadable; a list stays scannable at a hundred.
+templ appRows(apps []app.App) {
+	<div class="rows">
+		for _, a := range apps {
+			<a href={ templ.URL("/apps/" + a.Name) } class="row-link">
+				<span class="text-muted-foreground">
+					@icon("box")
+				</span>
+				<span class="min-w-0 flex-1">
+					<span class="block truncate font-medium">{ a.Name }</span>
+					<span class="mono block truncate text-muted-foreground">{ a.Image }</span>
+				</span>
+				<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
+					{ replicaLabel(a) }
+				</span>
+				<span class="w-24 shrink-0 text-right">
+					@appStatus(a)
+				</span>
+			</a>
+		}
+	</div>
+}
+
+templ appStatus(a app.App) {
+	if !a.StatusKnown {
+		@statusDot("unknown", "status-neutral")
+	} else {
+		@statusDot(string(a.Status.Phase), phaseClass(string(a.Status.Phase)))
+	}
+}
+
+// ---------------------------------------------------------------- app detail
+
+type AppDetailData struct {
+	App         app.App
+	Siblings    []app.App
+	Tab         string
+	Pods        []orchestrator.PodInfo
+	Deployments []app.Deployment
+	BaseURL     string
+}
+
+// AppDetail is the Railway-shaped view: a rail of every app on the left so you
+// can move between them without going back to a list, and a tabbed pane on the
+// right for the one you are looking at.
+templ AppDetail(d AppDetailData) {
+	<div class="flex flex-col gap-6 lg:flex-row">
+		@appRail(d)
+		<div class="min-w-0 flex-1">
+			@appDetailHeader(d.App)
+			<nav class="tabs mb-5">
+				@appTab(d, "", "Deployments")
+				@appTab(d, "variables", "Variables")
+				@appTab(d, "metrics", "Metrics")
+				@appTab(d, "settings", "Settings")
+			</nav>
+			switch d.Tab {
+				case "variables":
+					@appVariables(d.App)
+				case "metrics":
+					@appMetrics(d)
+				case "settings":
+					@appSettings(d.App)
+				default:
+					@appDeployments(d)
+			}
+		</div>
+	</div>
+}
+
+templ appRail(d AppDetailData) {
+	<aside class="w-full shrink-0 lg:w-[212px]">
+		<div class="panel overflow-hidden">
+			<div class="panel-header">
+				<span class="panel-title">Apps</span>
+				<a class="btn btn-ghost btn-sm" href="/apps/new" aria-label="Deploy app">+</a>
+			</div>
+			<div class="rows max-h-[420px] overflow-y-auto">
+				for _, s := range d.Siblings {
+					<a
+						href={ templ.URL("/apps/" + s.Name) }
+						class={ "row-link !gap-2.5 !py-2.5",
+							templ.KV("bg-accent/70", s.Name == d.App.Name) }
+					>
+						<span class="min-w-0 flex-1">
+							<span class="block truncate text-[12.5px] font-medium">{ s.Name }</span>
+							<span class="mt-0.5 block">
+								@appStatus(s)
+							</span>
+						</span>
+					</a>
+				}
+			</div>
+		</div>
+	</aside>
+}
+
+templ appDetailHeader(a app.App) {
+	<div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+		<div class="min-w-0">
+			<div class="flex items-center gap-2.5">
+				<h1 class="text-[19px] font-semibold tracking-tight">{ a.Name }</h1>
+				@appStatus(a)
+			</div>
+			<p class="mono mt-1 truncate text-muted-foreground">{ a.Image }</p>
+		</div>
+		<div class="flex items-center gap-2">
+			<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
+				<button class="btn" type="submit">Redeploy</button>
+			</form>
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + a.Name + "/delete") }
+				onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+			>
+				<button class="btn btn-danger" type="submit">Delete</button>
+			</form>
+		</div>
+	</div>
+}
+
+templ appTab(d AppDetailData, slug, label string) {
+	<a
+		href={ templ.URL(appTabHref(d.App.Name, slug)) }
+		class={ "tab", templ.KV("tab-active", d.Tab == slug) }
+	>
+		{ label }
+	</a>
+}
+
+// ---- deployments tab
+
+templ appDeployments(d AppDetailData) {
+	if len(d.Deployments) == 0 {
+		<div class="panel">
+			<div class="empty">
+				<p class="font-medium text-foreground">No deployments recorded</p>
+				<p>History appears here after the first deploy.</p>
+			</div>
+		</div>
+	} else {
+		@activeDeployment(d, d.Deployments[0])
+		if len(d.Deployments) > 1 {
+			<div class="panel mt-4">
+				<div class="panel-header">
+					<span class="panel-title">History</span>
+				</div>
+				<div class="rows">
+					for _, dep := range d.Deployments[1:] {
+						@deploymentRow(dep)
+					}
+				</div>
+			</div>
+		}
+	}
+	<div class="panel mt-4">
+		<div class="panel-header">
+			<span class="panel-title">Pods</span>
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(len(d.Pods)) }
+			</span>
+		</div>
+		if len(d.Pods) == 0 {
+			<div class="empty">
+				<p>No pods reported. The workload may be starting, or the cluster is unreachable.</p>
+			</div>
+		} else {
+			@podTable(d.Pods, false)
+		}
+	</div>
+}
+
+// activeDeployment gets the tinted treatment because it is the one answering
+// "what is live right now" — the question the page exists for.
+templ activeDeployment(d AppDetailData, dep app.Deployment) {
+	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div class="min-w-0">
+				<div class="flex items-center gap-2">
+					@deploymentStatus(dep)
+					<span class="text-[12px] text-muted-foreground">
+						{ relativeTime(dep.StartedAt) } via { dep.Source() }
+					</span>
+				</div>
+				if d.App.Port > 0 {
+					<p class="mono mt-1.5 truncate text-muted-foreground">
+						{ d.App.Namespace }.svc.cluster.local:80
+					</p>
+				}
+				if dep.Message != "" {
+					<p class="mt-1.5 text-[12.5px] text-muted-foreground">{ dep.Message }</p>
+				}
+			</div>
+			<div class="flex items-center gap-2">
+				<span class="tag">{ dep.Revision }</span>
+			</div>
+		</div>
+	</div>
+}
+
+templ deploymentRow(dep app.Deployment) {
+	<div class="row-item !py-2.5">
+		<span class="w-24 shrink-0">
+			@deploymentStatus(dep)
+		</span>
+		<span class="min-w-0 flex-1">
+			<span class="mono block truncate text-muted-foreground">{ dep.Image }</span>
+		</span>
+		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
+			{ relativeTime(dep.StartedAt) } via { dep.Source() }
+		</span>
+	</div>
+}
+
+templ deploymentStatus(dep app.Deployment) {
+	@statusDot(dep.Status, deploymentClass(dep.Status))
+}
+
+// ---- variables tab
+
+templ appVariables(a app.App) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Environment</span>
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(len(a.Env)) }
+			</span>
+		</div>
+		if len(a.Env) == 0 {
+			<div class="empty">
+				<p>No environment variables set.</p>
+			</div>
+		} else {
+			<table class="dtable">
+				<thead>
+					<tr><th>Key</th><th>Value</th></tr>
+				</thead>
+				<tbody>
+					for _, k := range sortedKeys(a.Env) {
+						<tr>
+							<td class="mono w-1/3">{ k }</td>
+							<td class="mono break-all text-muted-foreground">{ a.Env[k] }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
+	<p class="hint mt-3">
+		Editing variables from the dashboard is not wired up yet. They are set when
+		the app is created.
+	</p>
+}
+
+// ---- metrics tab
+
+templ appMetrics(d AppDetailData) {
+	<div class="metrics mb-4">
+		@metric("Desired", strconv.Itoa(int(d.App.Replicas)), "replicas")
+		@metric("Ready", readyLabel(d.App), "")
+		@metric("Pods", strconv.Itoa(len(d.Pods)), "")
+		@metric("Port", portLabel(d.App), "")
+	</div>
+	if d.App.StatusKnown && d.App.Status.Message != "" {
+		<div class="callout callout-warn mb-4">
+			<div>
+				<div class="font-medium">Cluster reports</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.App.Status.Message }</p>
+			</div>
+		</div>
+	}
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Requested resources</span>
+		</div>
+		<div class="panel-body">
+			<dl class="kv">
+				<dt>CPU request</dt>
+				<dd class="mono">{ orDash(d.App.CPURequest) }</dd>
+				<dt>CPU limit</dt>
+				<dd class="mono">{ orDash(d.App.CPULimit) }</dd>
+				<dt>Memory request</dt>
+				<dd class="mono">{ orDash(d.App.MemoryRequest) }</dd>
+				<dt>Memory limit</dt>
+				<dd class="mono">{ orDash(d.App.MemoryLimit) }</dd>
+			</dl>
+			<p class="hint mt-3">
+				Empty fields fall back to the namespace LimitRange, so no container
+				runs unbounded.
+			</p>
+		</div>
+	</div>
+}
+
+// ---- settings tab
+
+templ appSettings(a app.App) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Scale</span>
+		</div>
+		<div class="panel-body">
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + a.Name + "/scale") }
+				class="flex flex-wrap items-end gap-3"
+			>
+				<div class="field w-32">
+					<label class="label" for="replicas">Replicas</label>
+					<input
+						class="control"
+						id="replicas"
+						type="number"
+						name="replicas"
+						min="0"
+						max="50"
+						value={ strconv.Itoa(int(a.Replicas)) }
+					/>
+				</div>
+				<button class="btn" type="submit">Apply</button>
+				<span class="hint pb-2">Set to 0 to stop without deleting.</span>
+			</form>
+		</div>
+	</div>
+	<div class="panel mt-4">
+		<div class="panel-header">
+			<span class="panel-title">Details</span>
+		</div>
+		<div class="panel-body">
+			<dl class="kv">
+				<dt>Namespace</dt>
+				<dd class="mono break-all">{ a.Namespace }</dd>
+				<dt>Image</dt>
+				<dd class="mono break-all">{ a.Image }</dd>
+				<dt>Created</dt>
+				<dd>{ a.CreatedAt.Format("2 Jan 2006, 15:04") }</dd>
+				<dt>Updated</dt>
+				<dd>{ a.UpdatedAt.Format("2 Jan 2006, 15:04") }</dd>
+			</dl>
+		</div>
+	</div>
+	<div class="panel mt-4 border-l-2 border-l-destructive">
+		<div class="panel-header">
+			<span class="panel-title">Danger zone</span>
+		</div>
+		<div class="panel-body flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<div class="font-medium">Delete this app</div>
+				<p class="hint mt-0.5">Removes the workload and its namespace. Not reversible.</p>
+			</div>
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + a.Name + "/delete") }
+				onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+			>
+				<button class="btn btn-danger" type="submit">Delete app</button>
+			</form>
+		</div>
+	</div>
+}
+
+// ---------------------------------------------------------------- new app
+
+type NewAppData struct {
+	Error string
+	Form  NewAppForm
+}
+
+// NewAppForm preserves what the user typed so a validation error does not
+// discard their input.
+type NewAppForm struct {
+	Name     string
+	Image    string
+	Port     string
+	Replicas string
+	Env      string
+}
+
+templ NewApp(d NewAppData) {
+	@pageHead("Deploy app", "Run a container image on your cluster.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div>
+				<div class="font-medium">Could not deploy</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	<form method="post" action="/apps" class="max-w-2xl">
+		<div class="panel">
+			<div class="panel-header">
+				<span class="panel-title">Source</span>
+			</div>
+			<div class="panel-body flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="name">Name</label>
+					<input class="control" id="name" name="name" value={ d.Form.Name } placeholder="web" required/>
+					<span class="hint">Lowercase letters, numbers and dashes. Becomes the DNS name.</span>
+				</div>
+				<div class="field">
+					<label class="label" for="image">Image</label>
+					<input class="control mono" id="image" name="image" value={ d.Form.Image } placeholder="nginx:alpine" required/>
+					<span class="hint">
+						Must run as a non-root user — a restricted security context is enforced.
+					</span>
+				</div>
+			</div>
+		</div>
+		<div class="panel mt-4">
+			<div class="panel-header">
+				<span class="panel-title">Runtime</span>
+			</div>
+			<div class="panel-body flex flex-col gap-4">
+				<div class="grid gap-4 sm:grid-cols-2">
+					<div class="field">
+						<label class="label" for="port">Port</label>
+						<input class="control" id="port" name="port" type="number" min="0" max="65535" value={ d.Form.Port } placeholder="8080"/>
+						<span class="hint">0 for no inbound traffic.</span>
+					</div>
+					<div class="field">
+						<label class="label" for="replicas">Replicas</label>
+						<input class="control" id="replicas" name="replicas" type="number" min="0" max="50" value={ d.Form.Replicas }/>
+					</div>
+				</div>
+				<div class="field">
+					<label class="label" for="env">Environment</label>
+					<textarea class="control" id="env" name="env" rows="5" placeholder="LOG_LEVEL=info">{ d.Form.Env }</textarea>
+					<span class="hint">One KEY=value per line. Blank lines and # comments are ignored.</span>
+				</div>
+			</div>
+		</div>
+		<div class="mt-4 flex items-center gap-2">
+			<button class="btn btn-primary" type="submit">Deploy</button>
+			<a class="btn btn-ghost" href="/apps">Cancel</a>
+		</div>
+	</form>
+}
+
+// ---------------------------------------------------------------- cluster
+
+type ClusterData struct {
+	Tab     string
+	OK      bool
+	Error   string
+	Summary orchestrator.ClusterSummary
+	Nodes   []orchestrator.NodeInfo
+	Pods    []orchestrator.PodInfo
+}
+
+templ Cluster(d ClusterData) {
+	@pageHead("Cluster", "Kubernetes capacity and workloads.", nil)
+	if !d.OK {
+		@clusterCallout(d.Error)
+	}
+	<div class="metrics mb-5">
+		@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
+			fmt.Sprintf("%d ready", d.Summary.NodesReady))
+		@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
+		@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
+			clusterCPUDetail(d.Summary))
+		@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
+			clusterMemDetail(d.Summary))
+		@metric("Volumes", strconv.Itoa(d.Summary.Volumes), "")
+	</div>
+	<nav class="tabs mb-5">
+		<a class={ "tab", templ.KV("tab-active", d.Tab == "nodes") } href="/cluster/nodes">Nodes</a>
+		<a class={ "tab", templ.KV("tab-active", d.Tab == "pods") } href="/cluster/pods">Pods</a>
+	</nav>
+	if d.Tab == "pods" {
+		<div class="panel">
+			if len(d.Pods) == 0 {
+				<div class="empty">
+					<p class="font-medium text-foreground">No pods</p>
+					<p>Nothing is running, or the cluster is unreachable.</p>
+				</div>
+			} else {
+				@podTable(d.Pods, true)
+			}
+		</div>
+	} else {
+		if len(d.Nodes) == 0 {
+			<div class="panel">
+				<div class="empty">
+					<p class="font-medium text-foreground">No nodes</p>
+					<p>
+						The orchestrator is not connected to a cluster. Check
+						<code class="mono">YACHT_KUBECONFIG</code> and restart.
+					</p>
+				</div>
+			</div>
+		} else {
+			<div class="panel">
+				<div class="rows">
+					for _, n := range d.Nodes {
+						@nodeRow(n)
+					}
+				</div>
+			</div>
+		}
+	}
+}
+
+// nodeRow keeps a node to a single row with inline meters, rather than the
+// card-per-node layout it replaced. Four nodes then fit on screen together,
+// which is what makes an imbalance visible.
+templ nodeRow(n orchestrator.NodeInfo) {
+	<div class="row-item flex-wrap">
+		<div class="min-w-[220px] flex-1">
+			<div class="flex flex-wrap items-center gap-2">
+				<span class="font-medium">{ n.Name }</span>
+				if n.Ready {
+					@statusDot("Ready", "status-ok")
+				} else {
+					@statusDot("Not ready", "status-err")
+				}
+				for _, role := range n.Roles {
+					<span class="tag">{ role }</span>
+				}
+				if n.Unschedulable {
+					@statusDot("Cordoned", "status-warn")
+				}
+			</div>
+			<p class="mt-1 truncate text-[11.5px] text-muted-foreground">{ nodeSubtitle(n) }</p>
+		</div>
+		<div class="w-40 shrink-0">
+			<div class="flex items-baseline justify-between gap-2">
+				<span class="micro">CPU</span>
+				<span class="text-[11.5px] text-muted-foreground tabular-nums">{ cpuLabel(n) }</span>
+			</div>
+			@meter(n.CPUPercent(), meterClass(n.CPUPercent()))
+		</div>
+		<div class="w-40 shrink-0">
+			<div class="flex items-baseline justify-between gap-2">
+				<span class="micro">Memory</span>
+				<span class="text-[11.5px] text-muted-foreground tabular-nums">{ memLabel(n) }</span>
+			</div>
+			@meter(n.MemoryPercent(), meterClass(n.MemoryPercent()))
+		</div>
+		<div class="w-16 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums">
+			{ strconv.Itoa(n.Pods) } pods
+		</div>
+	</div>
+}
+
+templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
+	<div class="overflow-x-auto">
+		<table class="dtable">
+			<thead>
+				<tr>
+					<th>Pod</th>
+					if showNamespace {
+						<th>Namespace</th>
+					}
+					<th>Ready</th>
+					<th>Restarts</th>
+					<th>Node</th>
+					<th>Status</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, p := range pods {
+					<tr>
+						<td class="mono max-w-[240px] truncate">{ p.Name }</td>
+						if showNamespace {
+							<td class="mono max-w-[200px] truncate text-muted-foreground">{ p.Namespace }</td>
+						}
+						<td class="tabular-nums text-muted-foreground">
+							{ fmt.Sprintf("%d/%d", p.Ready, p.Total) }
+						</td>
+						<td class="tabular-nums text-muted-foreground">{ strconv.Itoa(int(p.Restarts)) }</td>
+						<td class="max-w-[160px] truncate text-muted-foreground">{ orDash(p.Node) }</td>
+						<td>@statusDot(p.Phase, podPhaseClass(p))</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// ---------------------------------------------------------------- activity
+
+type ActivityData struct {
+	Items []app.Activity
+}
+
+// Activity is the cross-app deployment feed: what changed recently, anywhere.
+// The per-app history answers "what happened to this"; this answers "what
+// happened", which is the question you have when something broke and you do
+// not yet know where.
+templ Activity(d ActivityData) {
+	@pageHead("Deployments", "Recent deploys across every app.", nil)
+	<div class="panel">
+		if len(d.Items) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No deployments yet</p>
+				<p>Deploys appear here as they happen.</p>
+			</div>
+		} else {
+			<div class="overflow-x-auto">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>App</th>
+							<th>Image</th>
+							<th>Trigger</th>
+							<th>Status</th>
+							<th class="text-right">When</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, it := range d.Items {
+							<tr>
+								<td>
+									<a
+										href={ templ.URL("/apps/" + it.AppName) }
+										class="font-medium hover:underline"
+									>{ it.AppName }</a>
+								</td>
+								<td class="mono max-w-[280px] truncate text-muted-foreground">{ it.Image }</td>
+								<td class="text-muted-foreground">
+									<span class="tag">{ it.Revision }</span>
+								</td>
+								<td>@statusDot(it.Status, deploymentClass(it.Status))</td>
+								<td class="whitespace-nowrap text-right text-muted-foreground">
+									{ relativeTime(it.StartedAt) }
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
+// ---------------------------------------------------------------- volumes
+
+type VolumesData struct {
+	OK      bool
+	Error   string
+	Volumes []orchestrator.VolumeInfo
+}
+
+templ Volumes(d VolumesData) {
+	@pageHead("Volumes", "Persistent volume claims in the cluster.", nil)
+	if !d.OK {
+		@clusterCallout(d.Error)
+	}
+	<div class="panel">
+		if len(d.Volumes) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No volumes</p>
+				<p>Apps with persistent storage will claim volumes here.</p>
+			</div>
+		} else {
+			<div class="overflow-x-auto">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>Claim</th>
+							<th>Namespace</th>
+							<th>Size</th>
+							<th>Class</th>
+							<th>Access</th>
+							<th>Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, v := range d.Volumes {
+							<tr>
+								<td class="mono max-w-[220px] truncate">{ v.Name }</td>
+								<td class="mono max-w-[180px] truncate text-muted-foreground">{ v.Namespace }</td>
+								<td class="tabular-nums text-muted-foreground">{ volumeSize(v) }</td>
+								<td class="text-muted-foreground">{ orDash(v.StorageClass) }</td>
+								<td class="text-muted-foreground">
+									for _, m := range v.AccessModes {
+										<span class="tag mr-1">{ m }</span>
+									}
+								</td>
+								<td>@statusDot(v.Phase, volumeClass(v))</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
+// ---------------------------------------------------------------- events
+
+type EventsData struct {
+	OK     bool
+	Error  string
+	Events []orchestrator.EventInfo
+}
+
+// Events is where Kubernetes explains itself. "Pending" is not actionable;
+// "Insufficient cpu" or "ErrImagePull" is.
+templ Events(d EventsData) {
+	@pageHead("Events", "Recent cluster events, warnings first.", nil)
+	if !d.OK {
+		@clusterCallout(d.Error)
+	}
+	<div class="panel">
+		if len(d.Events) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No events</p>
+				<p>
+					Nothing reported, or the cluster is unreachable. Kubernetes also
+					expires events after about an hour.
+				</p>
+			</div>
+		} else {
+			<div class="rows">
+				for _, e := range d.Events {
+					<div class="row-item !items-start">
+						<span class="w-28 shrink-0 pt-px">
+							if e.Warning() {
+								@statusDot(e.Reason, "status-warn")
+							} else {
+								@statusDot(e.Reason, "status-neutral")
+							}
+						</span>
+						<span class="min-w-0 flex-1">
+							<span class="block break-words">{ e.Message }</span>
+							<span class="mono mt-0.5 block text-muted-foreground">
+								{ e.Namespace } · { e.Object }
+							</span>
+						</span>
+						<span class="shrink-0 text-right text-[12px] text-muted-foreground">
+							{ relativeTime(e.LastSeen) }
+							if e.Count > 1 {
+								<span class="tag ml-1.5">&times;{ fmt.Sprintf("%d", e.Count) }</span>
+							}
+						</span>
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// ---------------------------------------------------------------- settings
+
+type SettingsData struct {
+	OwnerID       string
+	OwnerName     string
+	Authenticated bool
+	Version       string
+	ClusterOK     bool
+}
+
+templ Settings(d SettingsData) {
+	@pageHead("Settings", "This install runs in single-owner mode.", nil)
+	if !d.Authenticated {
+		<div class="callout callout-warn mb-5">
+			<div>
+				<div class="font-medium">No authentication configured</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Set <code class="mono">YACHT_AUTH_TOKEN</code> before exposing this
+					dashboard beyond a trusted network.
+				</p>
+			</div>
+		</div>
+	}
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Install</span>
+		</div>
+		<div class="panel-body">
+			<dl class="kv">
+				<dt>Owner</dt>
+				<dd>
+					{ d.OwnerName }
+					<span class="mono ml-1 text-muted-foreground">{ d.OwnerID }</span>
+				</dd>
+				<dt>Authentication</dt>
+				<dd>
+					if d.Authenticated {
+						@statusDot("Bearer token", "status-ok")
+					} else {
+						@statusDot("None", "status-warn")
+					}
+				</dd>
+				<dt>Cluster</dt>
+				<dd>
+					if d.ClusterOK {
+						@statusDot("Connected", "status-ok")
+					} else {
+						@statusDot("Unreachable", "status-err")
+					}
+				</dd>
+				<dt>Version</dt>
+				<dd class="mono">{ d.Version }</dd>
+			</dl>
+		</div>
+	</div>
+}

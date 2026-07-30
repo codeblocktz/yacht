@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630" role="img"
+     aria-label="Yacht — a self-hosted PaaS for Kubernetes">
+  <!--
+    GitHub social preview, 1200x630. Rendered to PNG by `make brand` because
+    GitHub does not accept SVG for the repository preview image.
+  -->
+  <defs>
+    <linearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3ddcae"/>
+      <stop offset="1" stop-color="#0e6f5a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.18" cy="0.1" r="0.9">
+      <stop offset="0" stop-color="#2dd4a7" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2dd4a7" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0v32" fill="none" stroke="#ffffff" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0b0b0f"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <g transform="translate(88 96)">
+    <rect width="72" height="72" rx="18" fill="url(#mark)"/>
+    <path d="M37.1 14.6c9.45 6.3 14.18 13.95 14.18 22.95H37.1z" fill="#04231c" fill-opacity="0.92"/>
+    <path d="M16.9 43.9h38.2c-2.47 8.32-9.67 13.5-19.1 13.5s-16.63-5.18-19.1-13.5z" fill="#04231c" fill-opacity="0.92"/>
+  </g>
+
+  <text x="180" y="148"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="44" font-weight="650" letter-spacing="-1" fill="#e8e8ee">Yacht</text>
+
+  <text x="88" y="286"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="64" font-weight="620" letter-spacing="-1.8" fill="#e8e8ee">A self-hosted PaaS</text>
+  <text x="88" y="358"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="64" font-weight="620" letter-spacing="-1.8" fill="#2dd4a7">for Kubernetes</text>
+
+  <text x="88" y="424"
+        font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="25" fill="#8b8b99">Deploy to your own server. Real Kubernetes underneath, not a Docker wrapper.</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="20" fill="#8b8b99">
+    <g transform="translate(88 494)">
+      <rect x="-14" y="-26" width="196" height="40" rx="8" fill="#16161d" stroke="#23232c"/>
+      <text x="0" y="0">Go · templ</text>
+    </g>
+    <g transform="translate(300 494)">
+      <rect x="-14" y="-26" width="120" height="40" rx="8" fill="#16161d" stroke="#23232c"/>
+      <text x="0" y="0">K3s</text>
+    </g>
+    <g transform="translate(436 494)">
+      <rect x="-14" y="-26" width="140" height="40" rx="8" fill="#16161d" stroke="#23232c"/>
+      <text x="0" y="0">MIT</text>
+    </g>
+  </g>
+
+  <text x="88" y="576"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="19" fill="#5f5f6d">github.com/codeblocktz/yacht</text>
+</svg>

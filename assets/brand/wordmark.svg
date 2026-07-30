@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 64" width="260" height="64" role="img" aria-label="Yacht">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3ddcae"/>
+      <stop offset="1" stop-color="#0e6f5a"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="12" width="40" height="40" rx="10" fill="url(#g)"/>
+  <path d="M25.6 20.5c5.25 3.5 7.9 7.75 7.9 12.75h-7.9z" fill="#04231c" fill-opacity="0.92"/>
+  <path d="M14.4 36.9h21.2c-1.37 4.62-5.37 7.5-10.6 7.5s-9.23-2.88-10.6-7.5z" fill="#04231c" fill-opacity="0.92"/>
+  <text
+    x="58" y="41"
+    font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+    font-size="26" font-weight="650" letter-spacing="-0.6"
+    fill="currentColor"
+  >Yacht</text>
+</svg>
