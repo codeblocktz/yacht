@@ -250,6 +250,12 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
 
+	// A trailing slash is the same page. /apps used to answer it because it was
+	// a mounted subtree; the groups below are flat, so it is stated here instead
+	// of leaving a typed URL to 404. Paths are normalised before routing, so no
+	// pattern — and no gate on one — can be stepped around with a slash.
+	r.Use(chimw.StripSlashes)
+
 	// Health is deliberately outside the authenticated group: a load balancer
 	// has no credentials, and a health check that needs them is not one.
 	r.Get("/healthz", s.health)
@@ -257,7 +263,14 @@ func (s *Server) Handler() http.Handler {
 	// Static assets are embedded and carry no owner data, so they sit outside
 	// the authenticated group too — otherwise the stylesheet 401s on the login
 	// page and every error screen renders unstyled.
-	r.Handle("/assets/*", assetHandler())
+	//
+	// Registered for the two methods that read, rather than for every method: a
+	// file server answering POST is a mutating verb on a route that has no role
+	// gate and can never need one, which is a thing the next reader has to work
+	// out is harmless.
+	assets := assetHandler()
+	r.Get("/assets/*", assets.ServeHTTP)
+	r.Head("/assets/*", assets.ServeHTTP)
 
 	// Sign-in is outside the authenticated group by necessity: someone with no
 	// session is exactly who needs it. The POST is a mutating route with no role
@@ -288,29 +301,67 @@ func (s *Server) Handler() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(identity.Middleware(s.ident))
 
-		r.Get("/", s.overview)
+		// The split between these groups is at the line where an action stops
+		// being undoable by redeploying. Each gate is on the group rather than in
+		// the handlers, so a route added to one of them later is protected
+		// whether or not its author thought about roles at all.
+		//
+		// The paths are written out flat rather than nested under r.Route: a
+		// mounted subtree can only belong to one group, and /apps has routes in
+		// two.
 
-		r.Route("/apps", func(r chi.Router) {
-			r.Get("/", s.appList)
-			r.Get("/new", s.appNew)
-			r.Post("/", s.appCreate)
-			r.Get("/{name}", s.appDetail)
-			r.Get("/{name}/variables", s.appDetail)
-			r.Get("/{name}/metrics", s.appDetail)
-			r.Get("/{name}/settings", s.appDetail)
-			r.Post("/{name}/scale", s.appScale)
-			r.Post("/{name}/redeploy", s.appRedeploy)
-			r.Post("/{name}/delete", s.appDelete)
+		// Member: reading everything, and every change a redeploy can undo.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireRole(account.RoleMember))
+
+			r.Get("/", s.overview)
+
+			r.Get("/apps", s.appList)
+			r.Post("/apps", s.appCreate)
+			r.Get("/apps/new", s.appNew)
+			r.Get("/apps/{name}", s.appDetail)
+			r.Get("/apps/{name}/variables", s.appDetail)
+			r.Get("/apps/{name}/metrics", s.appDetail)
+			r.Get("/apps/{name}/settings", s.appDetail)
+			r.Post("/apps/{name}/scale", s.appScale)
+			r.Post("/apps/{name}/redeploy", s.appRedeploy)
+
+			r.Get("/deployments", s.activity)
+
+			r.Get("/cluster", s.clusterNodes)
+			r.Get("/cluster/nodes", s.clusterNodes)
+			r.Get("/cluster/pods", s.clusterPods)
+			r.Get("/cluster/volumes", s.clusterVolumes)
+			r.Get("/cluster/events", s.clusterEvents)
+			r.Get("/settings", s.settings)
 		})
 
-		r.Get("/deployments", s.activity)
+		// Admin: everything a redeploy cannot undo, and who is in the team.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireRole(account.RoleAdmin))
 
-		r.Get("/cluster", s.clusterNodes)
-		r.Get("/cluster/nodes", s.clusterNodes)
-		r.Get("/cluster/pods", s.clusterPods)
-		r.Get("/cluster/volumes", s.clusterVolumes)
-		r.Get("/cluster/events", s.clusterEvents)
-		r.Get("/settings", s.settings)
+			r.Post("/apps/{name}/delete", s.appDelete)
+
+			if s.accounts != nil {
+				r.Post("/team/invite", s.teamRouteStub)
+				r.Post("/team/invitations/{id}/revoke", s.teamRouteStub)
+				r.Post("/team/members/{id}/remove", s.teamRouteStub)
+			}
+		})
+
+		// Owner: everything that changes who can administer.
+		//
+		// Appointing an admin is ownership. An admin allowed to appoint another
+		// admin could appoint an owner next, which is every permission the team
+		// has.
+		if s.accounts != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Post("/team/members/{id}/role", s.teamRouteStub)
+				r.Post("/team/delete", s.teamRouteStub)
+			})
+		}
 	})
 
 	return r
