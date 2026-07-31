@@ -1,7 +1,7 @@
 // Package orchestrator defines the contract between Yacht's control plane and
 // whatever actually runs workloads.
 //
-// SEAM 1 of 3. This interface is the primary extension point of the engine.
+// SEAM 1 of 4. This interface is the primary extension point of the engine.
 // The engine ships a single-cluster Kubernetes implementation (subpackage k8s)
 // and a no-op implementation for tests. A wrapping application can supply its
 // own — for example one that selects a cluster from a registry and applies

@@ -1,6 +1,6 @@
 // Package web serves the engine's dashboard.
 //
-// SEAM 3 of 3, and the one that is easiest to get wrong. The other two seams
+// SEAM 3 of 4, and the one that is easiest to get wrong. The other three seams
 // are Go interfaces, which compose naturally. A rendered HTML page does not:
 // you cannot wrap a template in middleware. If the layout hard-codes its own
 // sidebar and header, an application built on top of the engine has exactly two

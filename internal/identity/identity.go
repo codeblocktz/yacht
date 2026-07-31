@@ -1,6 +1,6 @@
 // Package identity answers one question: who owns this request?
 //
-// SEAM 2 of 3. The engine deliberately does not own authentication. It defines
+// SEAM 2 of 4. The engine deliberately does not own authentication. It defines
 // the question and consumes the answer; how the answer is produced is
 // injected.
 //
