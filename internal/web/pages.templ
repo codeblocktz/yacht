@@ -158,6 +158,14 @@ templ appRows(apps []app.App) {
 					<span class="block truncate font-medium">{ a.Name }</span>
 					<span class="mono block truncate text-muted-foreground">{ a.Image }</span>
 				</span>
+				// Plain text rather than an anchor: the whole row is already a
+				// link, and an anchor inside an anchor is markup a browser is
+				// free to rearrange. The clickable URL lives on the detail page.
+				if a.Host != "" {
+					<span class="mono hidden max-w-[260px] shrink-0 truncate text-[12px] text-muted-foreground lg:block">
+						{ a.Host }
+					</span>
+				}
 				<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
 					{ replicaLabel(a) }
 				</span>
@@ -250,6 +258,22 @@ templ appDetailHeader(a app.App) {
 				<h1 class="text-[19px] font-semibold tracking-tight">{ a.Name }</h1>
 				@appStatus(a)
 			</div>
+			// The URL sits above the image and in foreground colour: it is the
+			// one line on this page a user wants to click, and muted mono next
+			// to the image would read as another piece of metadata.
+			if a.Host != "" {
+				<a
+					class="mono mt-1 flex max-w-full items-center gap-1.5 hover:underline"
+					href={ templ.URL(a.URLScheme() + "://" + a.Host) }
+					target="_blank"
+					rel="noreferrer"
+				>
+					<span class="truncate">{ a.Host }</span>
+					<span class="text-muted-foreground [&>svg]:size-3.5">
+						@icon("external")
+					</span>
+				</a>
+			}
 			<p class="mono mt-1 truncate text-muted-foreground">{ a.Image }</p>
 		</div>
 		<div class="flex items-center gap-2">
@@ -897,6 +921,8 @@ type SettingsData struct {
 	Authenticated bool
 	Version       string
 	ClusterOK     bool
+	AppDomain     string
+	WildcardTLS   bool
 }
 
 templ Settings(d SettingsData) {
@@ -937,6 +963,29 @@ templ Settings(d SettingsData) {
 						@statusDot("Connected", "status-ok")
 					} else {
 						@statusDot("Unreachable", "status-err")
+					}
+				</dd>
+				<dt>App domain</dt>
+				<dd>
+					if d.AppDomain == "" {
+						<span class="text-muted-foreground">
+							Not configured — apps are reachable only inside the cluster. Set
+							<code class="mono">YACHT_APP_DOMAIN</code> to give each app a URL.
+						</span>
+					} else {
+						<span class="mono">*.{ d.AppDomain }</span>
+						<span class="ml-1 text-muted-foreground">must point at this cluster</span>
+					}
+				</dd>
+				<dt>Platform TLS</dt>
+				<dd>
+					if d.WildcardTLS {
+						@statusDot("Wildcard certificate", "status-ok")
+						<span class="ml-1 text-muted-foreground">
+							served by the ingress controller
+						</span>
+					} else {
+						@statusDot("Off", "status-neutral")
 					}
 				</dd>
 				<dt>Version</dt>

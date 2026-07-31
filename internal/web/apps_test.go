@@ -253,6 +253,81 @@ func TestAppDetailTabsAreScopedToOwner(t *testing.T) {
 	}
 }
 
+func TestAppDetailShowsTheHostnameAsALink(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.Host, a.TLS = "web.apps.example.com", true
+	h := testServer(t, Options{Apps: newFakeApps(a)})
+
+	body := get(t, h, "/apps/web").Body.String()
+
+	if !strings.Contains(body, "web.apps.example.com") {
+		t.Fatal("app detail does not show the hostname")
+	}
+	// A URL a user cannot click is a URL they have to retype.
+	if !strings.Contains(body, `href="https://web.apps.example.com"`) {
+		t.Fatal("the hostname is not rendered as a link")
+	}
+}
+
+// An install without wildcard TLS must not be offered an https link that
+// cannot connect.
+func TestAppURLSchemeFollowsPlatformTLS(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.Host = "web.apps.example.com"
+	h := testServer(t, Options{Apps: newFakeApps(a)})
+
+	body := get(t, h, "/apps/web").Body.String()
+
+	if !strings.Contains(body, `href="http://web.apps.example.com"`) {
+		t.Error("expected an http link when the platform does not serve TLS")
+	}
+	if strings.Contains(body, `href="https://web.apps.example.com"`) {
+		t.Error("https link offered when the platform does not serve TLS")
+	}
+}
+
+func TestAppWithNoHostnameShowsNoLink(t *testing.T) {
+	h := testServer(t, Options{Apps: newFakeApps(sampleApp("owner-1", "web"))})
+
+	body := get(t, h, "/apps/web").Body.String()
+
+	for _, empty := range []string{`href="https://"`, `href="http://"`} {
+		if strings.Contains(body, empty) {
+			t.Errorf("an app with no hostname rendered an empty link: %s", empty)
+		}
+	}
+}
+
+func TestAppListShowsTheHostname(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.Host = "web.apps.example.com"
+	h := testServer(t, Options{Apps: newFakeApps(a)})
+
+	if !strings.Contains(get(t, h, "/apps").Body.String(), "web.apps.example.com") {
+		t.Error("the app list does not show the hostname")
+	}
+}
+
+// The settings page is where an operator finds out whether per-app hostnames
+// are on at all, and what DNS record makes them work.
+func TestSettingsShowsTheAppDomain(t *testing.T) {
+	h := testServer(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	body := get(t, h, "/settings").Body.String()
+
+	if !strings.Contains(body, "*.apps.example.com") {
+		t.Error("settings should show the wildcard app domain")
+	}
+	if !strings.Contains(body, "Wildcard certificate") {
+		t.Error("settings should report the platform TLS posture")
+	}
+
+	h = testServer(t, Options{})
+	body = get(t, h, "/settings").Body.String()
+	if !strings.Contains(body, "YACHT_APP_DOMAIN") {
+		t.Error("settings should name the variable that turns per-app hostnames on")
+	}
+}
+
 // The stylesheet must be reachable without a credential, or every error page
 // and future login screen renders unstyled.
 func TestAssetsAreServedUnauthenticated(t *testing.T) {

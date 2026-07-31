@@ -55,18 +55,26 @@ type Options struct {
 	Authenticated bool
 	Version       string
 
+	// AppDomain and WildcardTLS describe the platform's hostname policy. The
+	// dashboard reads them to explain the install on the settings page; the
+	// per-app scheme comes from app.App.TLS, which the app service populates.
+	AppDomain   string
+	WildcardTLS bool
+
 	Logger *slog.Logger
 }
 
 // Server serves the dashboard.
 type Server struct {
-	orch  orchestrator.Orchestrator
-	ident identity.Provider
-	apps  Apps
-	slots SlotProvider
-	authn bool
-	ver   string
-	log   *slog.Logger
+	orch      orchestrator.Orchestrator
+	ident     identity.Provider
+	apps      Apps
+	slots     SlotProvider
+	authn     bool
+	ver       string
+	appDomain string
+	wildcard  bool
+	log       *slog.Logger
 }
 
 // New validates options and returns a server.
@@ -87,13 +95,15 @@ func New(opts Options) (*Server, error) {
 		opts.Version = "dev"
 	}
 	return &Server{
-		orch:  opts.Orchestrator,
-		ident: opts.Identity,
-		apps:  opts.Apps,
-		slots: opts.Slots,
-		authn: opts.Authenticated,
-		ver:   opts.Version,
-		log:   opts.Logger,
+		orch:      opts.Orchestrator,
+		ident:     opts.Identity,
+		apps:      opts.Apps,
+		slots:     opts.Slots,
+		authn:     opts.Authenticated,
+		ver:       opts.Version,
+		appDomain: opts.AppDomain,
+		wildcard:  opts.WildcardTLS,
+		log:       opts.Logger,
 	}, nil
 }
 
@@ -449,6 +459,8 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		Authenticated: s.authn,
 		Version:       s.ver,
 		ClusterOK:     s.orch.Ping(r.Context()) == nil,
+		AppDomain:     s.appDomain,
+		WildcardTLS:   s.wildcard,
 	}))
 }
 

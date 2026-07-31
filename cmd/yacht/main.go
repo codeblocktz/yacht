@@ -106,6 +106,8 @@ func run() error {
 		// here, which is the whole of what it takes to add tenant chrome.
 		Authenticated: !cfg.Unauthenticated(),
 		Version:       version,
+		AppDomain:     cfg.AppDomain,
+		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
 	})
 	if err != nil {

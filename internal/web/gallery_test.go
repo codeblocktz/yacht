@@ -120,6 +120,11 @@ func galleryPages() []galleryPage {
 		orchestrator.PhasePending, true,
 		`Back-off pulling image "ghcr.io/codeblocktz/mailer:v9": ErrImagePull`)
 
+	// Hostnames on some apps and not others, over both schemes: an install
+	// without wildcard TLS is a state that must look right too.
+	running.Host, running.TLS = "web.apps.example.com", true
+	degraded.Host = "api.apps.example.com"
+
 	allApps := []app.App{running, degraded, pending, stopped, unknown, failing}
 
 	pods := []orchestrator.PodInfo{
@@ -226,6 +231,15 @@ func galleryPages() []galleryPage {
 					Name: "web", Image: "nginx:alpine", Port: "8080", Replicas: "2",
 					Env: "LOG_LEVEL=info\nNODE_ENV=production",
 				},
+			}),
+		},
+		{
+			file: "states-settings.html", path: "/settings",
+			crumbs: []Crumb{{Label: "Settings"}},
+			page: Settings(SettingsData{
+				OwnerID: "owner-local", OwnerName: "Eric", Authenticated: true,
+				Version: "v0.1.0", ClusterOK: true,
+				AppDomain: "apps.example.com", WildcardTLS: true,
 			}),
 		},
 		{
