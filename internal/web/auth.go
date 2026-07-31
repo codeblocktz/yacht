@@ -1,9 +1,16 @@
 package web
 
 import (
+	"context"
+	"log/slog"
+	"net"
 	"net/http"
+	"net/mail"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/codeblocktz/yacht/internal/notify"
 )
 
 // SessionCookie is the name of the cookie carrying a session token.
@@ -57,4 +64,224 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: requestIsTLS(r), MaxAge: -1,
 	})
+}
+
+// signInFloor is the minimum time a sign-in POST takes.
+//
+// Issuing a link for a registered address does an extra INSERT that an
+// unregistered address does not, which is measurable — a 3.5x difference was
+// demonstrated against this code. Padding to a floor removes the signal
+// without pretending the two paths do equal work.
+//
+// The floor is above the slow path, so the pad is always a wait rather than a
+// race the fast path can lose.
+const signInFloor = 250 * time.Millisecond
+
+// Attempts allowed in a window, per address and per client.
+//
+// The floor already makes a single attempt cost 250ms; these are what stop an
+// enumeration run from simply being made in parallel. The per-address limit is
+// the tighter one because it is the one an enumerator cannot avoid — every
+// address they want to test needs its own attempt.
+const (
+	signInAttemptsPerAddress = 5
+	signInAttemptsPerIP      = 20
+	signInWindow             = 15 * time.Minute
+)
+
+// withFloor runs fn and does not return until d has elapsed.
+func withFloor(d time.Duration, fn func()) {
+	start := time.Now()
+	fn()
+	if rest := d - time.Since(start); rest > 0 {
+		time.Sleep(rest)
+	}
+}
+
+// signInPage serves the form. It sits outside the authenticated group: someone
+// with no session is exactly who needs it.
+func (s *Server) signInPage(w http.ResponseWriter, r *http.Request) {
+	s.renderSignedOut(w, r, http.StatusOK, "Sign in", SignIn(SignInData{}))
+}
+
+// signInRequest mails a link to the address, if it belongs to anyone.
+//
+// The visitor is answered identically either way — same page, same status, and,
+// through the floor, near enough the same time. Everything that differs between
+// a registered and an unregistered address happens inside the floor and is
+// visible only in the mailbox of whoever owns the address.
+func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
+	email, err := parseEmail(r.FormValue("email"))
+	if err != nil {
+		// Answered without the floor on purpose: malformed input is a mistake
+		// the visitor can already see, not a fact about who has an account.
+		s.renderSignedOut(w, r, http.StatusUnprocessableEntity, "Sign in", SignIn(SignInData{
+			Email: r.FormValue("email"),
+			Error: err.Error(),
+		}))
+		return
+	}
+
+	// Both counters are asked, not short-circuited, so an address already over
+	// its limit still counts against the client that keeps trying it.
+	// Lowercased for the counter because the lookup is case-insensitive: without
+	// it, alternating the capitalisation of one address buys an unlimited budget.
+	addressOK := s.signInLimit.allow("address:"+strings.ToLower(email), signInAttemptsPerAddress)
+	clientOK := s.signInLimit.allow("client:"+clientIP(r), signInAttemptsPerIP)
+	if !addressOK || !clientOK {
+		// Refusal depends on the attempt count and never on whether the address
+		// exists, so saying so plainly leaks nothing.
+		s.renderSignedOut(w, r, http.StatusTooManyRequests, "Sign in", SignIn(SignInData{
+			Email: email,
+			Error: "Too many sign-in attempts. Try again in a few minutes.",
+		}))
+		return
+	}
+
+	withFloor(signInFloor, func() { s.mailSignInLink(r.Context(), email) })
+
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
+}
+
+// mailSignInLink issues a link and delivers it, or does neither.
+//
+// Every failure here is swallowed into the log. The caller renders the same
+// page regardless: a lookup error or a refused relay that changed the response
+// would be an oracle in its own right, answering "is this address registered?"
+// with "the server behaved differently".
+func (s *Server) mailSignInLink(ctx context.Context, email string) {
+	raw, user, existed, err := s.accounts.IssueMagicLink(ctx, email, s.magicTTL)
+	if err != nil {
+		s.log.Error("issue sign-in link", slog.String("error", err.Error()))
+		return
+	}
+	if !existed {
+		return
+	}
+
+	// Built from the configured base URL, never from the Host header: a link
+	// built from a header is a link an attacker can point at their own server
+	// and have Yacht mail to a real person.
+	link := s.baseURL + "/auth/" + raw
+
+	if err := s.mailer.Send(ctx, notify.Message{
+		To:       user.Email,
+		Subject:  "Your Yacht sign-in link",
+		TextBody: signInBody(link, s.magicTTL),
+	}); err != nil {
+		s.log.Error("send sign-in link",
+			slog.String("to", user.Email), slog.String("error", err.Error()))
+	}
+}
+
+func signInBody(link string, ttl time.Duration) string {
+	return "Someone asked to sign in to Yacht with this address.\n\n" +
+		"Follow this link to sign in:\n\n" +
+		link + "\n\n" +
+		"The link works once and expires in " + ttl.String() + ".\n" +
+		"If it was not you, nothing has happened and you can ignore this message.\n"
+}
+
+// parseEmail accepts what a person types into the form and returns the address.
+//
+// mail.ParseAddress also accepts `Name <addr>`; only the address is kept, so a
+// display name cannot smuggle anything into what is stored or mailed.
+func parseEmail(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", errEmailRequired
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil || addr.Address == "" {
+		return "", errEmailMalformed
+	}
+	return addr.Address, nil
+}
+
+var (
+	errEmailRequired  = signInError("Enter the email address you sign in with.")
+	errEmailMalformed = signInError("That does not look like an email address.")
+)
+
+// signInError is a message written for the person reading the page rather than
+// for a log.
+type signInError string
+
+func (e signInError) Error() string { return string(e) }
+
+// clientIP is the address the rate limiter counts against.
+//
+// Best effort: behind a proxy chi's RealIP has already replaced RemoteAddr from
+// X-Forwarded-For, which a direct caller can also set. That is why the
+// per-address limit exists and is the tighter of the two — it is the one an
+// enumerator cannot dodge by rotating a header.
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// attemptLimiter counts attempts per key over a sliding window.
+//
+// In memory, and so per process: a restart forgives everyone, and two replicas
+// each keep their own count. That is the honest trade for having no dependency
+// here — the limit is a brake on enumeration, not a security boundary, and the
+// boundary is that the response says nothing either way.
+type attemptLimiter struct {
+	mu     sync.Mutex
+	window time.Duration
+	hits   map[string][]time.Time
+	swept  time.Time
+}
+
+// maxTrackedKeys bounds the map between sweeps. Keys are attacker-supplied
+// addresses, so an unbounded map is a way to spend the process's memory.
+const maxTrackedKeys = 50_000
+
+func newAttemptLimiter(window time.Duration) *attemptLimiter {
+	return &attemptLimiter{
+		window: window,
+		hits:   make(map[string][]time.Time),
+		swept:  time.Now(),
+	}
+}
+
+// allow records an attempt against key and reports whether it is within limit.
+func (l *attemptLimiter) allow(key string, limit int) bool {
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if now.Sub(l.swept) >= l.window || len(l.hits) > maxTrackedKeys {
+		for k, ts := range l.hits {
+			if kept := recent(ts, cutoff); len(kept) == 0 {
+				delete(l.hits, k)
+			} else {
+				l.hits[k] = kept
+			}
+		}
+		l.swept = now
+	}
+
+	ts := recent(l.hits[key], cutoff)
+	if len(ts) >= limit {
+		l.hits[key] = ts
+		return false
+	}
+	l.hits[key] = append(ts, now)
+	return true
+}
+
+// recent drops the attempts that have fallen out of the window. The slice is
+// appended to in order, so the survivors are its tail.
+func recent(ts []time.Time, cutoff time.Time) []time.Time {
+	for i, t := range ts {
+		if t.After(cutoff) {
+			return ts[i:]
+		}
+	}
+	return nil
 }

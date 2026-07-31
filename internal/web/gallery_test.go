@@ -243,6 +243,21 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
+			file: "states-sign-in.html", path: "/sign-in",
+			page: stack(
+				section("Sign in", "the form, and the same form after a rejected address",
+					stack(
+						SignIn(SignInData{}),
+						SignIn(SignInData{
+							Email: "not an address",
+							Error: "That does not look like an email address.",
+						}),
+					)),
+				section("Check your mail", "the same page whether or not the address is registered",
+					CheckMail()),
+			),
+		},
+		{
 			file: "states-overview.html", path: "/",
 			crumbs: []Crumb{{Label: "Overview"}},
 			page: Overview(OverviewData{

@@ -27,7 +27,11 @@ func testServer(t *testing.T, opts Options) http.Handler {
 			ID: "owner-1", DisplayName: "Eric",
 		})
 	}
-	opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	// A test that asserts on what was logged supplies its own logger; the rest
+	// get a silent one.
+	if opts.Logger == nil {
+		opts.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 
 	s, err := New(opts)
 	if err != nil {

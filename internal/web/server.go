@@ -8,14 +8,17 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -34,6 +37,20 @@ type Apps interface {
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
+}
+
+// Accounts is the sign-in surface's view of the account service.
+//
+// An interface rather than the concrete service, for the same reason Apps is
+// one: the sign-in page has to be testable without a database, and this package
+// has no business knowing how a person is stored.
+type Accounts interface {
+	// IssueMagicLink mints a sign-in link, reporting whether the address
+	// belongs to anyone. Nothing is mailed when it does not, and nothing about
+	// the difference reaches the visitor.
+	IssueMagicLink(
+		ctx context.Context, email string, ttl time.Duration,
+	) (raw string, user account.User, existed bool, err error)
 }
 
 // Options configures the dashboard server.
@@ -61,8 +78,32 @@ type Options struct {
 	AppDomain   string
 	WildcardTLS bool
 
+	// Accounts, when set, puts the sign-in surface on the router. Left nil the
+	// engine serves no sign-in page at all, which is right for an install
+	// resolved by a shared token: a form that could never issue a session is a
+	// worse answer than no form.
+	Accounts Accounts
+
+	// Mailer delivers sign-in links. Defaults to the logging transport, which
+	// is the break-glass path when mail breaks after accounts are switched on.
+	Mailer notify.Mailer
+
+	// BaseURL is the public URL links are built from. Required with Accounts,
+	// and deliberately not derived from the request: a link built from the Host
+	// header is one an attacker can point at their own server and have Yacht
+	// mail to a real person.
+	BaseURL string
+
+	// MagicLinkTTL is how long a sign-in link stays redeemable. Defaults to
+	// defaultMagicLinkTTL.
+	MagicLinkTTL time.Duration
+
 	Logger *slog.Logger
 }
+
+// defaultMagicLinkTTL matches config's default, so a server built without one
+// does not quietly outlive the link the operator configured.
+const defaultMagicLinkTTL = 15 * time.Minute
 
 // Server serves the dashboard.
 type Server struct {
@@ -75,6 +116,12 @@ type Server struct {
 	appDomain string
 	wildcard  bool
 	log       *slog.Logger
+
+	accounts    Accounts
+	mailer      notify.Mailer
+	baseURL     string
+	magicTTL    time.Duration
+	signInLimit *attemptLimiter
 }
 
 // New validates options and returns a server.
@@ -94,6 +141,20 @@ func New(opts Options) (*Server, error) {
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
+	if opts.Accounts != nil {
+		if opts.BaseURL == "" {
+			return nil, errors.New(
+				"web: a BaseURL is required with Accounts — sign-in links cannot be " +
+					"built from the request without letting a Host header decide where " +
+					"they point")
+		}
+		if opts.Mailer == nil {
+			opts.Mailer = notify.NewLog(opts.Logger)
+		}
+		if opts.MagicLinkTTL <= 0 {
+			opts.MagicLinkTTL = defaultMagicLinkTTL
+		}
+	}
 	return &Server{
 		orch:      opts.Orchestrator,
 		ident:     opts.Identity,
@@ -104,6 +165,12 @@ func New(opts Options) (*Server, error) {
 		appDomain: opts.AppDomain,
 		wildcard:  opts.WildcardTLS,
 		log:       opts.Logger,
+
+		accounts:    opts.Accounts,
+		mailer:      opts.Mailer,
+		baseURL:     strings.TrimRight(opts.BaseURL, "/"),
+		magicTTL:    opts.MagicLinkTTL,
+		signInLimit: newAttemptLimiter(signInWindow),
 	}, nil
 }
 
@@ -124,6 +191,14 @@ func (s *Server) Handler() http.Handler {
 	// the authenticated group too — otherwise the stylesheet 401s on the login
 	// page and every error screen renders unstyled.
 	r.Handle("/assets/*", assetHandler())
+
+	// Sign-in is outside the authenticated group by necessity: someone with no
+	// session is exactly who needs it. The POST is a mutating route with no role
+	// gate for the same reason — there is no session to read a role from yet.
+	if s.accounts != nil {
+		r.Get("/sign-in", s.signInPage)
+		r.Post("/sign-in", s.signInRequest)
+	}
 
 	r.Group(func(r chi.Router) {
 		r.Use(identity.Middleware(s.ident))
@@ -477,6 +552,35 @@ func (s *Server) renderWithCrumb(
 		slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: crumb})
 	}
 	s.renderWithSlots(w, r, slots, page)
+}
+
+// renderSignedOut renders a page for a visitor who has no session.
+//
+// The provider's brand survives, so an application wrapping the engine still
+// presents its own product on the page where people arrive. Its navigation does
+// not: every link in it needs a session, and offering a signed-out visitor a
+// column of links that will bounce them straight back here is worse than
+// offering none.
+func (s *Server) renderSignedOut(
+	w http.ResponseWriter, r *http.Request, status int, title string, page templ.Component,
+) {
+	slots := s.slots.Slots(r.Context(), r)
+	slots.Title = title
+	slots.Nav = nil
+	slots.Breadcrumb = nil
+	slots.HeaderTools = nil
+	slots.SidebarTop = nil
+	slots.SidebarFooter = nil
+	slots.Banner = nil
+
+	// Content-Type before the status line: set afterwards it is dropped, and a
+	// rejected address would come back as a page the browser renders as text.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
+		s.log.Error("render failed",
+			slog.String("path", r.URL.Path), slog.String("error", err.Error()))
+	}
 }
 
 // render wraps a page in the layout, filling the chrome from the injected
