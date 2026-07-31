@@ -85,6 +85,29 @@ type Accounts interface {
 	// RevokeAllSessions ends every session a person holds, which is the only
 	// answer to a cookie that has been copied off a machine.
 	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
+
+	// ListMembers and ListPendingInvitations are what the team page shows.
+	// Both are scoped by team, and the team comes from the caller's session
+	// rather than from the request.
+	ListMembers(ctx context.Context, teamID string) ([]account.Member, error)
+	ListPendingInvitations(ctx context.Context, teamID string) ([]account.Invitation, error)
+
+	// Invite issues an invitation and returns the token to mail. The token is
+	// returned rather than stored anywhere readable, so the message is the only
+	// place it exists.
+	Invite(
+		ctx context.Context, actor uuid.UUID, teamID, email string,
+		role account.Role, ttl time.Duration,
+	) (string, error)
+
+	// RevokeInvitation withdraws one. The mail cannot be recalled, so deleting
+	// the row is the only way to take an invitation back.
+	RevokeInvitation(ctx context.Context, actor uuid.UUID, teamID string, id uuid.UUID) error
+
+	// SetRole and RemoveMember change who may do what. Both check the actor's
+	// own authority and refuse to leave the team without an owner.
+	SetRole(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID, role account.Role) error
+	RemoveMember(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID) error
 }
 
 // The engine's own implementation, asserted here so that a signature drifting
@@ -340,6 +363,13 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/deployments", s.activity)
 
+			// Readable by any member: knowing who else is in your team is not a
+			// privilege. The page offers only the controls the viewer's role can
+			// actually use, and every one of those is gated on its own route.
+			if s.accounts != nil {
+				r.Get("/team", s.teamPage)
+			}
+
 			r.Get("/cluster", s.clusterNodes)
 			r.Get("/cluster/nodes", s.clusterNodes)
 			r.Get("/cluster/pods", s.clusterPods)
@@ -366,9 +396,9 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/delete", s.appDelete)
 
 			if s.accounts != nil {
-				r.Post("/team/invite", s.teamRouteStub)
-				r.Post("/team/invitations/{id}/revoke", s.teamRouteStub)
-				r.Post("/team/members/{id}/remove", s.teamRouteStub)
+				r.Post("/team/invite", s.teamInvite)
+				r.Post("/team/invitations/{id}/revoke", s.teamRevokeInvitation)
+				r.Post("/team/members/{id}/remove", s.teamRemoveMember)
 			}
 		})
 
@@ -381,7 +411,7 @@ func (s *Server) Handler() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireRole(account.RoleOwner))
 
-				r.Post("/team/members/{id}/role", s.teamRouteStub)
+				r.Post("/team/members/{id}/role", s.teamSetRole)
 				r.Post("/team/delete", s.teamRouteStub)
 			})
 		}

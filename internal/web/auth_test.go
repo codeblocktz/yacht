@@ -209,6 +209,44 @@ func (f *fakeAccounts) RevokeAllSessions(context.Context, uuid.UUID) error {
 	return errNoFakeAccountsBackend
 }
 
+// Team management is exercised against the real service and a real database in
+// team_test.go — the claims there are facts about rows in three tables, and a
+// fake asked the same questions would only repeat the answers it was written
+// with. These exist so fakeAccounts still satisfies the interface for the
+// sign-in tests, which have no business touching a team.
+
+func (f *fakeAccounts) ListMembers(context.Context, string) ([]account.Member, error) {
+	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) ListPendingInvitations(
+	context.Context, string,
+) ([]account.Invitation, error) {
+	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) Invite(
+	context.Context, uuid.UUID, string, string, account.Role, time.Duration,
+) (string, error) {
+	return "", errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) RevokeInvitation(
+	context.Context, uuid.UUID, string, uuid.UUID,
+) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) SetRole(
+	context.Context, uuid.UUID, string, uuid.UUID, account.Role,
+) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) RemoveMember(context.Context, uuid.UUID, string, uuid.UUID) error {
+	return errNoFakeAccountsBackend
+}
+
 var errNoFakeAccountsBackend = errors.New("fakeAccounts holds no teams or sessions")
 
 type fakeMailer struct {

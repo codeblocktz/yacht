@@ -2,9 +2,13 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -204,5 +208,336 @@ func TestSwitchRejectsGET(t *testing.T) {
 	}
 	if now := h.activeTeam(t, c); now != before {
 		t.Fatalf("a GET moved the session from %q to %q", before, now)
+	}
+}
+
+// ------------------------------------------------------ team management
+//
+// Against the real account service and a real database throughout. Every claim
+// here — that a session dies with its membership, that a revoked invitation
+// stops working, that the last owner cannot be removed — is a fact about rows
+// in three tables, and a fake asked the same questions would only repeat the
+// answers it was written with.
+
+// invite sends the management page's own invitation form.
+func (h *liveHarness) invite(
+	t *testing.T, c *http.Cookie, email, role string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	return h.postFormAs(t, "/team/invite", c, url.Values{
+		"email": {email}, "role": {role},
+	})
+}
+
+// invitationToken pulls the token out of the invitation mail, which is the only
+// place it exists — the same position the invited person is in.
+func invitationToken(t *testing.T, body string) string {
+	t.Helper()
+	const prefix = "https://yacht.test/invitations/"
+	i := strings.Index(body, prefix)
+	if i < 0 {
+		t.Fatalf("no invitation link in the mail:\n%s", body)
+	}
+	token := body[i+len(prefix):]
+	if j := strings.IndexAny(token, " \r\n"); j >= 0 {
+		token = token[:j]
+	}
+	if token == "" {
+		t.Fatalf("the invitation link carries no token:\n%s", body)
+	}
+	return token
+}
+
+// lastMail is the message the action under test caused, or a failure saying it
+// caused none.
+func (h *liveHarness) lastMail(t *testing.T, before int) string {
+	t.Helper()
+	sent := h.mailer.messages()
+	if len(sent) != before+1 {
+		t.Fatalf("mails sent = %d, want one more than %d", len(sent), before)
+	}
+	return sent[len(sent)-1].TextBody
+}
+
+// invitationAction finds the id in a revoke form, which is how the page offers
+// an invitation to be withdrawn.
+var invitationAction = regexp.MustCompile(
+	`/team/invitations/([0-9a-fA-F-]{36})/revoke`)
+
+func onlyInvitationID(t *testing.T, body string) string {
+	t.Helper()
+	found := invitationAction.FindAllStringSubmatch(body, -1)
+	if len(found) != 1 {
+		t.Fatalf("found %d revoke forms on the page, want exactly 1:\n%s", len(found), body)
+	}
+	return found[0][1]
+}
+
+func TestTeamPageListsMembersAndPendingInvitations(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-page", "team-app")
+
+	if rec := rt.invite(t, rt.owner, "invitee@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /team/invite = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+
+	rec := rt.getAs(t, "/team", rt.owner)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /team = %d, want 200\n%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// Everyone in the team, and the one person who has been asked but has not
+	// arrived. A page missing either is a page that cannot be acted on.
+	for _, want := range []string{
+		"owner@web.test", "admin@web.test", "member@web.test", "invitee@web.test",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the team page does not list %q:\n%s", want, body)
+		}
+	}
+
+	// The rows are real controls rather than text: each member can be acted on
+	// by id, and the invitation can be withdrawn.
+	for _, want := range []string{
+		`action="/team/members/` + rt.memberID.String() + `/remove"`,
+		`action="/team/members/` + rt.adminID.String() + `/role"`,
+		`action="/team/invite"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the team page is missing %q:\n%s", want, body)
+		}
+	}
+	if len(invitationAction.FindAllString(body, -1)) != 1 {
+		t.Errorf("the pending invitation has no revoke form:\n%s", body)
+	}
+
+	// A member may read who they work with. What they may change is a separate
+	// question, and the gates answer it.
+	if code := rt.getAs(t, "/team", rt.member).Code; code != http.StatusOK {
+		t.Errorf("GET /team as a member = %d, want 200", code)
+	}
+}
+
+func TestInviteSendsMailAndShowsPending(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-invite", "invite-app")
+	before := len(rt.mailer.messages())
+
+	rec := rt.invite(t, rt.admin, "newcomer@web.test", "member")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /team/invite as an admin = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/team" {
+		t.Errorf("Location = %q, want /team", loc)
+	}
+
+	sent := rt.mailer.messages()
+	if len(sent) != before+1 {
+		t.Fatalf("mails sent = %d, want one more than %d — an invitation nobody "+
+			"receives is not an invitation", len(sent), before)
+	}
+	msg := sent[len(sent)-1]
+	if msg.To != "newcomer@web.test" {
+		t.Errorf("the invitation went to %q", msg.To)
+	}
+	// Built from the configured base URL, never from the Host header: a link
+	// built from a header is one an attacker can point at their own server and
+	// have Yacht mail to a real person.
+	if !strings.Contains(msg.TextBody, "https://yacht.test/invitations/") {
+		t.Errorf("no invitation link in the mail:\n%s", msg.TextBody)
+	}
+
+	if body := rt.getAs(t, "/team", rt.admin).Body.String(); !strings.Contains(
+		body, "newcomer@web.test") {
+		t.Errorf("the invitation was sent but is not shown as pending, so there is "+
+			"nothing to revoke:\n%s", body)
+	}
+}
+
+// An admin must not be able to mint an owner — that is ownership. An admin who
+// could invite an owner could invite themselves back in with every permission
+// the team has.
+func TestAdminCannotInviteAnOwner(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-mint", "mint-app")
+	before := len(rt.mailer.messages())
+
+	rec := rt.invite(t, rt.admin, "usurper@web.test", "owner")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an admin inviting an owner = %d, want 403\n%s", rec.Code, rec.Body.String())
+	}
+	if got := rt.mailer.messages(); len(got) != before {
+		t.Errorf("mails sent = %d, want %d — the refused invitation was posted anyway",
+			len(got), before)
+	}
+	if body := rt.getAs(t, "/team", rt.owner).Body.String(); strings.Contains(
+		body, "usurper@web.test") {
+		t.Fatalf("the refused invitation exists:\n%s", body)
+	}
+
+	// The refusal is about who is asking, not about the role being unavailable:
+	// the owner may hand out ownership.
+	if rec := rt.invite(t, rt.owner, "usurper@web.test", "owner"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("the owner inviting an owner = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+}
+
+// Revoking is the only way to take back an invitation sent to the wrong
+// address: the mail itself cannot be recalled, so the token has to stop working.
+func TestRevokedInvitationDisappearsAndStopsWorking(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-revoke", "revoke-app")
+	dropped := rt.user(t, "dropped@web.test")
+	kept := rt.user(t, "kept@web.test")
+
+	before := len(rt.mailer.messages())
+	if rec := rt.invite(t, rt.owner, "dropped@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /team/invite = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	droppedToken := invitationToken(t, rt.lastMail(t, before))
+
+	id := onlyInvitationID(t, rt.getAs(t, "/team", rt.owner).Body.String())
+	rec := rt.postFormAs(t, "/team/invitations/"+id+"/revoke", rt.admin, nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST revoke = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+
+	body := rt.getAs(t, "/team", rt.owner).Body.String()
+	if strings.Contains(body, "dropped@web.test") {
+		t.Errorf("the revoked invitation is still on the page:\n%s", body)
+	}
+	if found := invitationAction.FindAllString(body, -1); len(found) != 0 {
+		t.Errorf("revoke forms still on the page: %v", found)
+	}
+
+	// The page is the smaller half of it. The token in the mail must be dead.
+	if _, _, err := rt.accounts.AcceptInvitation(
+		context.Background(), droppedToken, dropped.ID,
+	); !errors.Is(err, account.ErrTokenInvalid) {
+		t.Fatalf("accepting the revoked invitation: %v, want ErrTokenInvalid — the "+
+			"mail is still a way into the team", err)
+	}
+
+	// ...and an invitation that was not revoked still works, so the failure above
+	// is the revocation rather than invitations never working at all.
+	before = len(rt.mailer.messages())
+	if rec := rt.invite(t, rt.owner, "kept@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /team/invite = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	keptToken := invitationToken(t, rt.lastMail(t, before))
+	team, role, err := rt.accounts.AcceptInvitation(context.Background(), keptToken, kept.ID)
+	if err != nil {
+		t.Fatalf("accepting the invitation that was left alone: %v", err)
+	}
+	if team != rt.teamID || role != account.RoleMember {
+		t.Fatalf("accepted into %q as %q, want %q as member", team, role, rt.teamID)
+	}
+}
+
+// The HTTP-level proof that a session cannot outlive the membership it depends
+// on: the removed person's cookie must stop working on their next request, not
+// when it expires.
+func TestRemovingAMemberEndsTheirSession(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-remove", "remove-app")
+
+	if code := rt.getAs(t, "/apps", rt.member).Code; code != http.StatusOK {
+		t.Fatalf("GET /apps as the member before removal = %d, want 200", code)
+	}
+
+	rec := rt.postFormAs(t, "/team/members/"+rt.memberID.String()+"/remove", rt.owner, nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST remove = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+
+	if code := rt.getAs(t, "/apps", rt.member).Code; code != http.StatusUnauthorized {
+		t.Fatalf("GET /apps as the removed member = %d, want 401 — their cookie still "+
+			"opens the team they were taken out of", code)
+	}
+	if body := rt.getAs(t, "/team", rt.owner).Body.String(); strings.Contains(
+		body, "member@web.test") {
+		t.Errorf("the removed member is still listed:\n%s", body)
+	}
+	if _, err := rt.accounts.RoleIn(
+		context.Background(), rt.memberID, rt.teamID,
+	); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatalf("role after removal: %v, want ErrNotAMember", err)
+	}
+}
+
+// A team with no owner cannot be administered by anyone, ever again — there is
+// no route back that does not go through the database.
+func TestCannotRemoveOrDemoteTheLastOwner(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-lastowner", "last-app")
+	ctx := context.Background()
+
+	stillOwner := func(what string) {
+		t.Helper()
+		role, err := rt.accounts.RoleIn(ctx, rt.ownerID, rt.teamID)
+		if err != nil || role != account.RoleOwner {
+			t.Fatalf("after %s the only owner holds %q (%v), want owner — the team "+
+				"can no longer be administered by anybody", what, role, err)
+		}
+	}
+
+	demote := "/team/members/" + rt.ownerID.String() + "/role"
+	if rec := rt.postFormAs(t, demote, rt.owner, url.Values{
+		"role": {"member"},
+	}); rec.Code < 400 {
+		t.Errorf("the last owner demoted themselves: %d\n%s", rec.Code, rec.Body.String())
+	}
+	stillOwner("a self-demotion")
+
+	remove := "/team/members/" + rt.ownerID.String() + "/remove"
+	if rec := rt.postFormAs(t, remove, rt.owner, nil); rec.Code < 400 {
+		t.Errorf("the last owner removed themselves: %d\n%s", rec.Code, rec.Body.String())
+	}
+	stillOwner("a self-removal")
+	if code := rt.getAs(t, "/apps", rt.owner).Code; code != http.StatusOK {
+		t.Errorf("GET /apps as the owner = %d, want 200 — the refused removal took "+
+			"their session with it", code)
+	}
+
+	// The refusal is about the team keeping an owner, not about owners being
+	// unchangeable: with a second one appointed, the same demotion goes through.
+	if rec := rt.postFormAs(t, "/team/members/"+rt.adminID.String()+"/role", rt.owner,
+		url.Values{"role": {"owner"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("appointing a second owner = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if rec := rt.postFormAs(t, demote, rt.owner, url.Values{
+		"role": {"member"},
+	}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("demoting one of two owners = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if role, err := rt.accounts.RoleIn(ctx, rt.ownerID, rt.teamID); err != nil ||
+		role != account.RoleMember {
+		t.Fatalf("role after the demotion = %q (%v), want member", role, err)
+	}
+}
+
+// A management page that prints the invitation link lets anyone who can read it
+// impersonate the invitee — including whoever is looking over their shoulder.
+func TestPendingInvitationDoesNotLeakItsToken(t *testing.T) {
+	rt := newRoleTeam(t, "web-team-token", "token-app")
+
+	before := len(rt.mailer.messages())
+	if rec := rt.invite(t, rt.owner, "quiet@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /team/invite = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	token := invitationToken(t, rt.lastMail(t, before))
+
+	body := rt.getAs(t, "/team", rt.owner).Body.String()
+	// The invitation really is on the page, or the absences below prove nothing.
+	if !strings.Contains(body, "quiet@web.test") {
+		t.Fatalf("the invitation is not on the page at all:\n%s", body)
+	}
+
+	hash := account.HashToken(token)
+	for what, secret := range map[string]string{
+		"the raw token":       token,
+		"its hash, hex":       hex.EncodeToString(hash),
+		"its hash, base64":    base64.StdEncoding.EncodeToString(hash),
+		"its hash, base64url": base64.RawURLEncoding.EncodeToString(hash),
+	} {
+		if strings.Contains(body, secret) {
+			t.Errorf("the team page renders %s — anyone who can see the page can "+
+				"accept the invitation as its recipient", what)
+		}
 	}
 }
