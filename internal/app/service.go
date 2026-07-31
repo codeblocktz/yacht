@@ -148,7 +148,7 @@ func NewService(
 
 // EnsureOwner makes sure the owner row exists, so app inserts have a parent.
 func (s *Service) EnsureOwner(ctx context.Context, id, displayName, email string) error {
-	_, err := s.q.CreateOwner(ctx, dbgen.CreateOwnerParams{
+	_, err := s.q.CreateTeamRow(ctx, dbgen.CreateTeamRowParams{
 		ID: id, DisplayName: displayName, Email: email,
 	})
 	if err != nil {

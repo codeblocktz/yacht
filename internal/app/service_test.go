@@ -65,7 +65,7 @@ func owner(t *testing.T, s *Service, pool *pgxpool.Pool, id string) string {
 	ctx := context.Background()
 
 	purge := func() {
-		if _, err := pool.Exec(ctx, `DELETE FROM owners WHERE id = $1`, id); err != nil {
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
 			t.Errorf("purge owner: %v", err)
 		}
 	}

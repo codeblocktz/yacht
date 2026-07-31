@@ -61,7 +61,7 @@ func seedOwners(t *testing.T, pool *pgxpool.Pool, ids ...string) {
 	ctx := context.Background()
 
 	purge := func() {
-		if _, err := pool.Exec(ctx, `DELETE FROM owners WHERE id = ANY($1)`, ids); err != nil {
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id = ANY($1)`, ids); err != nil {
 			t.Errorf("purge owners: %v", err)
 		}
 	}
@@ -69,7 +69,7 @@ func seedOwners(t *testing.T, pool *pgxpool.Pool, ids ...string) {
 	t.Cleanup(purge)
 
 	for _, id := range ids {
-		if _, err := pool.Exec(ctx, `INSERT INTO owners (id) VALUES ($1)`, id); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO teams (id) VALUES ($1)`, id); err != nil {
 			t.Fatalf("seed owner %s: %v", id, err)
 		}
 	}
@@ -88,6 +88,83 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
+// The rename must carry every foreign key with it. If it does not, apps
+// silently lose their parent and the owner-scoping invariant is gone.
+func TestOwnersRenamedToTeamsKeepsForeignKeys(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+
+	var n int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.constraint_column_usage ccu
+		  ON tc.constraint_name = ccu.constraint_name
+		WHERE tc.constraint_type = 'FOREIGN KEY' AND ccu.table_name = 'teams'
+	`).Scan(&n); err != nil {
+		t.Fatalf("query foreign keys: %v", err)
+	}
+	// apps, deployments, domains, memberships, invitations all reference it.
+	if n < 3 {
+		t.Fatalf("foreign keys referencing teams = %d, want at least 3 (apps, deployments, domains)", n)
+	}
+
+	var exists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT to_regclass('public.owners') IS NOT NULL`).Scan(&exists); err != nil {
+		t.Fatalf("check owners: %v", err)
+	}
+	if exists {
+		t.Fatal("owners still exists — the rename did not happen")
+	}
+}
+
+func TestAccountTablesExist(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+
+	for _, table := range []string{"users", "memberships", "sessions", "invitations"} {
+		var exists bool
+		if err := pool.QueryRow(ctx,
+			`SELECT to_regclass('public.' || $1) IS NOT NULL`, table).Scan(&exists); err != nil {
+			t.Fatalf("check %s: %v", table, err)
+		}
+		if !exists {
+			t.Errorf("table %s does not exist", table)
+		}
+	}
+}
+
+// A person may hold one role in a team, not two.
+func TestMembershipIsUniquePerUserAndTeam(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+
+	const teamID = "test-membership-team"
+	seedOwners(t, pool, teamID)
+
+	var userID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email) VALUES ($1) RETURNING id`,
+		"membership@example.test").Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO memberships (user_id, owner_id, role) VALUES ($1, $2, 'owner')`,
+		userID, teamID); err != nil {
+		t.Fatalf("first membership: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO memberships (user_id, owner_id, role) VALUES ($1, $2, 'member')`,
+		userID, teamID); err == nil {
+		t.Fatal("a second membership for the same user and team was accepted")
+	}
+}
+
 // TestEveryTableIsOwnerScoped enforces the rule the open-core split depends
 // on: ownership is a column on the table being queried, not a join away.
 //
@@ -98,9 +175,15 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 	ctx := context.Background()
 	pool := testPool(t)
 
-	// owners is the principal table itself — its own id is the owner.
-	// goose_db_version is migration bookkeeping.
-	exempt := map[string]bool{"owners": true, "goose_db_version": true}
+	// Tables that legitimately carry no owner_id, each for a stated reason.
+	// Extending this map is how the invariant gets quietly lost, so every
+	// entry says why it is here.
+	exempt := map[string]string{
+		"teams":            "the principal table itself — its own id is the owner",
+		"goose_db_version": "migration bookkeeping",
+		"users":            "a person exists before belonging to any team",
+		"sessions":         "a session belongs to a person, not to a team",
+	}
 
 	rows, err := pool.Query(ctx, `
 		SELECT table_name
@@ -130,7 +213,7 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		if exempt[table] {
+		if _, ok := exempt[table]; ok {
 			continue
 		}
 		var count int

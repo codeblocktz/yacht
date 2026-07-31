@@ -5,8 +5,8 @@
 -- another owner's data, and sqlc makes the parameter impossible to omit
 -- because the generated signature requires it.
 
--- name: CreateOwner :one
-INSERT INTO owners (id, display_name, email)
+-- name: CreateTeamRow :one
+INSERT INTO teams (id, display_name, email)
 VALUES ($1, $2, $3)
 ON CONFLICT (id) DO UPDATE
     SET display_name = EXCLUDED.display_name,
@@ -14,8 +14,8 @@ ON CONFLICT (id) DO UPDATE
         updated_at   = now()
 RETURNING *;
 
--- name: GetOwner :one
-SELECT * FROM owners WHERE id = $1;
+-- name: GetTeamRow :one
+SELECT * FROM teams WHERE id = $1;
 
 -- name: CreateApp :one
 INSERT INTO apps (

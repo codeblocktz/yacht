@@ -20,7 +20,7 @@ type Querier interface {
 	// check. A handler that forgets to scope produces no rows here rather than
 	// another owner's data, and sqlc makes the parameter impossible to omit
 	// because the generated signature requires it.
-	CreateOwner(ctx context.Context, arg CreateOwnerParams) (Owner, error)
+	CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
 	// Releases an app's platform hostname.
 	//
@@ -32,7 +32,7 @@ type Querier interface {
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
-	GetOwner(ctx context.Context, id string) (Owner, error)
+	GetTeamRow(ctx context.Context, id string) (Team, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)

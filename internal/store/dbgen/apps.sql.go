@@ -118,9 +118,9 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 	return i, err
 }
 
-const createOwner = `-- name: CreateOwner :one
+const createTeamRow = `-- name: CreateTeamRow :one
 
-INSERT INTO owners (id, display_name, email)
+INSERT INTO teams (id, display_name, email)
 VALUES ($1, $2, $3)
 ON CONFLICT (id) DO UPDATE
     SET display_name = EXCLUDED.display_name,
@@ -129,7 +129,7 @@ ON CONFLICT (id) DO UPDATE
 RETURNING id, display_name, email, created_at, updated_at
 `
 
-type CreateOwnerParams struct {
+type CreateTeamRowParams struct {
 	ID          string
 	DisplayName string
 	Email       string
@@ -141,9 +141,9 @@ type CreateOwnerParams struct {
 // check. A handler that forgets to scope produces no rows here rather than
 // another owner's data, and sqlc makes the parameter impossible to omit
 // because the generated signature requires it.
-func (q *Queries) CreateOwner(ctx context.Context, arg CreateOwnerParams) (Owner, error) {
-	row := q.db.QueryRow(ctx, createOwner, arg.ID, arg.DisplayName, arg.Email)
-	var i Owner
+func (q *Queries) CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error) {
+	row := q.db.QueryRow(ctx, createTeamRow, arg.ID, arg.DisplayName, arg.Email)
+	var i Team
 	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
@@ -268,13 +268,13 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 	return i, err
 }
 
-const getOwner = `-- name: GetOwner :one
-SELECT id, display_name, email, created_at, updated_at FROM owners WHERE id = $1
+const getTeamRow = `-- name: GetTeamRow :one
+SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1
 `
 
-func (q *Queries) GetOwner(ctx context.Context, id string) (Owner, error) {
-	row := q.db.QueryRow(ctx, getOwner, id)
-	var i Owner
+func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
+	row := q.db.QueryRow(ctx, getTeamRow, id)
+	var i Team
 	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,

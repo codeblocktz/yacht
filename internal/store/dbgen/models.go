@@ -51,10 +51,50 @@ type Domain struct {
 	Managed   bool
 }
 
-type Owner struct {
+type Invitation struct {
+	ID         uuid.UUID
+	OwnerID    string
+	Email      string
+	Role       string
+	TokenHash  []byte
+	InvitedBy  pgtype.UUID
+	ExpiresAt  time.Time
+	AcceptedAt pgtype.Timestamptz
+	CreatedAt  time.Time
+}
+
+type Membership struct {
+	UserID    uuid.UUID
+	OwnerID   string
+	Role      string
+	CreatedAt time.Time
+}
+
+type Session struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	TokenHash    []byte
+	ActiveTeamID *string
+	UserAgent    string
+	Ip           string
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
+}
+
+type Team struct {
 	ID          string
 	DisplayName string
 	Email       string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+type User struct {
+	ID            uuid.UUID
+	Email         string
+	DisplayName   string
+	TotpSecret    *string
+	TotpConfirmed bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

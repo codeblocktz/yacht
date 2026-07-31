@@ -48,7 +48,7 @@ func seedApp(t *testing.T, pool *pgxpool.Pool, ownerID, name, namespace string) 
 	ctx := context.Background()
 
 	purge := func() {
-		if _, err := pool.Exec(ctx, `DELETE FROM owners WHERE id = $1`, ownerID); err != nil {
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id = $1`, ownerID); err != nil {
 			t.Errorf("purge owner %s: %v", ownerID, err)
 		}
 	}
@@ -56,7 +56,7 @@ func seedApp(t *testing.T, pool *pgxpool.Pool, ownerID, name, namespace string) 
 	t.Cleanup(purge)
 
 	q := dbgen.New(pool)
-	if _, err := q.CreateOwner(ctx, dbgen.CreateOwnerParams{ID: ownerID}); err != nil {
+	if _, err := q.CreateTeamRow(ctx, dbgen.CreateTeamRowParams{ID: ownerID}); err != nil {
 		t.Fatalf("create owner: %v", err)
 	}
 	row, err := q.CreateApp(ctx, dbgen.CreateAppParams{
