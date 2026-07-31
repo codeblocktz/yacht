@@ -60,6 +60,13 @@ func (r Ref) Validate() error {
 // most object names.
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// hostRE matches a dotted DNS name. Deliberately strict: no scheme, no port,
+// no path, no uppercase. Anything that arrives here in one of those shapes is
+// a caller that has confused a URL with a hostname, and failing early is
+// cheaper than an Ingress that silently never matches.
+var hostRE = regexp.MustCompile(
+	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`)
+
 // ValidateDNSLabel reports whether s is a legal Kubernetes object name.
 //
 // Callers are expected to generate names rather than pass user input straight
@@ -167,6 +174,22 @@ type AppSpec struct {
 	// visible escape hatch rather than silently weakening the default for
 	// everyone. /tmp is always writable — see the k8s implementation.
 	WritableRootFilesystem bool
+
+	// Hosts are the hostnames routed to this workload. Empty means the
+	// workload is reachable only inside the cluster.
+	//
+	// Plain strings rather than a richer type: the orchestrator's job is to
+	// route a name, and which names are legitimate — platform-issued or
+	// customer-claimed — is a decision that belongs above this seam.
+	Hosts []string
+
+	// TLS requests terminated TLS for Hosts.
+	//
+	// It carries no certificate reference. Platform hostnames are served from
+	// the ingress controller's own default certificate, so the workload's
+	// routing never names a Secret — an Ingress's TLS Secret must live in the
+	// Ingress's own namespace, and every app has its own namespace.
+	TLS bool
 }
 
 // Validate checks the spec well enough to avoid sending nonsense to a cluster.
@@ -182,6 +205,14 @@ func (s AppSpec) Validate() error {
 	}
 	if s.Port < 0 || s.Port > 65535 {
 		return fmt.Errorf("app spec: port must be within 0-65535, got %d", s.Port)
+	}
+	if len(s.Hosts) > 0 && s.Port == 0 {
+		return errors.New("app spec: hosts require a port to route to")
+	}
+	for _, h := range s.Hosts {
+		if !hostRE.MatchString(h) {
+			return fmt.Errorf("app spec: %q is not a valid hostname", h)
+		}
 	}
 	return nil
 }
