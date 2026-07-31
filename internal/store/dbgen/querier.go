@@ -12,8 +12,10 @@ import (
 
 type Querier interface {
 	CountApps(ctx context.Context, ownerID string) (int64, error)
+	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
+	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//
 	// This is not defensive duplication of an application-level check — it is the
@@ -28,18 +30,29 @@ type Querier interface {
 	// hostnames are globally unique, so a retired row keeps the name reserved
 	// against every other app forever.
 	DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error
+	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
+	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	GetTeam(ctx context.Context, id string) (Team, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
+	GetUserByEmail(ctx context.Context, email string) (User, error)
+	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
+	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
+	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
+	// A role change reads the owner count and then writes; taking the team row
+	// first serialises those pairs, so two concurrent demotions cannot both see
+	// two owners and both proceed.
+	LockTeam(ctx context.Context, id string) (Team, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Platform-issued hostnames. Custom domains get their own queries when that
@@ -56,6 +69,11 @@ type Querier interface {
 	// ownership; requiring proof would mean inventing a verification step for a
 	// name we already control.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
+	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
+	// Users and sessions carry no owner_id: a person exists before they belong to
+	// any team. Memberships and invitations do, and stay scoped by it like
+	// everything else.
+	UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)
