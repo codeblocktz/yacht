@@ -74,6 +74,11 @@ type Accounts interface {
 	// anything the request says about itself.
 	ResolveSession(ctx context.Context, raw string) (account.Session, error)
 
+	// SwitchTeam points a session at another team. Membership is verified there,
+	// against the session's own user rather than against anything the request
+	// supplied, which is what makes a crafted team id switch into nothing.
+	SwitchTeam(ctx context.Context, sessionID uuid.UUID, teamID string) error
+
 	// RevokeSession ends one session — sign-out on this browser.
 	RevokeSession(ctx context.Context, raw string) error
 
@@ -301,6 +306,13 @@ func (s *Server) Handler() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(identity.Middleware(s.ident))
 
+		// The teams a person may act as, for whatever renders the chrome. Mounted
+		// as middleware rather than fetched by each handler, because the switcher
+		// belongs to the layout and not to any one page.
+		if s.accounts != nil {
+			r.Use(s.withTeams)
+		}
+
 		// The split between these groups is at the line where an action stops
 		// being undoable by redeploying. Each gate is on the group rather than in
 		// the handlers, so a route added to one of them later is protected
@@ -334,6 +346,17 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/cluster/volumes", s.clusterVolumes)
 			r.Get("/cluster/events", s.clusterEvents)
 			r.Get("/settings", s.settings)
+
+			// Switching team is gated at member because that is what holding any
+			// session amounts to — the gate proves this browser is acting in a team
+			// it belongs to. Which team it may move to is a separate question, and
+			// one only the account service can answer, so it answers it.
+			//
+			// POST because it changes what every later request is scoped by. A GET
+			// would let a prefetch or a crawler move somebody into another team.
+			if s.accounts != nil {
+				r.Post("/teams/switch", s.teamSwitch)
+			}
 		})
 
 		// Admin: everything a redeploy cannot undo, and who is in the team.

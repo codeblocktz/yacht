@@ -197,6 +197,10 @@ func (f *fakeAccounts) ResolveSession(context.Context, string) (account.Session,
 	return account.Session{}, account.ErrSessionInvalid
 }
 
+func (f *fakeAccounts) SwitchTeam(context.Context, uuid.UUID, string) error {
+	return errNoFakeAccountsBackend
+}
+
 func (f *fakeAccounts) RevokeSession(context.Context, string) error {
 	return errNoFakeAccountsBackend
 }

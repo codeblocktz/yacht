@@ -82,6 +82,62 @@ templ sidebar(s Slots) {
 	</aside>
 }
 
+// TeamSwitcher moves the session between the teams a person belongs to.
+//
+// Every entry is a submit button in one POST form. A link would be a GET that
+// changes what the whole dashboard is scoped by, and prefetchers and crawlers
+// follow links — being moved into another team by a page you merely hovered
+// over is a confusing way to end up acting somewhere you did not choose.
+//
+// The list is only the chrome's copy of what the session already proved.
+// Membership is checked again on the way in, so an entry forged into this form
+// switches into nothing.
+//
+// details/summary rather than a scripted menu: the dashboard's one piece of
+// state that must work is the control that says which team you are in, and it
+// should not need JavaScript to open.
+templ TeamSwitcher(teams []TeamChoice) {
+	<details class="group relative">
+		<summary class="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-sidebar-accent [&::-webkit-details-marker]:hidden">
+			<span class="size-4 shrink-0 rounded-[5px] bg-muted ring-1 ring-inset ring-border"></span>
+			<span class="min-w-0 flex-1 truncate font-medium">{ activeTeamName(teams) }</span>
+			<svg
+				class="size-3.5 shrink-0 opacity-60 group-open:rotate-180"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.7"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M6 9l6 6 6-6"></path>
+			</svg>
+		</summary>
+		<form
+			method="post"
+			action="/teams/switch"
+			class="absolute left-0 right-0 z-20 mt-1 flex flex-col gap-px rounded-md border border-border bg-popover p-1 shadow-lg"
+		>
+			for _, team := range teams {
+				<button
+					type="submit"
+					name="team"
+					value={ team.ID }
+					class={ "flex items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-muted",
+						templ.KV("font-medium", team.Active) }
+				>
+					<span class="min-w-0 flex-1 truncate">{ team.Name }</span>
+					if team.Active {
+						<span class="text-[11px] text-muted-foreground">current</span>
+					} else {
+						<span class="text-[11px] text-muted-foreground">{ string(team.Role) }</span>
+					}
+				</button>
+			}
+		</form>
+	</details>
+}
+
 templ topbar(s Slots) {
 	<header class="flex h-12 shrink-0 items-center gap-3 border-b border-border px-6">
 		<div class="flex min-w-0 items-center gap-2 text-[12.5px] text-muted-foreground">

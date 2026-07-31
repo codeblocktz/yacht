@@ -107,13 +107,27 @@ type DefaultSlots struct{}
 
 var _ SlotProvider = DefaultSlots{}
 
-func (DefaultSlots) Slots(_ context.Context, r *http.Request) Slots {
+func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	path := r.URL.Path
+
+	// The switcher goes in SidebarTop — the slot documented as the home for an
+	// organisation switcher — rather than into the layout directly. A wrapping
+	// application that fills this slot with its own control replaces the
+	// engine's, which is the point of the seam: the chrome stays data.
+	//
+	// Nothing is drawn on an install with no accounts, where the person belongs
+	// to no teams and there is nothing to switch between.
+	var switcher templ.Component
+	if teams := TeamsFromContext(ctx); len(teams) > 0 {
+		switcher = TeamSwitcher(teams)
+	}
+
 	return Slots{
 		Title:      "Yacht",
 		Breadcrumb: breadcrumbFor(path),
 		BrandName:  "Yacht",
 		BrandHref:  "/",
+		SidebarTop: switcher,
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
