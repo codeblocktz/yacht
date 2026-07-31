@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var appDomainRE = regexp.MustCompile(
+	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`)
 
 // Config is everything the engine needs to start.
 type Config struct {
@@ -32,6 +36,23 @@ type Config struct {
 	OwnerID   string
 	OwnerName string
 
+	// AppDomain is the platform domain every app gets a hostname under, such
+	// as apps.example.com. Empty switches per-app hostnames off entirely.
+	AppDomain string
+
+	// WildcardTLS serves platform hostnames over TLS using the ingress
+	// controller's configured default certificate.
+	//
+	// Yacht cannot verify that default exists. An install without one serves
+	// the wrong certificate rather than failing, so this is logged at startup
+	// and shown on the settings page — a capability the engine cannot check is
+	// one it should be noisy about.
+	WildcardTLS bool
+
+	// ReservedDomains are additional suffixes no tenant may claim. AppDomain
+	// is always reserved whether or not it appears here.
+	ReservedDomains []string
+
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
 
@@ -49,6 +70,9 @@ func Load() (Config, error) {
 		AuthToken:       env("YACHT_AUTH_TOKEN", ""),
 		OwnerID:         env("YACHT_OWNER_ID", "owner-local"),
 		OwnerName:       env("YACHT_OWNER_NAME", "Local"),
+		AppDomain:       env("YACHT_APP_DOMAIN", ""),
+		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
+		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
 		ShutdownTimeout: envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		Debug:           envBool("YACHT_DEBUG", false),
 	}
@@ -76,6 +100,15 @@ func (c Config) validate() error {
 	if c.AuthToken != "" && len(c.AuthToken) < 16 {
 		errs = append(errs, errors.New("YACHT_AUTH_TOKEN must be at least 16 characters"))
 	}
+	if c.AppDomain != "" && !appDomainRE.MatchString(strings.ToLower(c.AppDomain)) {
+		errs = append(errs, errors.New("YACHT_APP_DOMAIN must be a valid dotted domain name"))
+	}
+	// TLS with nothing to apply it to leaves the operator believing apps are
+	// served over TLS while nothing says otherwise.
+	if c.WildcardTLS && c.AppDomain == "" {
+		errs = append(errs, errors.New(
+			"YACHT_WILDCARD_TLS requires YACHT_APP_DOMAIN — there would be no hostnames to serve"))
+	}
 
 	return errors.Join(errs...)
 }
@@ -100,6 +133,19 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+// envList reads a comma-separated variable, trimming each entry and dropping
+// empties, so a trailing comma or a stray space is not a silent extra entry.
+func envList(key string) []string {
+	raw := strings.Split(os.Getenv(key), ",")
+	out := make([]string, 0, len(raw))
+	for _, s := range raw {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {
