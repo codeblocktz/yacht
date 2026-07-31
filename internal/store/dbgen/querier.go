@@ -6,6 +6,8 @@ package dbgen
 
 import (
 	"context"
+
+	"github.com/google/uuid"
 )
 
 type Querier interface {
@@ -23,15 +25,31 @@ type Querier interface {
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetOwner(ctx context.Context, id string) (Owner, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
+	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
+	// Platform-issued hostnames. Custom domains get their own queries when that
+	// sub-project lands; keeping them in one file rather than in apps.sql is so
+	// that apps.sql stays about apps.
+	// Issues or reissues the platform hostname for an app.
+	//
+	// The conflict target is the partial index, so a second call for the same app
+	// moves its hostname rather than adding one. A collision on the global host
+	// index is a different conflict and is deliberately left to raise, because two
+	// apps claiming one hostname is a real error, not something to paper over.
+	//
+	// verified is true because a name the platform issued needs no proof of
+	// ownership; requiring proof would mean inventing a verification step for a
+	// name we already control.
+	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 }
 
 var _ Querier = (*Queries)(nil)

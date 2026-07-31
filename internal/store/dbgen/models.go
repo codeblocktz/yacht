@@ -48,6 +48,7 @@ type Domain struct {
 	Tls       bool
 	Verified  bool
 	CreatedAt time.Time
+	Managed   bool
 }
 
 type Owner struct {

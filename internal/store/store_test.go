@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
 // testDSN returns the connection string for the test database, or skips.
@@ -215,5 +217,64 @@ func TestSchemaRejectsInvalidKubernetesNames(t *testing.T) {
 				t.Errorf("schema accepted invalid Kubernetes name %q", tc.appName)
 			}
 		})
+	}
+}
+
+// TestManagedDomainIsUniquePerApp guards the partial index. An app has exactly
+// one platform-issued hostname, but any number of custom domains — so the
+// constraint has to be partial, and a plain unique index on app_id would
+// silently forbid the custom domains this table exists for.
+func TestManagedDomainIsUniquePerApp(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	seedOwners(t, pool, "test-managed-domain")
+
+	q := dbgen.New(pool)
+
+	appRow, err := q.CreateApp(ctx, dbgen.CreateAppParams{
+		OwnerID:   "test-managed-domain",
+		Name:      "web",
+		Namespace: "ns-test-managed-domain",
+		Image:     "nginx:alpine",
+		Replicas:  1,
+		Port:      8080,
+		Env:       []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
+		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.apps.example.com", Tls: true,
+	}); err != nil {
+		t.Fatalf("first managed domain: %v", err)
+	}
+
+	// The upsert must move the host rather than insert a second managed row.
+	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
+		OwnerID: appRow.OwnerID, AppID: appRow.ID, Host: "web.apps.acme.com", Tls: true,
+	}); err != nil {
+		t.Fatalf("reissue managed domain: %v", err)
+	}
+
+	rows, err := q.ListDomainsByApp(ctx, appRow.ID)
+	if err != nil {
+		t.Fatalf("list domains: %v", err)
+	}
+
+	managed := 0
+	for _, r := range rows {
+		if r.Managed {
+			managed++
+			if r.Host != "web.apps.acme.com" {
+				t.Fatalf("managed host = %q, want it reissued to web.apps.acme.com", r.Host)
+			}
+			if !r.Verified {
+				t.Fatal("a platform-issued host needs no proof of ownership; want verified")
+			}
+		}
+	}
+	if managed != 1 {
+		t.Fatalf("managed rows = %d, want exactly 1", managed)
 	}
 }
