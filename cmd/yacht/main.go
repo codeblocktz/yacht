@@ -76,6 +76,23 @@ func run() error {
 		AppDomain:   cfg.AppDomain,
 		WildcardTLS: cfg.WildcardTLS,
 	})
+
+	// Yacht cannot check that the ingress controller actually has a default
+	// certificate: there is no API for "what will you serve for an unknown
+	// host". Without one, apps are served the wrong certificate rather than
+	// failing, so the one thing available is to say so plainly at startup.
+	if cfg.WildcardTLS {
+		log.Info("wildcard TLS enabled — platform hostnames are served from the "+
+			"ingress controller's default certificate; Yacht cannot verify one is "+
+			"configured",
+			slog.String("app_domain", cfg.AppDomain))
+	}
+	if cfg.AppDomain != "" {
+		log.Info("per-app hostnames enabled",
+			slog.String("app_domain", cfg.AppDomain),
+			slog.String("dns", "point *."+cfg.AppDomain+" at this cluster"))
+	}
+
 	if err := apps.EnsureOwner(ctx, cfg.OwnerID, cfg.OwnerName, ""); err != nil {
 		return err
 	}
