@@ -14,6 +14,35 @@ import (
 var appDomainRE = regexp.MustCompile(
 	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`)
 
+// DNS limits, and the app-name limit they have to accommodate.
+//
+// maxAppName mirrors the 40-character cap app.CreateInput.Validate enforces.
+// It is duplicated rather than imported because config sits below app in the
+// dependency order; if the two ever disagree, this one is the conservative
+// side and fails at startup rather than per-app.
+const (
+	maxHostname = 253
+	maxLabel    = 63
+	maxAppName  = 40
+)
+
+// domainFault returns why a domain is unusable, or "" if it is fine.
+func domainFault(d string) string {
+	d = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+	switch {
+	case d == "":
+		return "must not be empty"
+	case !appDomainRE.MatchString(d):
+		return "must be a valid dotted domain name"
+	}
+	for _, label := range strings.Split(d, ".") {
+		if len(label) > maxLabel {
+			return fmt.Sprintf("label %q exceeds %d characters", label, maxLabel)
+		}
+	}
+	return ""
+}
+
 // Config is everything the engine needs to start.
 type Config struct {
 	// Addr is the listen address for the dashboard.
@@ -100,8 +129,26 @@ func (c Config) validate() error {
 	if c.AuthToken != "" && len(c.AuthToken) < 16 {
 		errs = append(errs, errors.New("YACHT_AUTH_TOKEN must be at least 16 characters"))
 	}
-	if c.AppDomain != "" && !appDomainRE.MatchString(strings.ToLower(c.AppDomain)) {
-		errs = append(errs, errors.New("YACHT_APP_DOMAIN must be a valid dotted domain name"))
+	if c.AppDomain != "" {
+		if fault := domainFault(c.AppDomain); fault != "" {
+			errs = append(errs, fmt.Errorf("YACHT_APP_DOMAIN %s", fault))
+		} else if n := len(c.AppDomain) + 1 + maxAppName; n > maxHostname {
+			// An app domain long enough that the longest legal app name
+			// overflows the DNS limit is a startup misconfiguration. Left
+			// unchecked the operator meets it one failed create at a time,
+			// with nothing connecting the failure to the setting.
+			errs = append(errs, fmt.Errorf(
+				"YACHT_APP_DOMAIN is too long: an app name of %d characters would "+
+					"produce a %d-character hostname, over the %d-character limit",
+				maxAppName, n, maxHostname))
+		}
+	}
+	// A reserved list full of things that match nothing reads as protection
+	// while providing none.
+	for _, d := range c.ReservedDomains {
+		if fault := domainFault(d); fault != "" {
+			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS entry %q %s", d, fault))
+		}
 	}
 	// TLS with nothing to apply it to leaves the operator believing apps are
 	// served over TLS while nothing says otherwise.

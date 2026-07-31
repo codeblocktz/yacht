@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,90 @@ func TestEveryVariableIsDocumented(t *testing.T) {
 		}
 		if !strings.Contains(string(example), name) {
 			t.Fatalf("%s is not documented in .env.example", name)
+		}
+	}
+}
+
+// An app domain that cannot produce a valid hostname is a startup
+// misconfiguration, not a per-app runtime failure. Without this check the
+// operator learns about it only when a create fails, one app at a time.
+func TestOverlongAppDomainFailsAtStartup(t *testing.T) {
+	cases := map[string]string{
+		"whole name too long for any app": strings.Repeat("a", 120) + "." +
+			strings.Repeat("b", 120) + ".example.com",
+		"single label over 63": strings.Repeat("a", 70) + ".example.com",
+	}
+
+	for name, domain := range cases {
+		t.Run(name, func(t *testing.T) {
+			setEnv(t, map[string]string{"YACHT_APP_DOMAIN": domain})
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted an app domain that can never yield a hostname (len=%d)", len(domain))
+			}
+		})
+	}
+}
+
+func TestUsableAppDomainStillLoads(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_APP_DOMAIN": "apps.example.com"})
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load rejected a perfectly ordinary app domain: %v", err)
+	}
+}
+
+// Garbage in a reserved list is worse than an empty one: it reads as though
+// names are protected while matching nothing.
+func TestReservedDomainsAreValidated(t *testing.T) {
+	for _, bad := range []string{"not a domain", "https://evil.test", "*", "evil.test/path"} {
+		t.Run(bad, func(t *testing.T) {
+			setEnv(t, map[string]string{"YACHT_RESERVED_DOMAINS": bad})
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted %q as a reserved domain", bad)
+			}
+		})
+	}
+}
+
+func TestValidReservedDomainsLoad(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_RESERVED_DOMAINS": "internal.example.com, admin.example.com",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.ReservedDomains) != 2 {
+		t.Fatalf("ReservedDomains = %v, want 2", c.ReservedDomains)
+	}
+}
+
+// TestEveryVariableReadIsDocumented scans for every YACHT_* string config.go
+// reads, rather than checking a list someone has to remember to extend. The
+// hardcoded version passed while YACHT_SHUTDOWN_TIMEOUT went undocumented.
+func TestEveryVariableReadIsDocumented(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatalf("read config.go: %v", err)
+	}
+	example, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+
+	found := regexp.MustCompile(`"(YACHT_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1)
+	if len(found) == 0 {
+		t.Fatal("no YACHT_* variables found in config.go — the scan is broken")
+	}
+
+	seen := map[string]bool{}
+	for _, m := range found {
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if !strings.Contains(string(example), name) {
+			t.Errorf("%s is read by config.go but not documented in .env.example", name)
 		}
 	}
 }

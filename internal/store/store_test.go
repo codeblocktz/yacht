@@ -278,3 +278,62 @@ func TestManagedDomainIsUniquePerApp(t *testing.T) {
 		t.Fatalf("managed rows = %d, want exactly 1", managed)
 	}
 }
+
+// TestPartialIndexLeavesCustomDomainsUnconstrained is the other half of
+// domains_app_managed_key. The managed side is covered above; without this,
+// nothing exercises the WHERE managed predicate, and a plain unique index on
+// app_id would pass every existing test while silently forbidding the custom
+// domains this table exists for.
+func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := dbgen.New(pool)
+
+	const ownerID = "test-partial-index"
+	seedOwners(t, pool, ownerID)
+
+	appRow, err := q.CreateApp(ctx, dbgen.CreateAppParams{
+		OwnerID: ownerID, Name: "web", Namespace: "ns-test-partial-index",
+		Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
+		OwnerID: ownerID, AppID: appRow.ID, Host: "web.apps.example.com", Tls: true,
+	}); err != nil {
+		t.Fatalf("managed domain: %v", err)
+	}
+
+	// Inserted directly: there is deliberately no production query for custom
+	// domains yet, and adding one purely to satisfy a test would ship an
+	// unused code path.
+	for _, host := range []string{"www.customer.test", "shop.customer.test"} {
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO domains (owner_id, app_id, host, tls, verified, managed)
+			 VALUES ($1, $2, $3, true, false, false)`,
+			ownerID, appRow.ID, host,
+		); err != nil {
+			t.Fatalf("insert custom domain %s: %v", host, err)
+		}
+	}
+
+	rows, err := q.ListDomainsByApp(ctx, appRow.ID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3 (one managed, two custom)", len(rows))
+	}
+
+	managed := 0
+	for _, r := range rows {
+		if r.Managed {
+			managed++
+		}
+	}
+	if managed != 1 {
+		t.Fatalf("managed rows = %d, want exactly 1", managed)
+	}
+}
