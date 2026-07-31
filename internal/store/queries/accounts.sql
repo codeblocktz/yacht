@@ -62,3 +62,36 @@ DELETE FROM memberships WHERE user_id = @user_id AND owner_id = @owner_id;
 
 -- name: CountOwnersOfTeam :one
 SELECT count(*) FROM memberships WHERE owner_id = @owner_id AND role = 'owner';
+
+-- name: CreateSession :one
+INSERT INTO sessions (user_id, token_hash, active_team_id, user_agent, ip, expires_at)
+VALUES (@user_id, @token_hash, @active_team_id, @user_agent, @ip, @expires_at)
+RETURNING *;
+
+-- The team is joined in because the request that carries this cookie needs the
+-- owner it resolves to, and a second round trip per request buys nothing. The
+-- join is LEFT: a session whose team was deleted still exists, it just has no
+-- owner to act as.
+--
+-- Expiry is filtered in SQL rather than in Go so that an expired row can never
+-- be treated as valid by a caller that forgets to check.
+-- name: GetSessionByHash :one
+SELECT s.*, t.display_name AS team_name, t.email AS team_email
+FROM sessions s
+LEFT JOIN teams t ON t.id = s.active_team_id
+WHERE s.token_hash = @token_hash AND s.expires_at > now();
+
+-- name: GetSession :one
+SELECT * FROM sessions WHERE id = @id;
+
+-- name: SetSessionTeam :exec
+UPDATE sessions SET active_team_id = @active_team_id WHERE id = @id;
+
+-- name: DeleteSessionByHash :exec
+DELETE FROM sessions WHERE token_hash = @token_hash;
+
+-- name: DeleteSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = @user_id;
+
+-- name: DeleteExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= now();

@@ -15,6 +15,7 @@ type Querier interface {
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
+	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//
@@ -24,6 +25,7 @@ type Querier interface {
 	// because the generated signature requires it.
 	CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	DeleteExpiredSessions(ctx context.Context) error
 	// Releases an app's platform hostname.
 	//
 	// Deleting rather than leaving the row is what makes the feature reversible:
@@ -31,11 +33,22 @@ type Querier interface {
 	// against every other app forever.
 	DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
+	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
+	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
+	// The team is joined in because the request that carries this cookie needs the
+	// owner it resolves to, and a second round trip per request buys nothing. The
+	// join is LEFT: a session whose team was deleted still exists, it just has no
+	// owner to act as.
+	//
+	// Expiry is filtered in SQL rather than in Go so that an expired row can never
+	// be treated as valid by a caller that forgets to check.
+	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
@@ -54,6 +67,7 @@ type Querier interface {
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
+	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Platform-issued hostnames. Custom domains get their own queries when that
 	// sub-project lands; keeping them in one file rather than in apps.sql is so

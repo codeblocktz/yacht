@@ -23,6 +23,44 @@ func (q *Queries) CountOwnersOfTeam(ctx context.Context, ownerID string) (int64,
 	return count, err
 }
 
+const createSession = `-- name: CreateSession :one
+INSERT INTO sessions (user_id, token_hash, active_team_id, user_agent, ip, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at
+`
+
+type CreateSessionParams struct {
+	UserID       uuid.UUID
+	TokenHash    []byte
+	ActiveTeamID *string
+	UserAgent    string
+	Ip           string
+	ExpiresAt    time.Time
+}
+
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
+	row := q.db.QueryRow(ctx, createSession,
+		arg.UserID,
+		arg.TokenHash,
+		arg.ActiveTeamID,
+		arg.UserAgent,
+		arg.Ip,
+		arg.ExpiresAt,
+	)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ActiveTeamID,
+		&i.UserAgent,
+		&i.Ip,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createTeam = `-- name: CreateTeam :one
 INSERT INTO teams (id, display_name)
 VALUES ($1, $2)
@@ -48,6 +86,15 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 	return i, err
 }
 
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
+DELETE FROM sessions WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredSessions)
+	return err
+}
+
 const deleteMembership = `-- name: DeleteMembership :exec
 DELETE FROM memberships WHERE user_id = $1 AND owner_id = $2
 `
@@ -59,6 +106,24 @@ type DeleteMembershipParams struct {
 
 func (q *Queries) DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error {
 	_, err := q.db.Exec(ctx, deleteMembership, arg.UserID, arg.OwnerID)
+	return err
+}
+
+const deleteSessionByHash = `-- name: DeleteSessionByHash :exec
+DELETE FROM sessions WHERE token_hash = $1
+`
+
+func (q *Queries) DeleteSessionByHash(ctx context.Context, tokenHash []byte) error {
+	_, err := q.db.Exec(ctx, deleteSessionByHash, tokenHash)
+	return err
+}
+
+const deleteSessionsForUser = `-- name: DeleteSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = $1
+`
+
+func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSessionsForUser, userID)
 	return err
 }
 
@@ -79,6 +144,71 @@ func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (M
 		&i.OwnerID,
 		&i.Role,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at FROM sessions WHERE id = $1
+`
+
+func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
+	row := q.db.QueryRow(ctx, getSession, id)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ActiveTeamID,
+		&i.UserAgent,
+		&i.Ip,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSessionByHash = `-- name: GetSessionByHash :one
+SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, t.display_name AS team_name, t.email AS team_email
+FROM sessions s
+LEFT JOIN teams t ON t.id = s.active_team_id
+WHERE s.token_hash = $1 AND s.expires_at > now()
+`
+
+type GetSessionByHashRow struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	TokenHash    []byte
+	ActiveTeamID *string
+	UserAgent    string
+	Ip           string
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
+	TeamName     *string
+	TeamEmail    *string
+}
+
+// The team is joined in because the request that carries this cookie needs the
+// owner it resolves to, and a second round trip per request buys nothing. The
+// join is LEFT: a session whose team was deleted still exists, it just has no
+// owner to act as.
+//
+// Expiry is filtered in SQL rather than in Go so that an expired row can never
+// be treated as valid by a caller that forgets to check.
+func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error) {
+	row := q.db.QueryRow(ctx, getSessionByHash, tokenHash)
+	var i GetSessionByHashRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ActiveTeamID,
+		&i.UserAgent,
+		&i.Ip,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.TeamName,
+		&i.TeamEmail,
 	)
 	return i, err
 }
@@ -242,6 +372,20 @@ func (q *Queries) LockTeam(ctx context.Context, id string) (Team, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setSessionTeam = `-- name: SetSessionTeam :exec
+UPDATE sessions SET active_team_id = $1 WHERE id = $2
+`
+
+type SetSessionTeamParams struct {
+	ActiveTeamID *string
+	ID           uuid.UUID
+}
+
+func (q *Queries) SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error {
+	_, err := q.db.Exec(ctx, setSessionTeam, arg.ActiveTeamID, arg.ID)
+	return err
 }
 
 const upsertMembership = `-- name: UpsertMembership :one
