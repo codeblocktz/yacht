@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,7 +15,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/store"
 )
 
-func testService(t *testing.T) (*Service, *orchestrator.Noop, *pgxpool.Pool) {
+func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -32,8 +33,30 @@ func testService(t *testing.T) (*Service, *orchestrator.Noop, *pgxpool.Pool) {
 	}
 	t.Cleanup(pool.Close)
 
-	orch := orchestrator.NewNoop()
-	return NewService(pool, orch, log), orch, pool
+	orch := &recordingOrchestrator{Noop: orchestrator.NewNoop()}
+	return NewService(pool, orch, log, opts), orch, pool
+}
+
+// recordingOrchestrator keeps the last spec it was asked to apply, so a test
+// can assert on what crossed the seam rather than only on what was stored.
+type recordingOrchestrator struct {
+	*orchestrator.Noop
+
+	mu   sync.Mutex
+	last orchestrator.AppSpec
+}
+
+func (r *recordingOrchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) error {
+	r.mu.Lock()
+	r.last = spec
+	r.mu.Unlock()
+	return r.Noop.ApplyApp(ctx, spec)
+}
+
+func (r *recordingOrchestrator) lastAppSpec() orchestrator.AppSpec {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.last
 }
 
 // owner registers an owner and removes it (and its apps, by cascade) after.
@@ -57,7 +80,7 @@ func owner(t *testing.T, s *Service, pool *pgxpool.Pool, id string) string {
 
 func TestCreateAppliesToClusterAndStores(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t)
+	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-create")
 
 	a, err := s.Create(ctx, id, CreateInput{
@@ -98,7 +121,7 @@ func TestCreateAppliesToClusterAndStores(t *testing.T) {
 // retries it.
 func TestCreateRollsBackWhenApplyFails(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t)
+	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-rollback")
 
 	s.orch = failingOrchestrator{Noop: orchestrator.NewNoop()}
@@ -121,7 +144,7 @@ func TestCreateRollsBackWhenApplyFails(t *testing.T) {
 
 func TestCreateRejectsDuplicateName(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t)
+	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-dupe")
 
 	in := CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1}
@@ -138,7 +161,7 @@ func TestCreateRejectsDuplicateName(t *testing.T) {
 // makes the schema extensible to more than one owner later.
 func TestNamesAreScopedByOwner(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t)
+	s, _, pool := testService(t, Options{})
 	a := owner(t, s, pool, "svc-owner-a")
 	b := owner(t, s, pool, "svc-owner-b")
 
@@ -165,7 +188,7 @@ func TestNamesAreScopedByOwner(t *testing.T) {
 
 func TestGetUnknownAppIsNotFound(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t)
+	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-missing")
 
 	if _, err := s.Get(ctx, id, "nope"); !errors.Is(err, ErrNotFound) {
@@ -175,7 +198,7 @@ func TestGetUnknownAppIsNotFound(t *testing.T) {
 
 func TestScaleAndDelete(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t)
+	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-scale")
 
 	if _, err := s.Create(ctx, id, CreateInput{
@@ -207,7 +230,7 @@ func TestScaleAndDelete(t *testing.T) {
 // records are still real and the operator still needs to see them.
 func TestListToleratesUnreachableCluster(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t)
+	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-degraded")
 
 	if _, err := s.Create(ctx, id, CreateInput{
@@ -227,6 +250,99 @@ func TestListToleratesUnreachableCluster(t *testing.T) {
 	}
 	if list[0].StatusKnown {
 		t.Error("status must be reported as unknown rather than as stopped")
+	}
+}
+
+func TestCreateIssuesAManagedHostname(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	id := owner(t, s, pool, "svc-host")
+
+	created, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if created.Host != "web.apps.example.com" {
+		t.Fatalf("Host = %q, want web.apps.example.com", created.Host)
+	}
+
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Host != "web.apps.example.com" {
+		t.Errorf("Host on read = %q, want web.apps.example.com", got.Host)
+	}
+	if got.URLScheme() != "https" {
+		t.Errorf("URLScheme = %q, want https when wildcard TLS is on", got.URLScheme())
+	}
+}
+
+func TestCreateWithoutAnAppDomainIssuesNoHostname(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-no-host")
+
+	created, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.Host != "" {
+		t.Fatalf("Host = %q, want empty when the feature is off", created.Host)
+	}
+}
+
+// Changing the app domain moves each app's URL the next time it is applied,
+// rather than all at once at startup. The managed column is what makes that
+// safe: the reconcile rewrites only rows Yacht issued.
+func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{AppDomain: "apps.example.com"})
+	id := owner(t, s, pool, "svc-reissue")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s.opts.AppDomain = "apps.acme.com"
+
+	if err := s.Redeploy(ctx, id, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Host != "web.apps.acme.com" {
+		t.Fatalf("Host = %q, want it reissued to web.apps.acme.com", got.Host)
+	}
+}
+
+func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	id := owner(t, s, pool, "svc-host-spec")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	spec := orch.lastAppSpec()
+	if len(spec.Hosts) != 1 || spec.Hosts[0] != "web.apps.example.com" {
+		t.Fatalf("spec.Hosts = %v, want [web.apps.example.com]", spec.Hosts)
+	}
+	if !spec.TLS {
+		t.Fatal("spec.TLS = false, want true when wildcard TLS is on")
 	}
 }
 

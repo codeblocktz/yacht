@@ -72,7 +72,10 @@ func run() error {
 		return err
 	}
 
-	apps := app.NewService(pool, orch, log)
+	apps := app.NewService(pool, orch, log, app.Options{
+		AppDomain:   cfg.AppDomain,
+		WildcardTLS: cfg.WildcardTLS,
+	})
 	if err := apps.EnsureOwner(ctx, cfg.OwnerID, cfg.OwnerName, ""); err != nil {
 		return err
 	}

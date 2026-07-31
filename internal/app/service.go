@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -58,6 +59,16 @@ type App struct {
 	// differently.
 	Status      orchestrator.AppStatus
 	StatusKnown bool
+
+	// Host is the platform-issued hostname, empty when no app domain is
+	// configured. Read from the domains table rather than stored on the app,
+	// so there is one place a hostname lives.
+	Host string
+
+	// TLS reports whether the platform serves Host over TLS. Populated on
+	// read from configuration rather than stored, because it is a property of
+	// the install and not of the app.
+	TLS bool
 }
 
 // Deployment is one recorded attempt to run a version of an app.
@@ -96,22 +107,43 @@ func (a App) Ref() orchestrator.Ref {
 	}
 }
 
+// URLScheme is https when the platform serves TLS and http otherwise, so the
+// dashboard never offers a link that cannot connect.
+func (a App) URLScheme() string {
+	if a.TLS {
+		return "https"
+	}
+	return "http"
+}
+
+// Options are the settings the service needs beyond its dependencies.
+type Options struct {
+	// AppDomain is the platform domain apps get hostnames under. Empty
+	// switches per-app hostnames off.
+	AppDomain string
+
+	// WildcardTLS serves those hostnames over TLS from the ingress
+	// controller's default certificate.
+	WildcardTLS bool
+}
+
 // Service manages app lifecycle.
 type Service struct {
 	pool *pgxpool.Pool
 	q    *dbgen.Queries
 	orch orchestrator.Orchestrator
 	log  *slog.Logger
+	opts Options
 }
 
 // NewService wires the store and the orchestrator together.
 func NewService(
-	pool *pgxpool.Pool, orch orchestrator.Orchestrator, log *slog.Logger,
+	pool *pgxpool.Pool, orch orchestrator.Orchestrator, log *slog.Logger, opts Options,
 ) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, q: dbgen.New(pool), orch: orch, log: log}
+	return &Service{pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts}
 }
 
 // EnsureOwner makes sure the owner row exists, so app inserts have a parent.
@@ -208,7 +240,23 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 
 	created := toApp(row)
-	if err := s.apply(ctx, created); err != nil {
+
+	// Issued inside the same transaction as the app row, so an app cannot
+	// exist without its URL and no later step can forget to add one.
+	host, err := domain.EnsureManaged(ctx, q, domain.ManagedInput{
+		OwnerID: ownerID, AppID: created.ID, AppName: created.Name,
+		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
+	})
+	if err != nil {
+		if errors.Is(err, domain.ErrHostTaken) {
+			return App{}, err
+		}
+		return App{}, fmt.Errorf("app: issue hostname: %w", err)
+	}
+	created.Host = host
+	created.TLS = s.opts.WildcardTLS && host != ""
+
+	if err := s.apply(ctx, q, created); err != nil {
 		// Best effort: the workload may be partly applied, and leaving it
 		// behind with no record would make it invisible.
 		if delErr := s.orch.DeleteApp(ctx, created.Ref()); delErr != nil {
@@ -238,13 +286,28 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 }
 
 // apply ensures the namespace and converges the workload.
-func (s *Service) apply(ctx context.Context, a App) error {
+//
+// The managed hostname is reconciled here rather than only at create, so an
+// app domain change moves each app's URL the next time it is applied. Rewriting
+// every app at startup would put a config typo in the path of the whole
+// install at once.
+//
+// q is the caller's handle on the store: Create passes its transaction so the
+// reconcile reads the app row it has not committed yet, everything else passes
+// the pool.
+func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 	if err := s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
 		Owner: orchestrator.OwnerID(a.OwnerID),
 		Name:  a.Namespace,
 	}); err != nil {
 		return err
 	}
+
+	hosts, err := s.reconcileHosts(ctx, q, a)
+	if err != nil {
+		return err
+	}
+
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
@@ -255,7 +318,23 @@ func (s *Service) apply(ctx context.Context, a App) error {
 		CPULimit:      a.CPULimit,
 		MemoryRequest: a.MemoryRequest,
 		MemoryLimit:   a.MemoryLimit,
+		Hosts:         hosts,
+		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
 	})
+}
+
+// reconcileHosts brings the managed hostname in line with current config and
+// returns every hostname routed to the app.
+func (s *Service) reconcileHosts(
+	ctx context.Context, q *dbgen.Queries, a App,
+) ([]string, error) {
+	if _, err := domain.EnsureManaged(ctx, q, domain.ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
+		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
+	}); err != nil {
+		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
+	}
+	return domain.HostsForApp(ctx, q, a.ID)
 }
 
 // List returns an owner's apps with live status attached.
@@ -269,6 +348,7 @@ func (s *Service) List(ctx context.Context, ownerID string) ([]App, error) {
 	for _, row := range rows {
 		a := toApp(row)
 		s.attachStatus(ctx, &a)
+		s.attachHost(ctx, &a)
 		out = append(out, a)
 	}
 	return out, nil
@@ -294,7 +374,25 @@ func (s *Service) Get(ctx context.Context, ownerID, name string) (App, error) {
 	}
 	a := toApp(row)
 	s.attachStatus(ctx, &a)
+	s.attachHost(ctx, &a)
 	return a, nil
+}
+
+// attachHost reads the app's hostname, tolerating a store that will not answer.
+//
+// ListDomainsByApp orders managed first, so index 0 is the platform hostname
+// whenever one has been issued.
+func (s *Service) attachHost(ctx context.Context, a *App) {
+	hosts, err := domain.HostsForApp(ctx, s.q, a.ID)
+	if err != nil {
+		s.log.Debug("hostname unavailable",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return
+	}
+	if len(hosts) > 0 {
+		a.Host = hosts[0]
+		a.TLS = s.opts.WildcardTLS
+	}
 }
 
 // attachStatus reads live state, tolerating an unreachable cluster.
@@ -423,7 +521,7 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	updated := toApp(row)
-	if err := s.apply(ctx, updated); err != nil {
+	if err := s.apply(ctx, s.q, updated); err != nil {
 		return App{}, err
 	}
 	s.recordDeployment(ctx, ownerID, updated,
@@ -437,7 +535,7 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.apply(ctx, a); err != nil {
+	if err := s.apply(ctx, s.q, a); err != nil {
 		return err
 	}
 	s.recordDeployment(ctx, ownerID, a, "redeploy", "running")
