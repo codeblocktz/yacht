@@ -181,7 +181,7 @@ func newIdentity(
 		// is not there.
 		log.Warn("this build serves no sign-in page yet — every request will be " +
 			"rejected until one is added; unset YACHT_BASE_URL to stay on token auth")
-		return account.NewService(pool, log).Provider(""), nil
+		return account.NewService(pool, log).Provider(web.SessionCookie), nil
 	}
 
 	owner := identity.Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}
