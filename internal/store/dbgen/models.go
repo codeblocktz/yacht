@@ -63,6 +63,15 @@ type Invitation struct {
 	CreatedAt  time.Time
 }
 
+type MagicLink struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	TokenHash  []byte
+	ExpiresAt  time.Time
+	ConsumedAt pgtype.Timestamptz
+	CreatedAt  time.Time
+}
+
 type Membership struct {
 	UserID    uuid.UUID
 	OwnerID   string

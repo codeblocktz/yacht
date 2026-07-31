@@ -12,6 +12,60 @@ import (
 	"github.com/google/uuid"
 )
 
+const acceptInvitation = `-- name: AcceptInvitation :one
+UPDATE invitations
+SET accepted_at = now()
+WHERE token_hash = $1
+  AND accepted_at IS NULL
+  AND expires_at > now()
+RETURNING owner_id, role
+`
+
+type AcceptInvitationRow struct {
+	OwnerID string
+	Role    string
+}
+
+// One conditional UPDATE, like the magic link: checking first and writing after
+// leaves a window in which the same invitation is accepted twice.
+func (q *Queries) AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error) {
+	row := q.db.QueryRow(ctx, acceptInvitation, tokenHash)
+	var i AcceptInvitationRow
+	err := row.Scan(&i.OwnerID, &i.Role)
+	return i, err
+}
+
+const consumeMagicLink = `-- name: ConsumeMagicLink :one
+WITH consumed AS (
+    UPDATE magic_links
+    SET consumed_at = now()
+    WHERE token_hash = $1
+      AND consumed_at IS NULL
+      AND expires_at > now()
+    RETURNING user_id
+)
+SELECT u.id, u.email, u.display_name, u.totp_secret, u.totp_confirmed, u.created_at, u.updated_at FROM users u JOIN consumed ON consumed.user_id = u.id
+`
+
+// Marking consumed and reading the user are one statement, so there is no
+// window between the two in which a second request can also find the link
+// unconsumed. Expiry is in the same condition for the same reason: a link that
+// has just expired must fail here rather than in whatever checks it later.
+func (q *Queries) ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error) {
+	row := q.db.QueryRow(ctx, consumeMagicLink, tokenHash)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.TotpSecret,
+		&i.TotpConfirmed,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const countOwnersOfTeam = `-- name: CountOwnersOfTeam :one
 SELECT count(*) FROM memberships WHERE owner_id = $1 AND role = 'owner'
 `
@@ -21,6 +75,32 @@ func (q *Queries) CountOwnersOfTeam(ctx context.Context, ownerID string) (int64,
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const createMagicLink = `-- name: CreateMagicLink :one
+INSERT INTO magic_links (user_id, token_hash, expires_at)
+VALUES ($1, $2, $3)
+RETURNING id, user_id, token_hash, expires_at, consumed_at, created_at
+`
+
+type CreateMagicLinkParams struct {
+	UserID    uuid.UUID
+	TokenHash []byte
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error) {
+	row := q.db.QueryRow(ctx, createMagicLink, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	var i MagicLink
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const createSession = `-- name: CreateSession :one
@@ -86,6 +166,24 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 	return i, err
 }
 
+const deleteExpiredInvitations = `-- name: DeleteExpiredInvitations :exec
+DELETE FROM invitations WHERE expires_at <= now() AND accepted_at IS NULL
+`
+
+func (q *Queries) DeleteExpiredInvitations(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredInvitations)
+	return err
+}
+
+const deleteExpiredMagicLinks = `-- name: DeleteExpiredMagicLinks :exec
+DELETE FROM magic_links WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredMagicLinks(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteExpiredMagicLinks)
+	return err
+}
+
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at <= now()
 `
@@ -93,6 +191,25 @@ DELETE FROM sessions WHERE expires_at <= now()
 func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteExpiredSessions)
 	return err
+}
+
+const deleteInvitation = `-- name: DeleteInvitation :execrows
+DELETE FROM invitations WHERE id = $1 AND owner_id = $2
+`
+
+type DeleteInvitationParams struct {
+	ID      uuid.UUID
+	OwnerID string
+}
+
+// Scoped by owner_id as well as id: an id from another team must not be
+// reachable by someone who happens to administer this one.
+func (q *Queries) DeleteInvitation(ctx context.Context, arg DeleteInvitationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteInvitation, arg.ID, arg.OwnerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteMembership = `-- name: DeleteMembership :exec
@@ -386,6 +503,44 @@ type SetSessionTeamParams struct {
 func (q *Queries) SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error {
 	_, err := q.db.Exec(ctx, setSessionTeam, arg.ActiveTeamID, arg.ID)
 	return err
+}
+
+const upsertInvitation = `-- name: UpsertInvitation :one
+INSERT INTO invitations (owner_id, email, role, token_hash, invited_by, expires_at)
+VALUES ($1, lower($2::text), $3, $4, $5::uuid, $6)
+ON CONFLICT (owner_id, lower(email)) WHERE accepted_at IS NULL
+DO UPDATE SET role       = excluded.role,
+              token_hash = excluded.token_hash,
+              invited_by = excluded.invited_by,
+              expires_at = excluded.expires_at,
+              created_at = now()
+RETURNING id
+`
+
+type UpsertInvitationParams struct {
+	OwnerID   string
+	Email     string
+	Role      string
+	TokenHash []byte
+	InvitedBy uuid.UUID
+	ExpiresAt time.Time
+}
+
+// Re-inviting replaces the pending invitation rather than adding a second one,
+// so the token in the older mail stops working. Two live tokens for one address
+// would mean revoking the invitation on screen leaves the other one usable.
+func (q *Queries) UpsertInvitation(ctx context.Context, arg UpsertInvitationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertInvitation,
+		arg.OwnerID,
+		arg.Email,
+		arg.Role,
+		arg.TokenHash,
+		arg.InvitedBy,
+		arg.ExpiresAt,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertMembership = `-- name: UpsertMembership :one

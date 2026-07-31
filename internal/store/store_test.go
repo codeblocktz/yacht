@@ -183,6 +183,7 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"goose_db_version": "migration bookkeeping",
 		"users":            "a person exists before belonging to any team",
 		"sessions":         "a session belongs to a person, not to a team",
+		"magic_links":      "a sign-in link proves an address, before any team is chosen",
 	}
 
 	rows, err := pool.Query(ctx, `

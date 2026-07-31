@@ -11,10 +11,19 @@ import (
 )
 
 type Querier interface {
+	// One conditional UPDATE, like the magic link: checking first and writing after
+	// leaves a window in which the same invitation is accepted twice.
+	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
+	// Marking consumed and reading the user are one statement, so there is no
+	// window between the two in which a second request can also find the link
+	// unconsumed. Expiry is in the same condition for the same reason: a link that
+	// has just expired must fail here rather than in whatever checks it later.
+	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
+	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
@@ -25,7 +34,12 @@ type Querier interface {
 	// because the generated signature requires it.
 	CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	DeleteExpiredInvitations(ctx context.Context) error
+	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
+	// Scoped by owner_id as well as id: an id from another team must not be
+	// reachable by someone who happens to administer this one.
+	DeleteInvitation(ctx context.Context, arg DeleteInvitationParams) (int64, error)
 	// Releases an app's platform hostname.
 	//
 	// Deleting rather than leaving the row is what makes the feature reversible:
@@ -69,6 +83,10 @@ type Querier interface {
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
+	// Re-inviting replaces the pending invitation rather than adding a second one,
+	// so the token in the older mail stops working. Two live tokens for one address
+	// would mean revoking the invitation on screen leaves the other one usable.
+	UpsertInvitation(ctx context.Context, arg UpsertInvitationParams) (uuid.UUID, error)
 	// Platform-issued hostnames. Custom domains get their own queries when that
 	// sub-project lands; keeping them in one file rather than in apps.sql is so
 	// that apps.sql stays about apps.

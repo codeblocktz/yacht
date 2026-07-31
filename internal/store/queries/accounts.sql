@@ -95,3 +95,58 @@ DELETE FROM sessions WHERE user_id = @user_id;
 
 -- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at <= now();
+
+-- name: CreateMagicLink :one
+INSERT INTO magic_links (user_id, token_hash, expires_at)
+VALUES (@user_id, @token_hash, @expires_at)
+RETURNING *;
+
+-- Marking consumed and reading the user are one statement, so there is no
+-- window between the two in which a second request can also find the link
+-- unconsumed. Expiry is in the same condition for the same reason: a link that
+-- has just expired must fail here rather than in whatever checks it later.
+-- name: ConsumeMagicLink :one
+WITH consumed AS (
+    UPDATE magic_links
+    SET consumed_at = now()
+    WHERE token_hash = @token_hash
+      AND consumed_at IS NULL
+      AND expires_at > now()
+    RETURNING user_id
+)
+SELECT u.* FROM users u JOIN consumed ON consumed.user_id = u.id;
+
+-- name: DeleteExpiredMagicLinks :exec
+DELETE FROM magic_links WHERE expires_at <= now();
+
+-- Re-inviting replaces the pending invitation rather than adding a second one,
+-- so the token in the older mail stops working. Two live tokens for one address
+-- would mean revoking the invitation on screen leaves the other one usable.
+-- name: UpsertInvitation :one
+INSERT INTO invitations (owner_id, email, role, token_hash, invited_by, expires_at)
+VALUES (@owner_id, lower(@email::text), @role, @token_hash, @invited_by::uuid, @expires_at)
+ON CONFLICT (owner_id, lower(email)) WHERE accepted_at IS NULL
+DO UPDATE SET role       = excluded.role,
+              token_hash = excluded.token_hash,
+              invited_by = excluded.invited_by,
+              expires_at = excluded.expires_at,
+              created_at = now()
+RETURNING id;
+
+-- One conditional UPDATE, like the magic link: checking first and writing after
+-- leaves a window in which the same invitation is accepted twice.
+-- name: AcceptInvitation :one
+UPDATE invitations
+SET accepted_at = now()
+WHERE token_hash = @token_hash
+  AND accepted_at IS NULL
+  AND expires_at > now()
+RETURNING owner_id, role;
+
+-- Scoped by owner_id as well as id: an id from another team must not be
+-- reachable by someone who happens to administer this one.
+-- name: DeleteInvitation :execrows
+DELETE FROM invitations WHERE id = @id AND owner_id = @owner_id;
+
+-- name: DeleteExpiredInvitations :exec
+DELETE FROM invitations WHERE expires_at <= now() AND accepted_at IS NULL;
