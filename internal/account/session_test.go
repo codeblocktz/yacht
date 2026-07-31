@@ -192,3 +192,67 @@ func TestSessionsImplementsIdentityProvider(t *testing.T) {
 		t.Fatal("Resolve accepted a request with no cookie")
 	}
 }
+
+// TestRemovedMemberLosesTheirSession is a regression test for the worst kind of
+// bug this package can have.
+//
+// Removing someone from a team has to take effect immediately. Resolving a
+// session against the session row alone leaves a departed member holding a
+// working cookie for the whole session TTL — up to thirty days by default.
+func TestRemovedMemberLosesTheirSession(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+
+	owner, _ := s.EnsureUser(ctx, "owner-revoke@example.test", "Owner")
+	member, _ := s.EnsureUser(ctx, "member-revoke@example.test", "Member")
+
+	const team = "team-session-revoke"
+	if _, err := s.CreateTeam(ctx, team, "Team", owner.ID); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	if err := s.SetRole(ctx, owner.ID, team, member.ID, RoleMember); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+
+	raw, err := s.CreateSession(ctx, member.ID, team, "", "", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := s.ResolveSession(ctx, raw); err != nil {
+		t.Fatalf("session should resolve while they are a member: %v", err)
+	}
+
+	if err := s.RemoveMember(ctx, owner.ID, team, member.ID); err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+
+	if _, err := s.ResolveSession(ctx, raw); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("a removed member's session still resolves: %v", err)
+	}
+}
+
+// The same must hold when membership disappears by any route, not just through
+// RemoveMember — otherwise the guarantee depends on remembering to revoke at
+// every call site, which is the check that eventually gets missed.
+func TestSessionDoesNotOutliveMembershipRemovedDirectly(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+
+	u, _ := s.EnsureUser(ctx, "direct-revoke@example.test", "U")
+	const team = "team-direct-revoke"
+	if _, err := s.CreateTeam(ctx, team, "Team", u.ID); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	raw, _ := s.CreateSession(ctx, u.ID, team, "", "", time.Hour)
+
+	if _, err := s.pool.Exec(ctx,
+		`DELETE FROM memberships WHERE user_id = $1 AND owner_id = $2`,
+		u.ID, team); err != nil {
+		t.Fatalf("delete membership: %v", err)
+	}
+
+	if _, err := s.ResolveSession(ctx, raw); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("session outlived the membership it depends on: %v", err)
+	}
+}

@@ -100,6 +100,17 @@ func (s *Service) AcceptInvitation(
 
 	q := s.q.WithTx(tx)
 
+	// Read the accepter first. The invitation names an address, and the token
+	// alone must not confer the role — otherwise a forwarded or intercepted
+	// mail hands membership to whoever opened it.
+	accepter, err := q.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", ErrTokenInvalid
+		}
+		return "", "", fmt.Errorf("account: accept invitation: %w", err)
+	}
+
 	row, err := q.AcceptInvitation(ctx, HashToken(raw))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -107,6 +118,14 @@ func (s *Service) AcceptInvitation(
 		}
 		return "", "", fmt.Errorf("account: accept invitation: %w", err)
 	}
+
+	// Compared case-insensitively, because that is how the address was stored
+	// and how the person will type it. Rolling the transaction back leaves the
+	// invitation unconsumed, so the intended recipient can still use it.
+	if !strings.EqualFold(strings.TrimSpace(row.Email), strings.TrimSpace(accepter.Email)) {
+		return "", "", ErrTokenInvalid
+	}
+
 	granted := Role(row.Role)
 
 	current, err := roleIn(ctx, q, userID, row.OwnerID)

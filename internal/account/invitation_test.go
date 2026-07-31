@@ -287,3 +287,42 @@ func TestAcceptingCannotDemote(t *testing.T) {
 		t.Fatalf("role = %q, want owner — accepting demoted the last owner", role)
 	}
 }
+
+// TestInvitationIsBoundToTheAddressItWasSentTo is a regression test.
+//
+// An invitation names an address. If acceptance ignores it, the token alone
+// confers the role — so a forwarded or intercepted mail hands someone else
+// membership of a team they were never invited to.
+func TestInvitationIsBoundToTheAddressItWasSentTo(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+
+	owner, _ := s.EnsureUser(ctx, "owner-bind@example.test", "Owner")
+	const team = "team-invite-bind"
+	if _, err := s.CreateTeam(ctx, team, "Team", owner.ID); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	raw, err := s.Invite(ctx, owner.ID, team, "intended@example.test", RoleAdmin, time.Hour)
+	if err != nil {
+		t.Fatalf("Invite: %v", err)
+	}
+
+	stranger, _ := s.EnsureUser(ctx, "stranger@example.test", "Stranger")
+	if _, _, err := s.AcceptInvitation(ctx, raw, stranger.ID); err == nil {
+		t.Fatal("someone the invitation was not addressed to accepted it")
+	}
+	if _, err := s.RoleIn(ctx, stranger.ID, team); !errors.Is(err, ErrNotAMember) {
+		t.Fatal("the stranger ended up in the team anyway")
+	}
+
+	// The intended recipient must still be able to accept, case-insensitively.
+	intended, _ := s.EnsureUser(ctx, "INTENDED@example.test", "Intended")
+	gotTeam, gotRole, err := s.AcceptInvitation(ctx, raw, intended.ID)
+	if err != nil {
+		t.Fatalf("the addressed recipient could not accept: %v", err)
+	}
+	if gotTeam != team || gotRole != RoleAdmin {
+		t.Fatalf("accepted into %q as %q, want %q as admin", gotTeam, gotRole, team)
+	}
+}

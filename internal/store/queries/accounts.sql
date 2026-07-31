@@ -75,10 +75,22 @@ RETURNING *;
 --
 -- Expiry is filtered in SQL rather than in Go so that an expired row can never
 -- be treated as valid by a caller that forgets to check.
+-- Resolves a session only while the membership behind it still exists.
+--
+-- The join to memberships is the security boundary, not decoration. Revoking
+-- sessions imperatively when someone is removed would work only for the call
+-- sites that remember to do it, and would still miss membership lost by
+-- cascade. Joining makes a departed member's cookie stop resolving the instant
+-- the row goes, by whatever route it went.
+--
+-- INNER JOIN on teams too: a session with no active team resolves to no owner,
+-- and returning a row the caller must then remember to reject is how that
+-- check gets skipped.
 -- name: GetSessionByHash :one
-SELECT s.*, t.display_name AS team_name, t.email AS team_email
+SELECT s.*, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
 FROM sessions s
-LEFT JOIN teams t ON t.id = s.active_team_id
+JOIN teams t ON t.id = s.active_team_id
+JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
 WHERE s.token_hash = @token_hash AND s.expires_at > now();
 
 -- name: GetSession :one
@@ -141,7 +153,7 @@ SET accepted_at = now()
 WHERE token_hash = @token_hash
   AND accepted_at IS NULL
   AND expires_at > now()
-RETURNING owner_id, role;
+RETURNING owner_id, role, email;
 
 -- Scoped by owner_id as well as id: an id from another team must not be
 -- reachable by someone who happens to administer this one.

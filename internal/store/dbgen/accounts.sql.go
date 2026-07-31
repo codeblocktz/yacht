@@ -18,12 +18,13 @@ SET accepted_at = now()
 WHERE token_hash = $1
   AND accepted_at IS NULL
   AND expires_at > now()
-RETURNING owner_id, role
+RETURNING owner_id, role, email
 `
 
 type AcceptInvitationRow struct {
 	OwnerID string
 	Role    string
+	Email   string
 }
 
 // One conditional UPDATE, like the magic link: checking first and writing after
@@ -31,7 +32,7 @@ type AcceptInvitationRow struct {
 func (q *Queries) AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error) {
 	row := q.db.QueryRow(ctx, acceptInvitation, tokenHash)
 	var i AcceptInvitationRow
-	err := row.Scan(&i.OwnerID, &i.Role)
+	err := row.Scan(&i.OwnerID, &i.Role, &i.Email)
 	return i, err
 }
 
@@ -286,9 +287,10 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 }
 
 const getSessionByHash = `-- name: GetSessionByHash :one
-SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, t.display_name AS team_name, t.email AS team_email
+SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
 FROM sessions s
-LEFT JOIN teams t ON t.id = s.active_team_id
+JOIN teams t ON t.id = s.active_team_id
+JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
 `
 
@@ -301,8 +303,9 @@ type GetSessionByHashRow struct {
 	Ip           string
 	ExpiresAt    time.Time
 	CreatedAt    time.Time
-	TeamName     *string
-	TeamEmail    *string
+	TeamName     string
+	TeamEmail    string
+	MemberRole   string
 }
 
 // The team is joined in because the request that carries this cookie needs the
@@ -312,6 +315,17 @@ type GetSessionByHashRow struct {
 //
 // Expiry is filtered in SQL rather than in Go so that an expired row can never
 // be treated as valid by a caller that forgets to check.
+// Resolves a session only while the membership behind it still exists.
+//
+// The join to memberships is the security boundary, not decoration. Revoking
+// sessions imperatively when someone is removed would work only for the call
+// sites that remember to do it, and would still miss membership lost by
+// cascade. Joining makes a departed member's cookie stop resolving the instant
+// the row goes, by whatever route it went.
+//
+// INNER JOIN on teams too: a session with no active team resolves to no owner,
+// and returning a row the caller must then remember to reject is how that
+// check gets skipped.
 func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByHash, tokenHash)
 	var i GetSessionByHashRow
@@ -326,6 +340,7 @@ func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSe
 		&i.CreatedAt,
 		&i.TeamName,
 		&i.TeamEmail,
+		&i.MemberRole,
 	)
 	return i, err
 }

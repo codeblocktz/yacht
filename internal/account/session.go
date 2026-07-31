@@ -35,7 +35,13 @@ type Session struct {
 	ActiveTeamID string
 	TeamName     string
 	TeamEmail    string
-	UserAgent    string
+
+	// Role the person holds in the active team. Carried on the session because
+	// resolving one already proves the membership exists — sub-project C's
+	// route gates would otherwise re-query it on every request.
+	Role Role
+
+	UserAgent string
 	IP           string
 	ExpiresAt    time.Time
 	CreatedAt    time.Time
@@ -102,8 +108,11 @@ func (s *Service) ResolveSession(ctx context.Context, raw string) (Session, erro
 		ID:           row.ID,
 		UserID:       row.UserID,
 		ActiveTeamID: deref(row.ActiveTeamID),
-		TeamName:     deref(row.TeamName),
-		TeamEmail:    deref(row.TeamEmail),
+		// Not nullable any more: the query inner-joins teams and memberships,
+		// so a row only comes back when both still exist.
+		TeamName:  row.TeamName,
+		TeamEmail: row.TeamEmail,
+		Role:      Role(row.MemberRole),
 		UserAgent:    row.UserAgent,
 		IP:           row.Ip,
 		ExpiresAt:    row.ExpiresAt,

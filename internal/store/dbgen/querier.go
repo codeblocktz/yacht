@@ -62,6 +62,17 @@ type Querier interface {
 	//
 	// Expiry is filtered in SQL rather than in Go so that an expired row can never
 	// be treated as valid by a caller that forgets to check.
+	// Resolves a session only while the membership behind it still exists.
+	//
+	// The join to memberships is the security boundary, not decoration. Revoking
+	// sessions imperatively when someone is removed would work only for the call
+	// sites that remember to do it, and would still miss membership lost by
+	// cascade. Joining makes a departed member's cookie stop resolving the instant
+	// the row goes, by whatever route it went.
+	//
+	// INNER JOIN on teams too: a session with no active team resolves to no owner,
+	// and returning a row the caller must then remember to reject is how that
+	// check gets skipped.
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
