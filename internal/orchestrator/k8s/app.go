@@ -40,11 +40,23 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
-	// A workload with no port takes no traffic and needs no Service.
+	// A workload with no port takes no traffic and needs neither a Service nor
+	// an Ingress. Prune rather than merely skip: an app that used to have a
+	// port would otherwise keep serving through objects nothing maintains.
 	if spec.Port > 0 {
 		if err := o.applyService(ctx, spec); err != nil {
 			return err
 		}
+	} else if err := o.deleteService(ctx, spec.Ref); err != nil {
+		return err
+	}
+
+	if spec.Port > 0 && len(spec.Hosts) > 0 {
+		if err := o.applyIngress(ctx, spec); err != nil {
+			return err
+		}
+	} else if err := o.deleteIngress(ctx, spec.Ref); err != nil {
+		return err
 	}
 
 	o.log.Info("app applied",
@@ -183,7 +195,7 @@ func (o *Orchestrator) applyService(ctx context.Context, spec orchestrator.AppSp
 	return nil
 }
 
-// DeleteApp removes a workload's Deployment and Service.
+// DeleteApp removes a workload's Deployment, Service and Ingress.
 func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) error {
 	if err := ref.Validate(); err != nil {
 		return err
@@ -199,6 +211,10 @@ func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) erro
 		Delete(ctx, ref.Name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("k8s: delete service %s: %w", ref, err)
+	}
+
+	if err := o.deleteIngress(ctx, ref); err != nil {
+		return err
 	}
 
 	o.log.Info("app deleted", slog.String("ref", ref.String()))
