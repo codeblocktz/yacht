@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -10,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/notify"
 )
 
@@ -172,6 +176,88 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 		s.log.Error("send sign-in link",
 			slog.String("to", user.Email), slog.String("error", err.Error()))
 	}
+}
+
+// signInCallback spends a magic link and opens a session on it.
+//
+// The link is the whole credential, so everything downstream follows from
+// ConsumeMagicLink succeeding: the person is who the address says, and the
+// cookie is issued for them and for a team they are proven to belong to.
+func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	user, err := s.accounts.ConsumeMagicLink(ctx, chi.URLParam(r, "token"))
+	if err != nil {
+		if !errors.Is(err, account.ErrTokenInvalid) {
+			s.log.Error("consume sign-in link", slog.String("error", err.Error()))
+		}
+		// Unknown, expired and already-spent links are answered alike, because
+		// "this link has already been used" tells whoever is holding a guessed
+		// token that they guessed a real one.
+		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", SignIn(SignInData{
+			Error: "That sign-in link is no longer valid. Ask for a new one.",
+		}))
+		return
+	}
+
+	team, err := s.activeTeam(ctx, user)
+	if err != nil {
+		s.log.Error("find a team to sign in to",
+			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
+		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", SignIn(SignInData{
+			Error: "Something went wrong signing you in. Try again in a moment.",
+		}))
+		return
+	}
+
+	raw, err := s.accounts.CreateSession(
+		ctx, user.ID, team, r.UserAgent(), clientIP(r), s.sessionTTL)
+	if err != nil {
+		s.log.Error("create session",
+			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
+		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", SignIn(SignInData{
+			Error: "Something went wrong signing you in. Try again in a moment.",
+		}))
+		return
+	}
+
+	setSessionCookie(w, r, raw, s.sessionTTL)
+	s.log.Info("signed in",
+		slog.String("user", user.ID.String()), slog.String("team", team))
+
+	// See other rather than a temporary redirect: the link has been spent, and
+	// a browser that repeated this GET from history would meet a dead token.
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// activeTeam picks the team a new session acts as.
+//
+// Someone with no team at all is the case the bootstrap exists for: on an
+// install that has just switched accounts on they are the first person in, and
+// the team the install was already running as is theirs to inherit. Without it
+// they would sign in successfully and resolve to no owner, which every page
+// reads as not being signed in at all.
+func (s *Server) activeTeam(ctx context.Context, user account.User) (string, error) {
+	teams, err := s.accounts.TeamsFor(ctx, user.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(teams) == 0 {
+		if err := s.accounts.BootstrapOwner(
+			ctx, s.bootstrapID, s.bootstrapName, user); err != nil {
+			return "", err
+		}
+		if teams, err = s.accounts.TeamsFor(ctx, user.ID); err != nil {
+			return "", err
+		}
+		if len(teams) == 0 {
+			return "", errors.New("web: the bootstrap left the person with no team")
+		}
+	}
+	// Whichever comes first by team name. A session opens onto one team and the
+	// switcher moves it; there is nothing here to prefer, and preferring the
+	// most recently used would need a column that does not exist.
+	return teams[0].TeamID, nil
 }
 
 func signInBody(link string, ttl time.Duration) string {

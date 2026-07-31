@@ -42,6 +42,14 @@ func testService(t *testing.T) *Service {
 	// because `go test ./...` runs those packages against the same database at
 	// the same time.
 	purge := func() {
+		// The team the bootstrap gives someone who could not have the configured
+		// one is named after them, so it is found through the same address filter
+		// — and has to go before the user it is derived from.
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id IN (
+			SELECT 'user-' || u.id::text FROM users u
+			WHERE lower(u.email) LIKE '%@example.test')`); err != nil {
+			t.Errorf("purge personal teams: %v", err)
+		}
 		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id LIKE 'team-%'`); err != nil {
 			t.Errorf("purge teams: %v", err)
 		}

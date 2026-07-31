@@ -6,20 +6,28 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/store"
 )
 
 func TestSessionCookieFlags(t *testing.T) {
@@ -163,6 +171,30 @@ func (f *fakeAccounts) asking() []string {
 	return slices.Clone(f.asked)
 }
 
+// The rest of the interface exists so this fake satisfies it, and refuses so
+// that a test which reaches the callback through it fails loudly instead of
+// quietly proving nothing. The callback is exercised against the real service,
+// where consuming a link and claiming a team mean something.
+func (f *fakeAccounts) ConsumeMagicLink(context.Context, string) (account.User, error) {
+	return account.User{}, account.ErrTokenInvalid
+}
+
+func (f *fakeAccounts) TeamsFor(context.Context, uuid.UUID) ([]account.Membership, error) {
+	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) BootstrapOwner(context.Context, string, string, account.User) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) CreateSession(
+	context.Context, uuid.UUID, string, string, string, time.Duration,
+) (string, error) {
+	return "", errNoFakeAccountsBackend
+}
+
+var errNoFakeAccountsBackend = errors.New("fakeAccounts holds no teams or sessions")
+
 type fakeMailer struct {
 	mu    sync.Mutex
 	delay time.Duration
@@ -189,9 +221,10 @@ func (m *fakeMailer) messages() []notify.Message {
 func signInServer(t *testing.T, accounts Accounts, mailer notify.Mailer) http.Handler {
 	t.Helper()
 	return testServer(t, Options{
-		Accounts: accounts,
-		Mailer:   mailer,
-		BaseURL:  "https://yacht.test",
+		Accounts:        accounts,
+		Mailer:          mailer,
+		BaseURL:         "https://yacht.test",
+		BootstrapTeamID: "web-signin",
 		// Nobody reaching the sign-in page has a session, so the provider that
 		// would resolve one refuses everything.
 		Identity: identity.ProviderFunc(func(context.Context, *http.Request) (identity.Owner, error) {
@@ -340,9 +373,10 @@ func median(d []time.Duration) time.Duration {
 func TestSignInWithNoMailTransportStillSucceeds(t *testing.T) {
 	var logged bytes.Buffer
 	h := testServer(t, Options{
-		Accounts: &fakeAccounts{},
-		BaseURL:  "https://yacht.test",
-		Logger:   slog.New(slog.NewTextHandler(&logged, nil)),
+		Accounts:        &fakeAccounts{},
+		BaseURL:         "https://yacht.test",
+		BootstrapTeamID: "web-signin",
+		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
 	})
 
 	rec := postSignIn(h, "known@example.test", "203.0.113.5:4000")
@@ -364,10 +398,11 @@ func TestSignInWithNoMailTransportStillSucceeds(t *testing.T) {
 func TestSignInSurvivesAMailFailure(t *testing.T) {
 	var logged bytes.Buffer
 	h := testServer(t, Options{
-		Accounts: &fakeAccounts{},
-		Mailer:   &fakeMailer{err: errors.New("relay refused")},
-		BaseURL:  "https://yacht.test",
-		Logger:   slog.New(slog.NewTextHandler(&logged, nil)),
+		Accounts:        &fakeAccounts{},
+		Mailer:          &fakeMailer{err: errors.New("relay refused")},
+		BaseURL:         "https://yacht.test",
+		BootstrapTeamID: "web-signin",
+		Logger:          slog.New(slog.NewTextHandler(&logged, nil)),
 	})
 
 	failed := postSignIn(h, "known@example.test", "203.0.113.9:4000")
@@ -459,11 +494,400 @@ func TestSignInIsRateLimited(t *testing.T) {
 // own server and have Yacht mail to a real person.
 func TestAccountsRequireAConfiguredBaseURL(t *testing.T) {
 	_, err := New(Options{
-		Orchestrator: newFailingOrchestrator(),
-		Identity:     identity.NewSingleOwner(identity.Owner{ID: "x"}),
-		Accounts:     &fakeAccounts{},
+		Orchestrator:    newFailingOrchestrator(),
+		Identity:        identity.NewSingleOwner(identity.Owner{ID: "x"}),
+		Accounts:        &fakeAccounts{},
+		BootstrapTeamID: "owner-local",
 	})
 	if err == nil {
 		t.Fatal("expected accounts without a BaseURL to be refused")
+	}
+}
+
+// Without the configured team id the first person to sign in gets a fresh empty
+// team, and the apps the install already deployed belong to an owner nobody can
+// sign in as. Silently, which is why it is refused at construction.
+func TestAccountsRequireABootstrapTeam(t *testing.T) {
+	_, err := New(Options{
+		Orchestrator: newFailingOrchestrator(),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: "x"}),
+		Accounts:     &fakeAccounts{},
+		BaseURL:      "https://yacht.test",
+	})
+	if err == nil {
+		t.Fatal("expected accounts without a bootstrap team to be refused")
+	}
+}
+
+// ------------------------------------------------- the magic-link callback
+//
+// These run against the real account service, the real app service and a real
+// database. What has to hold — that the first person to follow a link ends up
+// looking at the apps the install already had — is a fact about three packages
+// and a transaction, and no fake can prove it.
+
+// liveHarness is the whole sign-in path assembled: mail, callback, session
+// cookie, and the dashboard the cookie resolves against.
+type liveHarness struct {
+	handler  http.Handler
+	accounts *account.Service
+	apps     *app.Service
+	mailer   *fakeMailer
+	pool     *pgxpool.Pool
+	teamID   string
+}
+
+// newLiveHarness wires the engine against the test database, with teamID
+// standing in for YACHT_OWNER_ID.
+//
+// Addresses end in @web.test and team ids begin with web-, because `go test
+// ./...` runs the account, app and store packages against this same database at
+// the same time and each purges what it recognises.
+func newLiveHarness(t *testing.T, teamID string) *liveHarness {
+	t.Helper()
+	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set YACHT_TEST_DATABASE_URL to run the sign-in callback tests")
+	}
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if err := store.Migrate(ctx, dsn, log); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	pool, err := store.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	purge := func() {
+		// A person who could not have the configured team gets one named after
+		// themselves, so it is found through the same address filter — and has
+		// to go before the user it is derived from.
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id IN (
+			SELECT 'user-' || u.id::text FROM users u
+			WHERE lower(u.email) LIKE '%@web.test')`); err != nil {
+			t.Errorf("purge personal teams: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM teams WHERE id LIKE 'web-%'`); err != nil {
+			t.Errorf("purge teams: %v", err)
+		}
+		if _, err := pool.Exec(ctx,
+			`DELETE FROM users WHERE lower(email) LIKE '%@web.test'`); err != nil {
+			t.Errorf("purge users: %v", err)
+		}
+	}
+	purge()
+	t.Cleanup(purge)
+
+	accounts := account.NewService(pool, log)
+	apps := app.NewService(pool, orchestrator.NewNoop(), log, app.Options{})
+	mailer := &fakeMailer{}
+
+	h := testServer(t, Options{
+		Apps:     apps,
+		Accounts: accounts,
+		// The provider under test end to end: the cookie the callback sets is
+		// the cookie the dashboard resolves an owner from.
+		Identity:          accounts.Provider(SessionCookie),
+		Mailer:            mailer,
+		BaseURL:           "https://yacht.test",
+		BootstrapTeamID:   teamID,
+		BootstrapTeamName: "Local",
+		SessionTTL:        time.Hour,
+	})
+
+	return &liveHarness{
+		handler: h, accounts: accounts, apps: apps,
+		mailer: mailer, pool: pool, teamID: teamID,
+	}
+}
+
+// installedApp puts the configured team and an app in it, which is the state an
+// install that has been running on a single owner is in when accounts go on.
+func (h *liveHarness) installedApp(t *testing.T, name string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := h.apps.EnsureOwner(ctx, h.teamID, "Local", ""); err != nil {
+		t.Fatalf("EnsureOwner: %v", err)
+	}
+	if _, err := h.apps.Create(ctx, h.teamID, app.CreateInput{
+		Name: name, Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("create the app the install already had: %v", err)
+	}
+}
+
+func (h *liveHarness) user(t *testing.T, email string) account.User {
+	t.Helper()
+	u, err := h.accounts.EnsureUser(context.Background(), email, "")
+	if err != nil {
+		t.Fatalf("EnsureUser: %v", err)
+	}
+	return u
+}
+
+// signIn walks the whole path: ask for a link, take it out of the mail, follow
+// it. The token exists nowhere else, which is exactly the person's position.
+func (h *liveHarness) signIn(t *testing.T, email string) *httptest.ResponseRecorder {
+	t.Helper()
+	before := len(h.mailer.messages())
+
+	if code := postSignIn(h.handler, email, "198.51.100.1:2000").Code; code != http.StatusOK {
+		t.Fatalf("POST /sign-in for %s = %d, want 200", email, code)
+	}
+	sent := h.mailer.messages()
+	if len(sent) != before+1 {
+		t.Fatalf("mails sent = %d, want one more than %d — no link to follow",
+			len(sent), before)
+	}
+	return h.follow(t, linkIn(t, sent[len(sent)-1].TextBody))
+}
+
+func (h *liveHarness) follow(t *testing.T, link string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, link, nil))
+	return rec
+}
+
+func (h *liveHarness) getAs(
+	t *testing.T, path string, c *http.Cookie,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	if c != nil {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func (h *liveHarness) owners(t *testing.T, teamID string) int {
+	t.Helper()
+	var n int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM memberships WHERE owner_id = $1 AND role = 'owner'`,
+		teamID).Scan(&n); err != nil {
+		t.Fatalf("count owners: %v", err)
+	}
+	return n
+}
+
+// linkIn pulls the sign-in URL out of the mail body.
+func linkIn(t *testing.T, body string) string {
+	t.Helper()
+	const prefix = "https://yacht.test/auth/"
+	i := strings.Index(body, prefix)
+	if i < 0 {
+		t.Fatalf("no sign-in link in the mail:\n%s", body)
+	}
+	link := body[i:]
+	if j := strings.IndexAny(link, " \r\n"); j >= 0 {
+		link = link[:j]
+	}
+	return link
+}
+
+func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == SessionCookie {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestValidTokenCreatesASessionAndRedirects(t *testing.T) {
+	h := newLiveHarness(t, "web-valid")
+	h.installedApp(t, "already-here")
+	h.user(t, "alice@web.test")
+
+	rec := h.signIn(t, "alice@web.test")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("following the link = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Errorf("Location = %q, want /", loc)
+	}
+
+	c := sessionCookie(rec)
+	if c == nil || c.Value == "" {
+		t.Fatal("no session cookie — the link proved who they are and gave them nothing")
+	}
+	// The session is real, not merely written: the dashboard resolves an owner
+	// from this cookie and answers.
+	if code := h.getAs(t, "/apps", c).Code; code != http.StatusOK {
+		t.Fatalf("GET /apps with the new session = %d, want 200", code)
+	}
+}
+
+// The cookie must carry the flags from the cookie helper, on the one response
+// that ever sets it.
+func TestCallbackSetsTheSessionCookie(t *testing.T) {
+	h := newLiveHarness(t, "web-cookie")
+	h.user(t, "cookie@web.test")
+
+	c := sessionCookie(h.signIn(t, "cookie@web.test"))
+	if c == nil {
+		t.Fatal("the callback set no session cookie")
+	}
+	if !c.HttpOnly {
+		t.Error("HttpOnly must be set — script-readable session cookies are stealable by XSS")
+	}
+	if c.SameSite != http.SameSiteLaxMode {
+		t.Error("SameSite=Lax is the CSRF defence; without it every form needs a token")
+	}
+	if c.Path != "/" {
+		t.Errorf("Path = %q, want /", c.Path)
+	}
+	// The mailed link is https, so this one arrived over TLS.
+	if !c.Secure {
+		t.Error("Secure must be set when the link was followed over TLS")
+	}
+	if c.MaxAge <= 0 {
+		t.Errorf("MaxAge = %d, want the session TTL", c.MaxAge)
+	}
+
+	// ...and the same callback on a plain-HTTP install must not set it, or the
+	// browser drops the cookie and signing in appears to do nothing at all.
+	raw, _, existed, err := h.accounts.IssueMagicLink(
+		context.Background(), "cookie@web.test", time.Minute)
+	if err != nil || !existed {
+		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
+	}
+	plain := sessionCookie(h.follow(t, "http://yacht.test/auth/"+raw))
+	if plain == nil {
+		t.Fatal("the callback set no session cookie over plain HTTP")
+	}
+	if plain.Secure {
+		t.Error("Secure must not be set on a plain-HTTP request")
+	}
+}
+
+// A link sits in a mailbox forever. One that still worked the second time would
+// be a permanent key to the account.
+func TestConsumedTokenIsRejected(t *testing.T) {
+	h := newLiveHarness(t, "web-consumed")
+	h.user(t, "spent@web.test")
+
+	if code := postSignIn(h.handler, "spent@web.test", "198.51.100.2:2000").Code; code != http.StatusOK {
+		t.Fatalf("POST /sign-in = %d, want 200", code)
+	}
+	sent := h.mailer.messages()
+	if len(sent) != 1 {
+		t.Fatalf("mails = %d, want 1", len(sent))
+	}
+	link := linkIn(t, sent[0].TextBody)
+
+	if code := h.follow(t, link).Code; code != http.StatusSeeOther {
+		t.Fatalf("first use = %d, want 303", code)
+	}
+
+	again := h.follow(t, link)
+	if again.Code == http.StatusSeeOther {
+		t.Fatal("the link worked twice")
+	}
+	if again.Code != http.StatusUnauthorized {
+		t.Errorf("second use = %d, want 401", again.Code)
+	}
+	if c := sessionCookie(again); c != nil && c.Value != "" {
+		t.Fatal("a spent link still handed out a session")
+	}
+}
+
+func TestExpiredTokenIsRejected(t *testing.T) {
+	h := newLiveHarness(t, "web-expired")
+	h.user(t, "stale@web.test")
+
+	// Issued directly, because the only way to hold an expired link is to have
+	// been given it before it expired.
+	raw, _, existed, err := h.accounts.IssueMagicLink(
+		context.Background(), "stale@web.test", -time.Minute)
+	if err != nil || !existed {
+		t.Fatalf("IssueMagicLink: %v (existed=%v)", err, existed)
+	}
+
+	rec := h.follow(t, "https://yacht.test/auth/"+raw)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("following an expired link = %d, want 401", rec.Code)
+	}
+	if c := sessionCookie(rec); c != nil && c.Value != "" {
+		t.Fatal("an expired link handed out a session")
+	}
+}
+
+// The spec's third lockout guard, dropped between spec and plan in sub-project
+// B. Without it an existing single-owner install switches accounts on and the
+// apps already deployed under YACHT_OWNER_ID belong to a team nobody can sign
+// in to.
+func TestFirstSignInInheritsTheConfiguredOwner(t *testing.T) {
+	h := newLiveHarness(t, "web-inherit")
+	h.installedApp(t, "legacy-app")
+	first := h.user(t, "first@web.test")
+
+	rec := h.signIn(t, "first@web.test")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("following the link = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	c := sessionCookie(rec)
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+
+	// The proof that owner_id scoping followed the session: the app the install
+	// already had is on the page, so it is still reachable by somebody.
+	body := h.getAs(t, "/apps", c).Body.String()
+	if !strings.Contains(body, "legacy-app") {
+		t.Fatalf("the first person to sign in cannot see the app the install "+
+			"already deployed:\n%s", body)
+	}
+
+	role, err := h.accounts.RoleIn(context.Background(), first.ID, h.teamID)
+	if err != nil {
+		t.Fatalf("RoleIn: %v", err)
+	}
+	if role != account.RoleOwner {
+		t.Fatalf("role in %s = %q, want owner", h.teamID, role)
+	}
+}
+
+// ...and only the first. The second person must not be handed ownership of the
+// existing team just for signing in.
+func TestSecondSignInDoesNotInheritOwnership(t *testing.T) {
+	h := newLiveHarness(t, "web-second")
+	h.installedApp(t, "private-app")
+	h.user(t, "first@web.test")
+	second := h.user(t, "second@web.test")
+
+	if code := h.signIn(t, "first@web.test").Code; code != http.StatusSeeOther {
+		t.Fatalf("the first sign-in = %d, want 303", code)
+	}
+
+	rec := h.signIn(t, "second@web.test")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the second sign-in = %d, want 303", rec.Code)
+	}
+	c := sessionCookie(rec)
+	if c == nil {
+		t.Fatal("no session cookie for the second person")
+	}
+
+	if _, err := h.accounts.RoleIn(context.Background(), second.ID, h.teamID); !errors.Is(
+		err, account.ErrNotAMember) {
+		t.Fatalf("signing in joined the second person to the configured team: %v", err)
+	}
+	if n := h.owners(t, h.teamID); n != 1 {
+		t.Fatalf("owners of %s = %d, want 1", h.teamID, n)
+	}
+
+	// And the apps of the team they were never invited to are not on their
+	// screen, which is what the ownership would have bought them.
+	body := h.getAs(t, "/apps", c).Body.String()
+	if strings.Contains(body, "private-app") {
+		t.Fatalf("the second person to sign in can see the first team's apps:\n%s", body)
 	}
 }

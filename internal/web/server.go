@@ -51,7 +51,28 @@ type Accounts interface {
 	IssueMagicLink(
 		ctx context.Context, email string, ttl time.Duration,
 	) (raw string, user account.User, existed bool, err error)
+
+	// ConsumeMagicLink spends a link and returns the person it proves. Unknown,
+	// expired and already-spent links all come back as account.ErrTokenInvalid.
+	ConsumeMagicLink(ctx context.Context, raw string) (account.User, error)
+
+	// TeamsFor lists the teams a person may act as.
+	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
+
+	// BootstrapOwner gives someone with no team one to act as, handing the
+	// first of them the team the install was already running as.
+	BootstrapOwner(ctx context.Context, teamID, teamName string, user account.User) error
+
+	// CreateSession opens a session onto a team, returning the token for the
+	// cookie. Membership is verified there, not trusted from here.
+	CreateSession(
+		ctx context.Context, userID uuid.UUID, teamID, userAgent, ip string, ttl time.Duration,
+	) (string, error)
 }
+
+// The engine's own implementation, asserted here so that a signature drifting
+// apart from this interface fails the build in the package that defines it.
+var _ Accounts = (*account.Service)(nil)
 
 // Options configures the dashboard server.
 //
@@ -98,12 +119,27 @@ type Options struct {
 	// defaultMagicLinkTTL.
 	MagicLinkTTL time.Duration
 
+	// SessionTTL is how long a signed-in browser stays signed in. Defaults to
+	// defaultSessionTTL.
+	SessionTTL time.Duration
+
+	// BootstrapTeamID and BootstrapTeamName are the install's configured owner
+	// — YACHT_OWNER_ID and YACHT_OWNER_NAME. The first person to sign in
+	// inherits that team, so the apps an install already deployed under it stay
+	// reachable once accounts are switched on. Required with Accounts.
+	BootstrapTeamID   string
+	BootstrapTeamName string
+
 	Logger *slog.Logger
 }
 
-// defaultMagicLinkTTL matches config's default, so a server built without one
-// does not quietly outlive the link the operator configured.
-const defaultMagicLinkTTL = 15 * time.Minute
+// defaultMagicLinkTTL and defaultSessionTTL match config's defaults, so a
+// server built without them does not quietly outlive what the operator
+// configured.
+const (
+	defaultMagicLinkTTL = 15 * time.Minute
+	defaultSessionTTL   = 720 * time.Hour
+)
 
 // Server serves the dashboard.
 type Server struct {
@@ -117,11 +153,14 @@ type Server struct {
 	wildcard  bool
 	log       *slog.Logger
 
-	accounts    Accounts
-	mailer      notify.Mailer
-	baseURL     string
-	magicTTL    time.Duration
-	signInLimit *attemptLimiter
+	accounts      Accounts
+	mailer        notify.Mailer
+	baseURL       string
+	magicTTL      time.Duration
+	sessionTTL    time.Duration
+	bootstrapID   string
+	bootstrapName string
+	signInLimit   *attemptLimiter
 }
 
 // New validates options and returns a server.
@@ -148,11 +187,24 @@ func New(opts Options) (*Server, error) {
 					"built from the request without letting a Host header decide where " +
 					"they point")
 		}
+		// Refused rather than defaulted: without it the first person to sign in
+		// lands in a fresh empty team, and the apps the install already deployed
+		// belong to an owner nobody can authenticate as. That failure is silent
+		// and arrives on the day accounts are switched on.
+		if opts.BootstrapTeamID == "" {
+			return nil, errors.New(
+				"web: a BootstrapTeamID is required with Accounts — without the " +
+					"configured owner id the first person to sign in cannot inherit " +
+					"the team the install has been running as")
+		}
 		if opts.Mailer == nil {
 			opts.Mailer = notify.NewLog(opts.Logger)
 		}
 		if opts.MagicLinkTTL <= 0 {
 			opts.MagicLinkTTL = defaultMagicLinkTTL
+		}
+		if opts.SessionTTL <= 0 {
+			opts.SessionTTL = defaultSessionTTL
 		}
 	}
 	return &Server{
@@ -166,11 +218,14 @@ func New(opts Options) (*Server, error) {
 		wildcard:  opts.WildcardTLS,
 		log:       opts.Logger,
 
-		accounts:    opts.Accounts,
-		mailer:      opts.Mailer,
-		baseURL:     strings.TrimRight(opts.BaseURL, "/"),
-		magicTTL:    opts.MagicLinkTTL,
-		signInLimit: newAttemptLimiter(signInWindow),
+		accounts:      opts.Accounts,
+		mailer:        opts.Mailer,
+		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
+		magicTTL:      opts.MagicLinkTTL,
+		sessionTTL:    opts.SessionTTL,
+		bootstrapID:   opts.BootstrapTeamID,
+		bootstrapName: opts.BootstrapTeamName,
+		signInLimit:   newAttemptLimiter(signInWindow),
 	}, nil
 }
 
@@ -198,6 +253,12 @@ func (s *Server) Handler() http.Handler {
 	if s.accounts != nil {
 		r.Get("/sign-in", s.signInPage)
 		r.Post("/sign-in", s.signInRequest)
+		// The callback is a GET because it is a link in a mail message and
+		// nothing else can be, which is the one exception to every mutating
+		// route being a POST. What makes it tolerable is that the token is
+		// single-use and short-lived: a mail client that prefetches links spends
+		// one its own recipient asked for, and a crawler has nothing to guess.
+		r.Get("/auth/{token}", s.signInCallback)
 	}
 
 	r.Group(func(r chi.Router) {

@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/config"
@@ -71,19 +69,26 @@ func run() error {
 		return err
 	}
 
-	ident, err := newIdentity(cfg, pool, log)
-	if err != nil {
-		return err
-	}
-
-	// Nothing sends mail yet — the sign-in surface is the next sub-project —
-	// but the transport is built here so a relay that could never work stops
-	// startup, rather than surfacing at the first sign-in attempt where it
-	// reads to an operator as sign-in being broken.
+	// Non-nil only when sign-in is switched on. Held here rather than inside
+	// newIdentity because the dashboard needs the same service the session
+	// provider resolves against — one that signed a cookie the other did not
+	// know about would be a sign-in that never takes.
+	var accounts *account.Service
+	var mailer notify.Mailer
 	if cfg.AccountsEnabled() {
-		if _, err := newMailer(cfg, log); err != nil {
+		accounts = account.NewService(pool, log)
+
+		// Built before serving starts so that a relay which could never work
+		// stops startup, rather than surfacing at the first sign-in attempt
+		// where it reads to an operator as sign-in being broken.
+		if mailer, err = newMailer(cfg, log); err != nil {
 			return err
 		}
+	}
+
+	ident, err := newIdentity(cfg, accounts, log)
+	if err != nil {
+		return err
 	}
 
 	apps := app.NewService(pool, orch, log, app.Options{
@@ -111,7 +116,7 @@ func run() error {
 		return err
 	}
 
-	srv, err := web.New(web.Options{
+	opts := web.Options{
 		Orchestrator: orch,
 		Identity:     ident,
 		Apps:         apps,
@@ -126,7 +131,22 @@ func run() error {
 		AppDomain:     cfg.AppDomain,
 		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
-	})
+	}
+
+	if cfg.AccountsEnabled() {
+		opts.Accounts = accounts
+		opts.Mailer = mailer
+		opts.BaseURL = cfg.BaseURL
+		opts.MagicLinkTTL = cfg.MagicLinkTTL
+		opts.SessionTTL = cfg.SessionTTL
+		// The team the install has been running as. The first person to sign in
+		// inherits it, so the apps already deployed under YACHT_OWNER_ID stay
+		// reachable instead of belonging to an owner nobody can authenticate as.
+		opts.BootstrapTeamID = cfg.OwnerID
+		opts.BootstrapTeamName = cfg.OwnerName
+	}
+
+	srv, err := web.New(opts)
 	if err != nil {
 		return err
 	}
@@ -166,7 +186,7 @@ func newOrchestrator(
 // startup line whether the install signs people in, guards a shared token, or
 // trusts everyone who can reach the port.
 func newIdentity(
-	cfg config.Config, pool *pgxpool.Pool, log *slog.Logger,
+	cfg config.Config, accounts *account.Service, log *slog.Logger,
 ) (identity.Provider, error) {
 	if cfg.AccountsEnabled() {
 		log.Info("accounts enabled — requests are resolved from a session cookie "+
@@ -181,7 +201,7 @@ func newIdentity(
 		// is not there.
 		log.Warn("this build serves no sign-in page yet — every request will be " +
 			"rejected until one is added; unset YACHT_BASE_URL to stay on token auth")
-		return account.NewService(pool, log).Provider(web.SessionCookie), nil
+		return accounts.Provider(web.SessionCookie), nil
 	}
 
 	owner := identity.Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}
