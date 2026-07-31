@@ -1,12 +1,15 @@
 # Binaries
+# Anchored to the repo root. An unanchored `yacht` matches at every depth and
+# silently excludes cmd/yacht/, so a fresh clone has no main package to build.
 /bin/
 /dist/
-yacht
+/yacht
 
 # Go
+# Anchored for the same reason: `coverage.*` swallowed docs/coverage.md.
 *.test
 *.out
-coverage.*
+/coverage.*
 
 # templ generated files are committed so `go build` works without the templ CLI.
 # If you prefer generating in CI instead, uncomment:
