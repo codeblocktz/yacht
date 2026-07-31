@@ -4,13 +4,18 @@
 // the question and consumes the answer; how the answer is produced is
 // injected.
 //
-// The reason is the open-core boundary. The engine is single-owner: one person
-// runs it on their own cluster. A wrapping application is multi-tenant and
-// resolves an owner from a signed token, a session, an org membership, or all
-// three. If the engine baked in its own session handling, that wrapping layer
-// would have to fight it — usually by forking, which defeats the point of a
-// module. With the resolution injected, both sides get what they need and
-// neither knows about the other.
+// The reason is the open-core boundary. The engine now hosts several teams and
+// ships a session-backed provider of its own, so it is no longer true that
+// authentication lives entirely outside it. What is still true is the part that
+// matters: a wrapping application resolves an owner from a signed token, an org
+// membership, or its own sessions, and must be able to do so without fighting
+// the engine — usually by forking, which defeats the point of a module.
+//
+// The seam survives because account.Sessions is an implementation of Provider
+// rather than a replacement for it. The engine's own sign-in goes through the
+// same interface a wrapping application swaps out, which is why adding teams,
+// people and sessions changed no handler, no store query and no orchestrator
+// call.
 //
 // Everything downstream — handlers, storage, the orchestrator — takes an
 // OwnerID and never asks where it came from.

@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -82,6 +83,30 @@ type Config struct {
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
 
+	// BaseURL is the public URL the dashboard is reached at, such as
+	// https://yacht.example.com. It is what a sign-in link is built from, and
+	// setting it is what switches accounts on: without it there is no address
+	// to put in the link, so there is no way to sign in.
+	BaseURL string
+
+	// SMTP describes a relay to send sign-in links through. SMTPAddr empty
+	// means no relay is configured.
+	SMTPAddr     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+
+	// ResendAPIKey and ResendFrom select Resend's HTTP API instead of a relay.
+	ResendAPIKey string
+	ResendFrom   string
+
+	// SessionTTL is how long a signed-in browser stays signed in.
+	SessionTTL time.Duration
+
+	// MagicLinkTTL is how long a sign-in link remains redeemable. Short,
+	// because the link is a bearer credential sitting in a mailbox.
+	MagicLinkTTL time.Duration
+
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
 
@@ -102,6 +127,15 @@ func Load() (Config, error) {
 		AppDomain:       env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
 		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
+		BaseURL:         strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
+		SMTPAddr:        env("YACHT_SMTP_ADDR", ""),
+		SMTPUsername:    env("YACHT_SMTP_USER", ""),
+		SMTPPassword:    env("YACHT_SMTP_PASSWORD", ""),
+		SMTPFrom:        env("YACHT_SMTP_FROM", ""),
+		ResendAPIKey:    env("YACHT_RESEND_API_KEY", ""),
+		ResendFrom:      env("YACHT_RESEND_FROM", ""),
+		SessionTTL:      envDuration("YACHT_SESSION_TTL", 720*time.Hour),
+		MagicLinkTTL:    envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout: envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		Debug:           envBool("YACHT_DEBUG", false),
 	}
@@ -156,12 +190,66 @@ func (c Config) validate() error {
 		errs = append(errs, errors.New(
 			"YACHT_WILDCARD_TLS requires YACHT_APP_DOMAIN — there would be no hostnames to serve"))
 	}
+	errs = append(errs, c.accountFaults()...)
 
 	return errors.Join(errs...)
 }
 
+// accountFaults validates the sign-in settings, and only once accounts are on.
+//
+// With no base URL nothing ever sends mail, so a half-finished relay block is
+// inert; refusing to start over it would stop an install that had simply left
+// the settings lying around. Once accounts are on the same settings decide
+// whether anybody can get in, and each of these would be discovered at the
+// first sign-in attempt — by which point the operator reads it as sign-in
+// being broken rather than as a setting they got wrong.
+func (c Config) accountFaults() []error {
+	if !c.AccountsEnabled() {
+		return nil
+	}
+
+	var errs []error
+	if u, err := url.Parse(c.BaseURL); err != nil {
+		errs = append(errs, fmt.Errorf("YACHT_BASE_URL is not a URL: %w", err))
+	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		errs = append(errs, errors.New(
+			"YACHT_BASE_URL must be an absolute http or https URL, such as https://yacht.example.com"))
+	}
+
+	// Two transports is not a fallback chain, it is an unanswered question
+	// about which one sends. Say so rather than picking.
+	if c.SMTPAddr != "" && c.ResendAPIKey != "" {
+		errs = append(errs, errors.New(
+			"YACHT_SMTP_ADDR and YACHT_RESEND_API_KEY are both set — configure one mail transport"))
+	}
+	if c.SMTPAddr != "" && c.SMTPFrom == "" {
+		errs = append(errs, errors.New("YACHT_SMTP_FROM is required with YACHT_SMTP_ADDR"))
+	}
+	if c.ResendAPIKey != "" && c.ResendFrom == "" {
+		errs = append(errs, errors.New("YACHT_RESEND_FROM is required with YACHT_RESEND_API_KEY"))
+	}
+	// A zero or negative lifetime issues credentials that are already expired,
+	// which presents as sign-in silently never working.
+	if c.SessionTTL <= 0 {
+		errs = append(errs, errors.New("YACHT_SESSION_TTL must be positive"))
+	}
+	if c.MagicLinkTTL <= 0 {
+		errs = append(errs, errors.New("YACHT_MAGIC_LINK_TTL must be positive"))
+	}
+	return errs
+}
+
 // Unauthenticated reports whether the dashboard will accept any caller.
 func (c Config) Unauthenticated() bool { return c.AuthToken == "" }
+
+// AccountsEnabled reports whether the dashboard signs people in.
+//
+// A base URL and nothing else is enough: with no relay configured the sign-in
+// link is written to the log, which is the documented way back in when mail
+// breaks. What cannot be recovered from is the reverse — sign-in switched on
+// with no address to put in the link, which locks the operator out of their own
+// dashboard for good.
+func (c Config) AccountsEnabled() bool { return c.BaseURL != "" }
 
 func env(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
@@ -214,10 +302,28 @@ func (c Config) String() string {
 		token = "set"
 	}
 	return fmt.Sprintf(
-		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s debug=%t",
+		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
+			"accounts=%t mail=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
-		c.KubeInCluster, token, c.OwnerID, c.Debug,
+		c.KubeInCluster, token, c.OwnerID,
+		c.AccountsEnabled(), c.MailTransport(), c.Debug,
 	)
+}
+
+// MailTransport names the transport sign-in links will be delivered through.
+//
+// "log" is not an error state: it is the break-glass path an install with no
+// relay runs on, and naming it at startup is what stops an operator believing
+// mail is configured when it is not.
+func (c Config) MailTransport() string {
+	switch {
+	case c.SMTPAddr != "":
+		return "smtp"
+	case c.ResendAPIKey != "":
+		return "resend"
+	default:
+		return "log"
+	}
 }
 
 // redactDSN strips credentials from a connection string before logging.

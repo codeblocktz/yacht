@@ -1,5 +1,5 @@
-// Command yacht runs the Yacht engine: a single-owner, self-hosted PaaS
-// control plane for Kubernetes.
+// Command yacht runs the Yacht engine: a self-hosted PaaS control plane for
+// Kubernetes.
 package main
 
 import (
@@ -13,9 +13,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/config"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
 	"github.com/codeblocktz/yacht/internal/store"
@@ -67,9 +71,19 @@ func run() error {
 		return err
 	}
 
-	ident, err := newIdentity(cfg, log)
+	ident, err := newIdentity(cfg, pool, log)
 	if err != nil {
 		return err
+	}
+
+	// Nothing sends mail yet — the sign-in surface is the next sub-project —
+	// but the transport is built here so a relay that could never work stops
+	// startup, rather than surfacing at the first sign-in attempt where it
+	// reads to an operator as sign-in being broken.
+	if cfg.AccountsEnabled() {
+		if _, err := newMailer(cfg, log); err != nil {
+			return err
+		}
 	}
 
 	apps := app.NewService(pool, orch, log, app.Options{
@@ -104,7 +118,10 @@ func run() error {
 		// Slots is left nil: the engine uses its own single-owner chrome.
 		// An application wrapping the engine passes its own SlotProvider
 		// here, which is the whole of what it takes to add tenant chrome.
-		Authenticated: !cfg.Unauthenticated(),
+		// Accounts are a credential of their own, so the settings page must not
+		// report the install as open to anyone merely because no shared token
+		// is set.
+		Authenticated: cfg.AccountsEnabled() || !cfg.Unauthenticated(),
 		Version:       version,
 		AppDomain:     cfg.AppDomain,
 		WildcardTLS:   cfg.WildcardTLS,
@@ -142,7 +159,31 @@ func newOrchestrator(
 	return orchestrator.NewNoop(), nil
 }
 
-func newIdentity(cfg config.Config, log *slog.Logger) (identity.Provider, error) {
+// newIdentity picks which of the three providers resolves an owner.
+//
+// Which one is active decides who can reach the dashboard and what they see, so
+// each branch says so in the log: an operator must be able to tell from a
+// startup line whether the install signs people in, guards a shared token, or
+// trusts everyone who can reach the port.
+func newIdentity(
+	cfg config.Config, pool *pgxpool.Pool, log *slog.Logger,
+) (identity.Provider, error) {
+	if cfg.AccountsEnabled() {
+		log.Info("accounts enabled — requests are resolved from a session cookie "+
+			"to the team it is acting as",
+			slog.String("base_url", cfg.BaseURL),
+			slog.String("mail_transport", cfg.MailTransport()),
+			slog.Duration("session_ttl", cfg.SessionTTL),
+		)
+		// Until sign-in pages exist there is no way to obtain a cookie, so an
+		// install that sets YACHT_BASE_URL today gets a dashboard it cannot
+		// enter. Better said out loud than discovered at the login screen that
+		// is not there.
+		log.Warn("this build serves no sign-in page yet — every request will be " +
+			"rejected until one is added; unset YACHT_BASE_URL to stay on token auth")
+		return account.NewService(pool, log).Provider(""), nil
+	}
+
 	owner := identity.Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}
 
 	if cfg.Unauthenticated() {
@@ -150,7 +191,32 @@ func newIdentity(cfg config.Config, log *slog.Logger) (identity.Provider, error)
 			"Only run this way on a trusted network.")
 		return identity.NewSingleOwner(owner), nil
 	}
+	log.Info("shared-token authentication — every caller acts as the single owner",
+		slog.String("owner", cfg.OwnerID))
 	return identity.NewStaticToken(owner, cfg.AuthToken)
+}
+
+// newMailer builds the transport sign-in links are delivered through.
+//
+// The logging transport is the fallback rather than an error: with no relay
+// configured the link goes to the log, which is the only way back in when mail
+// breaks after accounts are switched on.
+func newMailer(cfg config.Config, log *slog.Logger) (notify.Mailer, error) {
+	switch {
+	case cfg.SMTPAddr != "":
+		return notify.NewSMTP(notify.SMTPConfig{
+			Addr:     cfg.SMTPAddr,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+		})
+	case cfg.ResendAPIKey != "":
+		return notify.NewResend(cfg.ResendAPIKey, cfg.ResendFrom)
+	default:
+		log.Warn("no mail transport configured — sign-in links will be written to " +
+			"this log, where anyone who can read it can use them")
+		return notify.NewLog(log), nil
+	}
 }
 
 func serve(

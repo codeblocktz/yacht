@@ -152,6 +152,60 @@ func TestValidReservedDomainsLoad(t *testing.T) {
 	}
 }
 
+// Turning sign-in on with no way to deliver a link locks the operator out of
+// their own dashboard permanently. Accounts stay off unless a link can be
+// delivered and a URL exists to put in it.
+func TestAccountsRequireABaseURL(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_SMTP_ADDR": "smtp.example.test:587"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.AccountsEnabled() {
+		t.Fatal("accounts enabled with no YACHT_BASE_URL — the link would point nowhere")
+	}
+}
+
+func TestAccountsEnabledWithBaseURL(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_BASE_URL": "https://yacht.example.test"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.AccountsEnabled() {
+		t.Fatal("accounts should be enabled once a base URL is set")
+	}
+}
+
+func TestSMTPAndResendTogetherFail(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_BASE_URL":       "https://yacht.example.test",
+		"YACHT_SMTP_ADDR":      "smtp.example.test:587",
+		"YACHT_SMTP_FROM":      "yacht@example.test",
+		"YACHT_RESEND_API_KEY": "re_123",
+	})
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted two mail transports at once")
+	}
+}
+
+func TestSMTPWithoutFromFails(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_BASE_URL":  "https://yacht.example.test",
+		"YACHT_SMTP_ADDR": "smtp.example.test:587",
+	})
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted SMTP with no from address")
+	}
+}
+
+func TestMalformedBaseURLFails(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_BASE_URL": "not a url"})
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted a malformed base URL")
+	}
+}
+
 // TestEveryVariableReadIsDocumented scans for every YACHT_* string config.go
 // reads, rather than checking a list someone has to remember to extend. The
 // hardcoded version passed while YACHT_SHUTDOWN_TIMEOUT went undocumented.
