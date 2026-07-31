@@ -22,6 +22,12 @@ type Querier interface {
 	// because the generated signature requires it.
 	CreateOwner(ctx context.Context, arg CreateOwnerParams) (Owner, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	// Releases an app's platform hostname.
+	//
+	// Deleting rather than leaving the row is what makes the feature reversible:
+	// hostnames are globally unique, so a retired row keeps the name reserved
+	// against every other app forever.
+	DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)

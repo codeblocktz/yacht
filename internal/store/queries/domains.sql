@@ -24,6 +24,15 @@ SELECT * FROM domains
 WHERE app_id = @app_id
 ORDER BY managed DESC, host;
 
+-- Releases an app's platform hostname.
+--
+-- Deleting rather than leaving the row is what makes the feature reversible:
+-- hostnames are globally unique, so a retired row keeps the name reserved
+-- against every other app forever.
+-- name: DeleteManagedDomain :exec
+DELETE FROM domains
+WHERE app_id = @app_id AND managed;
+
 -- name: GetManagedDomain :one
 SELECT * FROM domains
 WHERE app_id = @app_id AND managed

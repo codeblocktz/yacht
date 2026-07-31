@@ -429,3 +429,65 @@ func (failingOrchestrator) AppStatus(
 ) (orchestrator.AppStatus, error) {
 	return orchestrator.AppStatus{}, errCluster
 }
+
+// TestCreatePortlessAppWithAnAppDomain is a regression test.
+//
+// A workload with no port takes no traffic, and the dashboard turns a blank
+// port field into 0 — so if issuing a hostname were unconditional, switching
+// the feature on would make every background worker uncreatable.
+func TestCreatePortlessAppWithAnAppDomain(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
+	id := owner(t, s, pool, "svc-portless")
+
+	created, err := s.Create(ctx, id, CreateInput{
+		Name: "worker", Image: "busybox:latest", Replicas: 1, Port: 0,
+	})
+	if err != nil {
+		t.Fatalf("a port-less app must still be creatable: %v", err)
+	}
+	if created.Host != "" {
+		t.Errorf("Host = %q, want empty — nothing can reach a workload with no port", created.Host)
+	}
+
+	// Holding a globally unique name that no request can reach would block
+	// another app from ever using it.
+	if got := orch.lastAppSpec().Hosts; len(got) != 0 {
+		t.Errorf("spec.Hosts = %v, want none", got)
+	}
+}
+
+// TestRetiringTheAppDomainReleasesTheHostname is a regression test.
+//
+// Backing the feature out has to actually stop the routing. Leaving the row
+// behind keeps the app served at a name the operator has retired, and makes
+// the orchestrator's prune-on-empty-hosts path unreachable.
+func TestRetiringTheAppDomainReleasesTheHostname(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com"})
+	id := owner(t, s, pool, "svc-retire")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s.opts.AppDomain = ""
+
+	if err := s.Redeploy(ctx, id, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+
+	if got := orch.lastAppSpec().Hosts; len(got) != 0 {
+		t.Errorf("spec.Hosts = %v, want none so the Ingress is pruned", got)
+	}
+
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Host != "" {
+		t.Errorf("Host = %q, want empty — the dashboard must stop offering a retired URL", got.Host)
+	}
+}

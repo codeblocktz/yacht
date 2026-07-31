@@ -11,6 +11,21 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteManagedDomain = `-- name: DeleteManagedDomain :exec
+DELETE FROM domains
+WHERE app_id = $1 AND managed
+`
+
+// Releases an app's platform hostname.
+//
+// Deleting rather than leaving the row is what makes the feature reversible:
+// hostnames are globally unique, so a retired row keeps the name reserved
+// against every other app forever.
+func (q *Queries) DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteManagedDomain, appID)
+	return err
+}
+
 const getManagedDomain = `-- name: GetManagedDomain :one
 SELECT id, owner_id, app_id, host, tls, verified, created_at, managed FROM domains
 WHERE app_id = $1 AND managed

@@ -41,7 +41,12 @@ type ManagedInput struct {
 func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (string, error) {
 	host, err := Issue(in.AppName, in.AppDomain)
 	if errors.Is(err, ErrNoAppDomain) {
-		return "", nil
+		// The feature has been switched off. Retire any hostname previously
+		// issued rather than leaving it behind: a stale row keeps the app
+		// routed at a name the operator has retired, and holds that globally
+		// unique name against every other app. Backing the feature out has to
+		// actually back it out.
+		return "", RetireManaged(ctx, q, in.AppID)
 	}
 	if err != nil {
 		return "", err
@@ -59,6 +64,15 @@ func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (stri
 		return "", fmt.Errorf("domain: issue %s: %w", host, err)
 	}
 	return host, nil
+}
+
+// RetireManaged removes an app's platform-issued hostname, releasing the name
+// for reuse. It is a no-op when the app has none.
+func RetireManaged(ctx context.Context, q *dbgen.Queries, appID uuid.UUID) error {
+	if err := q.DeleteManagedDomain(ctx, appID); err != nil {
+		return fmt.Errorf("domain: retire hostname: %w", err)
+	}
+	return nil
 }
 
 // HostsForApp returns every hostname routed to an app, managed first.

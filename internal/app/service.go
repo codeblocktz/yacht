@@ -243,10 +243,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 
 	// Issued inside the same transaction as the app row, so an app cannot
 	// exist without its URL and no later step can forget to add one.
-	host, err := domain.EnsureManaged(ctx, q, domain.ManagedInput{
-		OwnerID: ownerID, AppID: created.ID, AppName: created.Name,
-		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
-	})
+	host, err := domain.EnsureManaged(ctx, q, s.managedInput(created))
 	if err != nil {
 		if errors.Is(err, domain.ErrHostTaken) {
 			return App{}, err
@@ -325,13 +322,30 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 
 // reconcileHosts brings the managed hostname in line with current config and
 // returns every hostname routed to the app.
+// managedInput describes the hostname an app should hold, which is none at all
+// when it has no port.
+//
+// A workload with no port takes no traffic, so a hostname could never reach it
+// — and issuing one anyway would both fail validation downstream and hold a
+// globally unique name against every other app. Expressing it as an empty app
+// domain reuses the existing "feature is off" path, which already retires a
+// hostname rather than merely skipping it. That matters: an app is created
+// with a port and later has it cleared, and the name has to be released.
+func (s *Service) managedInput(a App) domain.ManagedInput {
+	appDomain := s.opts.AppDomain
+	if a.Port == 0 {
+		appDomain = ""
+	}
+	return domain.ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
+		AppDomain: appDomain, TLS: s.opts.WildcardTLS,
+	}
+}
+
 func (s *Service) reconcileHosts(
 	ctx context.Context, q *dbgen.Queries, a App,
 ) ([]string, error) {
-	if _, err := domain.EnsureManaged(ctx, q, domain.ManagedInput{
-		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
-	}); err != nil {
+	if _, err := domain.EnsureManaged(ctx, q, s.managedInput(a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
 	}
 	return domain.HostsForApp(ctx, q, a.ID)
