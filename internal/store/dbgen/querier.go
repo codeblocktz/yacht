@@ -83,6 +83,10 @@ type Querier interface {
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
+	// The columns are named rather than starred, and token_hash is not among them.
+	// This list feeds the team page, and a hash that never leaves the database
+	// cannot be rendered into it by a template that innocently prints a struct.
+	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.

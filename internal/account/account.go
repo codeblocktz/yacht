@@ -85,6 +85,16 @@ type Membership struct {
 	CreatedAt time.Time
 }
 
+// Member is one person's place in a team, carrying enough of the person for a
+// management page to name them without a query per row.
+type Member struct {
+	UserID    uuid.UUID
+	Email     string
+	Name      string
+	Role      Role
+	CreatedAt time.Time
+}
+
 // Service owns people, teams and the roles between them.
 type Service struct {
 	pool *pgxpool.Pool
@@ -193,6 +203,31 @@ func (s *Service) TeamsFor(ctx context.Context, userID uuid.UUID) ([]Membership,
 			UserID:    row.UserID,
 			TeamID:    row.OwnerID,
 			TeamName:  row.TeamName,
+			Role:      Role(row.Role),
+			CreatedAt: row.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// ListMembers returns everyone in a team, with the role each holds.
+//
+// Scoped by team and by nothing else. There is no actor to check here because
+// the caller has already been proved to be acting in this team — the role gate
+// on the route resolved the session, and the team id it hands over is that
+// session's own active team rather than anything the request supplied. A team
+// id that arrived from a form would make this a directory of everybody.
+func (s *Service) ListMembers(ctx context.Context, teamID string) ([]Member, error) {
+	rows, err := s.q.ListMembersOfTeam(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("account: list members: %w", err)
+	}
+	out := make([]Member, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, Member{
+			UserID:    row.UserID,
+			Email:     row.Email,
+			Name:      row.UserName,
 			Role:      Role(row.Role),
 			CreatedAt: row.CreatedAt,
 		})

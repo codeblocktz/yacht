@@ -21,6 +21,49 @@ import (
 // rather than reporting that a still-live token has been withdrawn.
 var ErrInvitationNotFound = errors.New("account: no such invitation")
 
+// Invitation is an outstanding invitation, as a page that offers to withdraw
+// it needs it.
+//
+// There is no token field, and there is no field the token can be derived
+// from. The struct is the shape the team page renders, and a page that printed
+// the invitation link would let anyone who can read it — including whoever is
+// looking over the reader's shoulder — join as the invitee. Leaving the secret
+// out of the type is what makes that impossible rather than merely avoided.
+type Invitation struct {
+	ID        uuid.UUID
+	TeamID    string
+	Email     string
+	Role      Role
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+// ListPendingInvitations returns the invitations to a team that nobody has
+// accepted and that have not expired.
+//
+// Scoped by team, for the same reason ListMembers is: the team id comes from
+// the caller's own session, which the role gate has already resolved.
+func (s *Service) ListPendingInvitations(
+	ctx context.Context, teamID string,
+) ([]Invitation, error) {
+	rows, err := s.q.ListPendingInvitations(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("account: list invitations: %w", err)
+	}
+	out := make([]Invitation, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, Invitation{
+			ID:        row.ID,
+			TeamID:    row.OwnerID,
+			Email:     row.Email,
+			Role:      Role(row.Role),
+			ExpiresAt: row.ExpiresAt,
+			CreatedAt: row.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
 // Invite issues an invitation to join a team, and returns the token to mail.
 //
 // The actor's authority is checked with the same rule that governs role

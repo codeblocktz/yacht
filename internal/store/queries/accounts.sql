@@ -155,6 +155,15 @@ WHERE token_hash = @token_hash
   AND expires_at > now()
 RETURNING owner_id, role, email;
 
+-- The columns are named rather than starred, and token_hash is not among them.
+-- This list feeds the team page, and a hash that never leaves the database
+-- cannot be rendered into it by a template that innocently prints a struct.
+-- name: ListPendingInvitations :many
+SELECT id, owner_id, email, role, expires_at, created_at
+FROM invitations
+WHERE owner_id = @owner_id AND accepted_at IS NULL AND expires_at > now()
+ORDER BY email;
+
 -- Scoped by owner_id as well as id: an id from another team must not be
 -- reachable by someone who happens to administer this one.
 -- name: DeleteInvitation :execrows

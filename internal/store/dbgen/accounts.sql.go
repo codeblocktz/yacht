@@ -486,6 +486,52 @@ func (q *Queries) ListMembershipsForUser(ctx context.Context, userID uuid.UUID) 
 	return items, nil
 }
 
+const listPendingInvitations = `-- name: ListPendingInvitations :many
+SELECT id, owner_id, email, role, expires_at, created_at
+FROM invitations
+WHERE owner_id = $1 AND accepted_at IS NULL AND expires_at > now()
+ORDER BY email
+`
+
+type ListPendingInvitationsRow struct {
+	ID        uuid.UUID
+	OwnerID   string
+	Email     string
+	Role      string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+// The columns are named rather than starred, and token_hash is not among them.
+// This list feeds the team page, and a hash that never leaves the database
+// cannot be rendered into it by a template that innocently prints a struct.
+func (q *Queries) ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingInvitations, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingInvitationsRow{}
+	for rows.Next() {
+		var i ListPendingInvitationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Email,
+			&i.Role,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockTeam = `-- name: LockTeam :one
 SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1 FOR UPDATE
 `
