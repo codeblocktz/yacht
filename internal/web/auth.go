@@ -230,6 +230,88 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// signOut ends the session this browser holds.
+//
+// It sits outside the authenticated group on purpose. A session can already be
+// unusable before anyone clicks sign out — revoked from another browser, or
+// ended by the person being removed from the team — and a sign-out that first
+// demanded a working session would answer 401 and leave that browser holding a
+// cookie it has no way to drop.
+func (s *Server) signOut(w http.ResponseWriter, r *http.Request) {
+	raw := sessionToken(r)
+	if raw != "" {
+		if err := s.accounts.RevokeSession(r.Context(), raw); err != nil {
+			s.log.Error("revoke session", slog.String("error", err.Error()))
+			// The cookie is left alone. Clearing it here would make the browser
+			// forget a session that is still live in the database, so the person
+			// would believe they had signed out and have no handle left to try
+			// again with.
+			http.Error(w, "could not sign you out", http.StatusInternalServerError)
+			return
+		}
+	}
+	s.endSession(w, r)
+}
+
+// signOutEverywhere ends every session the person holds, on every device.
+//
+// This is the answer to a cookie that has been copied off a machine. Without it
+// a leaked session runs until it expires and its owner can do nothing at all
+// about it.
+func (s *Server) signOutEverywhere(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	if raw := sessionToken(r); raw != "" {
+		// Whose sessions to end comes from resolving the presented cookie, never
+		// from the request body. A user id read from a form would be a way to sign
+		// anybody out by knowing their id.
+		sess, err := s.accounts.ResolveSession(ctx, raw)
+		switch {
+		case errors.Is(err, account.ErrSessionInvalid):
+			// The cookie is already dead. There is nothing to revoke, and saying
+			// so would only tell the holder of a guessed token that they missed.
+		case err != nil:
+			s.log.Error("resolve session", slog.String("error", err.Error()))
+			http.Error(w, "could not sign you out", http.StatusInternalServerError)
+			return
+		default:
+			if err := s.accounts.RevokeAllSessions(ctx, sess.UserID); err != nil {
+				s.log.Error("revoke every session",
+					slog.String("user", sess.UserID.String()), slog.String("error", err.Error()))
+				// Reported rather than swallowed: this is the request someone makes
+				// when they believe a session has been stolen, and a silent failure
+				// leaves them sure the thief is locked out when they are not.
+				http.Error(w, "could not sign you out everywhere", http.StatusInternalServerError)
+				return
+			}
+			s.log.Info("signed out everywhere", slog.String("user", sess.UserID.String()))
+		}
+	}
+	s.endSession(w, r)
+}
+
+// endSession drops the cookie and sends the browser to the only page it can
+// still use.
+func (s *Server) endSession(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w, r)
+	// See other rather than a temporary redirect: the POST has been carried out,
+	// and a browser that repeated it from history would post to a route that no
+	// longer has a session to end.
+	http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
+}
+
+// sessionToken returns the raw token the request presented, or "".
+//
+// A missing cookie is not an error here: sign-out has to work for a browser
+// whose cookie has already gone.
+func sessionToken(r *http.Request) string {
+	c, err := r.Cookie(SessionCookie)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
 // activeTeam picks the team a new session acts as.
 //
 // Someone with no team at all is the case the bootstrap exists for: on an

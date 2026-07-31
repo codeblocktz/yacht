@@ -68,6 +68,18 @@ type Accounts interface {
 	CreateSession(
 		ctx context.Context, userID uuid.UUID, teamID, userAgent, ip string, ttl time.Duration,
 	) (string, error)
+
+	// ResolveSession returns the session a token stands for. It is how sign-out
+	// everywhere learns whose sessions to end: from the cookie, never from
+	// anything the request says about itself.
+	ResolveSession(ctx context.Context, raw string) (account.Session, error)
+
+	// RevokeSession ends one session — sign-out on this browser.
+	RevokeSession(ctx context.Context, raw string) error
+
+	// RevokeAllSessions ends every session a person holds, which is the only
+	// answer to a cookie that has been copied off a machine.
+	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
 }
 
 // The engine's own implementation, asserted here so that a signature drifting
@@ -259,6 +271,18 @@ func (s *Server) Handler() http.Handler {
 		// single-use and short-lived: a mail client that prefetches links spends
 		// one its own recipient asked for, and a crawler has nothing to guess.
 		r.Get("/auth/{token}", s.signInCallback)
+
+		// Sign-out is POST only. A GET that ends a session is one a prefetching
+		// browser, a crawler or an <img> tag on another site can fire, and being
+		// signed out by a page you visited is a denial of service with no error
+		// message. SameSite=Lax keeps the cookie off cross-site POSTs, which is
+		// what makes the POST safe without a token.
+		//
+		// Both sit outside the authenticated group deliberately: a browser whose
+		// session has already been revoked still has to be able to clear its
+		// cookie, and a 401 would deny it exactly that.
+		r.Post("/sign-out", s.signOut)
+		r.Post("/sign-out-everywhere", s.signOutEverywhere)
 	}
 
 	r.Group(func(r chi.Router) {

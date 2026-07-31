@@ -193,6 +193,18 @@ func (f *fakeAccounts) CreateSession(
 	return "", errNoFakeAccountsBackend
 }
 
+func (f *fakeAccounts) ResolveSession(context.Context, string) (account.Session, error) {
+	return account.Session{}, account.ErrSessionInvalid
+}
+
+func (f *fakeAccounts) RevokeSession(context.Context, string) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) RevokeAllSessions(context.Context, uuid.UUID) error {
+	return errNoFakeAccountsBackend
+}
+
 var errNoFakeAccountsBackend = errors.New("fakeAccounts holds no teams or sessions")
 
 type fakeMailer struct {
@@ -665,6 +677,19 @@ func (h *liveHarness) getAs(
 	return rec
 }
 
+func (h *liveHarness) postAs(
+	t *testing.T, path string, c *http.Cookie,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	if c != nil {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	return rec
+}
+
 func (h *liveHarness) owners(t *testing.T, teamID string) int {
 	t.Helper()
 	var n int
@@ -889,5 +914,170 @@ func TestSecondSignInDoesNotInheritOwnership(t *testing.T) {
 	body := h.getAs(t, "/apps", c).Body.String()
 	if strings.Contains(body, "private-app") {
 		t.Fatalf("the second person to sign in can see the first team's apps:\n%s", body)
+	}
+}
+
+// ------------------------------------------------------------- signing out
+//
+// Against the real service, because the claim being made is that the session
+// stops working — not that a handler was called.
+
+func TestSignOutClearsTheCookieAndRevokesTheSession(t *testing.T) {
+	h := newLiveHarness(t, "web-signout")
+	h.installedApp(t, "signout-app")
+	h.user(t, "out@web.test")
+
+	// Two browsers, the same person. Signing out of one must be signing out of
+	// one: a sign-out that quietly ended every session would be indistinguishable
+	// here from a correct one without the second.
+	here := sessionCookie(h.signIn(t, "out@web.test"))
+	elsewhere := sessionCookie(h.signIn(t, "out@web.test"))
+	if here == nil || elsewhere == nil {
+		t.Fatal("signing in twice did not produce two session cookies")
+	}
+	if here.Value == elsewhere.Value {
+		t.Fatal("both sign-ins produced the same session — there is only one browser to test with")
+	}
+	if code := h.getAs(t, "/apps", here).Code; code != http.StatusOK {
+		t.Fatalf("GET /apps before signing out = %d, want 200", code)
+	}
+
+	rec := h.postAs(t, "/sign-out", here)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /sign-out = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/sign-in" {
+		t.Errorf("Location = %q, want /sign-in", loc)
+	}
+
+	cleared := sessionCookie(rec)
+	if cleared == nil {
+		t.Fatal("sign-out did not clear the session cookie")
+	}
+	if cleared.Value != "" || cleared.MaxAge >= 0 {
+		t.Fatalf("cleared cookie = %q MaxAge=%d, want empty with a negative MaxAge",
+			cleared.Value, cleared.MaxAge)
+	}
+
+	// The cookie being dropped is the browser's side of it and the browser is
+	// not the threat. What matters is that the value, kept by anyone who copied
+	// it, no longer resolves to anything.
+	if code := h.getAs(t, "/apps", here).Code; code != http.StatusUnauthorized {
+		t.Fatalf("GET /apps with the signed-out session = %d, want 401 — the token still works",
+			code)
+	}
+	if code := h.getAs(t, "/apps", elsewhere).Code; code != http.StatusOK {
+		t.Fatalf("GET /apps on the other browser = %d, want 200 — signing out of one "+
+			"browser signed out of all of them", code)
+	}
+}
+
+// Without this a leaked session cannot be revoked at all: it runs until it
+// expires and the person it belongs to can do nothing about it.
+func TestSignOutEverywhereInvalidatesEveryDevice(t *testing.T) {
+	h := newLiveHarness(t, "web-signout-all")
+	h.installedApp(t, "everywhere-app")
+	h.user(t, "all@web.test")
+	h.user(t, "bystander@web.test")
+
+	here := sessionCookie(h.signIn(t, "all@web.test"))
+	phone := sessionCookie(h.signIn(t, "all@web.test"))
+	stolen := sessionCookie(h.signIn(t, "all@web.test"))
+	if here == nil || phone == nil || stolen == nil {
+		t.Fatal("three sign-ins did not produce three session cookies")
+	}
+	for _, c := range []*http.Cookie{here, phone, stolen} {
+		if code := h.getAs(t, "/apps", c).Code; code != http.StatusOK {
+			t.Fatalf("GET /apps before signing out everywhere = %d, want 200", code)
+		}
+	}
+
+	// Somebody else, signed in at the same time. Revoking one person's sessions
+	// must not be an install-wide sign-out.
+	other := sessionCookie(h.signIn(t, "bystander@web.test"))
+	if other == nil {
+		t.Fatal("the bystander did not get a session")
+	}
+
+	rec := h.postAs(t, "/sign-out-everywhere", here)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("POST /sign-out-everywhere = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if cleared := sessionCookie(rec); cleared == nil || cleared.Value != "" {
+		t.Fatal("sign-out-everywhere did not clear this browser's cookie")
+	}
+
+	for name, c := range map[string]*http.Cookie{
+		"this browser": here, "the phone": phone, "the stolen cookie": stolen,
+	} {
+		if code := h.getAs(t, "/apps", c).Code; code != http.StatusUnauthorized {
+			t.Errorf("GET /apps with %s = %d, want 401 — the session survived", name, code)
+		}
+	}
+	if code := h.getAs(t, "/apps", other).Code; code != http.StatusOK {
+		t.Errorf("GET /apps as the bystander = %d, want 200 — one person signing out "+
+			"everywhere signed out the whole install", code)
+	}
+}
+
+// GET must not sign anyone out: a prefetched or crawled link would. Browsers
+// and mail clients fetch links nobody clicked, and a sign-out that answers them
+// is a sign-out anyone can trigger with an <img> tag.
+func TestSignOutRejectsGET(t *testing.T) {
+	h := newLiveHarness(t, "web-signout-get")
+	h.installedApp(t, "get-app")
+	h.user(t, "getter@web.test")
+
+	c := sessionCookie(h.signIn(t, "getter@web.test"))
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+
+	for _, path := range []string{"/sign-out", "/sign-out-everywhere"} {
+		rec := h.getAs(t, path, c)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("GET %s = %d, want 405", path, rec.Code)
+		}
+		if cleared := sessionCookie(rec); cleared != nil && cleared.Value == "" {
+			t.Errorf("GET %s cleared the cookie", path)
+		}
+		if code := h.getAs(t, "/apps", c).Code; code != http.StatusOK {
+			t.Fatalf("GET %s ended the session: /apps then answered %d, want 200", path, code)
+		}
+	}
+}
+
+// A session can already be dead before its owner clicks sign out — removed from
+// the team, or revoked from another browser. Sign-out is not authenticated, so
+// that the cookie can still be cleared; refusing here would leave a browser
+// holding a dead cookie with no way to drop it.
+func TestSignOutWithADeadSessionStillClearsTheCookie(t *testing.T) {
+	h := newLiveHarness(t, "web-signout-dead")
+	h.user(t, "dead@web.test")
+
+	c := sessionCookie(h.signIn(t, "dead@web.test"))
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+	if err := h.accounts.RevokeSession(context.Background(), c.Value); err != nil {
+		t.Fatalf("RevokeSession: %v", err)
+	}
+
+	for _, path := range []string{"/sign-out", "/sign-out-everywhere"} {
+		rec := h.postAs(t, path, c)
+		if rec.Code != http.StatusSeeOther {
+			t.Errorf("POST %s with a dead session = %d, want 303\n%s",
+				path, rec.Code, rec.Body.String())
+		}
+		if cleared := sessionCookie(rec); cleared == nil || cleared.Value != "" {
+			t.Errorf("POST %s did not clear the dead cookie", path)
+		}
+	}
+
+	// ...and with no cookie at all, which is what a second click on a stale page
+	// sends.
+	rec := h.postAs(t, "/sign-out", nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("POST /sign-out with no cookie = %d, want 303", rec.Code)
 	}
 }
