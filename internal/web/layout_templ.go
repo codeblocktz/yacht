@@ -131,7 +131,7 @@ func Layout(s Slots, page templ.Component) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</head><body class=\"h-full\"><div class=\"flex h-full\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</head><body class=\"h-full\"><div class=\"flex h-full\"><div class=\"nav-backdrop\" onclick=\"yachtSidebarToggle()\" aria-hidden=\"true\"></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -228,14 +228,14 @@ func sidebar(s Slots) templ.Component {
 			templ_7745c5c3_Var7 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<aside id=\"sidebar\" class=\"sidebar hidden shrink-0 flex-col gap-px border-r border-sidebar-border bg-sidebar px-2.5 py-3 md:flex\"><a href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<aside id=\"sidebar\" class=\"sidebar\"><a href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var8 templ.SafeURL
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(s.BrandHref))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 78, Col: 32}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 79, Col: 32}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -248,7 +248,7 @@ func sidebar(s Slots) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(s.BrandName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 80, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 81, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 		if templ_7745c5c3_Err != nil {
@@ -275,7 +275,7 @@ func sidebar(s Slots) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(s.BrandName)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 87, Col: 18}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 88, Col: 18}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
@@ -289,7 +289,7 @@ func sidebar(s Slots) templ.Component {
 		var templ_7745c5c3_Var11 string
 		templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(s.BrandName)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 90, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 91, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 		if templ_7745c5c3_Err != nil {
@@ -326,7 +326,7 @@ func sidebar(s Slots) templ.Component {
 				var templ_7745c5c3_Var12 string
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(g.Heading)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 100, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 101, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 				if templ_7745c5c3_Err != nil {
@@ -350,7 +350,7 @@ func sidebar(s Slots) templ.Component {
 				var templ_7745c5c3_Var14 templ.SafeURL
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(item.Href))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 104, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 105, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -386,7 +386,7 @@ func sidebar(s Slots) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(item.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 110, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 111, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -404,7 +404,7 @@ func sidebar(s Slots) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(item.Badge)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 112, Col: 55}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 113, Col: 55}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -422,7 +422,7 @@ func sidebar(s Slots) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(item.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 114, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 115, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -504,7 +504,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(initials(activeTeamName(teams)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 154, Col: 57}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 155, Col: 57}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
@@ -517,7 +517,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 		var templ_7745c5c3_Var21 string
 		templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(activeTeamName(teams))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 156, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 157, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 		if templ_7745c5c3_Err != nil {
@@ -530,7 +530,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 		var templ_7745c5c3_Var22 string
 		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(activeTeamName(teams))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 169, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 170, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -554,7 +554,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 			var templ_7745c5c3_Var24 string
 			templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue(team.ID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 180, Col: 20}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 181, Col: 20}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 			if templ_7745c5c3_Err != nil {
@@ -580,7 +580,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 			var templ_7745c5c3_Var26 string
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinStringErrs(team.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 184, Col: 54}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 185, Col: 54}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -603,7 +603,7 @@ func TeamSwitcher(teams []TeamChoice) templ.Component {
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(string(team.Role))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 188, Col: 73}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 189, Col: 73}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 				if templ_7745c5c3_Err != nil {
@@ -666,7 +666,7 @@ func UserMenu(owner identity.Owner, canSignOut bool) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(initials(ownerLabel(owner)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 210, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 211, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 		if templ_7745c5c3_Err != nil {
@@ -679,7 +679,7 @@ func UserMenu(owner identity.Owner, canSignOut bool) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(ownerLabel(owner))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 212, Col: 72}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 213, Col: 72}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -697,7 +697,7 @@ func UserMenu(owner identity.Owner, canSignOut bool) templ.Component {
 			var templ_7745c5c3_Var31 string
 			templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(owner.Email)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 215, Col: 19}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 216, Col: 19}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 			if templ_7745c5c3_Err != nil {
@@ -715,7 +715,7 @@ func UserMenu(owner identity.Owner, canSignOut bool) templ.Component {
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(ownerLabel(owner))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 230, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 231, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 		if templ_7745c5c3_Err != nil {
@@ -807,7 +807,7 @@ func topbar(s Slots) templ.Component {
 				var templ_7745c5c3_Var34 templ.SafeURL
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(crumb.Href))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 268, Col: 36}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 269, Col: 36}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
@@ -820,7 +820,7 @@ func topbar(s Slots) templ.Component {
 				var templ_7745c5c3_Var35 string
 				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 269, Col: 19}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 270, Col: 19}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 				if templ_7745c5c3_Err != nil {
@@ -838,7 +838,7 @@ func topbar(s Slots) templ.Component {
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 272, Col: 57}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 273, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
@@ -933,7 +933,7 @@ func sidebarToggle() templ.Component {
 			templ_7745c5c3_Var38 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "<button type=\"button\" class=\"btn btn-ghost btn-icon -ml-2 hidden md:inline-flex\" aria-label=\"Toggle sidebar\" aria-controls=\"sidebar\" aria-expanded=\"true\" data-sidebar-toggle onclick=\"yachtSidebarToggle()\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 76, "<button type=\"button\" class=\"btn btn-ghost btn-icon -ml-2\" aria-label=\"Toggle sidebar\" aria-controls=\"sidebar\" aria-expanded=\"true\" data-sidebar-toggle onclick=\"yachtSidebarToggle()\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -979,7 +979,7 @@ func sidebarScript() templ.Component {
 			templ_7745c5c3_Var39 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "<script nonce=\"\">\n\t\t(function() {\n\t\t\tvar root = document.documentElement;\n\t\t\ttry {\n\t\t\t\tif (localStorage.getItem(\"yacht-sidebar\") === \"collapsed\") {\n\t\t\t\t\troot.setAttribute(\"data-sidebar\", \"collapsed\");\n\t\t\t\t}\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. An expanded\n\t\t\t\t   sidebar is the right fallback and a broken toggle must not\n\t\t\t\t   break the page. */\n\t\t\t}\n\t\t\tfunction sync() {\n\t\t\t\tvar open = root.getAttribute(\"data-sidebar\") !== \"collapsed\";\n\t\t\t\tvar buttons = document.querySelectorAll(\"[data-sidebar-toggle]\");\n\t\t\t\tfor (var i = 0; i < buttons.length; i++) {\n\t\t\t\t\tbuttons[i].setAttribute(\"aria-expanded\", open ? \"true\" : \"false\");\n\t\t\t\t}\n\t\t\t}\n\t\t\twindow.yachtSidebarToggle = function() {\n\t\t\t\tvar collapsed = root.getAttribute(\"data-sidebar\") === \"collapsed\";\n\t\t\t\troot.setAttribute(\"data-sidebar\", collapsed ? \"expanded\" : \"collapsed\");\n\t\t\t\ttry {\n\t\t\t\t\tlocalStorage.setItem(\n\t\t\t\t\t\t\"yacht-sidebar\",\n\t\t\t\t\t\tcollapsed ? \"expanded\" : \"collapsed\"\n\t\t\t\t\t);\n\t\t\t\t} catch (e) {}\n\t\t\t\tsync();\n\t\t\t};\n\t\t\t/* The button does not exist yet at this point in the head, so the\n\t\t\t   state it advertises is corrected once the body has parsed. */\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", sync);\n\t\t})();\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "<script nonce=\"\">\n\t\t(function() {\n\t\t\tvar root = document.documentElement;\n\t\t\ttry {\n\t\t\t\tif (localStorage.getItem(\"yacht-sidebar\") === \"collapsed\") {\n\t\t\t\t\troot.setAttribute(\"data-sidebar\", \"collapsed\");\n\t\t\t\t}\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. An expanded\n\t\t\t\t   sidebar is the right fallback and a broken toggle must not\n\t\t\t\t   break the page. */\n\t\t\t}\n\t\t\tfunction sync() {\n\t\t\t\tvar open = onPhone()\n\t\t\t\t\t? root.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t\t: root.getAttribute(\"data-sidebar\") !== \"collapsed\";\n\t\t\t\tvar buttons = document.querySelectorAll(\"[data-sidebar-toggle]\");\n\t\t\t\tfor (var i = 0; i < buttons.length; i++) {\n\t\t\t\t\tbuttons[i].setAttribute(\"aria-expanded\", open ? \"true\" : \"false\");\n\t\t\t\t}\n\t\t\t}\n\t\t\t/* Below md the same button opens a drawer instead of collapsing a\n\t\t\t   rail, because there is no room beside the page for a rail and no\n\t\t\t   other way to reach another page.\n\n\t\t\t   The drawer state is deliberately not stored. Every link here is a\n\t\t\t   full page load, so a drawer that remembered being open would\n\t\t\t   reopen itself over whatever you had just navigated to. The rail's\n\t\t\t   collapsed state is stored for the opposite reason: it is where you\n\t\t\t   left the furniture, not a thing you are in the middle of. */\n\t\t\tfunction onPhone() {\n\t\t\t\treturn !window.matchMedia(\"(min-width: 768px)\").matches;\n\t\t\t}\n\n\t\t\twindow.yachtSidebarToggle = function() {\n\t\t\t\tif (onPhone()) {\n\t\t\t\t\tvar open = root.getAttribute(\"data-nav\") === \"open\";\n\t\t\t\t\troot.setAttribute(\"data-nav\", open ? \"closed\" : \"open\");\n\t\t\t\t\tsync();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tvar collapsed = root.getAttribute(\"data-sidebar\") === \"collapsed\";\n\t\t\t\troot.setAttribute(\"data-sidebar\", collapsed ? \"expanded\" : \"collapsed\");\n\t\t\t\ttry {\n\t\t\t\t\tlocalStorage.setItem(\n\t\t\t\t\t\t\"yacht-sidebar\",\n\t\t\t\t\t\tcollapsed ? \"expanded\" : \"collapsed\"\n\t\t\t\t\t);\n\t\t\t\t} catch (e) {}\n\t\t\t\tsync();\n\t\t\t};\n\t\t\t/* Escape closes the drawer. It covers the page, so the usual way\n\t\t\t   out of something covering the page has to work. */\n\t\t\tdocument.addEventListener(\"keydown\", function(event) {\n\t\t\t\tif (\n\t\t\t\t\tevent.key === \"Escape\" &&\n\t\t\t\t\troot.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t) {\n\t\t\t\t\troot.setAttribute(\"data-nav\", \"closed\");\n\t\t\t\t\tsync();\n\t\t\t\t}\n\t\t\t});\n\n\t\t\t/* The button does not exist yet at this point in the head, so the\n\t\t\t   state it advertises is corrected once the body has parsed. On a\n\t\t\t   phone that correction matters: the markup says expanded, and the\n\t\t\t   drawer starts shut. */\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", sync);\n\t\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

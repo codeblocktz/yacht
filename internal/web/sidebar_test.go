@@ -2,9 +2,13 @@ package web
 
 import (
 	"context"
+	"io"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/a-h/templ"
 
 	"github.com/codeblocktz/yacht/internal/identity"
 )
@@ -123,5 +127,69 @@ func TestOwnerLabelFallsBackToEmail(t *testing.T) {
 		if got := ownerLabel(c.owner); got != c.want {
 			t.Errorf("ownerLabel(%+v) = %q, want %q", c.owner, got, c.want)
 		}
+	}
+}
+
+// Below md the sidebar is a drawer, and the button that opens it is the only
+// way to reach another page.
+//
+// This shipped as `hidden md:flex` on the aside and `hidden md:inline-flex` on
+// the toggle, which on a phone is a dashboard you can navigate into and not out
+// of. Both are asserted here because hiding either one alone recreates it.
+func TestOnAPhoneThereIsStillAWayOut(t *testing.T) {
+	page := renderToString(t, Layout(
+		Slots{Title: "t", BrandName: "Yacht", BrandHref: "/", Nav: []NavGroup{{
+			Items: []NavItem{{Label: "Projects", Href: "/projects"}},
+		}}},
+		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil }),
+	))
+
+	aside := regexp.MustCompile(`<aside[^>]*>`).FindString(page)
+	if aside == "" {
+		t.Fatal("no sidebar in the layout")
+	}
+	if strings.Contains(aside, "hidden") {
+		t.Errorf("the sidebar hides itself in markup, so no breakpoint can bring it back: %s", aside)
+	}
+
+	toggle := regexp.MustCompile(`<button[^>]*data-sidebar-toggle[^>]*>`).FindString(page)
+	if toggle == "" {
+		t.Fatal("no sidebar toggle in the layout")
+	}
+	if strings.Contains(toggle, "hidden") {
+		t.Errorf("the toggle is hidden, so a phone has no way to open the drawer: %s", toggle)
+	}
+
+	// Tapping away is how a drawer is dismissed, so something has to be there
+	// to tap.
+	if !strings.Contains(page, "nav-backdrop") {
+		t.Error("the drawer has no backdrop to dismiss it")
+	}
+}
+
+// The drawer must not be remembered. Every link is a full page load, so a
+// drawer that persisted would reopen itself over the page you just chose.
+func TestTheDrawerIsNotPersisted(t *testing.T) {
+	page := renderToString(t, Layout(Slots{Title: "t"},
+		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil })))
+
+	script := regexp.MustCompile(`(?s)<script nonce="">.*?</script>`).FindAllString(page, -1)
+	var sidebar string
+	for _, s := range script {
+		if strings.Contains(s, "yachtSidebarToggle") {
+			sidebar = s
+		}
+	}
+	if sidebar == "" {
+		t.Fatal("no sidebar script in the layout")
+	}
+	// The rail's collapsed state is stored; the drawer's is not. If data-nav
+	// ever reaches localStorage, that distinction has been lost.
+	if regexp.MustCompile(`setItem\([^)]*data-nav`).MatchString(sidebar) ||
+		strings.Contains(sidebar, `"yacht-nav"`) {
+		t.Error("the drawer state is being stored, so it will reopen over the next page")
+	}
+	if !strings.Contains(sidebar, "yacht-sidebar") {
+		t.Error("the desktop rail no longer remembers being collapsed")
 	}
 }

@@ -352,8 +352,40 @@
 
      The rules that do the collapsing are not here — see the utilities layer at
      the end of this file for why. */
+  /* The whole of the sidebar's own layout, including whether it is shown.
+     It used to carry `hidden md:flex` in the markup, which is a second place
+     deciding the same thing and one a media query here has to fight. */
   .sidebar {
-    @apply w-[228px] transition-[width] duration-150 ease-out;
+    @apply flex w-[228px] shrink-0 flex-col gap-px border-r border-sidebar-border
+           bg-sidebar px-2.5 py-3 transition-[width] duration-150 ease-out;
+  }
+
+  /* Below md the sidebar is a drawer over the page rather than a column beside
+     it: at 390px a 228px column leaves no room for the thing you came to read.
+     Everything in it — the nav, the switcher, the footer — is the same markup,
+     because a second copy for small screens is a second copy to keep correct. */
+  @media (max-width: 767px) {
+    .sidebar {
+      @apply fixed bottom-0 left-0 top-0 z-50 w-[268px] -translate-x-full
+             transition-transform shadow-xl;
+    }
+    :root[data-nav="open"] .sidebar { @apply translate-x-0; }
+
+    .nav-backdrop {
+      @apply fixed inset-0 z-40 bg-black/50 opacity-0 pointer-events-none
+             transition-opacity;
+    }
+    :root[data-nav="open"] .nav-backdrop { @apply opacity-100 pointer-events-auto; }
+
+    /* The collapsed rail is a desktop idea. On a drawer it would leave a 56px
+       strip of icons over the page, which is neither the drawer nor the page. */
+    :root[data-sidebar="collapsed"] .sidebar { @apply w-[268px]; }
+  }
+
+  /* The backdrop does not exist above md, where the sidebar takes its own
+     space and there is nothing to dismiss. */
+  @media (min-width: 768px) {
+    .nav-backdrop { @apply hidden; }
   }
 
   /* The rail has no room for a label, so the name has to arrive on hover.

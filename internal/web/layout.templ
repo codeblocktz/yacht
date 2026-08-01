@@ -30,6 +30,7 @@ templ Layout(s Slots, page templ.Component) {
 		</head>
 		<body class="h-full">
 			<div class="flex h-full">
+				<div class="nav-backdrop" onclick="yachtSidebarToggle()" aria-hidden="true"></div>
 				@sidebar(s)
 				<div class="flex min-w-0 flex-1 flex-col">
 					@topbar(s)
@@ -72,7 +73,7 @@ templ Layout(s Slots, page templ.Component) {
 templ sidebar(s Slots) {
 	<aside
 		id="sidebar"
-		class="sidebar hidden shrink-0 flex-col gap-px border-r border-sidebar-border bg-sidebar px-2.5 py-3 md:flex"
+		class="sidebar"
 	>
 		<a
 			href={ templ.URL(s.BrandHref) }
@@ -312,7 +313,7 @@ templ themeScript() {
 templ sidebarToggle() {
 	<button
 		type="button"
-		class="btn btn-ghost btn-icon -ml-2 hidden md:inline-flex"
+		class="btn btn-ghost btn-icon -ml-2"
 		aria-label="Toggle sidebar"
 		aria-controls="sidebar"
 		aria-expanded="true"
@@ -346,13 +347,34 @@ templ sidebarScript() {
 				   break the page. */
 			}
 			function sync() {
-				var open = root.getAttribute("data-sidebar") !== "collapsed";
+				var open = onPhone()
+					? root.getAttribute("data-nav") === "open"
+					: root.getAttribute("data-sidebar") !== "collapsed";
 				var buttons = document.querySelectorAll("[data-sidebar-toggle]");
 				for (var i = 0; i < buttons.length; i++) {
 					buttons[i].setAttribute("aria-expanded", open ? "true" : "false");
 				}
 			}
+			/* Below md the same button opens a drawer instead of collapsing a
+			   rail, because there is no room beside the page for a rail and no
+			   other way to reach another page.
+
+			   The drawer state is deliberately not stored. Every link here is a
+			   full page load, so a drawer that remembered being open would
+			   reopen itself over whatever you had just navigated to. The rail's
+			   collapsed state is stored for the opposite reason: it is where you
+			   left the furniture, not a thing you are in the middle of. */
+			function onPhone() {
+				return !window.matchMedia("(min-width: 768px)").matches;
+			}
+
 			window.yachtSidebarToggle = function() {
+				if (onPhone()) {
+					var open = root.getAttribute("data-nav") === "open";
+					root.setAttribute("data-nav", open ? "closed" : "open");
+					sync();
+					return;
+				}
 				var collapsed = root.getAttribute("data-sidebar") === "collapsed";
 				root.setAttribute("data-sidebar", collapsed ? "expanded" : "collapsed");
 				try {
@@ -363,8 +385,22 @@ templ sidebarScript() {
 				} catch (e) {}
 				sync();
 			};
+			/* Escape closes the drawer. It covers the page, so the usual way
+			   out of something covering the page has to work. */
+			document.addEventListener("keydown", function(event) {
+				if (
+					event.key === "Escape" &&
+					root.getAttribute("data-nav") === "open"
+				) {
+					root.setAttribute("data-nav", "closed");
+					sync();
+				}
+			});
+
 			/* The button does not exist yet at this point in the head, so the
-			   state it advertises is corrected once the body has parsed. */
+			   state it advertises is corrected once the body has parsed. On a
+			   phone that correction matters: the markup says expanded, and the
+			   drawer starts shut. */
 			document.addEventListener("DOMContentLoaded", sync);
 		})();
 	</script>
