@@ -1,0 +1,110 @@
+package web
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// TestTemplatesOnlyUseClassesThatExist.
+//
+// A template can name any class it likes and still compile. Naming one the
+// stylesheet does not define produces a page with no padding, no borders and
+// no alignment — which is what the team page shipped as, because it used
+// "table" where the design system has "dtable".
+//
+// Utility classes come from Tailwind and are generated on demand, so only the
+// design system's own names are checked: those are the ones with no generator
+// behind them, and the ones a typo silently removes.
+func TestTemplatesOnlyUseClassesThatExist(t *testing.T) {
+	css, err := os.ReadFile(filepath.Join("..", "..", "assets", "css", "input.css"))
+	if err != nil {
+		t.Fatalf("read stylesheet: %v", err)
+	}
+
+	defined := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\.([a-z][a-z0-9-]*)\s*\{`).
+		FindAllStringSubmatch(string(css), -1) {
+		defined[m[1]] = true
+	}
+	if len(defined) < 20 {
+		t.Fatalf("only %d classes found in the stylesheet — the scan is broken", len(defined))
+	}
+
+	// Names that look like design-system classes: a bare word, no colon, no
+	// bracket, no slash. Anything with those is a Tailwind utility.
+	looksLikeOurs := regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+
+	// Tailwind's own single-word utilities, which are not in our stylesheet
+	// and are not typos.
+	tailwind := map[string]bool{
+		"flex": true, "grid": true, "block": true, "hidden": true, "inline": true,
+		"grow": true, "shrink": true, "truncate": true, "relative": true,
+		"absolute": true, "fixed": true, "sticky": true, "border": true,
+		"rounded": true, "italic": true, "underline": true, "uppercase": true,
+		"capitalize": true, "container": true, "transform": true, "overflow": true,
+		"group": true, "peer": true, "sr": true, "antialiased": true,
+		"tabular": true, "nums": true, "mono": true, "invisible": true, "visible": true,
+	}
+
+	files, err := filepath.Glob(filepath.Join(".", "*.templ"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no templates found: %v", err)
+	}
+
+	var unknown []string
+	classAttr := regexp.MustCompile(`class="([^"{]*)"`)
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, m := range classAttr.FindAllStringSubmatch(string(src), -1) {
+			for _, name := range strings.Fields(m[1]) {
+				if !looksLikeOurs.MatchString(name) || defined[name] || tailwind[name] {
+					continue
+				}
+				// A Tailwind utility with a known prefix.
+				if strings.ContainsAny(name, ":[]/") {
+					continue
+				}
+				if prefixed(name) {
+					continue
+				}
+				unknown = append(unknown, filepath.Base(f)+": "+name)
+			}
+		}
+	}
+
+	sort.Strings(unknown)
+	for _, u := range unknown {
+		t.Errorf("class is neither in the stylesheet nor a Tailwind utility: %s", u)
+	}
+}
+
+// prefixed reports whether a name is a Tailwind utility by its prefix.
+func prefixed(name string) bool {
+	for _, p := range []string{
+		"p-", "px-", "py-", "pt-", "pb-", "pl-", "pr-",
+		"m-", "mx-", "my-", "mt-", "mb-", "ml-", "mr-",
+		"w-", "h-", "min-", "max-", "gap-", "space-",
+		"text-", "font-", "bg-", "border-", "rounded-", "shadow-",
+		"flex-", "grid-", "col-", "row-", "items-", "justify-", "self-",
+		"opacity-", "cursor-", "overflow-", "whitespace-", "break-",
+		"top-", "bottom-", "left-", "right-", "z-", "order-", "leading-",
+		"tracking-", "align-", "object-", "list-", "divide-", "ring-",
+		"transition", "duration-", "ease-", "hover", "focus", "sm", "md", "lg", "xl",
+		"tabular-", "shrink-", "size-", "from-", "to-", "via-", "gradient-", "aspect-",
+		"inset-", "translate-", "scale-", "rotate-", "fill-", "stroke-",
+		"placeholder-", "caret-", "accent-", "select-", "resize-", "appearance-",
+		"pointer-", "outline-", "decoration-", "indent-", "content-", "backdrop-",
+	} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}

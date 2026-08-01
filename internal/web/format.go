@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -317,4 +318,16 @@ func sourceIcon(src app.Source) string {
 		return "layers"
 	}
 	return "box"
+}
+
+// roleTone colours a role the way the rest of the dashboard colours state:
+// an owner is the one that matters, a member is unremarkable.
+func roleTone(r account.Role) string {
+	switch r {
+	case account.RoleOwner:
+		return "status-info"
+	case account.RoleAdmin:
+		return "status-warn"
+	}
+	return "status-neutral"
 }

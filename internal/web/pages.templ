@@ -430,7 +430,9 @@ templ appVariables(d AppDetailData) {
 									// A page that could show it is one an
 									// onlooker can read.
 									<span class="text-muted-foreground">••••••••</span>
-									<span class="badge ml-2">secret</span>
+									<span class="ml-2">
+										@statusDot("secret", "status-info")
+									</span>
 								} else {
 									{ v.Value }
 								}
@@ -1216,7 +1218,7 @@ templ appStorage(d AppDetailData) {
 				<p>Anything this app writes is lost when its pod restarts.</p>
 			</div>
 		} else {
-			<table class="table">
+			<table class="dtable">
 				<thead>
 					<tr><th>Name</th><th>Mounted at</th><th>Size</th><th class="text-right">Actions</th></tr>
 				</thead>
@@ -1229,11 +1231,11 @@ templ appStorage(d AppDetailData) {
 							<td class="text-right">
 								<div class="flex justify-end gap-2">
 									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/resize") } class="flex items-center gap-1.5">
-										<input class="control control-sm w-20" name="size_gb" type="number" min="1" max="1024" value={ gigabytes(v.SizeBytes) }/>
+										<input class="control w-20 !py-1 !text-[12px]" name="size_gb" type="number" min="1" max="1024" value={ gigabytes(v.SizeBytes) }/>
 										<button class="btn btn-sm" type="submit">Grow</button>
 									</form>
 									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/delete") } class="flex items-center gap-1.5">
-										<input class="control control-sm w-28" name="confirm" placeholder={ v.Name } aria-label="Type the volume name to confirm"/>
+										<input class="control w-28 !py-1 !text-[12px]" name="confirm" placeholder={ v.Name } aria-label="Type the volume name to confirm"/>
 										<button class="btn btn-sm btn-danger" type="submit">Delete</button>
 									</form>
 								</div>

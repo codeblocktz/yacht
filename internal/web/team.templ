@@ -9,17 +9,15 @@ import "github.com/codeblocktz/yacht/internal/account"
 // even by accident — an invitation link on this page would let any reader join
 // as the invitee.
 templ TeamPage(d TeamPageData) {
-	<section class="stack gap-6">
-		<header class="page-header">
-			<h1 class="page-title">Team</h1>
-			<p class="page-subtitle">{ d.TeamName }</p>
-		</header>
-		if d.Error != "" {
-			<div class="notice notice-error">{ d.Error }</div>
-		}
-		<div class="panel">
+	@pageHead("Team", d.TeamName, nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+		<div class="panel mb-5">
 			<div class="panel-header"><span class="panel-title">Members</span></div>
-			<table class="table">
+			<table class="dtable">
 				<thead>
 					<tr><th>Person</th><th>Role</th><th class="text-right">Actions</th></tr>
 				</thead>
@@ -29,15 +27,15 @@ templ TeamPage(d TeamPageData) {
 							<td>
 								<span class="mono">{ m.Email }</span>
 								if m.Name != "" {
-									<span class="muted">{ m.Name }</span>
+									<span class="text-muted-foreground">{ m.Name }</span>
 								}
 							</td>
-							<td><span class="badge">{ string(m.Role) }</span></td>
+							<td>@statusDot(string(m.Role), roleTone(m.Role))</td>
 							<td class="text-right">
 								<div class="flex gap-2 justify-end">
 									if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
 										<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="inline">
-											<select class="control control-sm" name="role">
+											<select class="control !py-1 !text-[12px]" name="role">
 												for _, r := range []account.Role{account.RoleMember, account.RoleAdmin, account.RoleOwner} {
 													if r == m.Role {
 														<option value={ string(r) } selected>{ string(r) }</option>
@@ -62,12 +60,12 @@ templ TeamPage(d TeamPageData) {
 			</table>
 		</div>
 		if d.Viewer.CanAdminister() {
-			<div class="panel">
+			<div class="panel mb-5">
 				<div class="panel-header"><span class="panel-title">Pending invitations</span></div>
 				if len(d.Invitations) == 0 {
-					<div class="panel-body"><p class="muted">Nobody is waiting to join.</p></div>
+					<div class="panel-body"><p class="text-muted-foreground">Nobody is waiting to join.</p></div>
 				} else {
-					<table class="table">
+					<table class="dtable">
 						<thead>
 							<tr><th>Address</th><th>Role</th><th class="text-right">Actions</th></tr>
 						</thead>
@@ -75,7 +73,7 @@ templ TeamPage(d TeamPageData) {
 							for _, inv := range d.Invitations {
 								<tr>
 									<td><span class="mono">{ inv.Email }</span></td>
-									<td><span class="badge">{ string(inv.Role) }</span></td>
+									<td>@statusDot(string(inv.Role), roleTone(inv.Role))</td>
 									<td class="text-right">
 										<form method="post" action={ templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke") } class="inline">
 											<button class="btn btn-sm" type="submit">Revoke</button>
@@ -87,7 +85,7 @@ templ TeamPage(d TeamPageData) {
 					</table>
 				}
 			</div>
-			<div class="panel">
+			<div class="panel mb-5">
 				<div class="panel-header"><span class="panel-title">Invite someone</span></div>
 				<div class="panel-body">
 					<form method="post" action="/team/invite" class="flex gap-4 items-end">
@@ -110,5 +108,4 @@ templ TeamPage(d TeamPageData) {
 				</div>
 			</div>
 		}
-	</section>
 }
