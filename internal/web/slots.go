@@ -17,8 +17,11 @@ package web
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/a-h/templ"
+
+	"github.com/codeblocktz/yacht/internal/identity"
 )
 
 // NavItem is one entry in the sidebar.
@@ -119,6 +122,10 @@ var _ SlotProvider = DefaultSlots{}
 func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	path := r.URL.Path
 
+	// Read once and shared: the switcher offers this list, and the footer asks
+	// the same question of it — whether this install has accounts at all.
+	teams := TeamsFromContext(ctx)
+
 	// The switcher goes in SidebarTop — the slot documented as the home for an
 	// organisation switcher — rather than into the layout directly. A wrapping
 	// application that fills this slot with its own control replaces the
@@ -127,8 +134,24 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// Nothing is drawn on an install with no accounts, where the person belongs
 	// to no teams and there is nothing to switch between.
 	var switcher templ.Component
-	if teams := TeamsFromContext(ctx); len(teams) > 0 {
+	if len(teams) > 0 {
 		switcher = TeamSwitcher(teams)
+	}
+
+	// The footer fills the slot documented as the bottom of the sidebar, for
+	// the same reason the switcher fills SidebarTop: a wrapping application
+	// that wants its own account control replaces this one by filling the
+	// slot, rather than by editing the layout.
+	//
+	// Nothing is drawn where no owner was resolved. The sign-in page renders
+	// this same chrome with no session, and a footer offering to sign out of
+	// nothing is worse than an empty corner — which is also why this reads the
+	// owner with FromContext rather than MustFromContext.
+	var footer templ.Component
+	if owner, ok := identity.FromContext(ctx); ok {
+		// Sign-out is routed only where accounts are on, and that is the same
+		// condition that gives a session teams to switch between.
+		footer = UserMenu(owner, len(teams) > 0)
 	}
 
 	return Slots{
@@ -136,11 +159,12 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.
-		FullBleed:  isCanvasPath(path),
-		Breadcrumb: breadcrumbFor(path),
-		BrandName:  "Yacht",
-		BrandHref:  "/",
-		SidebarTop: switcher,
+		FullBleed:     isCanvasPath(path),
+		Breadcrumb:    breadcrumbFor(path),
+		BrandName:     "Yacht",
+		BrandHref:     "/",
+		SidebarTop:    switcher,
+		SidebarFooter: footer,
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
@@ -199,6 +223,41 @@ func breadcrumbFor(path string) []Crumb {
 
 func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// ownerLabel is what the sidebar calls the signed-in owner.
+//
+// An identity provider is free to resolve an owner with no display name — the
+// token provider does, and so does a fresh account that has only ever proved
+// an email address. Falling back to the address keeps the corner labelled
+// instead of leaving a blank row beside an avatar.
+func ownerLabel(o identity.Owner) string {
+	if o.DisplayName != "" {
+		return o.DisplayName
+	}
+	if o.Email != "" {
+		return o.Email
+	}
+	return "Account"
+}
+
+// initials abbreviates a label for the sidebar's square avatars.
+//
+// Two letters from the first two words, one from a single word. Runes rather
+// than bytes: a team named "Ötzi" abbreviated by byte would render half a
+// character.
+func initials(label string) string {
+	fields := strings.Fields(label)
+	if len(fields) == 0 {
+		return "?"
+	}
+	first := []rune(fields[0])
+	out := string(first[:1])
+	if len(fields) > 1 {
+		second := []rune(fields[1])
+		out += string(second[:1])
+	}
+	return strings.ToUpper(out)
 }
 
 // slot renders c, tolerating nil so every slot is genuinely optional.

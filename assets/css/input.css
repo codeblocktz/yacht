@@ -296,12 +296,74 @@
            text-muted-foreground/70;
   }
   .nav-item {
-    @apply flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px]
-           text-muted-foreground transition-colors hover:bg-sidebar-accent
-           hover:text-foreground;
+    @apply relative flex items-center gap-2.5 rounded-md px-2 py-1.5
+           text-[13px] text-muted-foreground transition-colors
+           hover:bg-sidebar-accent hover:text-foreground;
   }
   .nav-active {
     @apply bg-sidebar-accent text-foreground font-medium;
+  }
+
+  /* ---- sidebar controls -------------------------------------------- */
+
+  /* The team switcher and the user menu are bounded controls rather than
+     nav rows. Both change what the whole dashboard is scoped by, and a
+     control with that much reach should not look like one more link: the
+     border and the lighter fill are what say "this opens something". */
+  .switcher {
+    @apply relative flex w-full cursor-pointer list-none items-center gap-2
+           rounded-lg border border-sidebar-border bg-background px-2 py-1.5
+           text-[12.5px] transition-colors hover:border-border
+           hover:bg-sidebar-accent [&::-webkit-details-marker]:hidden;
+  }
+  /* Open is a held state, not a hover: while the menu is down the control
+     stays lit, so it is obvious which one the panel belongs to. Expressed
+     against the parent's open attribute rather than as a class the template
+     has to remember to add. */
+  details[open] > .switcher {
+    @apply border-border bg-sidebar-accent;
+  }
+  .switcher-menu {
+    @apply absolute z-30 flex min-w-[210px] flex-col gap-px rounded-lg border
+           border-border bg-popover p-1 shadow-lg;
+  }
+  .switcher-item {
+    @apply flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5
+           text-left text-[12.5px] text-muted-foreground transition-colors
+           hover:bg-muted hover:text-foreground;
+  }
+  /* Sign-out ends sessions, so it is coloured as the destructive thing it
+     is rather than sitting flush with Settings. */
+  .switcher-danger {
+    @apply text-destructive hover:bg-destructive/10 hover:text-destructive;
+  }
+  .avatar {
+    @apply grid size-5 shrink-0 place-items-center rounded-[5px] bg-brand/15
+           text-[9px] font-semibold uppercase text-brand ring-1 ring-inset
+           ring-brand/25;
+  }
+
+  /* ---- collapsed rail ---------------------------------------------- */
+
+  /* Collapse is driven by a data attribute on <html>, set before first paint
+     by the same trick the theme uses. The markup has one form and CSS decides
+     what of it is shown, so nothing here needs the server to know whether a
+     given browser keeps its sidebar open.
+
+     The rules that do the collapsing are not here — see the utilities layer at
+     the end of this file for why. */
+  .sidebar {
+    @apply w-[228px] transition-[width] duration-150 ease-out;
+  }
+
+  /* The rail has no room for a label, so the name has to arrive on hover.
+     A real element rather than title=, which waits a second, cannot be
+     styled, and reads as a browser artefact rather than part of the app. */
+  .nav-tip {
+    @apply pointer-events-none absolute left-full top-1/2 z-40 ml-2 hidden
+           -translate-y-1/2 whitespace-nowrap rounded-md border border-border
+           bg-popover px-2 py-1 text-[12px] font-normal text-foreground
+           shadow-md;
   }
 
   /* ---- forms ------------------------------------------------------- */
@@ -488,4 +550,49 @@
   @media (min-width: 40rem) {
     .canvas-sheet { max-width: 560px !important; }
   }
+}
+
+/* The collapsed rail.
+   
+   In the utilities layer rather than with the rest of the sidebar, because
+   each of these overrides a utility written directly on the element it
+   targets — display:none against a `flex` on the switcher label, left:100%
+   against a `left-0` on its menu. Layers are resolved before specificity, and
+   utilities come after components, so in the components layer these rules lose
+   however specific they are. The symptom is not a broken page: the rail
+   collapses to 56px and the label it cannot fit stays visible inside it.
+   
+   Here they are in the same layer as what they fight, where the extra
+   specificity of :root[...] settles it. */
+@layer utilities {
+  :root[data-sidebar="collapsed"] .sidebar { width: 56px; }
+  :root[data-sidebar="collapsed"] .rail-hide { display: none; }
+  :root[data-sidebar="collapsed"] .sidebar .nav-item,
+  :root[data-sidebar="collapsed"] .sidebar .switcher,
+  :root[data-sidebar="collapsed"] .sidebar .brand {
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+  /* A menu anchored to the sidebar's own width has nowhere to go once that
+     width is 56px, so in the rail both menus open beside it instead. */
+  :root[data-sidebar="collapsed"] .switcher-menu {
+    left: 100%;
+    right: auto;
+    margin-left: 0.5rem;
+    width: 220px;
+  }
+  /* The rail has no room for a group name, but the grouping still carries
+     meaning — so the heading becomes the rule it was already implying. */
+  :root[data-sidebar="collapsed"] .nav-group {
+    margin-inline: auto;
+    margin-block: 0.5rem;
+    height: 1px;
+    width: 1.25rem;
+    overflow: hidden;
+    padding: 0;
+    background-color: var(--border);
+    color: transparent;
+  }
+  :root[data-sidebar="collapsed"] .sidebar :hover > .nav-tip { display: block; }
 }

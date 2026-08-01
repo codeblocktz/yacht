@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/web/ui/sheet"
+import (
+	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+)
 
 // Layout renders the chrome around a page.
 //
@@ -18,6 +21,7 @@ templ Layout(s Slots, page templ.Component) {
 			<link rel="icon" href="data:,"/>
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
 			@themeScript()
+			@sidebarScript()
 			<script src={ asset("/assets/js/htmx.min.js") } defer></script>
 			@sheet.Script()
 			if s.FullBleed {
@@ -54,17 +58,32 @@ templ Layout(s Slots, page templ.Component) {
 	</html>
 }
 
+// sidebar renders the navigation panel.
+//
+// Every label in here is wrapped rather than bare, because the collapsed rail
+// hides labels and shows icons, and CSS can only hide what it can select. The
+// markup therefore has one form in both states: nothing below decides whether
+// the sidebar is collapsed, and neither does the server. See sidebarScript().
+//
+// The aside is deliberately not overflow-hidden. In the rail both menus open
+// beside the sidebar rather than inside it, and a clipping context here erases
+// them. Nothing overflows anyway: the labels are display:none when collapsed
+// rather than merely too wide to fit.
 templ sidebar(s Slots) {
-	<aside class="hidden w-[228px] shrink-0 flex-col gap-px border-r border-sidebar-border bg-sidebar px-2.5 py-3 md:flex">
+	<aside
+		id="sidebar"
+		class="sidebar hidden shrink-0 flex-col gap-px border-r border-sidebar-border bg-sidebar px-2.5 py-3 md:flex"
+	>
 		<a
 			href={ templ.URL(s.BrandHref) }
-			class="mb-1 flex items-center gap-2.5 px-2 py-1.5 text-[14px] font-semibold tracking-tight"
+			class="brand relative mb-1 flex items-center gap-2.5 px-2 py-1.5 text-[14px] font-semibold tracking-tight"
 		>
 			<span class="size-4 shrink-0 rounded-[5px] bg-gradient-to-br from-brand to-brand/40 ring-1 ring-inset ring-white/10"></span>
-			{ s.BrandName }
+			<span class="rail-hide truncate">{ s.BrandName }</span>
+			<span class="nav-tip">{ s.BrandName }</span>
 		</a>
 		if s.SidebarTop != nil {
-			<div class="mb-1 px-1">
+			<div class="mb-1">
 				@slot(s.SidebarTop)
 			</div>
 		}
@@ -81,10 +100,11 @@ templ sidebar(s Slots) {
 						if item.Icon != "" {
 							@icon(item.Icon)
 						}
-						<span class="truncate">{ item.Label }</span>
+						<span class="rail-hide truncate">{ item.Label }</span>
 						if item.Badge != "" {
-							<span class="ml-auto tag">{ item.Badge }</span>
+							<span class="rail-hide ml-auto tag">{ item.Badge }</span>
 						}
+						<span class="nav-tip">{ item.Label }</span>
 					</a>
 				}
 			}
@@ -111,13 +131,25 @@ templ sidebar(s Slots) {
 // details/summary rather than a scripted menu: the dashboard's one piece of
 // state that must work is the control that says which team you are in, and it
 // should not need JavaScript to open.
+//
+// The bordered box is not decoration. Sitting flush in a column of navigation
+// links, this read as one more link — and the one control on the page that
+// changes what every query is scoped by should not look like a way to go to a
+// page. The border is what says it opens something.
+//
+// Shares a name with the user menu so the browser closes one when the other
+// opens. Two panels hanging over the sidebar at once is the kind of thing a
+// scripted menu needs a listener for; native exclusive details does it for
+// free.
 templ TeamSwitcher(teams []TeamChoice) {
-	<details class="group relative">
-		<summary class="flex cursor-pointer list-none items-center gap-2 rounded-md px-2 py-1.5 text-[12.5px] hover:bg-sidebar-accent [&::-webkit-details-marker]:hidden">
-			<span class="size-4 shrink-0 rounded-[5px] bg-muted ring-1 ring-inset ring-border"></span>
-			<span class="min-w-0 flex-1 truncate font-medium">{ activeTeamName(teams) }</span>
+	<details name="sidebar-menu" class="group relative">
+		<summary class="switcher">
+			<span class="avatar">{ initials(activeTeamName(teams)) }</span>
+			<span class="rail-hide min-w-0 flex-1 truncate text-left font-medium">
+				{ activeTeamName(teams) }
+			</span>
 			<svg
-				class="size-3.5 shrink-0 opacity-60 group-open:rotate-180"
+				class="rail-hide size-3.5 shrink-0 opacity-60 group-open:rotate-180"
 				viewBox="0 0 24 24"
 				fill="none"
 				stroke="currentColor"
@@ -127,19 +159,20 @@ templ TeamSwitcher(teams []TeamChoice) {
 			>
 				<path d="M6 9l6 6 6-6"></path>
 			</svg>
+			<span class="nav-tip">{ activeTeamName(teams) }</span>
 		</summary>
 		<form
 			method="post"
 			action="/teams/switch"
-			class="absolute left-0 right-0 z-20 mt-1 flex flex-col gap-px rounded-md border border-border bg-popover p-1 shadow-lg"
+			class="switcher-menu left-0 right-0 top-full mt-1"
 		>
 			for _, team := range teams {
 				<button
 					type="submit"
 					name="team"
 					value={ team.ID }
-					class={ "flex items-center gap-2 rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-muted",
-						templ.KV("font-medium", team.Active) }
+					class={ "switcher-item",
+						templ.KV("font-medium text-foreground", team.Active) }
 				>
 					<span class="min-w-0 flex-1 truncate">{ team.Name }</span>
 					if team.Active {
@@ -153,8 +186,72 @@ templ TeamSwitcher(teams []TeamChoice) {
 	</details>
 }
 
+// UserMenu is the sidebar's floor: who the session belongs to, and the actions
+// that belong to the session rather than to any page.
+//
+// A details/summary for the same reason the switcher is one — the control that
+// signs you out is the last thing that should need JavaScript to open — and it
+// opens upward because it sits on the floor of the panel.
+//
+// canSignOut is false on a token-authenticated install. There is no session to
+// end there and /sign-out is not routed at all, so the buttons would 404;
+// drawing nothing is better than drawing a control that cannot work. It is the
+// same question the switcher answers by having no teams to offer.
+templ UserMenu(owner identity.Owner, canSignOut bool) {
+	<details name="sidebar-menu" class="group relative">
+		<summary class="switcher">
+			<span class="avatar">{ initials(ownerLabel(owner)) }</span>
+			<span class="rail-hide flex min-w-0 flex-1 flex-col text-left">
+				<span class="truncate font-medium leading-tight">{ ownerLabel(owner) }</span>
+				if owner.Email != "" && owner.Email != ownerLabel(owner) {
+					<span class="truncate text-[11px] leading-tight text-muted-foreground">
+						{ owner.Email }
+					</span>
+				}
+			</span>
+			<svg
+				class="rail-hide size-3.5 shrink-0 opacity-60 group-open:rotate-180"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.7"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d="M6 9l6 6 6-6"></path>
+			</svg>
+			<span class="nav-tip">{ ownerLabel(owner) }</span>
+		</summary>
+		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
+			<a href="/settings" class="switcher-item">
+				@icon("settings")
+				<span class="flex-1">Settings</span>
+			</a>
+			if canSignOut {
+				<div class="my-1 h-px bg-border"></div>
+				<form method="post" action="/sign-out">
+					<button type="submit" class="switcher-item switcher-danger">
+						@icon("log-out")
+						<span class="flex-1">Sign out</span>
+					</button>
+				</form>
+				// Separate from Sign out on purpose: it ends sessions on every
+				// other browser too, which is a bigger thing than leaving here,
+				// and the two should not be one slip apart.
+				<form method="post" action="/sign-out-everywhere">
+					<button type="submit" class="switcher-item">
+						<span class="size-4 shrink-0"></span>
+						<span class="flex-1 text-[11px]">Sign out everywhere</span>
+					</button>
+				</form>
+			}
+		</div>
+	</details>
+}
+
 templ topbar(s Slots) {
 	<header class="flex h-12 shrink-0 items-center gap-3 border-b border-border px-6">
+		@sidebarToggle()
 		<div class="flex min-w-0 items-center gap-2 text-[12.5px] text-muted-foreground">
 			for i, crumb := range s.Breadcrumb {
 				if i > 0 {
@@ -195,6 +292,70 @@ templ themeScript() {
 				/* Private browsing can throw on localStorage. The OS preference
 				   is a fine fallback and a broken toggle must not break the page. */
 			}
+		})();
+	</script>
+}
+
+// sidebarToggle collapses the sidebar to its icon rail and back.
+//
+// It lives in the top bar rather than in the sidebar because it has to be in
+// the same place in both states: a control that moves when you use it is one
+// you have to find again every time. Hidden below md, where there is no
+// sidebar to collapse.
+templ sidebarToggle() {
+	<button
+		type="button"
+		class="btn btn-ghost btn-icon -ml-2 hidden md:inline-flex"
+		aria-label="Toggle sidebar"
+		aria-controls="sidebar"
+		aria-expanded="true"
+		data-sidebar-toggle
+		onclick="yachtSidebarToggle()"
+	>
+		@icon("panel-left")
+	</button>
+}
+
+// sidebarScript resolves the collapsed state before first paint.
+//
+// Inline and synchronous for the same reason as themeScript: applying the
+// attribute after DOMContentLoaded means anyone who keeps the sidebar
+// collapsed watches it snap shut on every navigation.
+//
+// Setting the attribute before the aside exists also means the width
+// transition never runs on load — it animates when someone presses the
+// button, and not when a page arrives already collapsed.
+templ sidebarScript() {
+	<script nonce="">
+		(function() {
+			var root = document.documentElement;
+			try {
+				if (localStorage.getItem("yacht-sidebar") === "collapsed") {
+					root.setAttribute("data-sidebar", "collapsed");
+				}
+			} catch (e) {
+				/* Private browsing can throw on localStorage. An expanded
+				   sidebar is the right fallback and a broken toggle must not
+				   break the page. */
+			}
+			function sync() {
+				var open = root.getAttribute("data-sidebar") !== "collapsed";
+				var buttons = document.querySelectorAll("[data-sidebar-toggle]");
+				for (var i = 0; i < buttons.length; i++) {
+					buttons[i].setAttribute("aria-expanded", open ? "true" : "false");
+				}
+			}
+			window.yachtSidebarToggle = function() {
+				var collapsed = root.getAttribute("data-sidebar") === "collapsed";
+				root.setAttribute("data-sidebar", collapsed ? "expanded" : "collapsed");
+				try {
+					localStorage.setItem("yacht-sidebar", collapsed ? "expanded" : "collapsed");
+				} catch (e) {}
+				sync();
+			};
+			/* The button does not exist yet at this point in the head, so the
+			   state it advertises is corrected once the body has parsed. */
+			document.addEventListener("DOMContentLoaded", sync);
 		})();
 	</script>
 }
@@ -319,6 +480,13 @@ templ icon(name string) {
 				<path d="M15 3h6v6"></path>
 				<path d="M10 14 21 3"></path>
 				<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+			case "panel-left":
+				<rect width="18" height="18" x="3" y="3" rx="2"></rect>
+				<path d="M9 3v18"></path>
+			case "log-out":
+				<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+				<polyline points="16 17 21 12 16 7"></polyline>
+				<line x1="21" x2="9" y1="12" y2="12"></line>
 			case "users":
 				<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
 				<circle cx="9" cy="7" r="4"></circle>
