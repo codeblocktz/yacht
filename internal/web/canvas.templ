@@ -13,6 +13,7 @@ templ Canvas(d CanvasData) {
 	if d.Empty {
 		@emptyApps()
 	} else {
+		<div class="canvas-wrap">
 		<div class="canvas">
 			<div class="canvas-inner" style={ canvasSize(d) }>
 				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
@@ -30,7 +31,13 @@ templ Canvas(d CanvasData) {
 				</svg>
 				for _, n := range d.Nodes {
 					<div class="canvas-node" style={ nodeAt(n) }>
-						<a href={ templ.URL("/apps/" + n.App.Name) } class="canvas-card">
+						<a
+						href={ templ.URL("/apps/" + n.App.Name) }
+						class="canvas-card"
+						hx-get={ "/canvas/panel/" + n.App.Name }
+						hx-target="#canvas-panel"
+						hx-swap="innerHTML"
+					>
 							<span class="canvas-card-head">
 								@icon(sourceIcon(n.App.Source))
 								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
@@ -45,7 +52,13 @@ templ Canvas(d CanvasData) {
 							</span>
 						</a>
 						if n.Volume != nil {
-							<a href={ templ.URL("/apps/" + n.App.Name + "/storage") } class="canvas-volume">
+							<a
+							href={ templ.URL("/apps/" + n.App.Name + "/storage") }
+							class="canvas-volume"
+							hx-get={ "/canvas/panel/" + n.App.Name + "/volume/" + n.Volume.Name }
+							hx-target="#canvas-panel"
+							hx-swap="innerHTML"
+						>
 								@icon("disk")
 								<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
 								<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
@@ -55,5 +68,87 @@ templ Canvas(d CanvasData) {
 				}
 			</div>
 		</div>
+		// Empty until something is clicked. href on every card still works, so
+		// the graph is navigable with JavaScript switched off — the panel is an
+		// improvement on that, not a replacement for it.
+		<aside id="canvas-panel" class="canvas-panel"></aside>
+		</div>
 	}
+}
+
+// CanvasPanel is the detail that slides in beside the graph.
+//
+// A fragment: htmx swaps it into the panel container, so the canvas keeps its
+// scroll position and nothing re-renders that did not change. Opened directly
+// it is still a readable page of facts, because a fragment that only works
+// inside one page is a link nobody can share.
+templ CanvasPanel(d CanvasPanelData) {
+	<div class="panel-head">
+		<span class="flex min-w-0 flex-1 items-center gap-2.5">
+			if d.Volume != nil {
+				@icon("disk")
+				<span class="truncate font-medium">{ d.Volume.Name }</span>
+			} else {
+				@icon(sourceIcon(d.App.Source))
+				<span class="truncate font-medium">{ d.App.Name }</span>
+			}
+		</span>
+		<button
+			class="btn btn-ghost btn-sm"
+			hx-get="/canvas/panel/close"
+			hx-target="#canvas-panel"
+			hx-swap="innerHTML"
+			aria-label="Close"
+		>&times;</button>
+	</div>
+	<div class="panel-scroll">
+		if d.Volume != nil {
+			<dl class="kv">
+				<dt>Mounted at</dt>
+				<dd class="mono">{ d.Volume.MountPath }</dd>
+				<dt>Size</dt>
+				<dd class="tabular-nums">{ gigabytes(d.Volume.SizeBytes) } GB</dd>
+				<dt>Attached to</dt>
+				<dd>{ d.App.Name }</dd>
+			</dl>
+			<a class="btn mt-4" href={ templ.URL("/apps/" + d.App.Name + "/storage") }>
+				Manage storage
+			</a>
+		} else {
+			<dl class="kv">
+				<dt>Status</dt>
+				<dd>
+					@appStatus(d.App)
+				</dd>
+				<dt>Image</dt>
+				<dd class="mono break-all">{ d.App.Image }</dd>
+				if d.App.Host != "" {
+					<dt>URL</dt>
+					<dd>
+						<a class="mono" href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) } target="_blank" rel="noreferrer">
+							{ d.App.Host }
+						</a>
+					</dd>
+				}
+				if d.App.Internal {
+					<dt>Reachable</dt>
+					<dd class="text-muted-foreground">Inside this install only.</dd>
+				}
+				<dt>Variables</dt>
+				<dd class="tabular-nums">{ strconv.Itoa(len(d.App.Variables)) }</dd>
+				<dt>Storage</dt>
+				<dd>
+					if len(d.App.Volumes) == 0 {
+						<span class="text-muted-foreground">None</span>
+					} else {
+						<span class="mono">{ d.App.Volumes[0].MountPath }</span>
+					}
+				</dd>
+			</dl>
+			<div class="mt-4 flex flex-wrap gap-2">
+				<a class="btn" href={ templ.URL("/apps/" + d.App.Name) }>Open app</a>
+				<a class="btn" href={ templ.URL("/apps/" + d.App.Name + "/variables") }>Variables</a>
+			</div>
+		}
+	</div>
 }

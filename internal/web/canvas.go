@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
 )
@@ -227,4 +229,50 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// CanvasPanelData is the detail shown beside the graph.
+type CanvasPanelData struct {
+	App app.App
+
+	// Volume is set when the panel was opened from the storage strip rather
+	// than the card, so clicking the volume shows the volume.
+	Volume *app.Volume
+}
+
+// canvasPanel renders the detail for one card, for htmx to swap in beside the
+// graph.
+//
+// A fragment rather than a page: the canvas stays where it is, which is the
+// point of a panel. It is a normal GET, so the same URL opened directly still
+// returns something readable — a fragment that only works inside one page is a
+// link nobody can share.
+func (s *Server) canvasPanel(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+
+	a, err := s.apps.Get(ctx, owner.ID, chi.URLParam(r, "name"))
+	if err != nil {
+		http.Error(w, "no such app", http.StatusNotFound)
+		return
+	}
+
+	data := CanvasPanelData{App: a}
+	if chi.URLParam(r, "volume") != "" {
+		for i := range a.Volumes {
+			if a.Volumes[i].Name == chi.URLParam(r, "volume") {
+				data.Volume = &a.Volumes[i]
+			}
+		}
+		if data.Volume == nil {
+			http.Error(w, "no such volume", http.StatusNotFound)
+			return
+		}
+	}
+
+	// Rendered without the layout: this is a fragment that lands inside a page
+	// that already has one.
+	if err := CanvasPanel(data).Render(ctx, w); err != nil {
+		s.log.Error("render canvas panel", "error", err)
+	}
 }

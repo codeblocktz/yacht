@@ -421,6 +421,12 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/", s.overview)
 
 			r.Get("/canvas", s.canvas)
+			// Closing returns nothing, which is what empties the container.
+			// A client-side hide would leave the panel in the DOM holding the
+			// last app somebody looked at.
+			r.Get("/canvas/panel/close", func(w http.ResponseWriter, _ *http.Request) {})
+			r.Get("/canvas/panel/{name}", s.canvasPanel)
+			r.Get("/canvas/panel/{name}/volume/{volume}", s.canvasPanel)
 			r.Get("/apps", s.appList)
 			r.Post("/apps", s.appCreate)
 			r.Get("/apps/new", s.appNew)

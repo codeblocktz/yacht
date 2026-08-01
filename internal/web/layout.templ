@@ -16,7 +16,7 @@ templ Layout(s Slots, page templ.Component) {
 			<link rel="icon" href="data:,"/>
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
 			@themeScript()
-			<script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
+			<script src={ asset("/assets/js/htmx.min.js") } defer></script>
 		</head>
 		<body class="h-full">
 			<div class="flex h-full">

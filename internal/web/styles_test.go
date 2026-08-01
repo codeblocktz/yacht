@@ -25,8 +25,12 @@ func TestTemplatesOnlyUseClassesThatExist(t *testing.T) {
 		t.Fatalf("read stylesheet: %v", err)
 	}
 
+	// Every class named anywhere in a selector, not only those immediately
+	// followed by a brace: a rule like ".panel:not(:empty)" or ".a > .b"
+	// defines its classes just as much, and missing them makes this test
+	// report real classes as typos.
 	defined := map[string]bool{}
-	for _, m := range regexp.MustCompile(`\.([a-z][a-z0-9-]*)\s*\{`).
+	for _, m := range regexp.MustCompile(`\.([a-z][a-z0-9-]*)`).
 		FindAllStringSubmatch(string(css), -1) {
 		defined[m[1]] = true
 	}
@@ -107,4 +111,44 @@ func prefixed(name string) bool {
 		}
 	}
 	return false
+}
+
+// TestNoRemoteAssets.
+//
+// The binary is the whole deployment — that is the claim in assets.go and the
+// reason the stylesheet is embedded. A script or stylesheet fetched from a CDN
+// breaks it: the dashboard stops working on an air-gapped install, and the
+// bytes a browser receives are whatever the CDN serves that day rather than
+// the ones that were tested.
+//
+// htmx shipped that way for a while, loaded from unpkg on every page and used
+// by nothing.
+func TestNoRemoteAssets(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(".", "*.templ"))
+	remote := regexp.MustCompile(`(src|href)=['"]?(https?:)?//`)
+
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, line := range strings.Split(string(src), "\n") {
+			if remote.MatchString(line) && !strings.Contains(line, "rel=\"noreferrer\"") {
+				t.Errorf("%s loads an asset from off this server:\n  %s",
+					filepath.Base(f), strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+// And the file it now points at has to actually be there, or every page loads
+// a 404 and the panel silently never opens.
+func TestVendoredScriptIsEmbedded(t *testing.T) {
+	b, err := assetsFS.ReadFile("assets/js/htmx.min.js")
+	if err != nil {
+		t.Fatalf("htmx is not embedded: %v", err)
+	}
+	if len(b) < 10_000 {
+		t.Fatalf("htmx is %d bytes — that is not the library", len(b))
+	}
 }
