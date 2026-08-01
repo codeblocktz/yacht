@@ -53,7 +53,11 @@ func gatedServer(t *testing.T, accounts Accounts, team string) http.Handler {
 		Mailer:          &fakeMailer{},
 		BaseURL:         "https://yacht.test",
 		BootstrapTeamID: team,
-		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// Present so the join routes are on the table the walk below covers.
+		// A route only reachable in some configurations is exactly the one
+		// nobody remembers to gate.
+		Joiner: &fakeJoiner{configured: true},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -186,6 +186,11 @@ type Options struct {
 	AppDomain   string
 	WildcardTLS bool
 
+	// Joiner, when set, puts the add-node surface on the router. Left nil the
+	// engine offers no way to add a node, which is right for an install with
+	// no secret key: it could store nothing and hand out nothing.
+	Joiner Joiner
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -252,6 +257,12 @@ type Server struct {
 	appDomain string
 	wildcard  bool
 	log       *slog.Logger
+
+	// joiner answers how a machine joins this cluster. Nil leaves the add-node
+	// surface off the router entirely, the way Accounts leaves out sign-in: a
+	// page that could never produce a working command is a worse answer than
+	// no page.
+	joiner Joiner
 
 	accounts       Accounts
 	mailer         notify.Mailer
@@ -323,6 +334,7 @@ func New(opts Options) (*Server, error) {
 		wildcard:  opts.WildcardTLS,
 		log:       opts.Logger,
 
+		joiner:         opts.Joiner,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -509,6 +521,30 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/team/members/{id}/remove", s.teamRemoveMember)
 			}
 		})
+
+		// The cluster's own settings, gated at owner whether or not accounts
+		// are switched on.
+		//
+		// Not in the group below, because that one only exists when there are
+		// accounts. A single-owner install has one principal who is already the
+		// owner, and leaving these routes off it would mean the only kind of
+		// install that certainly has a cluster is the one that cannot add a
+		// node to it.
+		//
+		// Owner rather than admin because a node is cluster-scoped while every
+		// role here is team-scoped: a node one team adds runs every other
+		// team's workloads and can read the secrets mounted into them. That is
+		// the same class of decision as appointing an admin, which is the line
+		// owner already draws.
+		if s.joiner != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Get("/cluster/nodes/add", s.nodeAdd)
+				r.Get("/cluster/nodes/add/status", s.nodeAddFragment)
+				r.Post("/cluster/join", s.nodeJoinSet)
+			})
+		}
 
 		// Owner: everything that changes who can administer.
 		//
@@ -813,6 +849,14 @@ func (s *Server) clusterPods(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab string) {
 	ctx := r.Context()
 	data := ClusterData{Tab: tab, OK: true}
+
+	// Shown only to somebody the add page would actually admit. A button that
+	// leads to a 403 tells the viewer they have a permission they do not.
+	if s.joiner != nil {
+		if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+			data.CanAddNode = true
+		}
+	}
 
 	if err := s.orch.Ping(ctx); err != nil {
 		data.OK = false

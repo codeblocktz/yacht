@@ -14,6 +14,7 @@ type Querier interface {
 	// One conditional UPDATE, like the magic link: checking first and writing after
 	// leaves a window in which the same invitation is accepted twice.
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
+	ClearClusterJoin(ctx context.Context) (int64, error)
 	// Forget every saved position in a project, so the next render lays it out
 	// again from the dependencies.
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
@@ -70,6 +71,9 @@ type Querier interface {
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	// The join settings are install-wide, so unlike every other query here these
+	// take no owner_id. See the 00012 migration for why.
+	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.
@@ -142,6 +146,7 @@ type Querier interface {
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
+	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,

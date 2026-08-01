@@ -15,6 +15,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
@@ -147,6 +148,15 @@ func run() error {
 		AppDomain:     cfg.AppDomain,
 		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
+	}
+
+	// The add-node surface only exists where a token could actually be sealed.
+	// Without a key the page could store nothing and hand out nothing, so it is
+	// left off the router entirely rather than shown and refused.
+	if keeper.Configured() {
+		opts.Joiner = cluster.New(pool, keeper, log)
+	} else {
+		log.Info("add-node is off — set YACHT_SECRET_KEY to store a cluster join token")
 	}
 
 	if cfg.AccountsEnabled() {

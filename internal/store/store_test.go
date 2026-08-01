@@ -184,6 +184,9 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"users":            "a person exists before belonging to any team",
 		"sessions":         "a session belongs to a person, not to a team",
 		"magic_links":      "a sign-in link proves an address, before any team is chosen",
+		"cluster_join": "a cluster is not a team's — a node one team adds runs " +
+			"every team's workloads, so an owner here would encode the false " +
+			"claim that each team has a cluster of its own",
 	}
 
 	rows, err := pool.Query(ctx, `

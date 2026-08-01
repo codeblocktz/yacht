@@ -42,6 +42,14 @@ type AppLink struct {
 	CreatedAt time.Time
 }
 
+type ClusterJoin struct {
+	ID          int32
+	ServerUrl   string
+	TokenSealed []byte
+	UpdatedAt   time.Time
+	UpdatedBy   pgtype.UUID
+}
+
 type Deployment struct {
 	ID         uuid.UUID
 	OwnerID    string

@@ -1,0 +1,183 @@
+package web
+
+// AddNode hands over the command that joins a machine to this cluster.
+//
+// The command carries the join token in the clear, because that is what the
+// person running it needs. Everything else on the page — including the stored
+// settings summary — is built from cluster.Settings, which does not carry it,
+// so the command is the only place it can appear.
+templ AddNode(d AddNodeData) {
+	@pageHead("Add a node",
+		"Run one command on the machine. It joins as an agent and starts taking work.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">Cannot build a join command</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	if d.Configured {
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">Run this on the new machine</span>
+			</div>
+			<div class="panel-body">
+				if d.Command != "" {
+					<pre class="mono select-all overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-[12px] leading-relaxed">{ d.Command }</pre>
+					<p class="mt-3 text-[12.5px] text-muted-foreground">
+						This contains the cluster's join token. Anyone who runs it adds a
+						machine that can run every team's workloads, so treat it like a
+						password rather than like a URL.
+					</p>
+				}
+				<form method="get" action="/cluster/nodes/add" class="mt-4 flex flex-wrap items-end gap-3">
+					<div class="field min-w-[200px]">
+						<label class="label" for="pool">Pool</label>
+						<input
+							class="control"
+							id="pool"
+							name="pool"
+							value={ d.Pool }
+							placeholder="web"
+						/>
+					</div>
+					<button class="btn" type="submit">Update command</button>
+				</form>
+				<p class="mt-2 text-[12.5px] text-muted-foreground">
+					A pool labels the node so apps can be scheduled onto it. Leave it
+					empty for an ordinary node.
+				</p>
+			</div>
+		</div>
+	} else {
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">Set the join settings</span>
+			</div>
+			<div class="panel-body">
+				<p class="mb-4 text-[12.5px] text-muted-foreground">
+					Yacht needs the address agents connect back to and this cluster's
+					join token. On a K3s server the token is in
+					<code class="mono">/var/lib/rancher/k3s/server/node-token</code>.
+					It is sealed before it is stored.
+				</p>
+				@joinSettingsForm(d)
+			</div>
+		</div>
+	}
+	if d.Configured {
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">Join settings</span>
+			</div>
+			<div class="panel-body">
+				<dl class="kv mb-4">
+					<dt>Server</dt>
+					<dd class="mono break-all">{ d.Settings.ServerURL }</dd>
+					<dt>Token</dt>
+					<dd>
+						if d.Settings.TokenSet {
+							Stored and sealed
+						} else {
+							<span class="text-muted-foreground">Not set</span>
+						}
+					</dd>
+					<dt>Updated</dt>
+					<dd class="tabular-nums">{ d.Settings.UpdatedAt }</dd>
+				</dl>
+				@joinSettingsForm(d)
+			</div>
+		</div>
+	}
+	// Polled on its own so the command above is not re-rendered under a cursor
+	// that is halfway through selecting it.
+	<div
+		hx-get={ "/cluster/nodes/add/status?pool=" + d.Pool }
+		hx-trigger="load, every 5s"
+		hx-swap="innerHTML"
+	>
+		@AddNodeNodes(d)
+	</div>
+}
+
+templ joinSettingsForm(d AddNodeData) {
+	<form method="post" action="/cluster/join" class="flex flex-col gap-3">
+		<div class="field">
+			<label class="label" for="server_url">Server address</label>
+			<input
+				class="control"
+				id="server_url"
+				name="server_url"
+				value={ d.Settings.ServerURL }
+				placeholder="https://10.0.0.1:6443"
+				required
+			/>
+		</div>
+		<div class="field">
+			<label class="label" for="token">Join token</label>
+			<input
+				class="control"
+				id="token"
+				name="token"
+				type="password"
+				autocomplete="off"
+				placeholder="K10…"
+				required
+			/>
+		</div>
+		<div>
+			<button class="btn btn-primary" type="submit">
+				if d.Configured {
+					Replace
+				} else {
+					Save
+				}
+			</button>
+		</div>
+	</form>
+}
+
+// AddNodeNodes is the confirmation half, polled while somebody runs the
+// command on the machine.
+templ AddNodeNodes(d AddNodeData) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Nodes</span>
+		</div>
+		if !d.ClusterOK {
+			// Said plainly rather than shown as "no node yet". The two look the
+			// same and mean entirely different things.
+			<div class="empty">
+				<p class="font-medium text-foreground">The cluster is not answering</p>
+				<p>The command above is still correct. Nothing here can confirm a join until the cluster is reachable.</p>
+			</div>
+		} else if len(d.Nodes) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No nodes</p>
+				<p>Waiting for the first one to arrive.</p>
+			</div>
+		} else {
+			<div class="rows">
+				for _, n := range d.Nodes {
+					<div class="row-item">
+						<span class="min-w-0 flex-1">
+							<span class="block truncate font-medium">{ n.Name }</span>
+							<span class="mono block truncate text-muted-foreground">
+								{ n.Version } &middot; { n.OS }/{ n.Architecture }
+							</span>
+						</span>
+						if d.IsNew(n) {
+							<span class="status status-ok">just joined</span>
+						}
+						if n.Ready {
+							<span class="status status-ok">ready</span>
+						} else {
+							<span class="status status-warn">not ready</span>
+						}
+					</div>
+				}
+			</div>
+		}
+	</div>
+}

@@ -771,10 +771,19 @@ type ClusterData struct {
 	Summary orchestrator.ClusterSummary
 	Nodes   []orchestrator.NodeInfo
 	Pods    []orchestrator.PodInfo
+
+	// CanAddNode is false for anybody but an owner, and for an install with no
+	// join settings surface at all. Offering the button and refusing the page
+	// would be advertising a permission the viewer does not have.
+	CanAddNode bool
 }
 
 templ Cluster(d ClusterData) {
-	@pageHead("Cluster", "Kubernetes capacity and workloads.", nil)
+	if d.CanAddNode {
+		@pageHead("Cluster", "Kubernetes capacity and workloads.", addNodeButton())
+	} else {
+		@pageHead("Cluster", "Kubernetes capacity and workloads.", nil)
+	}
 	if !d.OK {
 		@clusterCallout(d.Error)
 	}
@@ -829,6 +838,10 @@ templ Cluster(d ClusterData) {
 // nodeRow keeps a node to a single row with inline meters, rather than the
 // card-per-node layout it replaced. Four nodes then fit on screen together,
 // which is what makes an imbalance visible.
+templ addNodeButton() {
+	<a class="btn btn-primary" href="/cluster/nodes/add">Add node</a>
+}
+
 templ nodeRow(n orchestrator.NodeInfo) {
 	<div class="row-item flex-wrap">
 		<div class="min-w-[220px] flex-1">
