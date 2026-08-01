@@ -193,6 +193,12 @@ type AppDetailData struct {
 	Deployments []app.Deployment
 	BaseURL     string
 
+	// Net is the app's routing, shown in the Settings tab. Loaded alongside the
+	// rest rather than on its own page: domains are something you go to
+	// Settings to change, and a panel nothing links to is a panel nobody finds.
+	Net    app.Networking
+	Notice string
+
 	// Error is a refusal from the action that produced this render, shown with
 	// the form that caused it rather than carried through a redirect.
 	Error string
@@ -520,6 +526,14 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
+	if d.Notice != "" {
+		<div class="callout mb-5">
+			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
+		</div>
+	}
+	@publicNetworking(netOf(d))
+	@customDomains(netOf(d))
+	@routingOptions(netOf(d))
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">

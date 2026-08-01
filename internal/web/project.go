@@ -166,6 +166,16 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	}); err == nil {
 		d.Pods = pods
 	}
+	// Routing, for the Settings tab. Read here rather than on its own page,
+	// because a panel nothing links to is a panel nobody finds — which is
+	// exactly what happened the first time.
+	if s.nets != nil {
+		if n, err := s.nets.Networking(ctx, a.OwnerID, a.Name); err == nil {
+			d.Net = n
+		} else {
+			s.log.Error("read networking", slog.String("error", err.Error()))
+		}
+	}
 	if deps, err := s.apps.Deployments(ctx, a.OwnerID, a.ID, 20); err == nil {
 		d.Deployments = deps
 	} else {

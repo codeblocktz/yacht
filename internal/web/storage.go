@@ -221,5 +221,38 @@ func (s *Server) appActionFailed(
 	}
 
 	w.WriteHeader(status)
-	s.render(w, r, AppDetail(AppDetailData{App: a, Tab: tab, Error: cause.Error()}))
+	s.render(w, r, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
+}
+
+// appActionNoticed re-renders a tab with something worth saying.
+//
+// The counterpart to appActionFailed, for an action that succeeded and left
+// work for the person: adding a domain changes no routing until they create a
+// DNS record, and a bare redirect would leave them to work that out.
+func (s *Server) appActionNoticed(
+	w http.ResponseWriter, r *http.Request, appName, tab, notice string,
+) {
+	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
+	if err != nil {
+		http.Redirect(w, r, "/apps/"+appName+"/"+tab, http.StatusSeeOther)
+		return
+	}
+	s.render(w, r, AppDetail(s.detailWith(r, a, tab, notice, "")))
+}
+
+// detailWith builds the tab's data around a message.
+//
+// The routing is loaded here as well as on the ordinary render: a refusal that
+// dropped the domains panel would answer "that name is taken" on a page with
+// nowhere to see the domains.
+func (s *Server) detailWith(
+	r *http.Request, a app.App, tab, notice, fail string,
+) AppDetailData {
+	d := AppDetailData{App: a, Tab: tab, Notice: notice, Error: fail}
+	if s.nets != nil {
+		if n, err := s.nets.Networking(r.Context(), a.OwnerID, a.Name); err == nil {
+			d.Net = n
+		}
+	}
+	return d
 }

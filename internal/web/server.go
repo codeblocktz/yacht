@@ -535,7 +535,6 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
 			if s.nets != nil {
-				r.Get("/apps/{name}/networking", s.networkingPage)
 				r.Post("/apps/{name}/networking", s.networkingSet)
 				r.Post("/apps/{name}/domains", s.domainAdd)
 				r.Post("/apps/{name}/domains/{id}/verify", s.domainVerify)

@@ -10,28 +10,6 @@ type NetworkingData struct {
 	Error  string
 }
 
-// NetworkingPanel is the Networking section of an app's settings.
-templ NetworkingPanel(d NetworkingData) {
-	@pageHead("Networking", "How this app is reached from outside the cluster.",
-		backToApp(d.App))
-	if d.Error != "" {
-		<div class="callout callout-err mb-5">
-			<div class="min-w-0">
-				<div class="font-medium">That did not work</div>
-				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
-			</div>
-		</div>
-	}
-	if d.Notice != "" {
-		<div class="callout mb-5">
-			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
-		</div>
-	}
-	@publicNetworking(d)
-	@customDomains(d)
-	@routingOptions(d)
-}
-
 templ publicNetworking(d NetworkingData) {
 	<div class="panel mb-5">
 		<div class="panel-header">
@@ -197,10 +175,6 @@ templ routingOptions(d NetworkingData) {
 			</form>
 		</div>
 	</div>
-}
-
-templ backToApp(name string) {
-	<a class="btn" href={ templ.URL("/apps/" + name + "/settings") }>Back to settings</a>
 }
 
 // PlatformDNS is the install-wide DNS configuration.
