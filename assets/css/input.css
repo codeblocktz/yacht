@@ -628,3 +628,20 @@
   }
   :root[data-sidebar="collapsed"] .sidebar :hover > .nav-tip { display: block; }
 }
+
+@layer components {
+  /* Container output. Monospaced and dense, because a log is read by scanning
+     for the one line that differs rather than by reading every line. */
+  .logs {
+    @apply max-h-[540px] overflow-auto px-3 py-2 font-mono text-[12px] leading-[1.55];
+  }
+  .log-line {
+    @apply flex gap-3 whitespace-pre-wrap break-all;
+  }
+  /* The timestamp does not wrap and does not shrink: a log whose times drift
+     out of alignment is much harder to scan than one with a wide gutter. */
+  .log-time {
+    @apply shrink-0 tabular-nums text-muted-foreground;
+  }
+  .log-text { @apply min-w-0; }
+}

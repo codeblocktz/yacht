@@ -113,6 +113,10 @@ func (n *Noop) Nodes(context.Context) ([]NodeInfo, error) { return nil, nil }
 // Events returns nothing: there is no cluster to emit any.
 func (n *Noop) Events(context.Context, int) ([]EventInfo, error) { return nil, nil }
 
+// Logs returns nothing. There is no container to have written any, and
+// inventing lines would make an empty install look like a running one.
+func (n *Noop) Logs(context.Context, LogOptions) ([]LogLine, error) { return nil, nil }
+
 // Volumes returns nothing: the engine's in-memory mode provisions no storage.
 func (n *Noop) Volumes(context.Context, OwnerID) ([]VolumeInfo, error) { return nil, nil }
 

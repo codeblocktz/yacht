@@ -409,6 +409,14 @@ type ClusterInspector interface {
 	// Events lists recent cluster events, newest first, capped at limit.
 	Events(ctx context.Context, limit int) ([]EventInfo, error)
 
+	// Logs reads a container's output.
+	//
+	// On the read-only seam because it is a read. The scoping that matters is
+	// not here: the namespace and pod arrive already resolved from an app the
+	// caller looked up by owner, because a pod name on its own is enough to
+	// read another tenant's logs.
+	Logs(ctx context.Context, opts LogOptions) ([]LogLine, error)
+
 	// Volumes lists an owner's persistent volume claims.
 	//
 	// Scoped rather than cluster-wide: a claim names the workload it belongs to,

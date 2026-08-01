@@ -197,6 +197,9 @@ type Options struct {
 	// Nets, when set, puts the per-app Networking surface on the router.
 	Nets Nets
 
+	// Logs, when set, puts the log surface on the router.
+	Logs Logger
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -278,6 +281,10 @@ type Server struct {
 	// nets is an app's routing. Nil leaves the Networking surface off.
 	nets Nets
 
+	// logs reads container output. Nil leaves the log surface off, which is
+	// right for an install whose orchestrator has no containers to read.
+	logs Logger
+
 	accounts       Accounts
 	mailer         notify.Mailer
 	baseURL        string
@@ -351,6 +358,7 @@ func New(opts Options) (*Server, error) {
 		joiner:         opts.Joiner,
 		stacks:         opts.Stacks,
 		nets:           opts.Nets,
+		logs:           opts.Logs,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -487,6 +495,10 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
+			if s.logs != nil {
+				r.Get("/apps/{name}/logs", s.appLogs)
+				r.Get("/apps/{name}/logs/lines", s.appLogsFragment)
+			}
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
 

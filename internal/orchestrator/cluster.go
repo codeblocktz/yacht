@@ -142,6 +142,35 @@ type PodListOptions struct {
 	Owner OwnerID
 }
 
+// LogOptions selects which container output to read.
+type LogOptions struct {
+	// Namespace and Pod name the container. Both come from an app the caller
+	// has already resolved by owner — never from a request — because a pod
+	// name is enough to read any tenant's output.
+	Namespace string
+	Pod       string
+
+	// Tail caps how many lines come back. A pod that has been up for a month
+	// has more output than anyone wants to render, and no cap means the whole
+	// lot crosses the wire before anything is shown.
+	Tail int64
+
+	// Previous reads the container that died rather than the one running now.
+	// It is the only way to see why something crash-looped: the running
+	// container started after the interesting part.
+	Previous bool
+}
+
+// LogLine is one line of container output.
+//
+// The timestamp is separate from the text so the page can align and format it,
+// and so a line whose own content happens to start with something
+// timestamp-shaped is not mistaken for one.
+type LogLine struct {
+	At   time.Time
+	Text string
+}
+
 // EventInfo is one cluster event.
 //
 // Events are where Kubernetes explains itself. "Pod is Pending" tells an

@@ -155,6 +155,7 @@ func run() error {
 		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
 		Nets:          apps,
+		Logs:          apps,
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.

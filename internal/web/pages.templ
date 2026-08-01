@@ -357,6 +357,9 @@ templ appDeployments(d AppDetailData) {
 templ activeDeployment(d AppDetailData, dep app.Deployment) {
 	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
 		<div class="flex flex-wrap items-center justify-between gap-3">
+			<a class="btn btn-sm order-last" href={ templ.URL("/apps/" + d.App.Name + "/logs") }>
+				View logs
+			</a>
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">
 					@deploymentStatus(dep)

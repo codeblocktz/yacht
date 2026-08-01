@@ -1,0 +1,94 @@
+package web
+
+import "strconv"
+
+// AppLogs is the log pane for one app.
+templ AppLogs(d LogsData) {
+	@pageHead(d.App+" logs", "Output from the running container.", backToDeployments(d.App))
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-body">
+			<form method="get" action={ templ.URL("/apps/" + d.App + "/logs") } class="flex flex-wrap items-end gap-3">
+				if len(d.Logs.Pods) > 1 {
+					<div class="field min-w-[220px]">
+						<label class="label" for="pod">Pod</label>
+						<select class="control" id="pod" name="pod">
+							for _, p := range d.Logs.Pods {
+								<option value={ p } selected?={ p == d.Logs.Pod }>{ p }</option>
+							}
+						</select>
+					</div>
+				} else if d.Logs.Pod != "" {
+					<div class="field">
+						<span class="label">Pod</span>
+						<span class="mono text-[12.5px] text-muted-foreground">{ d.Logs.Pod }</span>
+					</div>
+				}
+				<label class="flex items-center gap-2 text-[12.5px]">
+					<input type="checkbox" name="previous" value="1" checked?={ d.Previous }/>
+					Previous run
+				</label>
+				<button class="btn" type="submit">Apply</button>
+			</form>
+			<p class="mt-2 text-[12.5px] text-muted-foreground">
+				Previous run reads the container that died rather than the one running
+				now. After a crash loop it is the only place the reason survives — the
+				running container started after it.
+			</p>
+		</div>
+	</div>
+	// Polled on its own so following a log does not re-render the controls
+	// under a cursor that is halfway through changing them.
+	<div
+		hx-get={ logsFragmentHref(d) }
+		hx-trigger="load, every 5s"
+		hx-swap="innerHTML"
+	>
+		@AppLogLines(d)
+	</div>
+}
+
+// AppLogLines is the polled body.
+templ AppLogLines(d LogsData) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">
+				if d.Previous {
+					Previous run
+				} else {
+					Output
+				}
+			</span>
+			<span class="text-muted-foreground tabular-nums">
+				{ strconv.Itoa(len(d.Logs.Lines)) } { plural(len(d.Logs.Lines), "line") }
+			</span>
+		</div>
+		if len(d.Logs.Lines) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing to show</p>
+				if d.Logs.Note != "" {
+					<p>{ d.Logs.Note }</p>
+				}
+			</div>
+		} else {
+			<div class="logs">
+				for _, l := range d.Logs.Lines {
+					<div class="log-line">
+						if !l.At.IsZero() {
+							<span class="log-time">{ l.At.Format("15:04:05") }</span>
+						}
+						<span class="log-text">{ l.Text }</span>
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+templ backToDeployments(name string) {
+	<a class="btn" href={ templ.URL("/apps/" + name) }>Back to deployments</a>
+}
