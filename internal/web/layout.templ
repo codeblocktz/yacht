@@ -184,10 +184,11 @@ templ topbar(s Slots) {
 // navigation, which looks broken however good the rest of the page is.
 templ themeScript() {
 	<script nonce="">
-		(function () {
+		(function() {
 			try {
 				var stored = localStorage.getItem("yacht-theme");
-				var dark = stored ? stored === "dark"
+				var dark = stored
+					? stored === "dark"
 					: window.matchMedia("(prefers-color-scheme: dark)").matches;
 				document.documentElement.classList.toggle("dark", dark);
 			} catch (e) {

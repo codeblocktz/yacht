@@ -9,7 +9,6 @@ import (
 )
 
 // ---------------------------------------------------------------- shared
-
 templ pageHead(title, subtitle string, actions templ.Component) {
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
 		<div class="min-w-0">
@@ -131,7 +130,6 @@ templ emptyApps() {
 }
 
 // ---------------------------------------------------------------- apps list
-
 templ AppList(apps []app.App) {
 	@pageHead("Apps", "Workloads managed by this install.", deployButton())
 	<div class="panel">
@@ -308,7 +306,6 @@ templ appTab(d AppDetailData, slug, label string) {
 }
 
 // ---- deployments tab
-
 templ appDeployments(d AppDetailData) {
 	if len(d.Deployments) == 0 {
 		<div class="panel">
@@ -396,7 +393,6 @@ templ deploymentStatus(dep app.Deployment) {
 }
 
 // ---- variables tab
-
 templ appVariables(d AppDetailData) {
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
@@ -478,7 +474,6 @@ templ appVariables(d AppDetailData) {
 }
 
 // ---- metrics tab
-
 templ appMetrics(d AppDetailData) {
 	<div class="metrics mb-4">
 		@metric("Desired", strconv.Itoa(int(d.App.Replicas)), "replicas")
@@ -518,7 +513,6 @@ templ appMetrics(d AppDetailData) {
 }
 
 // ---- settings tab
-
 templ appSettings(d AppDetailData) {
 	{{ a := d.App }}
 	if d.Error != "" {
@@ -901,7 +895,8 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						</td>
 						<td class="tabular-nums text-muted-foreground">{ strconv.Itoa(int(p.Restarts)) }</td>
 						<td class="max-w-[160px] truncate text-muted-foreground">{ orDash(p.Node) }</td>
-						<td>@statusDot(p.Phase, podPhaseClass(p))</td>
+						<td>@statusDot(p.Phase, podPhaseClass(p))
+</td>
 					</tr>
 				}
 			</tbody>
@@ -952,7 +947,8 @@ templ Activity(d ActivityData) {
 								<td class="text-muted-foreground">
 									<span class="tag">{ it.Revision }</span>
 								</td>
-								<td>@statusDot(it.Status, deploymentClass(it.Status))</td>
+								<td>@statusDot(it.Status, deploymentClass(it.Status))
+</td>
 								<td class="whitespace-nowrap text-right text-muted-foreground">
 									{ relativeTime(it.StartedAt) }
 								</td>
@@ -1009,7 +1005,8 @@ templ Volumes(d VolumesData) {
 										<span class="tag mr-1">{ m }</span>
 									}
 								</td>
-								<td>@statusDot(v.Phase, volumeClass(v))</td>
+								<td>@statusDot(v.Phase, volumeClass(v))
+</td>
 							</tr>
 						}
 					</tbody>

@@ -15,97 +15,99 @@ templ TeamPage(d TeamPageData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
-		<div class="panel mb-5">
-			<div class="panel-header"><span class="panel-title">Members</span></div>
-			<table class="dtable">
-				<thead>
-					<tr><th>Person</th><th>Role</th><th class="text-right">Actions</th></tr>
-				</thead>
-				<tbody>
-					for _, m := range d.Members {
-						<tr>
-							<td>
-								<span class="mono">{ m.Email }</span>
-								if m.Name != "" {
-									<span class="text-muted-foreground">{ m.Name }</span>
-								}
-							</td>
-							<td>@statusDot(string(m.Role), roleTone(m.Role))</td>
-							<td class="text-right">
-								<div class="flex gap-2 justify-end">
-									if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
-										<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="inline">
-											<select class="control !py-1 !text-[12px]" name="role">
-												for _, r := range []account.Role{account.RoleMember, account.RoleAdmin, account.RoleOwner} {
-													if r == m.Role {
-														<option value={ string(r) } selected>{ string(r) }</option>
-													} else {
-														<option value={ string(r) }>{ string(r) }</option>
-													}
-												}
-											</select>
-											<button class="btn btn-sm" type="submit">Change role</button>
-										</form>
-									}
-									if d.Viewer.CanAdminister() && m.UserID != d.ViewerID {
-										<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/remove") } class="inline">
-											<button class="btn btn-sm btn-danger" type="submit">Remove</button>
-										</form>
-									}
-								</div>
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		</div>
-		if d.Viewer.CanAdminister() {
-			<div class="panel mb-5">
-				<div class="panel-header"><span class="panel-title">Pending invitations</span></div>
-				if len(d.Invitations) == 0 {
-					<div class="panel-body"><p class="text-muted-foreground">Nobody is waiting to join.</p></div>
-				} else {
-					<table class="dtable">
-						<thead>
-							<tr><th>Address</th><th>Role</th><th class="text-right">Actions</th></tr>
-						</thead>
-						<tbody>
-							for _, inv := range d.Invitations {
-								<tr>
-									<td><span class="mono">{ inv.Email }</span></td>
-									<td>@statusDot(string(inv.Role), roleTone(inv.Role))</td>
-									<td class="text-right">
-										<form method="post" action={ templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke") } class="inline">
-											<button class="btn btn-sm" type="submit">Revoke</button>
-										</form>
-									</td>
-								</tr>
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Members</span></div>
+		<table class="dtable">
+			<thead>
+				<tr><th>Person</th><th>Role</th><th class="text-right">Actions</th></tr>
+			</thead>
+			<tbody>
+				for _, m := range d.Members {
+					<tr>
+						<td>
+							<span class="mono">{ m.Email }</span>
+							if m.Name != "" {
+								<span class="text-muted-foreground">{ m.Name }</span>
 							}
-						</tbody>
-					</table>
-				}
-			</div>
-			<div class="panel mb-5">
-				<div class="panel-header"><span class="panel-title">Invite someone</span></div>
-				<div class="panel-body">
-					<form method="post" action="/team/invite" class="flex gap-4 items-end">
-						<div class="field grow">
-							<label class="label" for="email">Email</label>
-							<input class="control" id="email" name="email" type="email" required placeholder="colleague@example.com"/>
-						</div>
-						<div class="field">
-							<label class="label" for="role">Role</label>
-							<select class="control" id="role" name="role">
-								<option value="member">member</option>
-								<option value="admin">admin</option>
-								if d.Viewer.CanOwn() {
-									<option value="owner">owner</option>
+						</td>
+						<td>@statusDot(string(m.Role), roleTone(m.Role))
+</td>
+						<td class="text-right">
+							<div class="flex gap-2 justify-end">
+								if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
+									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="inline">
+										<select class="control !py-1 !text-[12px]" name="role">
+											for _, r := range []account.Role{account.RoleMember, account.RoleAdmin, account.RoleOwner} {
+												if r == m.Role {
+													<option value={ string(r) } selected>{ string(r) }</option>
+												} else {
+													<option value={ string(r) }>{ string(r) }</option>
+												}
+											}
+										</select>
+										<button class="btn btn-sm" type="submit">Change role</button>
+									</form>
 								}
-							</select>
-						</div>
-						<button class="btn btn-primary" type="submit">Send invitation</button>
-					</form>
-				</div>
+								if d.Viewer.CanAdminister() && m.UserID != d.ViewerID {
+									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/remove") } class="inline">
+										<button class="btn btn-sm btn-danger" type="submit">Remove</button>
+									</form>
+								}
+							</div>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+	if d.Viewer.CanAdminister() {
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Pending invitations</span></div>
+			if len(d.Invitations) == 0 {
+				<div class="panel-body"><p class="text-muted-foreground">Nobody is waiting to join.</p></div>
+			} else {
+				<table class="dtable">
+					<thead>
+						<tr><th>Address</th><th>Role</th><th class="text-right">Actions</th></tr>
+					</thead>
+					<tbody>
+						for _, inv := range d.Invitations {
+							<tr>
+								<td><span class="mono">{ inv.Email }</span></td>
+								<td>@statusDot(string(inv.Role), roleTone(inv.Role))
+</td>
+								<td class="text-right">
+									<form method="post" action={ templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke") } class="inline">
+										<button class="btn btn-sm" type="submit">Revoke</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Invite someone</span></div>
+			<div class="panel-body">
+				<form method="post" action="/team/invite" class="flex gap-4 items-end">
+					<div class="field grow">
+						<label class="label" for="email">Email</label>
+						<input class="control" id="email" name="email" type="email" required placeholder="colleague@example.com"/>
+					</div>
+					<div class="field">
+						<label class="label" for="role">Role</label>
+						<select class="control" id="role" name="role">
+							<option value="member">member</option>
+							<option value="admin">admin</option>
+							if d.Viewer.CanOwn() {
+								<option value="owner">owner</option>
+							}
+						</select>
+					</div>
+					<button class="btn btn-primary" type="submit">Send invitation</button>
+				</form>
 			</div>
-		}
+		</div>
+	}
 }

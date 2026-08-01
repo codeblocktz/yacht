@@ -369,12 +369,38 @@
   }
   .canvas-empty { @apply flex flex-1 items-center justify-center p-6; }
 
+  /* One control, segmented, rather than four loose buttons: zoom is a single
+     setting and reads better as one object in a bar that already has two. */
+  .canvas-zoom {
+    @apply flex items-center overflow-hidden rounded-md border border-border;
+  }
+  .canvas-zoom-btn {
+    @apply flex h-7 w-7 items-center justify-center text-[13px] text-muted-foreground
+           transition-colors hover:bg-accent hover:text-foreground;
+  }
+  .canvas-zoom-level {
+    @apply h-7 min-w-[52px] border-x border-border px-1 text-center text-[11.5px]
+           tabular-nums text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground;
+  }
+  .canvas-zoom-fit { @apply w-auto px-2 text-[11.5px]; }
+
   .canvas {
     @apply min-h-0 flex-1 overflow-auto bg-muted/30;
     background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
     background-size: 22px 22px;
   }
+  /* Sized by the script to the scaled graph, so the scroll container has
+     something the right size to scroll around at any zoom. Left to itself it
+     simply wraps the graph, which is what a no-JavaScript view wants. */
+  .canvas-stage { @apply w-max; }
   .canvas-inner { @apply relative p-6; }
+
+  /* Dragging the background moves the view. The grab cursor is the only thing
+     that says so, since the background has nothing in it to hint with. */
+  .canvas { @apply cursor-grab; }
+  .canvas-panning { @apply cursor-grabbing select-none; }
+  .canvas-card, .canvas-volume { @apply cursor-pointer; }
   .canvas-edges { @apply pointer-events-none absolute inset-0; }
   .canvas-edge {
     @apply fill-none stroke-border;
