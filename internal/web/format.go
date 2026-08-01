@@ -1,6 +1,7 @@
 package web
 
 import (
+	"strconv"
 	"fmt"
 	"maps"
 	"slices"
@@ -295,4 +296,12 @@ func orDash(s string) string {
 // map directly would reorder the page on every render.
 func sortedKeys(m map[string]string) []string {
 	return slices.Sorted(maps.Keys(m))
+}
+
+// gigabytes renders a byte count as whole gigabytes.
+//
+// The engine stores bytes because comparing them is what enforces grow-only,
+// but nobody types 2147483648 into a form.
+func gigabytes(b int64) string {
+	return strconv.FormatInt(b/(1<<30), 10)
 }

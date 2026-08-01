@@ -553,3 +553,21 @@ func TestPagesRenderWithoutAnAppService(t *testing.T) {
 		}
 	}
 }
+
+// Storage is exercised against the real service and a real database in
+// storage_test.go — what it claims is facts about rows and a Deployment, which
+// a fake can only echo back. These exist so fakeApps satisfies the interface.
+
+func (f *fakeApps) AttachVolume(
+	context.Context, string, string, app.VolumeInput,
+) (app.Volume, error) {
+	return app.Volume{}, errors.New("fakeApps has no storage")
+}
+
+func (f *fakeApps) ResizeVolume(context.Context, string, string, string, int64) error {
+	return errors.New("fakeApps has no storage")
+}
+
+func (f *fakeApps) DeleteVolume(context.Context, string, string, string, bool) error {
+	return errors.New("fakeApps has no storage")
+}

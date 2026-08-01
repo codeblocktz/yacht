@@ -194,6 +194,10 @@ type AppDetailData struct {
 	Pods        []orchestrator.PodInfo
 	Deployments []app.Deployment
 	BaseURL     string
+
+	// Error is a refusal from the action that produced this render, shown with
+	// the form that caused it rather than carried through a redirect.
+	Error string
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -208,6 +212,7 @@ templ AppDetail(d AppDetailData) {
 				@appTab(d, "", "Deployments")
 				@appTab(d, "variables", "Variables")
 				@appTab(d, "metrics", "Metrics")
+				@appTab(d, "storage", "Storage")
 				@appTab(d, "settings", "Settings")
 			</nav>
 			switch d.Tab {
@@ -215,6 +220,8 @@ templ AppDetail(d AppDetailData) {
 					@appVariables(d.App)
 				case "metrics":
 					@appMetrics(d)
+				case "storage":
+					@appStorage(d)
 				case "settings":
 					@appSettings(d.App)
 				default:
@@ -1024,6 +1031,93 @@ templ Settings(d SettingsData) {
 				<dt>Version</dt>
 				<dd class="mono">{ d.Version }</dd>
 			</dl>
+		</div>
+	</div>
+}
+
+// appStorage is the tab that attaches, grows and removes an app's volumes.
+//
+// The two consequences of having storage are stated before the form rather
+// than after the surprise: a ReadWriteOnce claim mounts on one node at a time,
+// so the app is held to one replica, and a deploy stops the old pod before
+// starting the new one instead of overlapping them.
+templ appStorage(d AppDetailData) {
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	<div class="callout mb-5">
+		<div class="min-w-0">
+			<div class="font-medium">Storage changes how this app deploys</div>
+			<p class="mt-0.5 text-muted-foreground">
+				A volume can be mounted by one pod at a time, so an app with storage runs
+				<strong>one replica</strong> and each deploy has brief <strong>downtime</strong> —
+				the old pod stops before the new one starts, rather than overlapping.
+			</p>
+		</div>
+	</div>
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Volumes</span></div>
+		if len(d.App.Volumes) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No storage</p>
+				<p>Anything this app writes is lost when its pod restarts.</p>
+			</div>
+		} else {
+			<table class="table">
+				<thead>
+					<tr><th>Name</th><th>Mounted at</th><th>Size</th><th class="text-right">Actions</th></tr>
+				</thead>
+				<tbody>
+					for _, v := range d.App.Volumes {
+						<tr>
+							<td class="mono">{ v.Name }</td>
+							<td class="mono">{ v.MountPath }</td>
+							<td class="tabular-nums">{ gigabytes(v.SizeBytes) } GB</td>
+							<td class="text-right">
+								<div class="flex justify-end gap-2">
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/resize") } class="flex items-center gap-1.5">
+										<input class="control control-sm w-20" name="size_gb" type="number" min="1" max="1024" value={ gigabytes(v.SizeBytes) }/>
+										<button class="btn btn-sm" type="submit">Grow</button>
+									</form>
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/delete") } class="flex items-center gap-1.5">
+										<input class="control control-sm w-28" name="confirm" placeholder={ v.Name } aria-label="Type the volume name to confirm"/>
+										<button class="btn btn-sm btn-danger" type="submit">Delete</button>
+									</form>
+								</div>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+			<div class="panel-body border-t">
+				<p class="text-muted-foreground">
+					A volume can grow but never shrink — Kubernetes cannot shrink a claim,
+					and the filesystem on it may be full. Deleting one destroys what it
+					holds, so its name has to be typed back.
+				</p>
+			</div>
+		}
+	</div>
+	<div class="panel">
+		<div class="panel-header"><span class="panel-title">Add a volume</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage") } class="flex flex-wrap items-end gap-4">
+				<div class="field">
+					<label class="label" for="vol-name">Name</label>
+					<input class="control" id="vol-name" name="name" required placeholder="data"/>
+				</div>
+				<div class="field grow">
+					<label class="label" for="vol-mount">Mount path</label>
+					<input class="control mono" id="vol-mount" name="mount_path" required placeholder="/var/lib/data"/>
+				</div>
+				<div class="field">
+					<label class="label" for="vol-size">Size (GB)</label>
+					<input class="control w-24" id="vol-size" name="size_gb" type="number" min="1" max="1024" value="1"/>
+				</div>
+				<button class="btn btn-primary" type="submit">Attach</button>
+			</form>
 		</div>
 	</div>
 }

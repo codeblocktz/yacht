@@ -37,6 +37,12 @@ type Apps interface {
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
+
+	// Storage. Attaching holds the app to one replica and makes its deploys
+	// recreate rather than roll; the service refuses what it cannot honour.
+	AttachVolume(ctx context.Context, ownerID, appName string, in app.VolumeInput) (app.Volume, error)
+	ResizeVolume(ctx context.Context, ownerID, appName, volumeName string, sizeBytes int64) error
+	DeleteVolume(ctx context.Context, ownerID, appName, volumeName string, detach bool) error
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
 }
 
@@ -407,6 +413,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}", s.appDetail)
 			r.Get("/apps/{name}/variables", s.appDetail)
 			r.Get("/apps/{name}/metrics", s.appDetail)
+			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
@@ -444,6 +451,13 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleAdmin))
 
 			r.Post("/apps/{name}/delete", s.appDelete)
+
+			// Storage sits with the admin actions rather than the member ones:
+			// attaching changes how the app deploys, and deleting destroys what
+			// it holds. Neither is undoable by redeploying, which is the line.
+			r.Post("/apps/{name}/storage", s.storageAttach)
+			r.Post("/apps/{name}/storage/{volume}/resize", s.storageResize)
+			r.Post("/apps/{name}/storage/{volume}/delete", s.storageDelete)
 
 			if s.accounts != nil {
 				r.Post("/team/invite", s.teamInvite)
@@ -483,6 +497,8 @@ func detailTab(r *http.Request) string {
 		return "variables"
 	case strings.HasSuffix(r.URL.Path, "/metrics"):
 		return "metrics"
+	case strings.HasSuffix(r.URL.Path, "/storage"):
+		return "storage"
 	case strings.HasSuffix(r.URL.Path, "/settings"):
 		return "settings"
 	}
