@@ -350,6 +350,37 @@ type Orchestrator interface {
 	ClusterInspector
 }
 
+// NodeManager takes a machine out of service.
+//
+// Optional, and asserted for rather than required. Everything else here can be
+// served by a restricted credential — inspection from a cache or a read
+// replica, workloads through a namespaced role — and evicting pods across every
+// namespace and deleting a node object is the one thing that cannot. An
+// implementation that cannot do it simply does not satisfy this, and the
+// surface offering it stays off rather than failing when somebody presses it.
+//
+// Deliberately not part of ClusterInspector, which is read-only by design.
+type NodeManager interface {
+	// Cordon stops or resumes scheduling onto a node. It does not move
+	// anything already running there.
+	Cordon(ctx context.Context, node string, unschedulable bool) error
+
+	// Drain evicts the pods a node is running and reports how many it asked
+	// to leave.
+	//
+	// Eviction is a request, not a deletion: it respects disruption budgets,
+	// so a pod whose budget would be violated stays and is reported rather
+	// than being taken down anyway. It returns once the evictions are
+	// requested, not once they have finished — the caller watches the node
+	// empty rather than holding a request open for however long that takes.
+	Drain(ctx context.Context, node string) (requested int, err error)
+
+	// DeleteNode removes the node object. The machine itself is not touched:
+	// it stops being part of the cluster, and shutting it down is a separate
+	// act somebody performs where the machine is.
+	DeleteNode(ctx context.Context, node string) error
+}
+
 // ClusterInspector reports on the runtime itself rather than on workloads.
 //
 // Read-only by design. Everything that mutates a cluster goes through the

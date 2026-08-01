@@ -144,6 +144,10 @@ func (o *Orchestrator) Pods(
 		listOpts.LabelSelector = ownedBy(opts.Owner)
 	}
 
+	if opts.Node != "" {
+		listOpts.FieldSelector = "spec.nodeName=" + opts.Node
+	}
+
 	list, err := o.client.CoreV1().Pods(opts.Namespace).List(ctx, listOpts)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: list pods: %w", err)
@@ -152,9 +156,10 @@ func (o *Orchestrator) Pods(
 	out := make([]orchestrator.PodInfo, 0, len(list.Items))
 	for _, p := range list.Items {
 		info := orchestrator.PodInfo{
-			Name:      p.Name,
-			Namespace: p.Namespace,
-			Phase:     string(p.Status.Phase),
+			Name:       p.Name,
+			Namespace:  p.Namespace,
+			DrainMoves: !skipOnDrain(&p),
+			Phase:      string(p.Status.Phase),
 			Node:      p.Spec.NodeName,
 			Total:     int32(len(p.Status.ContainerStatuses)),
 			CreatedAt: p.CreationTimestamp.Time,

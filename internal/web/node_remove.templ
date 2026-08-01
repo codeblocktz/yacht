@@ -1,0 +1,167 @@
+package web
+
+import "strconv"
+
+// NodeDetail is one machine, what is on it, and how to take it out of service.
+templ NodeDetail(d NodeDetailData) {
+	@pageHead(d.Node.Name, "One machine in the cluster, and what it is running.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That did not work</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	if !d.CanManage {
+		<div class="callout mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">This cluster connection cannot manage nodes</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Draining evicts pods in every namespace and removing deletes a node
+					object. The credential this install uses cannot do either, so the
+					actions are not offered.
+				</p>
+			</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Node</span>
+		</div>
+		<div class="panel-body">
+			<dl class="kv">
+				<dt>Status</dt>
+				<dd>
+					if d.Node.Ready {
+						<span class="status status-ok">ready</span>
+					} else {
+						<span class="status status-err">not ready</span>
+					}
+					if d.Node.Unschedulable {
+						<span class="status status-warn">cordoned</span>
+					}
+				</dd>
+				<dt>Version</dt>
+				<dd class="mono">{ d.Node.Version }</dd>
+				<dt>Platform</dt>
+				<dd class="mono">{ d.Node.OS }/{ d.Node.Architecture }</dd>
+				if d.Node.Pool != "" {
+					<dt>Pool</dt>
+					<dd class="mono">{ d.Node.Pool }</dd>
+				}
+				<dt>Address</dt>
+				<dd class="mono">{ d.Node.Address }</dd>
+			</dl>
+		</div>
+	</div>
+	if d.CanManage {
+		@nodeActions(d)
+	}
+	// Draining is asynchronous: the eviction is a request, and the pods leave
+	// when they leave. The page watches rather than holding a request open.
+	<div
+		hx-get={ "/cluster/nodes/" + d.Node.Name + "/status" }
+		hx-trigger="load, every 4s"
+		hx-swap="innerHTML"
+	>
+		@NodeDetailBody(d)
+	</div>
+}
+
+templ nodeActions(d NodeDetailData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Take out of service</span>
+		</div>
+		<div class="panel-body">
+			<div class="flex flex-wrap items-center gap-2">
+				if d.Node.Unschedulable {
+					<form method="post" action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/cordon") }>
+						<input type="hidden" name="unschedulable" value="false"/>
+						<button class="btn" type="submit">Allow scheduling again</button>
+					</form>
+				} else {
+					<form method="post" action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/cordon") }>
+						<input type="hidden" name="unschedulable" value="true"/>
+						<button class="btn" type="submit">Stop scheduling</button>
+					</form>
+				}
+				<form
+					method="post"
+					action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/drain") }
+					onsubmit="return confirm('Evict everything running on this node? Each pod restarts elsewhere. A pod whose storage lives on this machine cannot move and will stay pending until the node is back.')"
+				>
+					<button class="btn" type="submit">Drain</button>
+				</form>
+				if d.Drained {
+					<form
+						method="post"
+						action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/remove") }
+						onsubmit="return confirm('Remove this node from the cluster? The machine itself keeps running and must be shut down separately.')"
+					>
+						<button class="btn btn-danger" type="submit">Remove from cluster</button>
+					</form>
+				} else {
+					// Offered only once the node is empty. A button that would be
+					// refused is worse than one that is not there: it reads as
+					// permission and answers with an error.
+					<button class="btn" type="button" disabled title="Drain the node first">
+						Remove from cluster
+					</button>
+				}
+			</div>
+			<p class="mt-3 text-[12.5px] text-muted-foreground">
+				Draining stops scheduling first, then asks each pod to leave. A pod
+				covered by a disruption budget is refused rather than taken down, and
+				the refusal is reported here.
+			</p>
+			<p class="mt-2 text-[12.5px] text-muted-foreground">
+				A pod with storage on this machine is the case to watch. Local volumes
+				are bound to the node that holds them, so the pod is evicted and then
+				has nowhere to go — it stays pending until this node accepts work
+				again, whatever spare capacity the rest of the cluster has.
+			</p>
+		</div>
+	</div>
+}
+
+// NodeDetailBody is the polled half: what is still running.
+templ NodeDetailBody(d NodeDetailData) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Running here</span>
+			<span class="text-muted-foreground">
+				{ strconv.Itoa(len(d.Pods)) } { plural(len(d.Pods), "pod") }
+			</span>
+		</div>
+		if len(d.Pods) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing is running here</p>
+				<p>This node can be removed from the cluster.</p>
+			</div>
+		} else {
+			<div class="rows">
+				for _, p := range d.Pods {
+					<div class="row-item">
+						<span class="min-w-0 flex-1">
+							<span class="block truncate font-medium">{ p.Name }</span>
+							<span class="mono block truncate text-muted-foreground">{ p.Namespace }</span>
+						</span>
+						if !p.DrainMoves {
+							// Said rather than hidden. These are why "0 pods" never
+							// happens on a real node, and somebody waiting for that
+							// number deserves to know it is not coming.
+							<span class="status status-neutral">stays</span>
+						}
+						if p.Healthy() {
+							<span class="status status-ok">ready</span>
+						} else {
+							<span class="status status-warn">{ p.Phase }</span>
+						}
+					</div>
+				}
+			</div>
+		}
+	</div>
+}

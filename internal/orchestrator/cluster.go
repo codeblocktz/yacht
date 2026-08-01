@@ -63,6 +63,14 @@ type PodInfo struct {
 	// does not manage.
 	App   string
 	Owner OwnerID
+
+	// DrainMoves reports whether draining this pod's node would move it.
+	//
+	// Decided where the drain is implemented rather than by a caller reading
+	// fields and re-deriving the rule. A page that counted differently from
+	// the drain would call a node empty while the drain still had work, and
+	// the two would drift the first time either changed.
+	DrainMoves bool
 }
 
 // Healthy reports whether every container in the pod is ready.
@@ -108,6 +116,10 @@ type PodListOptions struct {
 
 	// ManagedOnly restricts results to workloads the engine created.
 	ManagedOnly bool
+
+	// Node limits results to pods scheduled on one machine. Empty means every
+	// node.
+	Node string
 
 	// Owner limits results to one principal's workloads.
 	//

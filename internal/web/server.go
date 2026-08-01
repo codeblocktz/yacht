@@ -546,6 +546,27 @@ func (s *Server) Handler() http.Handler {
 			})
 		}
 
+		// Taking a machine out of service is the other half of putting one in,
+		// and the same reasoning gates it: a node is cluster-scoped, so it is
+		// not a decision one team's admin makes for every other team.
+		//
+		// Its own group rather than the one above, because the two abilities are
+		// unrelated. Joining needs a key to seal a token; draining needs a
+		// credential that can evict across namespaces. An install can have
+		// either without the other, and coupling them would switch off a working
+		// feature because an unrelated one was unavailable.
+		if _, ok := s.nodeManager(); ok {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Get("/cluster/nodes/{name}", s.nodeDetail)
+				r.Get("/cluster/nodes/{name}/status", s.nodeDetailFragment)
+				r.Post("/cluster/nodes/{name}/cordon", s.nodeCordon)
+				r.Post("/cluster/nodes/{name}/drain", s.nodeDrain)
+				r.Post("/cluster/nodes/{name}/remove", s.nodeRemove)
+			})
+		}
+
 		// Owner: everything that changes who can administer.
 		//
 		// Appointing an admin is ownership. An admin allowed to appoint another
@@ -850,12 +871,11 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 	ctx := r.Context()
 	data := ClusterData{Tab: tab, OK: true}
 
-	// Shown only to somebody the add page would actually admit. A button that
-	// leads to a 403 tells the viewer they have a permission they do not.
-	if s.joiner != nil {
-		if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
-			data.CanAddNode = true
-		}
+	// Shown only to somebody the page behind it would actually admit. A control
+	// that leads to a 403 tells the viewer they have a permission they do not.
+	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+		data.CanAddNode = s.joiner != nil
+		_, data.CanManageNodes = s.nodeManager()
 	}
 
 	if err := s.orch.Ping(ctx); err != nil {

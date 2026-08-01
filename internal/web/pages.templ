@@ -772,10 +772,13 @@ type ClusterData struct {
 	Nodes   []orchestrator.NodeInfo
 	Pods    []orchestrator.PodInfo
 
-	// CanAddNode is false for anybody but an owner, and for an install with no
-	// join settings surface at all. Offering the button and refusing the page
-	// would be advertising a permission the viewer does not have.
-	CanAddNode bool
+	// CanAddNode and CanManageNodes are separate because the abilities are.
+	// Joining needs a key to seal a token; draining needs a credential that can
+	// evict across namespaces, and an install can have either without the
+	// other. Each gates only what it actually governs, so a link never leads
+	// somewhere its viewer would be refused.
+	CanAddNode     bool
+	CanManageNodes bool
 }
 
 templ Cluster(d ClusterData) {
@@ -827,7 +830,7 @@ templ Cluster(d ClusterData) {
 			<div class="panel">
 				<div class="rows">
 					for _, n := range d.Nodes {
-						@nodeRow(n)
+						@nodeRow(n, d.CanManageNodes)
 					}
 				</div>
 			</div>
@@ -842,11 +845,19 @@ templ addNodeButton() {
 	<a class="btn btn-primary" href="/cluster/nodes/add">Add node</a>
 }
 
-templ nodeRow(n orchestrator.NodeInfo) {
+templ nodeRow(n orchestrator.NodeInfo, manageable bool) {
 	<div class="row-item flex-wrap">
 		<div class="min-w-[220px] flex-1">
 			<div class="flex flex-wrap items-center gap-2">
-				<span class="font-medium">{ n.Name }</span>
+				if manageable {
+					// Linked only for somebody the page would admit. A link to a
+					// 403 says you have a permission you do not.
+					<a class="font-medium hover:underline" href={ templ.URL("/cluster/nodes/" + n.Name) }>
+						{ n.Name }
+					</a>
+				} else {
+					<span class="font-medium">{ n.Name }</span>
+				}
 				if n.Ready {
 					@statusDot("Ready", "status-ok")
 				} else {
