@@ -215,6 +215,16 @@ func (f *fakeAccounts) RevokeAllSessions(context.Context, uuid.UUID) error {
 // with. These exist so fakeAccounts still satisfies the interface for the
 // sign-in tests, which have no business touching a team.
 
+func (f *fakeAccounts) InvitationFor(context.Context, string) (account.Invitation, error) {
+	return account.Invitation{}, account.ErrTokenInvalid
+}
+
+func (f *fakeAccounts) AcceptInvitation(
+	context.Context, string, uuid.UUID,
+) (string, account.Role, error) {
+	return "", "", account.ErrTokenInvalid
+}
+
 func (f *fakeAccounts) ListMembers(context.Context, string) ([]account.Member, error) {
 	return nil, errNoFakeAccountsBackend
 }

@@ -453,3 +453,78 @@ func recent(ts []time.Time, cutoff time.Time) []time.Time {
 	}
 	return nil
 }
+
+// acceptInvitation spends an invitation, or first establishes who is holding it.
+//
+// The token is not proof of identity. Acceptance is bound to the address the
+// invitation names, so a visitor who is not signed in is sent a sign-in link to
+// that address rather than let in — which makes a forwarded or intercepted
+// invitation useless to anyone who cannot read that mailbox.
+//
+// Deliberately outside the authenticated group: the whole point is that the
+// person following it may have no account yet.
+func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	token := chi.URLParam(r, "token")
+
+	// Signed in already: spend it. AcceptInvitation checks the address itself,
+	// so a signed-in stranger is refused here rather than trusted.
+	if sess, err := s.accounts.ResolveSession(ctx, sessionToken(r)); err == nil {
+		team, role, err := s.accounts.AcceptInvitation(ctx, token, sess.UserID)
+		if err != nil {
+			s.invitationFailed(w, r, err)
+			return
+		}
+		s.log.Info("invitation accepted",
+			slog.String("team", team), slog.String("role", string(role)))
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	// Not signed in. Read the invitation without spending it, and mail a
+	// sign-in link to the address it names.
+	inv, err := s.accounts.InvitationFor(ctx, token)
+	if err != nil {
+		s.invitationFailed(w, r, err)
+		return
+	}
+
+	raw, _, existed, err := s.accounts.IssueMagicLink(ctx, inv.Email, s.magicTTL)
+	if err != nil {
+		s.log.Error("issue sign-in link for an invitation", slog.String("error", err.Error()))
+		http.Error(w, "could not send a sign-in link", http.StatusInternalServerError)
+		return
+	}
+	if existed || raw != "" {
+		msg := notify.Message{
+			To:      inv.Email,
+			Subject: "Sign in to Yacht to accept your invitation",
+			TextBody: "Sign in to accept your invitation:\n\n" +
+				s.baseURL + "/auth/" + raw + "\n\n" +
+				"Then open the invitation link again.\n" +
+				"If you were not expecting this, ignore it.",
+		}
+		if err := s.mailer.Send(ctx, msg); err != nil {
+			s.log.Error("send invitation sign-in link", slog.String("error", err.Error()))
+		}
+	}
+
+	// The address is not echoed back. Whoever is holding this link may not be
+	// the person it was sent to, and telling them which mailbox to watch would
+	// be the disclosure the binding exists to prevent.
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
+}
+
+// invitationFailed answers a link that cannot be spent.
+//
+// Expired, already accepted, revoked and never-existed are one response on
+// purpose: distinguishing them tells whoever is holding a stray token which
+// kind of stray it is.
+func (s *Server) invitationFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if !errors.Is(err, account.ErrTokenInvalid) {
+		s.log.Error("accept invitation", slog.String("error", err.Error()))
+		http.Error(w, "could not accept the invitation", http.StatusInternalServerError)
+		return
+	}
+	http.Error(w, "this invitation is no longer valid", http.StatusNotFound)
+}

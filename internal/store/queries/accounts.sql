@@ -171,3 +171,18 @@ DELETE FROM invitations WHERE id = @id AND owner_id = @owner_id;
 
 -- name: DeleteExpiredInvitations :exec
 DELETE FROM invitations WHERE expires_at <= now() AND accepted_at IS NULL;
+
+-- Reads an invitation without spending it, so a signed-out visitor can be sent
+-- a sign-in link to the address it names. token_hash is not among the columns,
+-- for the same reason it is absent from ListPendingInvitations.
+-- name: GetInvitationByHash :one
+SELECT id, owner_id, email, role, expires_at, created_at
+FROM invitations
+WHERE token_hash = @token_hash AND accepted_at IS NULL AND expires_at > now();
+
+-- Withdraws the invitations somebody issued, used when they lose the authority
+-- to have issued them. An administrator who leaves must not keep a live token
+-- for an address they control.
+-- name: DeleteInvitationsByInviter :exec
+DELETE FROM invitations
+WHERE owner_id = @owner_id AND invited_by = @invited_by::uuid AND accepted_at IS NULL;

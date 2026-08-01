@@ -86,6 +86,15 @@ type Accounts interface {
 	// answer to a cookie that has been copied off a machine.
 	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
 
+	// InvitationFor reads an invitation without spending it, so a visitor who
+	// is not signed in can be sent a link to the address it names instead of
+	// being let in on the strength of holding the token.
+	InvitationFor(ctx context.Context, raw string) (account.Invitation, error)
+
+	// AcceptInvitation spends one. It checks the address itself, so a
+	// signed-in stranger holding the token is refused there rather than here.
+	AcceptInvitation(ctx context.Context, raw string, userID uuid.UUID) (string, account.Role, error)
+
 	// ListMembers and ListPendingInvitations are what the team page shows.
 	// Both are scoped by team, and the team comes from the caller's session
 	// rather than from the request.
@@ -312,6 +321,12 @@ func (s *Server) Handler() http.Handler {
 		// single-use and short-lived: a mail client that prefetches links spends
 		// one its own recipient asked for, and a crawler has nothing to guess.
 		r.Get("/auth/{token}", s.signInCallback)
+
+		// Outside the authenticated group because the point of an invitation is
+		// that the person following it may not have an account yet. The handler
+		// establishes who they are before spending anything — the token is not
+		// treated as proof of identity.
+		r.Get("/invitations/{token}", s.acceptInvitation)
 
 		// Sign-out is POST only. A GET that ends a session is one a prefetching
 		// browser, a crawler or an <img> tag on another site can fire, and being

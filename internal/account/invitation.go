@@ -227,3 +227,30 @@ func (s *Service) RevokeInvitation(
 		return nil
 	})
 }
+
+// InvitationFor reads an invitation without spending it.
+//
+// Needed because acceptance is bound to the address the invitation names, so a
+// signed-out visitor cannot simply be let in on the strength of holding the
+// token. Reading it tells the caller which mailbox to prove, and spends
+// nothing if they cannot.
+func (s *Service) InvitationFor(ctx context.Context, raw string) (Invitation, error) {
+	if raw == "" {
+		return Invitation{}, ErrTokenInvalid
+	}
+	row, err := s.q.GetInvitationByHash(ctx, HashToken(raw))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Invitation{}, ErrTokenInvalid
+		}
+		return Invitation{}, fmt.Errorf("account: read invitation: %w", err)
+	}
+	return Invitation{
+		ID:        row.ID,
+		TeamID:    row.OwnerID,
+		Email:     row.Email,
+		Role:      Role(row.Role),
+		ExpiresAt: row.ExpiresAt,
+		CreatedAt: row.CreatedAt,
+	}, nil
+}

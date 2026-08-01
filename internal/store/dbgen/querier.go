@@ -40,6 +40,10 @@ type Querier interface {
 	// Scoped by owner_id as well as id: an id from another team must not be
 	// reachable by someone who happens to administer this one.
 	DeleteInvitation(ctx context.Context, arg DeleteInvitationParams) (int64, error)
+	// Withdraws the invitations somebody issued, used when they lose the authority
+	// to have issued them. An administrator who leaves must not keep a live token
+	// for an address they control.
+	DeleteInvitationsByInviter(ctx context.Context, arg DeleteInvitationsByInviterParams) error
 	// Releases an app's platform hostname.
 	//
 	// Deleting rather than leaving the row is what makes the feature reversible:
@@ -52,6 +56,10 @@ type Querier interface {
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	// Reads an invitation without spending it, so a signed-out visitor can be sent
+	// a sign-in link to the address it names. token_hash is not among the columns,
+	// for the same reason it is absent from ListPendingInvitations.
+	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)

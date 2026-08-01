@@ -541,3 +541,192 @@ func TestPendingInvitationDoesNotLeakItsToken(t *testing.T) {
 		}
 	}
 }
+
+// ------------------------------------------------- accepting an invitation
+//
+// Task 7 built the page that sends invitation links. Without this, those links
+// go nowhere — so these tests are the difference between the feature working
+// and the feature mailing a 404.
+
+// TestAcceptingAnInvitationWhileSignedInAddsTheTeam is the straightforward
+// path: the person is already known, so the token only has to be spent.
+func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-signedin")
+	owner := h.user(t, "owner-inv-in@web.test")
+	h.team(t, "web-inv-signedin", "Team", owner, "")
+
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-in@web.test"))
+
+	before := len(h.mailer.messages())
+	if rec := h.invite(t, ownerCookie, "joiner-in@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("invite = %d, want 303", rec.Code)
+	}
+	token := invitationToken(t, h.lastMail(t, before))
+
+	// The invited person signs in first, on their own address.
+	h.user(t, "joiner-in@web.test")
+	joinerCookie := sessionCookie(h.signIn(t, "joiner-in@web.test"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil)
+	req.AddCookie(joinerCookie)
+	h.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("accept = %d, want 303 — body: %s", rec.Code, rec.Body.String())
+	}
+
+	joiner, err := h.accounts.EnsureUser(context.Background(), "joiner-in@web.test", "")
+	if err != nil {
+		t.Fatalf("EnsureUser: %v", err)
+	}
+	role, err := h.accounts.RoleIn(context.Background(), joiner.ID, "web-inv-signedin")
+	if err != nil {
+		t.Fatalf("the invitation did not put them in the team: %v", err)
+	}
+	if role != account.RoleMember {
+		t.Fatalf("role = %q, want member", role)
+	}
+}
+
+// TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst is the one that
+// matters.
+//
+// Acceptance is bound to the address the invitation names, so the token cannot
+// be treated as proof of who is holding it. A signed-out visitor must be sent
+// a sign-in link to the invited address — which means an intercepted or
+// forwarded invitation is useless to anyone who cannot read that mailbox.
+func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-signedout")
+	owner := h.user(t, "owner-inv-out@web.test")
+	h.team(t, "web-inv-signedout", "Team", owner, "")
+
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-out@web.test"))
+
+	before := len(h.mailer.messages())
+	h.invite(t, ownerCookie, "joiner-out@web.test", "member")
+	token := invitationToken(t, h.lastMail(t, before))
+
+	// Follow the link with no cookie at all.
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil))
+
+	if rec.Code == http.StatusSeeOther {
+		if loc := rec.Header().Get("Location"); !strings.Contains(loc, "sign-in") {
+			t.Fatalf("a signed-out visitor was redirected to %q, not to sign in", loc)
+		}
+	} else if rec.Code != http.StatusOK {
+		t.Fatalf("accept while signed out = %d, want 200 or a redirect to sign-in", rec.Code)
+	}
+
+	// Nobody joined on the strength of holding the token.
+	joiner := h.user(t, "joiner-out@web.test")
+	if _, err := h.accounts.RoleIn(
+		context.Background(), joiner.ID, "web-inv-signedout",
+	); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatal("holding the token alone put somebody in the team")
+	}
+}
+
+// A stranger who gets hold of the link cannot use it, because acceptance is
+// bound to the invited address rather than to whoever presents the token.
+func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-stranger")
+	owner := h.user(t, "owner-inv-str@web.test")
+	h.team(t, "web-inv-stranger", "Team", owner, "")
+
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-str@web.test"))
+
+	before := len(h.mailer.messages())
+	h.invite(t, ownerCookie, "intended-str@web.test", "admin")
+	token := invitationToken(t, h.lastMail(t, before))
+
+	h.user(t, "stranger-str@web.test")
+	strangerCookie := sessionCookie(h.signIn(t, "stranger-str@web.test"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil)
+	req.AddCookie(strangerCookie)
+	h.handler.ServeHTTP(rec, req)
+
+	stranger, _ := h.accounts.EnsureUser(context.Background(), "stranger-str@web.test", "")
+	if _, err := h.accounts.RoleIn(
+		context.Background(), stranger.ID, "web-inv-stranger",
+	); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatalf("a stranger spent an invitation addressed to somebody else (status %d)", rec.Code)
+	}
+}
+
+// A spent invitation is spent. Otherwise the link in a mailbox stays a way in
+// long after it was used.
+func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-replay")
+	owner := h.user(t, "owner-inv-rep@web.test")
+	h.team(t, "web-inv-replay", "Team", owner, "")
+
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-rep@web.test"))
+
+	before := len(h.mailer.messages())
+	h.invite(t, ownerCookie, "joiner-rep@web.test", "member")
+	token := invitationToken(t, h.lastMail(t, before))
+
+	h.user(t, "joiner-rep@web.test")
+	joinerCookie := sessionCookie(h.signIn(t, "joiner-rep@web.test"))
+
+	accept := func() int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil)
+		req.AddCookie(joinerCookie)
+		h.handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := accept(); code != http.StatusSeeOther {
+		t.Fatalf("first accept = %d, want 303", code)
+	}
+	if code := accept(); code == http.StatusSeeOther {
+		t.Fatal("the same invitation was accepted twice")
+	}
+}
+
+// TestInvitationsDieWithTheirInviter closes a hole found by sub-project B's
+// adversarial review: an admin who is removed from a team left behind live
+// invitations for any address they controlled — a self-service way back in.
+func TestInvitationsDieWithTheirInviter(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-inviter")
+	ctx := context.Background()
+
+	owner := h.user(t, "owner-inv-inv@web.test")
+	h.team(t, "web-inv-inviter", "Team", owner, "")
+
+	admin := h.user(t, "admin-inv-inv@web.test")
+	if err := h.accounts.SetRole(ctx, owner.ID, "web-inv-inviter", admin.ID, account.RoleAdmin); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	adminCookie := sessionCookie(h.signIn(t, "admin-inv-inv@web.test"))
+
+	before := len(h.mailer.messages())
+	if rec := h.invite(t, adminCookie, "accomplice@web.test", "member"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("admin invite = %d, want 303", rec.Code)
+	}
+	token := invitationToken(t, h.lastMail(t, before))
+
+	// The admin leaves.
+	if err := h.accounts.RemoveMember(ctx, owner.ID, "web-inv-inviter", admin.ID); err != nil {
+		t.Fatalf("RemoveMember: %v", err)
+	}
+
+	// Their outstanding invitation must have gone with them.
+	h.user(t, "accomplice@web.test")
+	accompliceCookie := sessionCookie(h.signIn(t, "accomplice@web.test"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil)
+	req.AddCookie(accompliceCookie)
+	h.handler.ServeHTTP(rec, req)
+
+	accomplice, _ := h.accounts.EnsureUser(ctx, "accomplice@web.test", "")
+	if _, err := h.accounts.RoleIn(ctx, accomplice.ID, "web-inv-inviter"); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatal("an invitation issued by a since-removed admin was still redeemable")
+	}
+}

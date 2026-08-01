@@ -213,6 +213,24 @@ func (q *Queries) DeleteInvitation(ctx context.Context, arg DeleteInvitationPara
 	return result.RowsAffected(), nil
 }
 
+const deleteInvitationsByInviter = `-- name: DeleteInvitationsByInviter :exec
+DELETE FROM invitations
+WHERE owner_id = $1 AND invited_by = $2::uuid AND accepted_at IS NULL
+`
+
+type DeleteInvitationsByInviterParams struct {
+	OwnerID   string
+	InvitedBy uuid.UUID
+}
+
+// Withdraws the invitations somebody issued, used when they lose the authority
+// to have issued them. An administrator who leaves must not keep a live token
+// for an address they control.
+func (q *Queries) DeleteInvitationsByInviter(ctx context.Context, arg DeleteInvitationsByInviterParams) error {
+	_, err := q.db.Exec(ctx, deleteInvitationsByInviter, arg.OwnerID, arg.InvitedBy)
+	return err
+}
+
 const deleteMembership = `-- name: DeleteMembership :exec
 DELETE FROM memberships WHERE user_id = $1 AND owner_id = $2
 `
@@ -243,6 +261,38 @@ DELETE FROM sessions WHERE user_id = $1
 func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteSessionsForUser, userID)
 	return err
+}
+
+const getInvitationByHash = `-- name: GetInvitationByHash :one
+SELECT id, owner_id, email, role, expires_at, created_at
+FROM invitations
+WHERE token_hash = $1 AND accepted_at IS NULL AND expires_at > now()
+`
+
+type GetInvitationByHashRow struct {
+	ID        uuid.UUID
+	OwnerID   string
+	Email     string
+	Role      string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
+// Reads an invitation without spending it, so a signed-out visitor can be sent
+// a sign-in link to the address it names. token_hash is not among the columns,
+// for the same reason it is absent from ListPendingInvitations.
+func (q *Queries) GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error) {
+	row := q.db.QueryRow(ctx, getInvitationByHash, tokenHash)
+	var i GetInvitationByHashRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Email,
+		&i.Role,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getMembership = `-- name: GetMembership :one

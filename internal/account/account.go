@@ -307,6 +307,16 @@ func (s *Service) RemoveMember(
 		}); err != nil {
 			return fmt.Errorf("account: remove member: %w", err)
 		}
+		// Their outstanding invitations go with them, in the same transaction.
+		// An administrator who leaves would otherwise keep a live token for any
+		// address they control — a self-service way back into a team that has
+		// just removed them. Their session stops resolving the moment the
+		// membership row goes; without this, the invitation would not.
+		if err := q.DeleteInvitationsByInviter(ctx, dbgen.DeleteInvitationsByInviterParams{
+			OwnerID: teamID, InvitedBy: target,
+		}); err != nil {
+			return fmt.Errorf("account: remove member invitations: %w", err)
+		}
 		return nil
 	})
 }
