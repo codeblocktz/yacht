@@ -78,26 +78,29 @@ func podPhaseClass(p orchestrator.PodInfo) string {
 // deploymentClass maps a deployment status to a status style.
 func deploymentClass(status string) string {
 	switch status {
-	case "running", "succeeded":
+	case app.DeployActive, "succeeded":
 		return "status-ok"
-	case "pending":
+	case app.DeployRunning, "pending":
 		return "status-info"
-	case "failed":
+	case app.DeployFailed:
 		return "status-err"
 	case "cancelled":
 		return "status-warn"
 	}
+	// Superseded lands here, and neutral is right: it is history, not a
+	// problem. Colouring a replaced deployment like a fault would make a
+	// healthy app look like it had been failing all week.
 	return "status-neutral"
 }
 
 // activeDeploymentBorder tints the live deployment panel by its health.
 func activeDeploymentBorder(d app.Deployment) string {
 	switch d.Status {
-	case "running", "succeeded":
+	case app.DeployActive, "succeeded":
 		return "border-l-success"
-	case "failed":
+	case app.DeployFailed:
 		return "border-l-destructive"
-	case "pending":
+	case app.DeployRunning, "pending":
 		return "border-l-info"
 	}
 	return "border-l-border"

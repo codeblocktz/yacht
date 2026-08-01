@@ -103,3 +103,14 @@ RETURNING *;
 UPDATE apps
 SET https_only = @https_only, cname_only = @cname_only, updated_at = now()
 WHERE owner_id = @owner_id AND name = @name;
+
+-- Retires the deployments a new one replaces.
+--
+-- Only rows that never reached a terminal state: a finished deployment already
+-- says what happened to it, and rewriting that would lose the difference
+-- between one that was replaced and one that failed.
+-- name: SupersedeDeployments :execrows
+UPDATE deployments
+SET status = 'superseded', finished_at = COALESCE(finished_at, now())
+WHERE owner_id = @owner_id AND app_id = @app_id
+  AND status IN ('running', 'active');

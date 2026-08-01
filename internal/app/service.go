@@ -424,7 +424,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 
 	if _, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: created.ID, Image: created.Image,
-		Revision: "initial", Status: "running",
+		Revision: "initial", Status: DeployActive,
 	}); err != nil {
 		return App{}, fmt.Errorf("app: record deployment: %w", err)
 	}
@@ -733,18 +733,67 @@ func (s *Service) RecentActivity(
 	return out, nil
 }
 
-// recordDeployment appends a history entry.
-func (s *Service) recordDeployment(
-	ctx context.Context, ownerID string, a App, revision, status string,
-) {
-	if _, err := s.q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
-		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
-		Revision: revision, Status: status,
+// Deployment statuses.
+//
+// One deployment is active and the rest are history, which is the shape people
+// expect: the thing running now, and what it replaced. Superseded is distinct
+// from failed on purpose — a deployment that was replaced worked, and reading
+// a history of failures where none happened is worse than no history.
+const (
+	DeployRunning    = "running"
+	DeployActive     = "active"
+	DeployFailed     = "failed"
+	DeploySuperseded = "superseded"
+)
+
+// beginDeployment retires the previous deployment and opens a new one.
+//
+// Returns the new row's id, or uuid.Nil when history could not be written.
+// History is useful, not load-bearing: failing a deploy because its audit row
+// would not write is the wrong trade, and every caller checks for Nil rather
+// than assuming.
+func (s *Service) beginDeployment(
+	ctx context.Context, ownerID string, a App, revision string,
+) uuid.UUID {
+	if _, err := s.q.SupersedeDeployments(ctx, dbgen.SupersedeDeploymentsParams{
+		OwnerID: ownerID, AppID: a.ID,
 	}); err != nil {
-		// History is useful, not load-bearing. Failing a successful deploy
-		// because its audit row would not write is the wrong trade.
+		s.log.Warn("could not retire earlier deployments",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+	}
+
+	row, err := s.q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
+		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
+		Revision: revision, Status: DeployRunning,
+	})
+	if err != nil {
 		s.log.Warn("could not record deployment",
 			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return uuid.Nil
+	}
+	return row.ID
+}
+
+// endDeployment says how it went.
+//
+// Without this every row stays "running" for ever, and a history of finished
+// deployments reads as a list of things still in progress — which is what this
+// shipped as, because FinishDeployment existed and nothing called it.
+func (s *Service) endDeployment(
+	ctx context.Context, ownerID string, id uuid.UUID, cause error,
+) {
+	if id == uuid.Nil {
+		return
+	}
+	status, message := DeployActive, ""
+	if cause != nil {
+		status, message = DeployFailed, cause.Error()
+	}
+	if _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
+		OwnerID: ownerID, ID: id, Status: status, Message: message,
+	}); err != nil {
+		s.log.Warn("could not finish deployment record",
+			slog.String("error", err.Error()))
 	}
 }
 
@@ -776,11 +825,14 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	updated := toApp(row)
-	if err := s.apply(ctx, s.q, updated); err != nil {
+	id := s.beginDeployment(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
+	err = s.apply(ctx, s.q, updated)
+	// Recorded whichever way it went. A deploy that failed and left no trace is
+	// one nobody can find afterwards.
+	s.endDeployment(ctx, ownerID, id, err)
+	if err != nil {
 		return App{}, err
 	}
-	s.recordDeployment(ctx, ownerID, updated,
-		fmt.Sprintf("scale:%d", replicas), "running")
 	return updated, nil
 }
 
@@ -790,11 +842,10 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
-	s.recordDeployment(ctx, ownerID, a, "redeploy", "running")
-	return nil
+	id := s.beginDeployment(ctx, ownerID, a, "redeploy")
+	err = s.apply(ctx, s.q, a)
+	s.endDeployment(ctx, ownerID, id, err)
+	return err
 }
 
 // Delete removes the workload from the cluster and then the record.

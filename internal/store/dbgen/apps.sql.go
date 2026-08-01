@@ -588,6 +588,31 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 	return i, err
 }
 
+const supersedeDeployments = `-- name: SupersedeDeployments :execrows
+UPDATE deployments
+SET status = 'superseded', finished_at = COALESCE(finished_at, now())
+WHERE owner_id = $1 AND app_id = $2
+  AND status IN ('running', 'active')
+`
+
+type SupersedeDeploymentsParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+// Retires the deployments a new one replaces.
+//
+// Only rows that never reached a terminal state: a finished deployment already
+// says what happened to it, and rewriting that would lose the difference
+// between one that was replaced and one that failed.
+func (q *Queries) SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, supersedeDeployments, arg.OwnerID, arg.AppID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateApp = `-- name: UpdateApp :one
 UPDATE apps
 SET image          = $3,

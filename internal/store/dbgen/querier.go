@@ -169,6 +169,12 @@ type Querier interface {
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	// Retires the deployments a new one replaces.
+	//
+	// Only rows that never reached a terminal state: a finished deployment already
+	// says what happened to it, and rewriting that would lose the difference
+	// between one that was replaced and one that failed.
+	SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error)
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address
