@@ -1,0 +1,59 @@
+package web
+
+import "strconv"
+
+// Canvas draws the apps and what connects them.
+//
+// Server-rendered: the layout is computed in Go and the edges are an SVG path
+// list. There is no client-side graph library because there is no Node in this
+// project, and a canvas that needs a build step to render is one a self-hoster
+// cannot patch.
+templ Canvas(d CanvasData) {
+	@pageHead("Canvas", "How your apps relate to each other.", deployButton())
+	if d.Empty {
+		@emptyApps()
+	} else {
+		<div class="canvas">
+			<div class="canvas-inner" style={ canvasSize(d) }>
+				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
+					<defs>
+						<marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4"
+							markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+							<path d="M0 0 L8 4 L0 8 z" class="canvas-arrow"></path>
+						</marker>
+					</defs>
+					for _, e := range d.Edges {
+						<path d={ e.Path } class="canvas-edge" marker-end="url(#arrow)">
+							<title>{ e.Via }</title>
+						</path>
+					}
+				</svg>
+				for _, n := range d.Nodes {
+					<div class="canvas-node" style={ nodeAt(n) }>
+						<a href={ templ.URL("/apps/" + n.App.Name) } class="canvas-card">
+							<span class="canvas-card-head">
+								@icon(sourceIcon(n.App.Source))
+								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
+							</span>
+							<span class="canvas-card-status">
+								@appStatus(n.App)
+								if n.App.Host != "" {
+									<span class="mono truncate text-[11.5px] text-muted-foreground">
+										{ n.App.Host }
+									</span>
+								}
+							</span>
+						</a>
+						if n.Volume != nil {
+							<a href={ templ.URL("/apps/" + n.App.Name + "/storage") } class="canvas-volume">
+								@icon("disk")
+								<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
+								<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
+							</a>
+						}
+					</div>
+				}
+			</div>
+		</div>
+	}
+}

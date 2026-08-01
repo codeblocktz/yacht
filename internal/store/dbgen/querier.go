@@ -22,6 +22,7 @@ type Querier interface {
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
+	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
@@ -97,6 +98,7 @@ type Querier interface {
 	// and comparing in Go: a check the caller performs is one a caller can skip,
 	// and Kubernetes cannot shrink a claim afterwards to undo it.
 	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
+	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
@@ -116,6 +118,7 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error

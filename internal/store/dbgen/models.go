@@ -31,6 +31,14 @@ type App struct {
 	Internal       bool
 }
 
+type AppLink struct {
+	OwnerID   string
+	FromAppID uuid.UUID
+	ToAppID   uuid.UUID
+	ViaKey    string
+	CreatedAt time.Time
+}
+
 type Deployment struct {
 	ID         uuid.UUID
 	OwnerID    string

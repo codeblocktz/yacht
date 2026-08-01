@@ -594,3 +594,5 @@ func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error
 func (f *fakeApps) SetHealth(context.Context, string, string, string, bool) error {
 	return errors.New("fakeApps has no health probe")
 }
+
+func (f *fakeApps) Links(context.Context, string) ([]app.Link, error) { return nil, nil }

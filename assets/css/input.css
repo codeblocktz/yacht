@@ -350,3 +350,39 @@
     @apply m-0 min-w-0;
   }
 }
+
+  /* ---------------------------------------------------------------- canvas */
+
+  /* The graph is laid out on the server, so the cards are absolutely
+     positioned at coordinates Go computed. The scroll container is what makes
+     a wide graph usable without a pan control. */
+  .canvas {
+    @apply overflow-auto rounded-md border border-border bg-muted/30 p-0;
+    background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .canvas-inner { @apply relative; }
+  .canvas-edges { @apply pointer-events-none absolute inset-0; }
+  .canvas-edge {
+    @apply fill-none stroke-border;
+    stroke-width: 1.5;
+    stroke-dasharray: 4 4;
+  }
+  .canvas-arrow { @apply fill-border stroke-none; }
+
+  .canvas-node { @apply absolute; }
+
+  .canvas-card {
+    @apply flex flex-col gap-2.5 rounded-md border border-border bg-card px-3.5 py-3
+           transition-colors hover:border-foreground/25;
+  }
+  .canvas-card-head { @apply flex items-center gap-2.5 text-[13px] text-foreground; }
+  .canvas-card-status { @apply flex items-center gap-2 overflow-hidden; }
+
+  /* Attached beneath the card, sharing its edge, so the volume reads as part
+     of the service rather than as a second thing that happens to be nearby. */
+  .canvas-volume {
+    @apply -mt-px flex items-center gap-2.5 rounded-b-md border border-border
+           bg-muted/40 px-3.5 py-2 text-[12px] text-muted-foreground
+           transition-colors hover:text-foreground;
+  }

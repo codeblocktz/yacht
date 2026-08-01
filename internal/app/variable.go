@@ -93,6 +93,9 @@ func (s *Service) SetVariable(
 	if _, err := s.q.UpsertVariable(ctx, params); err != nil {
 		return fmt.Errorf("app: set variable: %w", err)
 	}
+	if err := s.recordLinks(ctx, s.q, ownerID, a, in.Key, in.Value); err != nil {
+		return err
+	}
 
 	if err := s.apply(ctx, s.q, a); err != nil {
 		return err
@@ -118,6 +121,12 @@ func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key stri
 	})
 	if err != nil {
 		return fmt.Errorf("app: delete variable: %w", err)
+	}
+	// The edge goes with the variable that carried it.
+	if err := s.q.ReplaceAppLinks(ctx, dbgen.ReplaceAppLinksParams{
+		FromAppID: a.ID, ViaKey: key,
+	}); err != nil {
+		return fmt.Errorf("app: clear links: %w", err)
 	}
 	if n == 0 {
 		return ErrVariableNotFound
@@ -186,4 +195,73 @@ func (s *Service) envFor(
 		secrets[row.Key] = value
 	}
 	return plain, secrets, nil
+}
+
+// recordLinks notes which other apps a variable's value refers to.
+//
+// Done here, at the moment the value is written, because this is the only
+// place it is readable: a secret is sealed at rest, and the page that draws
+// the graph cannot open it. The alternative — decrypt everything on every
+// render — would mean opening every secret in the install to draw a picture.
+//
+// A reference is another app's in-cluster address appearing anywhere in the
+// value. That catches a connection string without needing to parse one, and
+// without guessing at formats the engine does not control.
+func (s *Service) recordLinks(
+	ctx context.Context, q *dbgen.Queries, ownerID string, from App, key, value string,
+) error {
+	// Replaced rather than added to: editing a variable that used to point at a
+	// database and now points elsewhere must not leave the old edge behind.
+	if err := q.ReplaceAppLinks(ctx, dbgen.ReplaceAppLinksParams{
+		FromAppID: from.ID, ViaKey: key,
+	}); err != nil {
+		return fmt.Errorf("app: clear links: %w", err)
+	}
+	if value == "" {
+		return nil
+	}
+
+	peers, err := s.q.ListApps(ctx, ownerID)
+	if err != nil {
+		return fmt.Errorf("app: list apps for links: %w", err)
+	}
+	for _, peer := range peers {
+		if peer.ID == from.ID {
+			continue
+		}
+		// The name a workload is reachable by inside the cluster. Matching on
+		// the qualified host rather than the bare name, so a variable whose
+		// value merely contains the word "api" is not a dependency on the app
+		// called api.
+		host := peer.Name + "." + peer.Namespace
+		if !strings.Contains(value, host) {
+			continue
+		}
+		if err := q.CreateAppLink(ctx, dbgen.CreateAppLinkParams{
+			OwnerID: ownerID, FromAppID: from.ID, ToAppID: peer.ID, ViaKey: key,
+		}); err != nil {
+			return fmt.Errorf("app: record link: %w", err)
+		}
+	}
+	return nil
+}
+
+// Link is one app's dependency on another, as the graph needs it.
+type Link struct {
+	From string
+	To   string
+	Via  string
+}
+
+// Links returns every recorded dependency between an owner's apps.
+func (s *Service) Links(ctx context.Context, ownerID string) ([]Link, error) {
+	rows, err := s.q.ListAppLinks(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("app: list links: %w", err)
+	}
+	out := make([]Link, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Link{From: r.FromName, To: r.ToName, Via: r.ViaKey})
+	}
+	return out, nil
 }

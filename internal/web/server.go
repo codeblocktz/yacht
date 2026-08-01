@@ -52,6 +52,10 @@ type Apps interface {
 	// SetHealth points the readiness probe at a path, and optionally lets the
 	// same path restart the container.
 	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
+
+	// Links are the dependencies between apps, recorded when a variable naming
+	// another app is written — the only moment a sealed value is readable.
+	Links(ctx context.Context, ownerID string) ([]app.Link, error)
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
 }
 
@@ -416,6 +420,7 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/", s.overview)
 
+			r.Get("/canvas", s.canvas)
 			r.Get("/apps", s.appList)
 			r.Post("/apps", s.appCreate)
 			r.Get("/apps/new", s.appNew)

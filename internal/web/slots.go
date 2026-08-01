@@ -131,6 +131,8 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
+				{Label: "Canvas", Href: "/canvas", Icon: "grid",
+					Active: hasPrefix(path, "/canvas")},
 				{Label: "Apps", Href: "/apps", Icon: "box", Active: hasPrefix(path, "/apps")},
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
 					Active: hasPrefix(path, "/deployments")},

@@ -331,3 +331,14 @@ func roleTone(r account.Role) string {
 	}
 	return "status-neutral"
 }
+
+// canvasSize and nodeAt are inline styles because the values are computed per
+// render. A class cannot carry a coordinate.
+func canvasSize(d CanvasData) string {
+	return "width:" + strconv.Itoa(d.Width) + "px;height:" + strconv.Itoa(d.Height) + "px"
+}
+
+func nodeAt(n CanvasNode) string {
+	return "left:" + strconv.Itoa(n.X) + "px;top:" + strconv.Itoa(n.Y) + "px;width:" +
+		strconv.Itoa(cardW) + "px"
+}
