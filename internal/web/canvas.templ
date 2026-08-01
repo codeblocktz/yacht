@@ -212,13 +212,7 @@ templ appPanelBody(d AppDetailData) {
 			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
 		</form>
 	</div>
-	<nav class="tabs canvas-sheet-tabs">
-		@appTab(d, "", "Deployments")
-		@appTab(d, "variables", "Variables")
-		@appTab(d, "metrics", "Metrics")
-		@appTab(d, "storage", "Storage")
-		@appTab(d, "settings", "Settings")
-	</nav>
+	@appTabs(d.App.Name, d.Tab)
 	<div class="canvas-sheet-body">
 		switch d.Tab {
 			case "variables":

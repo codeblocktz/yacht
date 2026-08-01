@@ -214,11 +214,11 @@ templ AppDetail(d AppDetailData) {
 		<div class="min-w-0 flex-1">
 			@appDetailHeader(d.App)
 			<nav class="tabs mb-5">
-				@appTab(d, "", "Deployments")
-				@appTab(d, "variables", "Variables")
-				@appTab(d, "metrics", "Metrics")
-				@appTab(d, "storage", "Storage")
-				@appTab(d, "settings", "Settings")
+				@appTab(d.App.Name, d.Tab, "", "Deployments")
+				@appTab(d.App.Name, d.Tab, "variables", "Variables")
+				@appTab(d.App.Name, d.Tab, "metrics", "Metrics")
+				@appTab(d.App.Name, d.Tab, "storage", "Storage")
+				@appTab(d.App.Name, d.Tab, "settings", "Settings")
 			</nav>
 			switch d.Tab {
 				case "variables":
@@ -303,10 +303,26 @@ templ appDetailHeader(a app.App) {
 	</div>
 }
 
-templ appTab(d AppDetailData, slug, label string) {
+// appTabs is an app's tab strip.
+//
+// One templ rather than a list repeated per surface, because the log sheet
+// renders it too. A panel that covers the app it belongs to has to carry the
+// way out of itself: an open sheet makes the rest of the document inert, so
+// tabs left behind it are not merely hidden — they cannot be clicked.
+templ appTabs(name, active string) {
+	<nav class="tabs canvas-sheet-tabs">
+		@appTab(name, active, "", "Deployments")
+		@appTab(name, active, "variables", "Variables")
+		@appTab(name, active, "metrics", "Metrics")
+		@appTab(name, active, "storage", "Storage")
+		@appTab(name, active, "settings", "Settings")
+	</nav>
+}
+
+templ appTab(name, active, slug, label string) {
 	<a
-		href={ templ.URL(appTabHref(d.App.Name, slug)) }
-		class={ "tab", templ.KV("tab-active", d.Tab == slug) }
+		href={ templ.URL(appTabHref(name, slug)) }
+		class={ "tab", templ.KV("tab-active", active == slug) }
 	>
 		{ label }
 	</a>

@@ -1,10 +1,6 @@
 package web
 
-import (
-	"strconv"
-
-	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
-)
+import "github.com/codeblocktz/yacht/internal/web/ui/sheet"
 
 // AppLogs is the log pane for one app.
 templ AppLogs(d LogsData) {
@@ -68,7 +64,7 @@ templ AppLogLines(d LogsData) {
 				}
 			</span>
 			<span class="text-muted-foreground tabular-nums">
-				{ strconv.Itoa(len(d.Logs.Lines)) } { plural(len(d.Logs.Lines), "line") }
+				{ plural(len(d.Logs.Lines), "line") }
 			</span>
 		</div>
 		if len(d.Logs.Lines) == 0 {
@@ -110,6 +106,12 @@ templ DeployLogPanel(d DeployLogsData) {
 			<span class="mono truncate">{ d.Deploy.Deployment.Image }</span>
 		}
 	}
+	// The app's own tabs, in the panel that covers them. An open sheet makes
+	// the document behind it inert, so a tab left back there is not just out of
+	// sight — clicking where it is hits this panel instead. Deployments reads
+	// as current because that is where this log was opened from, and following
+	// it is the way back to the list.
+	@appTabs(d.App, "")
 	if d.Error != "" {
 		<div class="canvas-sheet-body">
 			<div class="callout callout-err">
@@ -142,7 +144,7 @@ templ DeployLogPanel(d DeployLogsData) {
 				hx-swap="innerHTML"
 			>Previous run</a>
 			<span class="text-[12px] text-muted-foreground tabular-nums">
-				{ strconv.Itoa(len(d.Deploy.Logs.Lines)) } { plural(len(d.Deploy.Logs.Lines), "line") }
+				{ plural(len(d.Deploy.Logs.Lines), "line") }
 			</span>
 		</div>
 		<div class="canvas-sheet-body !p-0">
