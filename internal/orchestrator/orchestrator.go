@@ -184,6 +184,14 @@ type AppSpec struct {
 	// customer-claimed — is a decision that belongs above this seam.
 	Hosts []string
 
+	// Secrets are environment values that must not appear in the pod template.
+	//
+	// They become a Kubernetes Secret the container reads with envFrom, rather
+	// than literals in the Deployment — so they are absent from
+	// `kubectl get deploy -o yaml`, which is the copy people read, paste into
+	// issues, and check into repositories.
+	Secrets map[string]string
+
 	// Volumes are storage the workload keeps across redeploys.
 	//
 	// Attaching any forces the workload to recreate rather than roll on

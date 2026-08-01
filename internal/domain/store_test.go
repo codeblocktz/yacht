@@ -67,7 +67,7 @@ func seedApp(t *testing.T, pool *pgxpool.Pool, ownerID, name, namespace string) 
 	}
 	row, err := q.CreateApp(ctx, dbgen.CreateAppParams{
 		OwnerID: ownerID, Name: name, Namespace: namespace,
-		Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: []byte(`{}`),
+		Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
 		t.Fatalf("create app: %v", err)

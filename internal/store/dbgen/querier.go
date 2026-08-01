@@ -57,6 +57,7 @@ type Querier interface {
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
+	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
@@ -109,6 +110,7 @@ type Querier interface {
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
+	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// A role change reads the owner count and then writes; taking the team row
 	// first serialises those pairs, so two concurrent demotions cannot both see
@@ -140,6 +142,12 @@ type Querier interface {
 	// any team. Memberships and invitations do, and stay scoped by it like
 	// everything else.
 	UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error)
+	// Environment variables, one row each so a secret can be sealed while its
+	// neighbour stays readable.
+	// Upsert rather than insert: setting a variable that already exists is what a
+	// person means by editing one, and a separate update path would need the
+	// caller to know which case they are in.
+	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
 }
 
 var _ Querier = (*Queries)(nil)

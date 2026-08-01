@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func (f *fakeApps) Create(_ context.Context, ownerID string, in app.CreateInput)
 	f.created = append(f.created, in)
 	a := app.App{
 		ID: uuid.New(), OwnerID: ownerID, Name: in.Name, Image: in.Image,
-		Replicas: in.Replicas, Port: in.Port, Env: in.Env,
+		Replicas: in.Replicas, Port: in.Port, Variables: varsFrom(in.Env),
 		Namespace: app.Namespace(ownerID, in.Name),
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
@@ -124,7 +125,7 @@ func sampleApp(owner, name string) app.App {
 		ID: uuid.New(), OwnerID: owner, Name: name,
 		Namespace: app.Namespace(owner, name),
 		Image:     "nginx:alpine", Replicas: 2, Port: 8080,
-		Env:       map[string]string{"LOG_LEVEL": "info"},
+		Variables: []app.Variable{{Key: "LOG_LEVEL", Value: "info"}},
 		CreatedAt: time.Now(), UpdatedAt: time.Now(),
 		StatusKnown: true,
 		Status: orchestrator.AppStatus{
@@ -570,4 +571,22 @@ func (f *fakeApps) ResizeVolume(context.Context, string, string, string, int64) 
 
 func (f *fakeApps) DeleteVolume(context.Context, string, string, string, bool) error {
 	return errors.New("fakeApps has no storage")
+}
+
+// varsFrom turns a fixture map into the variable rows an app now carries.
+func varsFrom(env map[string]string) []app.Variable {
+	out := make([]app.Variable, 0, len(env))
+	for k, v := range env {
+		out = append(out, app.Variable{Key: k, Value: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
+
+func (f *fakeApps) SetVariable(context.Context, string, string, app.VariableInput) error {
+	return errors.New("fakeApps has no variables")
+}
+
+func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error {
+	return errors.New("fakeApps has no variables")
 }

@@ -98,7 +98,7 @@ func galleryPages() []galleryPage {
 			ID: uuid.New(), OwnerID: "owner-local", Name: name,
 			Namespace: app.Namespace("owner-local", name),
 			Image:     image, Replicas: replicas, Port: 8080,
-			Env:       map[string]string{"LOG_LEVEL": "info", "NODE_ENV": "production"},
+			Variables: varsFrom(map[string]string{"LOG_LEVEL": "info", "NODE_ENV": "production"}),
 			CreatedAt: now.Add(-72 * time.Hour), UpdatedAt: now.Add(-11 * time.Minute),
 			StatusKnown: known,
 			Status: orchestrator.AppStatus{

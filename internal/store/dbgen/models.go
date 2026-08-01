@@ -19,7 +19,6 @@ type App struct {
 	Image         string
 	Replicas      int32
 	Port          int32
-	Env           []byte
 	CpuRequest    string
 	CpuLimit      string
 	MemoryRequest string
@@ -106,6 +105,18 @@ type User struct {
 	TotpConfirmed bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type Variable struct {
+	ID        uuid.UUID
+	OwnerID   string
+	AppID     uuid.UUID
+	Key       string
+	Value     string
+	Sealed    []byte
+	Secret    bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Volume struct {

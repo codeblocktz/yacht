@@ -20,6 +20,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
+	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
 	"github.com/codeblocktz/yacht/internal/web"
 )
@@ -91,9 +92,24 @@ func run() error {
 		return err
 	}
 
+	// Built before serving so a malformed key stops startup rather than
+	// surfacing the first time somebody saves a secret — by which point they
+	// read it as the feature being broken.
+	var keeper *secret.Keeper
+	if cfg.SecretKey != "" {
+		if keeper, err = secret.NewKeeper(cfg.SecretKey); err != nil {
+			return err
+		}
+	} else {
+		log.Warn("no YACHT_SECRET_KEY set — environment variables can be stored, " +
+			"but marking one secret will be refused rather than stored readable; " +
+			"generate a key with `openssl rand -base64 32`")
+	}
+
 	apps := app.NewService(pool, orch, log, app.Options{
 		AppDomain:   cfg.AppDomain,
 		WildcardTLS: cfg.WildcardTLS,
+		Keeper:      keeper,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default

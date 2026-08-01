@@ -133,3 +133,59 @@ func (s *Server) storageFailed(
 		App: a, Tab: "storage", Error: cause.Error(),
 	}))
 }
+
+// variableSet stores an environment variable.
+func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	err := s.apps.SetVariable(ctx, owner.ID, name, app.VariableInput{
+		Key: r.FormValue("key"), Value: r.FormValue("value"),
+		Secret: r.FormValue("secret") != "",
+	})
+	if err != nil {
+		s.variableFailed(w, r, name, err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+}
+
+// variableDelete removes one.
+func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	if err := s.apps.DeleteVariable(ctx, owner.ID, name, chi.URLParam(r, "key")); err != nil {
+		s.variableFailed(w, r, name, err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+}
+
+// variableFailed re-renders the tab with the reason.
+func (s *Server) variableFailed(
+	w http.ResponseWriter, r *http.Request, appName string, cause error,
+) {
+	status := http.StatusUnprocessableEntity
+	switch {
+	case errors.Is(cause, app.ErrNotFound), errors.Is(cause, app.ErrVariableNotFound):
+		status = http.StatusNotFound
+	case errors.Is(cause, app.ErrNoSecretKey):
+		// The install cannot do what was asked, which is a server-side
+		// condition rather than a mistake in what was typed.
+		status = http.StatusNotImplemented
+	}
+
+	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
+	if err != nil {
+		http.Error(w, cause.Error(), status)
+		return
+	}
+
+	w.WriteHeader(status)
+	s.render(w, r, AppDetail(AppDetailData{
+		App: a, Tab: "variables", Error: cause.Error(),
+	}))
+}

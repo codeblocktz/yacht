@@ -322,7 +322,6 @@ func TestManagedDomainIsUniquePerApp(t *testing.T) {
 		Image:     "nginx:alpine",
 		Replicas:  1,
 		Port:      8080,
-		Env:       []byte(`{}`),
 	})
 	if err != nil {
 		t.Fatalf("create app: %v", err)
@@ -378,7 +377,7 @@ func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
 
 	appRow, err := q.CreateApp(ctx, dbgen.CreateAppParams{
 		OwnerID: ownerID, Name: "web", Namespace: "ns-test-partial-index",
-		Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: []byte(`{}`),
+		Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
 		t.Fatalf("create app: %v", err)
@@ -434,7 +433,7 @@ func TestVolumeNameAndMountAreUniquePerApp(t *testing.T) {
 
 	a, err := q.CreateApp(ctx, dbgen.CreateAppParams{
 		OwnerID: ownerID, Name: "web", Namespace: "ns-test-volumes",
-		Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: []byte(`{}`),
+		Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
 		t.Fatalf("create app: %v", err)
@@ -459,5 +458,59 @@ func TestVolumeNameAndMountAreUniquePerApp(t *testing.T) {
 	}
 	if err := insert("other", "/var/lib/other"); err != nil {
 		t.Errorf("a second, distinct volume was refused: %v", err)
+	}
+}
+
+// The two value columns exist so one variable can be sealed while its
+// neighbour stays readable. The constraint is what stops a writer leaving a
+// secret in the readable column, which no amount of care in Go would prevent
+// forever.
+func TestSecretVariablesCannotBeStoredReadable(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	q := dbgen.New(pool)
+
+	const ownerID = "test-variables"
+	seedOwners(t, pool, ownerID)
+
+	a, err := q.CreateApp(ctx, dbgen.CreateAppParams{
+		OwnerID: ownerID, Name: "web", Namespace: "ns-test-variables",
+		Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	insert := func(key, value string, sealed []byte, secret bool) error {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO variables (owner_id, app_id, key, value, sealed, secret)
+			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			ownerID, a.ID, key, value, sealed, secret)
+		return err
+	}
+
+	if err := insert("PLAIN", "readable", nil, false); err != nil {
+		t.Fatalf("plain variable: %v", err)
+	}
+	if err := insert("SEALED", "", []byte{0x01, 0x02}, true); err != nil {
+		t.Fatalf("sealed variable: %v", err)
+	}
+
+	if err := insert("BAD1", "plaintext-password", nil, true); err == nil {
+		t.Error("a secret was accepted with its value in the readable column")
+	}
+	if err := insert("BAD2", "", []byte{0x01}, false); err == nil {
+		t.Error("a non-secret was accepted carrying sealed bytes")
+	}
+	if err := insert("BAD3", "both", []byte{0x01}, true); err == nil {
+		t.Error("a secret was accepted with both columns populated")
+	}
+	// A shell will not export a name with a dash, so a pod spec that sets one
+	// produces a variable the program never sees.
+	if err := insert("has-dash", "x", nil, false); err == nil {
+		t.Error("a key no shell can export was accepted")
+	}
+	if err := insert("PLAIN", "again", nil, false); err == nil {
+		t.Error("two variables with the same key on one app were accepted")
 	}
 }

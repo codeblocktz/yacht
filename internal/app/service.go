@@ -25,6 +25,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
@@ -44,7 +45,10 @@ type App struct {
 	Image     string
 	Replicas  int32
 	Port      int32
-	Env       map[string]string
+
+	// Variables are this app's environment. A secret's value is not carried
+	// here — see Variable.
+	Variables []Variable
 
 	CPURequest    string
 	CPULimit      string
@@ -121,6 +125,11 @@ func (a App) URLScheme() string {
 
 // Options are the settings the service needs beyond its dependencies.
 type Options struct {
+	// Keeper seals secret variables. Left nil, secrets are refused rather than
+	// stored readable — a protection somebody asked for and did not get is
+	// worse than one they were told they could not have.
+	Keeper *secret.Keeper
+
 	// AppDomain is the platform domain apps get hostnames under. Empty
 	// switches per-app hostnames off.
 	AppDomain string
@@ -137,6 +146,10 @@ type Service struct {
 	orch orchestrator.Orchestrator
 	log  *slog.Logger
 	opts Options
+
+	// keeper seals secret variables. Nil when no key is configured, which is
+	// why every use goes through Configured() rather than a nil check.
+	keeper *secret.Keeper
 }
 
 // NewService wires the store and the orchestrator together.
@@ -146,7 +159,7 @@ func NewService(
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts}
+	return &Service{pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts, keeper: opts.Keeper}
 }
 
 // EnsureOwner makes sure the owner row exists, so app inserts have a parent.
@@ -209,10 +222,6 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 
 	namespace := Namespace(ownerID, in.Name)
-	envJSON, err := marshalEnv(in.Env)
-	if err != nil {
-		return App{}, err
-	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -229,7 +238,6 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		Image:         in.Image,
 		Replicas:      in.Replicas,
 		Port:          in.Port,
-		Env:           envJSON,
 		CpuRequest:    in.CPURequest,
 		CpuLimit:      in.CPULimit,
 		MemoryRequest: in.MemoryRequest,
@@ -243,6 +251,20 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 
 	created := toApp(row)
+
+	// In the same transaction as the app row. An app whose variables half
+	// arrived is one that starts missing configuration it was told to have.
+	for key, value := range in.Env {
+		v := VariableInput{Key: strings.TrimSpace(key), Value: value}
+		if err := v.Validate(); err != nil {
+			return App{}, fmt.Errorf("app: variable %q: %w", key, err)
+		}
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: v.Key, Value: v.Value,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create variable %s: %w", v.Key, err)
+		}
+	}
 
 	// Issued inside the same transaction as the app row, so an app cannot
 	// exist without its URL and no later step can forget to add one.
@@ -316,12 +338,18 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return err
 	}
 
+	plain, secrets, err := s.envFor(ctx, q, a.ID)
+	if err != nil {
+		return err
+	}
+
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
 		Replicas:      a.Replicas,
 		Port:          a.Port,
-		Env:           a.Env,
+		Env:           plain,
+		Secrets:       secrets,
 		CPURequest:    a.CPURequest,
 		CPULimit:      a.CPULimit,
 		MemoryRequest: a.MemoryRequest,
@@ -423,6 +451,9 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	// Read on the same pass. Storage changes what the app page can offer —
 	// scaling, and whether a deploy will recreate — so a caller holding an App
 	// without it would be deciding from a partial picture.
+	if vars, err := s.variablesFor(ctx, s.q, a.ID); err == nil {
+		a.Variables = vars
+	}
 	if vols, err := s.volumesFor(ctx, s.q, a.ID); err == nil {
 		a.Volumes = vols
 	} else {
@@ -633,7 +664,6 @@ func toApp(row dbgen.App) App {
 		Image:         row.Image,
 		Replicas:      row.Replicas,
 		Port:          row.Port,
-		Env:           unmarshalEnv(row.Env),
 		CPURequest:    row.CpuRequest,
 		CPULimit:      row.CpuLimit,
 		MemoryRequest: row.MemoryRequest,

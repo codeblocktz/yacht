@@ -26,11 +26,11 @@ func (q *Queries) CountApps(ctx context.Context, ownerID string) (int64, error) 
 
 const createApp = `-- name: CreateApp :one
 INSERT INTO apps (
-    owner_id, name, namespace, image, replicas, port, env,
+    owner_id, name, namespace, image, replicas, port,
     cpu_request, cpu_limit, memory_request, memory_limit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
 `
 
 type CreateAppParams struct {
@@ -40,7 +40,6 @@ type CreateAppParams struct {
 	Image         string
 	Replicas      int32
 	Port          int32
-	Env           []byte
 	CpuRequest    string
 	CpuLimit      string
 	MemoryRequest string
@@ -55,7 +54,6 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		arg.Image,
 		arg.Replicas,
 		arg.Port,
-		arg.Env,
 		arg.CpuRequest,
 		arg.CpuLimit,
 		arg.MemoryRequest,
@@ -70,7 +68,6 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.Image,
 		&i.Replicas,
 		&i.Port,
-		&i.Env,
 		&i.CpuRequest,
 		&i.CpuLimit,
 		&i.MemoryRequest,
@@ -205,7 +202,7 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -225,7 +222,6 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.Image,
 		&i.Replicas,
 		&i.Port,
-		&i.Env,
 		&i.CpuRequest,
 		&i.CpuLimit,
 		&i.MemoryRequest,
@@ -237,7 +233,7 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -257,7 +253,6 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.Image,
 		&i.Replicas,
 		&i.Port,
-		&i.Env,
 		&i.CpuRequest,
 		&i.CpuLimit,
 		&i.MemoryRequest,
@@ -286,7 +281,7 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -308,7 +303,6 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.Image,
 			&i.Replicas,
 			&i.Port,
-			&i.Env,
 			&i.CpuRequest,
 			&i.CpuLimit,
 			&i.MemoryRequest,
@@ -436,7 +430,7 @@ const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
 `
 
 type SetAppReplicasParams struct {
@@ -456,7 +450,6 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.Image,
 		&i.Replicas,
 		&i.Port,
-		&i.Env,
 		&i.CpuRequest,
 		&i.CpuLimit,
 		&i.MemoryRequest,
@@ -472,14 +465,13 @@ UPDATE apps
 SET image          = $3,
     replicas       = $4,
     port           = $5,
-    env            = $6,
-    cpu_request    = $7,
-    cpu_limit      = $8,
-    memory_request = $9,
-    memory_limit   = $10,
+    cpu_request    = $6,
+    cpu_limit      = $7,
+    memory_request = $8,
+    memory_limit   = $9,
     updated_at     = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, env, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at
 `
 
 type UpdateAppParams struct {
@@ -488,7 +480,6 @@ type UpdateAppParams struct {
 	Image         string
 	Replicas      int32
 	Port          int32
-	Env           []byte
 	CpuRequest    string
 	CpuLimit      string
 	MemoryRequest string
@@ -502,7 +493,6 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		arg.Image,
 		arg.Replicas,
 		arg.Port,
-		arg.Env,
 		arg.CpuRequest,
 		arg.CpuLimit,
 		arg.MemoryRequest,
@@ -517,7 +507,6 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.Image,
 		&i.Replicas,
 		&i.Port,
-		&i.Env,
 		&i.CpuRequest,
 		&i.CpuLimit,
 		&i.MemoryRequest,

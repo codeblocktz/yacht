@@ -76,6 +76,13 @@ type Config struct {
 	// has an account of its own.
 	OwnerEmail string
 
+	// SecretKey seals secret environment variables, base64 of 32 bytes.
+	//
+	// Empty means secrets are refused rather than stored readable. Losing it
+	// means losing every secret sealed with it — there is no recovery path,
+	// because a recovery path is a second way in.
+	SecretKey string
+
 	// AppDomain is the platform domain every app gets a hostname under, such
 	// as apps.example.com. Empty switches per-app hostnames off entirely.
 	AppDomain string
@@ -135,6 +142,7 @@ func Load() (Config, error) {
 		OwnerID:         env("YACHT_OWNER_ID", "owner-local"),
 		OwnerName:       env("YACHT_OWNER_NAME", "Local"),
 		OwnerEmail:      strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		SecretKey:       strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		AppDomain:       env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
 		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),

@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"github.com/codeblocktz/yacht/internal/secret"
 	"io"
 	"log/slog"
 	"os"
@@ -94,8 +97,20 @@ func TestCreateAppliesToClusterAndStores(t *testing.T) {
 	if a.Namespace != Namespace(id, "web") {
 		t.Errorf("namespace = %q, want a derived one", a.Namespace)
 	}
-	if a.Env["LOG_LEVEL"] != "info" {
-		t.Errorf("env round-trip failed: %v", a.Env)
+	// Read back rather than trusting what Create returned: variables are rows
+	// now, and the question is whether they were written.
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var found bool
+	for _, v := range got.Variables {
+		if v.Key == "LOG_LEVEL" && v.Value == "info" && !v.Secret {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("env round-trip failed: %+v", got.Variables)
 	}
 
 	// The workload reached the cluster, not just the database.
@@ -605,5 +620,90 @@ func TestScalingAnAppWithStorageIsRefused(t *testing.T) {
 
 	if _, err := s.Scale(ctx, id, "web", 3); err == nil {
 		t.Fatal("scaled an app with storage to three replicas")
+	}
+}
+
+// TestSecretIsUnreadableInTheDatabase is the claim the feature exists to make.
+func TestSecretIsUnreadableInTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	k, err := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	if err != nil {
+		t.Fatalf("NewKeeper: %v", err)
+	}
+	s, orch, pool := testService(t, Options{Keeper: k})
+	id := owner(t, s, pool, "svc-secret")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	const password = "hunter2-not-in-any-dump"
+	if err := s.SetVariable(ctx, id, "web", VariableInput{
+		Key: "DATABASE_URL", Value: password, Secret: true,
+	}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+
+	// Not in any column of the row that holds it.
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM variables
+		 WHERE value LIKE '%' || $1 || '%'
+		    OR encode(sealed, 'escape') LIKE '%' || $1 || '%'`,
+		password).Scan(&n); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if n != 0 {
+		t.Fatal("the secret is recoverable from the variables table")
+	}
+
+	// Not readable through the API a page uses.
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	for _, v := range got.Variables {
+		if v.Value == password {
+			t.Fatal("the secret came back through the read path a page uses")
+		}
+		if v.Key == "DATABASE_URL" && !v.Secret {
+			t.Fatal("the secret is not marked secret")
+		}
+	}
+
+	// But it does reach the cluster, as a Secret rather than a literal.
+	spec := orch.lastAppSpec()
+	if spec.Secrets["DATABASE_URL"] != password {
+		t.Fatalf("the workload did not receive the secret: %+v", spec.Secrets)
+	}
+	if spec.Env["DATABASE_URL"] != "" {
+		t.Fatal("the secret was also placed in the plain environment")
+	}
+}
+
+// Without a key, a secret is refused rather than stored readable.
+func TestSecretRefusedWithoutAKey(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-nokey")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	err := s.SetVariable(ctx, id, "web", VariableInput{
+		Key: "TOKEN", Value: "sk_live_x", Secret: true,
+	})
+	if !errors.Is(err, ErrNoSecretKey) {
+		t.Fatalf("want ErrNoSecretKey, got %v", err)
+	}
+
+	got, _ := s.Get(ctx, id, "web")
+	if len(got.Variables) != 0 {
+		t.Fatalf("a refused secret was stored anyway: %+v", got.Variables)
 	}
 }

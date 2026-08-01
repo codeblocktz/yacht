@@ -190,7 +190,7 @@ type TeamPageData struct {
 	// Viewer is the role of the person looking at the page. The page offers
 	// only the controls their role can actually use — an admin is not shown a
 	// role selector they would be refused for using.
-	Viewer  account.Role
+	Viewer   account.Role
 	ViewerID uuid.UUID
 
 	Members     []account.Member

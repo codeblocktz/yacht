@@ -19,10 +19,10 @@ SELECT * FROM teams WHERE id = $1;
 
 -- name: CreateApp :one
 INSERT INTO apps (
-    owner_id, name, namespace, image, replicas, port, env,
+    owner_id, name, namespace, image, replicas, port,
     cpu_request, cpu_limit, memory_request, memory_limit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetApp :one
@@ -46,11 +46,10 @@ UPDATE apps
 SET image          = $3,
     replicas       = $4,
     port           = $5,
-    env            = $6,
-    cpu_request    = $7,
-    cpu_limit      = $8,
-    memory_request = $9,
-    memory_limit   = $10,
+    cpu_request    = $6,
+    cpu_limit      = $7,
+    memory_request = $8,
+    memory_limit   = $9,
     updated_at     = now()
 WHERE owner_id = $1 AND id = $2
 RETURNING *;

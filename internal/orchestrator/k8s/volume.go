@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -80,4 +83,47 @@ func volumeMounts(spec orchestrator.AppSpec) []*corev1ac.VolumeMountApplyConfigu
 			WithMountPath(v.MountPath))
 	}
 	return out
+}
+
+// secretName is the Secret holding an app's sealed environment.
+func secretName(appName string) string { return appName + "-env" }
+
+// applySecret writes the app's secret environment into a Kubernetes Secret.
+//
+// The container reads it with envFrom rather than having the values inlined as
+// literals, which is the whole point: `kubectl get deploy -o yaml` is the copy
+// people read, paste into issues and check into repositories, and a password
+// in the pod template is a password in all of those.
+//
+// A Secret is not encryption — it is base64 in etcd unless the cluster
+// encrypts at rest. What it buys is that the value stops travelling with the
+// object everybody looks at.
+func (o *Orchestrator) applySecret(ctx context.Context, spec orchestrator.AppSpec) error {
+	if len(spec.Secrets) == 0 {
+		// Removed rather than left behind: a Secret nothing references is a
+		// copy of values the app no longer uses, sitting where the next person
+		// to read the namespace will find it.
+		return o.deleteSecret(ctx, spec.Ref)
+	}
+
+	sec := corev1ac.Secret(secretName(spec.Name), spec.Namespace).
+		WithLabels(orchestrator.ObjectLabels(spec.Ref)).
+		WithType(corev1.SecretTypeOpaque).
+		WithStringData(spec.Secrets)
+
+	if _, err := o.client.CoreV1().Secrets(spec.Namespace).
+		Apply(ctx, sec, applyOpts()); err != nil {
+		return fmt.Errorf("k8s: apply secret %s: %w", spec.Ref, err)
+	}
+	return nil
+}
+
+// deleteSecret removes an app's environment Secret, tolerating its absence.
+func (o *Orchestrator) deleteSecret(ctx context.Context, ref orchestrator.Ref) error {
+	err := o.client.CoreV1().Secrets(ref.Namespace).
+		Delete(ctx, secretName(ref.Name), metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("k8s: delete secret %s: %w", ref, err)
+	}
+	return nil
 }

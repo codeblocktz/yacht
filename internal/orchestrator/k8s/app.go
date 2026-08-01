@@ -45,6 +45,13 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
+	// Before the Deployment that reads it: a pod whose envFrom names a Secret
+	// that does not exist yet fails to start, and recovers only once the
+	// kubelet retries.
+	if err := o.applySecret(ctx, spec); err != nil {
+		return err
+	}
+
 	if err := o.applyDeployment(ctx, spec); err != nil {
 		return err
 	}
@@ -177,6 +184,14 @@ func (o *Orchestrator) container(
 			volumeMounts(spec)...,
 		)...)
 
+	// envFrom rather than literals: the values stay in the Secret and out of
+	// the pod template.
+	if len(spec.Secrets) > 0 {
+		c = c.WithEnvFrom(corev1ac.EnvFromSource().
+			WithSecretRef(corev1ac.SecretEnvSource().
+				WithName(secretName(spec.Name))))
+	}
+
 	if spec.Port > 0 {
 		c = c.WithPorts(
 			corev1ac.ContainerPort().
@@ -269,6 +284,10 @@ func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) erro
 	}
 
 	if err := o.deleteIngress(ctx, ref); err != nil {
+		return err
+	}
+
+	if err := o.deleteSecret(ctx, ref); err != nil {
 		return err
 	}
 
