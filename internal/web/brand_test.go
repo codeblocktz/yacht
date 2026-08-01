@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image/png"
 	"io"
 	"regexp"
 	"strings"
@@ -146,5 +147,78 @@ func TestTheFaviconIsFramedOnItsArtwork(t *testing.T) {
 	if !bytes.Contains(b, []byte(`viewBox="0 0 215 292"`)) {
 		t.Errorf("the favicon is not framed on its artwork: %s",
 			regexp.MustCompile(`viewBox="[^"]*"`).Find(b))
+	}
+}
+
+// Every brand image this binary serves has something in it.
+//
+// The favicon shipped blank and three tests passed: they checked the viewBox
+// string, the file size and that the markup mentioned the brand colour, all of
+// which were true of an SVG whose only group was translated off its own canvas
+// twice. Decoding the raster and counting non-transparent pixels is the check
+// that could not have been satisfied by an empty file.
+func TestEveryBrandImageHasPixelsInIt(t *testing.T) {
+	for _, name := range []string{
+		"assets/brand/icon-32.png",
+		"assets/brand/icon-180.png",
+		"assets/brand/social.png",
+	} {
+		raw, err := assetsFS.ReadFile(name)
+		if err != nil {
+			t.Errorf("%s is not embedded: %v", name, err)
+			continue
+		}
+		img, err := png.Decode(bytes.NewReader(raw))
+		if err != nil {
+			t.Errorf("%s does not decode as a PNG: %v", name, err)
+			continue
+		}
+
+		// The mark is teal on a dark field, so "has content" means pixels that
+		// are not the background. A blank image fails this whatever its size.
+		b := img.Bounds()
+		var lit int
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			for x := b.Min.X; x < b.Max.X; x++ {
+				r, g, bl, _ := img.At(x, y).RGBA()
+				if g>>8 > 40 && g > r && g > bl {
+					lit++
+				}
+			}
+		}
+		if lit == 0 {
+			t.Errorf("%s is %dx%d and draws nothing", name, b.Dx(), b.Dy())
+		}
+	}
+}
+
+// The SVG favicon draws too, which the framing test alone does not prove: a
+// group translated twice sits outside a viewBox that still reads correctly.
+func TestTheSVGFaviconIsNotTranslatedOffItsCanvas(t *testing.T) {
+	raw, err := assetsFS.ReadFile("assets/brand/icon.svg")
+	if err != nil {
+		t.Fatalf("read icon: %v", err)
+	}
+	if n := bytes.Count(raw, []byte("matrix(1,0,0,1,-958.482024,-1596.092892)")); n != 1 {
+		t.Fatalf("the outer translate appears %d times, want exactly 1 — "+
+			"twice moves the artwork off the canvas while the viewBox still looks right", n)
+	}
+}
+
+// A link to the dashboard should arrive somewhere with a name and a picture.
+func TestAPastedLinkHasSomethingToShow(t *testing.T) {
+	page := renderToString(t, Layout(Slots{Title: "Projects"},
+		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil })))
+
+	for _, want := range []string{
+		`property="og:title"`,
+		`property="og:image"`,
+		"/assets/brand/social.png",
+		`rel="apple-touch-icon"`,
+		`sizes="32x32"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the head is missing %s", want)
+		}
 	}
 }

@@ -193,3 +193,42 @@ func TestTheDrawerIsNotPersisted(t *testing.T) {
 		t.Error("the desktop rail no longer remembers being collapsed")
 	}
 }
+
+// Every nav link carries its own name.
+//
+// It used to come from the visible label, which the collapsed rail hides, and
+// the tooltip beside it, which is display:none until hovered. In the rail that
+// left every link with no accessible name at all — a screen reader read "link"
+// and nothing else, on the only navigation the page has.
+//
+// The name is on the anchor because that is the one place true in both states.
+// The tooltip is marked decorative: it is a visual affordance for the rail, and
+// counted as a name it would say everything twice.
+func TestEveryNavLinkIsNamedInBothStates(t *testing.T) {
+	page := renderToString(t, Layout(
+		Slots{Title: "t", BrandName: "Yacht", BrandHref: "/", Nav: []NavGroup{{
+			Items: []NavItem{
+				{Label: "Projects", Href: "/projects", Icon: "grid"},
+				{Label: "Nodes", Href: "/cluster/nodes", Icon: "server"},
+			},
+		}}},
+		templ.ComponentFunc(func(context.Context, io.Writer) error { return nil }),
+	))
+
+	links := regexp.MustCompile(`<a[^>]*class="nav-item[^"]*"[^>]*>`).FindAllString(page, -1)
+	if len(links) != 2 {
+		t.Fatalf("found %d nav links, want 2", len(links))
+	}
+	for _, l := range links {
+		if !strings.Contains(l, "aria-label=") {
+			t.Errorf("a nav link has no name of its own, so the collapsed rail leaves it unnamed: %s", l)
+		}
+	}
+
+	// Nothing may be named by a tooltip that is hidden until hover.
+	for _, tip := range regexp.MustCompile(`<span class="nav-tip"[^>]*>`).FindAllString(page, -1) {
+		if !strings.Contains(tip, `aria-hidden="true"`) {
+			t.Errorf("a tooltip is exposed as a name and will be read twice: %s", tip)
+		}
+	}
+}

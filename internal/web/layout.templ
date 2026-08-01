@@ -18,7 +18,18 @@ templ Layout(s Slots, page templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ s.Title }</title>
+			// SVG first for anything that takes one, with a raster fallback
+			// behind it: Safari before 16 ignores an SVG favicon entirely and
+			// shows a blank page glyph rather than falling back to nothing.
 			<link rel="icon" type="image/svg+xml" href={ asset("/assets/brand/icon.svg") }/>
+			<link rel="icon" type="image/png" sizes="32x32" href={ asset("/assets/brand/icon-32.png") }/>
+			<link rel="apple-touch-icon" sizes="180x180" href={ asset("/assets/brand/icon-180.png") }/>
+			// A link to this dashboard is usually pasted into a chat. Without
+			// these it arrives as a bare URL with no name and no picture.
+			<meta property="og:title" content={ s.Title }/>
+			<meta property="og:type" content="website"/>
+			<meta property="og:image" content={ asset("/assets/brand/social.png") }/>
+			<meta name="twitter:card" content="summary_large_image"/>
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
 			@themeScript()
 			@sidebarScript()
@@ -88,7 +99,7 @@ templ sidebar(s Slots) {
 					{ s.BrandName }
 				}
 			</span>
-			<span class="nav-tip">{ s.BrandName }</span>
+			<span class="nav-tip" aria-hidden="true">{ s.BrandName }</span>
 		</a>
 		if s.SidebarTop != nil {
 			<div class="mb-1">
@@ -104,6 +115,7 @@ templ sidebar(s Slots) {
 					<a
 						href={ templ.URL(item.Href) }
 						class={ "nav-item", templ.KV("nav-active", item.Active) }
+						aria-label={ item.Label }
 					>
 						if item.Icon != "" {
 							@icon(item.Icon)
@@ -112,7 +124,7 @@ templ sidebar(s Slots) {
 						if item.Badge != "" {
 							<span class="rail-hide ml-auto tag">{ item.Badge }</span>
 						}
-						<span class="nav-tip">{ item.Label }</span>
+						<span class="nav-tip" aria-hidden="true">{ item.Label }</span>
 					</a>
 				}
 			}
@@ -167,7 +179,7 @@ templ TeamSwitcher(teams []TeamChoice) {
 			>
 				<path d="M6 9l6 6 6-6"></path>
 			</svg>
-			<span class="nav-tip">{ activeTeamName(teams) }</span>
+			<span class="nav-tip" aria-hidden="true">{ activeTeamName(teams) }</span>
 		</summary>
 		<form
 			method="post"
@@ -228,7 +240,7 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 			>
 				<path d="M6 9l6 6 6-6"></path>
 			</svg>
-			<span class="nav-tip">{ ownerLabel(owner) }</span>
+			<span class="nav-tip" aria-hidden="true">{ ownerLabel(owner) }</span>
 		</summary>
 		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
 			<a href="/settings" class="switcher-item">
