@@ -26,24 +26,6 @@ templ Canvas(d CanvasData) {
 		<span class="min-w-0 flex-1 truncate text-muted-foreground">
 			How these apps relate to each other.
 		</span>
-		if !d.Empty {
-			// Hidden until the script runs. Buttons that do nothing without
-			// JavaScript are worse than no buttons: they say the page is
-			// broken rather than that the feature is unavailable.
-			<div class="canvas-zoom" data-zoom-controls hidden>
-				<button class="canvas-zoom-btn" type="button" data-zoom="out" aria-label="Zoom out">&minus;</button>
-				<button class="canvas-zoom-level" type="button" data-zoom="reset" title="Reset to 100%">
-					<span data-zoom-level>100%</span>
-				</button>
-				<button class="canvas-zoom-btn" type="button" data-zoom="in" aria-label="Zoom in">+</button>
-				<button class="canvas-zoom-btn canvas-zoom-fit" type="button" data-zoom="fit" title="Fit the whole graph">Fit</button>
-			</div>
-			<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/arrange") }>
-				<button class="btn btn-sm" type="submit" title="Lay the cards out from their dependencies again">
-					Auto-arrange
-				</button>
-			</form>
-		}
 		@deployButton()
 	</div>
 	if d.Empty {
@@ -62,83 +44,103 @@ templ Canvas(d CanvasData) {
 			data-volume-h={ strconv.Itoa(volumeH) }
 			data-project={ d.Project.Slug }
 		>
-			// The stage is what grows and shrinks with the zoom, so the scroll
-			// container still has something the size of the scaled graph to
-			// scroll around. Scaling the graph alone would leave the scrollable
-			// area the size it was at 100%.
-			<div class="canvas-stage" data-canvas-stage>
-				<div class="canvas-inner" style={ canvasSize(d) }>
-					<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
-						<defs>
-							<marker
-								id="arrow"
-								viewBox="0 0 8 8"
-								refX="7"
-								refY="4"
-								markerWidth="6"
-								markerHeight="6"
-								orient="auto-start-reverse"
-							>
-								<path d="M0 0 L8 4 L0 8 z" class="canvas-arrow"></path>
-							</marker>
-						</defs>
-						for _, e := range d.Edges {
-							<path
-								d={ e.Path }
-								class="canvas-edge"
-								marker-end="url(#arrow)"
-								data-from={ e.From }
-								data-to={ e.To }
-							>
-								<title>{ e.Via }</title>
-							</path>
-						}
-					</svg>
-					for _, n := range d.Nodes {
-						<div
-							class="canvas-node"
-							style={ nodeAt(n) }
-							data-node={ n.App.Name }
-							data-has-volume={ boolAttr(n.Volume != nil) }
+			<div class="canvas-inner" style={ canvasSize(d) }>
+				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
+					<defs>
+						<marker
+							id="arrow"
+							viewBox="0 0 8 8"
+							refX="7"
+							refY="4"
+							markerWidth="6"
+							markerHeight="6"
+							orient="auto-start-reverse"
 						>
-							<a
-								href={ templ.URL("/apps/" + n.App.Name) }
-								class={ "canvas-card",
-								templ.KV("canvas-card-open", d.Open != nil && d.Open.App.Name == n.App.Name) }
-							>
-								// The handle is a separate target from the link. Dragging
-								// from anywhere on the card would mean every click has to
-								// be told apart from a very short drag, and the one that
-								// guesses wrong either loses the drag or follows a link
-								// somebody was only moving.
-								<span class="canvas-grip" data-drag-handle aria-hidden="true">
-									@icon("grip")
-								</span>
-								<span class="canvas-card-head">
-									@icon(sourceIcon(n.App.Source))
-									<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
-								</span>
-								<span class="canvas-card-status">
-									@appStatus(n.App)
-									if n.App.Host != "" {
-										<span class="mono truncate text-[11.5px] text-muted-foreground">
-											{ n.App.Host }
-										</span>
-									}
-								</span>
-							</a>
-							if n.Volume != nil {
-								<a
-									href={ templ.URL("/apps/" + n.App.Name + "/storage") }
-									class="canvas-volume"
-								>
-									@icon("disk")
-									<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
-									<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
-								</a>
-							}
-						</div>
+							<path d="M0 0 L8 4 L0 8 z" class="canvas-arrow"></path>
+						</marker>
+					</defs>
+					for _, e := range d.Edges {
+						<path
+							d={ e.Path }
+							class="canvas-edge"
+							marker-end="url(#arrow)"
+							data-from={ e.From }
+							data-to={ e.To }
+						>
+							<title>{ e.Via }</title>
+						</path>
 					}
+				</svg>
+				for _, n := range d.Nodes {
+					<div
+						class="canvas-node"
+						style={ nodeAt(n) }
+						data-node={ n.App.Name }
+						data-has-volume={ boolAttr(n.Volume != nil) }
+					>
+						<a
+							href={ templ.URL("/apps/" + n.App.Name) }
+							class={ "canvas-card",
+								templ.KV("canvas-card-open", d.Open != nil && d.Open.App.Name == n.App.Name) }
+						>
+							// The handle is a separate target from the link. Dragging
+							// from anywhere on the card would mean every click has to
+							// be told apart from a very short drag, and the one that
+							// guesses wrong either loses the drag or follows a link
+							// somebody was only moving.
+							<span class="canvas-grip" data-drag-handle aria-hidden="true">
+								@icon("grip")
+							</span>
+							<span class="canvas-card-head">
+								@icon(sourceIcon(n.App.Source))
+								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
+							</span>
+							<span class="canvas-card-status">
+								@appStatus(n.App)
+								if n.App.Host != "" {
+									<span class="mono truncate text-[11.5px] text-muted-foreground">
+										{ n.App.Host }
+									</span>
+								}
+							</span>
+						</a>
+						if n.Volume != nil {
+							<a
+								href={ templ.URL("/apps/" + n.App.Name + "/storage") }
+								class="canvas-volume"
+							>
+								@icon("disk")
+								<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
+								<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
+							</a>
+						}
+					</div>
+				}
+			</div>
+			// Floating on the surface rather than in the bar, because they act on
+			// the view rather than on the project — and because an infinite canvas
+			// has no edge to hang them off. Hidden until the script runs: buttons
+			// that do nothing without JavaScript say the page is broken rather
+			// than that the feature is unavailable.
+			<div class="canvas-controls" data-canvas-controls hidden>
+				<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/arrange") }>
+					<button class="canvas-ctl" type="submit" title="Lay the cards out from their dependencies again" aria-label="Auto-arrange">
+						@icon("grid")
+					</button>
+				</form>
+				<div class="canvas-ctl-group">
+					<button class="canvas-ctl" type="button" data-zoom="in" title="Zoom in" aria-label="Zoom in">
+						@icon("plus")
+					</button>
+					<button class="canvas-ctl canvas-ctl-level" type="button" data-zoom="reset" title="Reset to 100%">
+						<span data-zoom-level>100%</span>
+					</button>
+					<button class="canvas-ctl" type="button" data-zoom="out" title="Zoom out" aria-label="Zoom out">
+						@icon("minus")
+					</button>
+					<button class="canvas-ctl" type="button" data-zoom="fit" title="Fit the whole graph" aria-label="Fit">
+						@icon("maximize")
+					</button>
 				</div>
 			</div>
 		</div>

@@ -30,8 +30,9 @@ templ TeamPage(d TeamPageData) {
 								<span class="text-muted-foreground">{ m.Name }</span>
 							}
 						</td>
-						<td>@statusDot(string(m.Role), roleTone(m.Role))
-</td>
+						<td>
+							@statusDot(string(m.Role), roleTone(m.Role))
+						</td>
 						<td class="text-right">
 							<div class="flex gap-2 justify-end">
 								if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
@@ -74,8 +75,9 @@ templ TeamPage(d TeamPageData) {
 						for _, inv := range d.Invitations {
 							<tr>
 								<td><span class="mono">{ inv.Email }</span></td>
-								<td>@statusDot(string(inv.Role), roleTone(inv.Role))
-</td>
+								<td>
+									@statusDot(string(inv.Role), roleTone(inv.Role))
+								</td>
 								<td class="text-right">
 									<form method="post" action={ templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke") } class="inline">
 										<button class="btn btn-sm" type="submit">Revoke</button>

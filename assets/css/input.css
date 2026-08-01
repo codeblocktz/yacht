@@ -369,32 +369,38 @@
   }
   .canvas-empty { @apply flex flex-1 items-center justify-center p-6; }
 
-  /* One control, segmented, rather than four loose buttons: zoom is a single
-     setting and reads better as one object in a bar that already has two. */
-  .canvas-zoom {
-    @apply flex items-center overflow-hidden rounded-md border border-border;
+  /* Floating on the surface, bottom-left, because an infinite canvas has no
+     edge to hang a toolbar off and the controls act on the view rather than on
+     the project. Grouped the way they are used: arranging is one thing, moving
+     the view is another. */
+  .canvas-controls {
+    @apply absolute bottom-4 left-4 z-10 flex w-9 flex-col gap-2;
   }
-  .canvas-zoom-btn {
-    @apply flex h-7 w-7 items-center justify-center text-[13px] text-muted-foreground
-           transition-colors hover:bg-accent hover:text-foreground;
+  .canvas-ctl-group {
+    @apply flex flex-col overflow-hidden rounded-md border border-border bg-card
+           divide-y divide-border;
   }
-  .canvas-zoom-level {
-    @apply h-7 min-w-[52px] border-x border-border px-1 text-center text-[11.5px]
-           tabular-nums text-muted-foreground transition-colors
+  .canvas-ctl {
+    @apply flex h-9 w-9 items-center justify-center rounded-md border border-border
+           bg-card text-muted-foreground transition-colors
            hover:bg-accent hover:text-foreground;
   }
-  .canvas-zoom-fit { @apply w-auto px-2 text-[11.5px]; }
+  /* Inside a group the container already draws the edges, so each button
+     dropping its own keeps the seams to one line rather than two. */
+  .canvas-ctl-group .canvas-ctl { @apply rounded-none border-0; }
+  .canvas-ctl-level { @apply text-[10px] tabular-nums; }
 
+  /* Clipped, not scrolled. The graph is moved with a transform, so there is
+     nothing to scroll and no scrollbar to suggest the canvas ends. */
   .canvas {
-    @apply min-h-0 flex-1 overflow-auto bg-muted/30;
+    @apply relative min-h-0 flex-1 overflow-hidden bg-muted/30;
     background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
     background-size: 22px 22px;
   }
-  /* Sized by the script to the scaled graph, so the scroll container has
-     something the right size to scroll around at any zoom. Left to itself it
-     simply wraps the graph, which is what a no-JavaScript view wants. */
-  .canvas-stage { @apply w-max; }
-  .canvas-inner { @apply relative p-6; }
+  /* Taken out of flow so the transform that moves it cannot push anything
+     else around. Without the script it simply sits at the top-left, which is
+     where the server laid the graph out anyway. */
+  .canvas-inner { @apply absolute left-0 top-0 p-6; }
 
   /* Dragging the background moves the view. The grab cursor is the only thing
      that says so, since the background has nothing in it to hint with. */

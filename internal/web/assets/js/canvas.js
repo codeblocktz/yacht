@@ -1,6 +1,12 @@
-// Moving around the canvas: panning, zooming, and dragging cards.
+// An infinite canvas: panning, zooming, and dragging cards.
 //
-// The canvas renders and navigates without this file. Every card is a link and
+// There is no scroll container. The graph is moved with a transform and the
+// canvas clips it, so panning is unbounded in every direction and there are no
+// scrollbars saying otherwise. A scroll container can only reach the edges of
+// what is already there, which makes an empty area you cannot move into look
+// like a wall.
+//
+// The page renders and navigates without this file. Every card is a link and
 // every position comes from the server, so with the script blocked you get a
 // static picture you can still click through — which is the reason the layout
 // is computed in Go rather than here.
@@ -15,9 +21,8 @@
   var canvas = document.querySelector("[data-canvas]");
   if (!canvas) return;
 
-  var stage = canvas.querySelector("[data-canvas-stage]");
   var inner = canvas.querySelector(".canvas-inner");
-  if (!stage || !inner) return;
+  if (!inner) return;
 
   var CARD_W = parseInt(canvas.dataset.cardW, 10);
   var CARD_H = parseInt(canvas.dataset.cardH, 10);
@@ -27,81 +32,92 @@
   var MIN_ZOOM = 0.25;
   var MAX_ZOOM = 2;
   var GRID_SIZE = 22; // matches the dot grid in the stylesheet
+  var FIT_MARGIN = 48;
 
   var GRAPH_W = inner.offsetWidth;
   var GRAPH_H = inner.offsetHeight;
 
-  // Zoom is this person's view of the canvas, not the team's arrangement of
-  // it, so it stays in the browser rather than going to the server the way a
-  // dragged position does.
-  var zoomKey = "yacht.zoom." + (canvas.dataset.project || "");
-  var zoom = 1;
-
-  // ---- zoom
+  // The view: where the graph's origin sits on screen, and how big it is drawn.
+  // This is this person's view of the canvas rather than the team's
+  // arrangement of it, so it stays in the browser — the same reasoning that
+  // sends a dragged card to the server and keeps the zoom here.
+  var view = { x: 0, y: 0, zoom: 1 };
+  var viewKey = "yacht.view." + (canvas.dataset.project || "");
 
   function clamp(n, lo, hi) {
     return Math.min(hi, Math.max(lo, n));
   }
 
-  function applyZoom() {
+  function apply() {
     inner.style.transformOrigin = "0 0";
-    inner.style.transform = "scale(" + zoom + ")";
-    stage.style.width = Math.round(GRAPH_W * zoom) + "px";
-    stage.style.height = Math.round(GRAPH_H * zoom) + "px";
-    // The dot grid scales too. A fixed grid under a scaled graph reads as the
-    // cards having changed size rather than as the view having moved.
-    canvas.style.backgroundSize = GRID_SIZE * zoom + "px " + GRID_SIZE * zoom + "px";
+    inner.style.transform =
+      "translate(" + view.x + "px, " + view.y + "px) scale(" + view.zoom + ")";
+
+    // The grid moves and scales with the graph. A grid that stayed put would
+    // be the one thing on screen insisting the canvas had not moved.
+    var step = GRID_SIZE * view.zoom;
+    canvas.style.backgroundSize = step + "px " + step + "px";
+    canvas.style.backgroundPosition = view.x + "px " + view.y + "px";
 
     var label = document.querySelector("[data-zoom-level]");
-    if (label) label.textContent = Math.round(zoom * 100) + "%";
+    if (label) label.textContent = Math.round(view.zoom * 100) + "%";
+
     try {
-      localStorage.setItem(zoomKey, String(zoom));
+      localStorage.setItem(viewKey, JSON.stringify(view));
     } catch (e) {
-      // Private browsing, or storage full. Zooming still works for this visit.
+      // Private browsing, or storage full. The view still works for this visit.
     }
   }
 
-  // setZoom keeps the point under the cursor where it is.
+  // zoomTo keeps the point under the cursor where it is.
   //
-  // Without the anchor, zooming always pulls toward the top-left corner, so
-  // getting closer to something on the right means zooming in and then hunting
-  // for it again.
-  function setZoom(next, clientX, clientY) {
+  // Without the anchor, zooming always pulls toward the origin, so getting
+  // closer to something on the right means zooming in and then hunting for it
+  // again.
+  function zoomTo(next, clientX, clientY) {
     next = clamp(next, MIN_ZOOM, MAX_ZOOM);
-    if (next === zoom) return;
+    if (next === view.zoom) return;
 
     var rect = canvas.getBoundingClientRect();
     var ax = clientX === undefined ? rect.width / 2 : clientX - rect.left;
     var ay = clientY === undefined ? rect.height / 2 : clientY - rect.top;
 
-    var gx = (canvas.scrollLeft + ax) / zoom;
-    var gy = (canvas.scrollTop + ay) / zoom;
+    // The graph point currently under the anchor, which must not move.
+    var gx = (ax - view.x) / view.zoom;
+    var gy = (ay - view.y) / view.zoom;
 
-    zoom = next;
-    applyZoom();
-
-    canvas.scrollLeft = gx * zoom - ax;
-    canvas.scrollTop = gy * zoom - ay;
+    view.zoom = next;
+    view.x = ax - gx * view.zoom;
+    view.y = ay - gy * view.zoom;
+    apply();
   }
 
   function fit() {
     var rect = canvas.getBoundingClientRect();
-    var next = Math.min(rect.width / GRAPH_W, rect.height / GRAPH_H, 1);
-    zoom = clamp(next, MIN_ZOOM, MAX_ZOOM);
-    applyZoom();
-    canvas.scrollLeft = 0;
-    canvas.scrollTop = 0;
+    view.zoom = clamp(
+      Math.min(
+        (rect.width - FIT_MARGIN * 2) / GRAPH_W,
+        (rect.height - FIT_MARGIN * 2) / GRAPH_H
+      ),
+      MIN_ZOOM,
+      MAX_ZOOM
+    );
+    view.x = (rect.width - GRAPH_W * view.zoom) / 2;
+    view.y = (rect.height - GRAPH_H * view.zoom) / 2;
+    apply();
   }
 
   try {
-    var saved = parseFloat(localStorage.getItem(zoomKey));
-    if (saved) zoom = clamp(saved, MIN_ZOOM, MAX_ZOOM);
+    var saved = JSON.parse(localStorage.getItem(viewKey));
+    if (saved && isFinite(saved.x) && isFinite(saved.y) && saved.zoom) {
+      view = { x: saved.x, y: saved.y, zoom: clamp(saved.zoom, MIN_ZOOM, MAX_ZOOM) };
+    }
   } catch (e) {
-    // Nothing stored, or storage unavailable.
+    // Nothing stored, or it was written by an older version.
   }
-  applyZoom();
+  apply();
 
-  var controls = document.querySelector("[data-zoom-controls]");
+  var controls = document.querySelector("[data-canvas-controls]");
   if (controls) {
     controls.hidden = false;
     controls.addEventListener("click", function (event) {
@@ -109,13 +125,13 @@
       if (!button) return;
       switch (button.dataset.zoom) {
         case "in":
-          setZoom(zoom + 0.1);
+          zoomTo(view.zoom + 0.1);
           break;
         case "out":
-          setZoom(zoom - 0.1);
+          zoomTo(view.zoom - 0.1);
           break;
         case "reset":
-          setZoom(1);
+          zoomTo(1);
           break;
         case "fit":
           fit();
@@ -124,15 +140,20 @@
     });
   }
 
-  // Ctrl or Command with the wheel zooms; the wheel alone scrolls, which is
-  // what the scroll container already does. Browsers report a trackpad pinch
-  // as a ctrl-wheel, so pinching works without a second code path.
+  // Ctrl or Command with the wheel zooms; the wheel alone moves the view,
+  // because there is no scrollbar left to do it. Browsers report a trackpad
+  // pinch as a ctrl-wheel, so pinching works without a second code path.
   canvas.addEventListener(
     "wheel",
     function (event) {
-      if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
-      setZoom(zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), event.clientX, event.clientY);
+      if (event.ctrlKey || event.metaKey) {
+        zoomTo(view.zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), event.clientX, event.clientY);
+        return;
+      }
+      view.x -= event.shiftKey ? event.deltaY : event.deltaX;
+      view.y -= event.shiftKey ? 0 : event.deltaY;
+      apply();
     },
     { passive: false }
   );
@@ -177,7 +198,7 @@
     });
   }
 
-  // ---- dragging a card, and panning the canvas
+  // ---- dragging a card, and panning the view
 
   var drag = null;
   var pan = null;
@@ -200,6 +221,7 @@
 
   canvas.addEventListener("pointerdown", function (event) {
     if (event.button !== 0) return;
+    if (event.target.closest("[data-canvas-controls]")) return;
 
     var handle = event.target.closest("[data-drag-handle]");
     if (handle) {
@@ -221,7 +243,7 @@
       return;
     }
 
-    // Anywhere that is not a card pans the view. Dragging the background is
+    // Anywhere that is not a card moves the view. Dragging the background is
     // how every canvas works, and it costs nothing here: the background has
     // nothing else to click.
     if (event.target.closest("[data-node]")) return;
@@ -231,16 +253,19 @@
       pointerId: event.pointerId,
       clientX: event.clientX,
       clientY: event.clientY,
-      left: canvas.scrollLeft,
-      top: canvas.scrollTop,
+      x: view.x,
+      y: view.y,
     };
     canvas.classList.add("canvas-panning");
   });
 
   canvas.addEventListener("pointermove", function (event) {
     if (pan && event.pointerId === pan.pointerId) {
-      canvas.scrollLeft = pan.left - (event.clientX - pan.clientX);
-      canvas.scrollTop = pan.top - (event.clientY - pan.clientY);
+      // Not clamped, in either direction. That is what makes the canvas
+      // infinite rather than a window onto a fixed sheet.
+      view.x = pan.x + (event.clientX - pan.clientX);
+      view.y = pan.y + (event.clientY - pan.clientY);
+      apply();
       return;
     }
     if (!drag || event.pointerId !== drag.pointerId) return;
@@ -248,8 +273,8 @@
     // Divided by the zoom: at 50% the pointer covers twice the canvas for the
     // same distance on screen, and a card that ignored that would slide out
     // from under the cursor.
-    var x = Math.round(drag.startX + (event.clientX - drag.clientX) / zoom);
-    var y = Math.round(drag.startY + (event.clientY - drag.clientY) / zoom);
+    var x = Math.round(drag.startX + (event.clientX - drag.clientX) / view.zoom);
+    var y = Math.round(drag.startY + (event.clientY - drag.clientY) / view.zoom);
 
     // Clamped at the origin for the reason the server clamps it: a card
     // dragged past the top-left corner is an overshoot, not a request to be

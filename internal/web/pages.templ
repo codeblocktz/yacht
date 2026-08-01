@@ -895,8 +895,9 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						</td>
 						<td class="tabular-nums text-muted-foreground">{ strconv.Itoa(int(p.Restarts)) }</td>
 						<td class="max-w-[160px] truncate text-muted-foreground">{ orDash(p.Node) }</td>
-						<td>@statusDot(p.Phase, podPhaseClass(p))
-</td>
+						<td>
+							@statusDot(p.Phase, podPhaseClass(p))
+						</td>
 					</tr>
 				}
 			</tbody>
@@ -947,8 +948,9 @@ templ Activity(d ActivityData) {
 								<td class="text-muted-foreground">
 									<span class="tag">{ it.Revision }</span>
 								</td>
-								<td>@statusDot(it.Status, deploymentClass(it.Status))
-</td>
+								<td>
+									@statusDot(it.Status, deploymentClass(it.Status))
+								</td>
 								<td class="whitespace-nowrap text-right text-muted-foreground">
 									{ relativeTime(it.StartedAt) }
 								</td>
@@ -1005,8 +1007,9 @@ templ Volumes(d VolumesData) {
 										<span class="tag mr-1">{ m }</span>
 									}
 								</td>
-								<td>@statusDot(v.Phase, volumeClass(v))
-</td>
+								<td>
+									@statusDot(v.Phase, volumeClass(v))
+								</td>
 							</tr>
 						}
 					</tbody>
