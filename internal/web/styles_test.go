@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/a-h/templ"
+
+	"github.com/codeblocktz/yacht/internal/app"
 )
 
 // TestTemplatesOnlyUseClassesThatExist.
@@ -191,5 +196,88 @@ func TestVendoredHtmxIsWholeLibrary(t *testing.T) {
 	}
 	if len(b) < 10_000 {
 		t.Fatalf("htmx is %d bytes — that is not the library", len(b))
+	}
+}
+
+// Every icon name a template can ask for has a drawing.
+//
+// A name with no case renders an empty <svg>: correct markup, right size,
+// nothing in it. That is how Postgres cards shipped with a blank square where
+// their icon should be — sourceIcon returned "storage" and the switch had never
+// heard of it.
+func TestEveryIconNameHasADrawing(t *testing.T) {
+	layout, err := os.ReadFile("layout.templ")
+	if err != nil {
+		t.Fatalf("read layout.templ: %v", err)
+	}
+	drawn := map[string]bool{}
+	for _, m := range regexp.MustCompile(`case "([a-z-]+)":`).FindAllStringSubmatch(string(layout), -1) {
+		drawn[m[1]] = true
+	}
+	if len(drawn) == 0 {
+		t.Fatal("no icon cases found — this test would pass vacuously")
+	}
+
+	// Names reached through icon(...) in a template, and names returned by the
+	// Go helpers that feed it. The second set is where the blank square came
+	// from: nothing in a template mentions "storage".
+	asked := map[string]string{}
+	files, _ := filepath.Glob("*.templ")
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, m := range regexp.MustCompile(`icon\("([a-z-]+)"\)`).FindAllStringSubmatch(string(src), -1) {
+			asked[m[1]] = filepath.Base(f)
+		}
+	}
+	for _, src := range []app.Source{app.SourceImage, app.SourcePostgres, "git", "template"} {
+		asked[sourceIcon(src)] = "sourceIcon(" + string(src) + ")"
+	}
+	for _, group := range (DefaultSlots{}).Slots(context.Background(),
+		httptest.NewRequest(http.MethodGet, "/", nil)).Nav {
+		for _, item := range group.Items {
+			if item.Icon != "" {
+				asked[item.Icon] = "nav: " + item.Label
+			}
+		}
+	}
+
+	for name, where := range asked {
+		if !drawn[name] {
+			t.Errorf("%s asks for the %q icon, which draws nothing", where, name)
+		}
+	}
+}
+
+// The card's rendered height is the height the server laid out with.
+//
+// Every edge is drawn from cardH and volumeH. When the stylesheet sized cards
+// from their content instead, the numbers disagreed by 23px and every arrow
+// stopped short of the card it pointed at — which looked like the graph being
+// disconnected rather than like a spacing bug.
+func TestTheCardGeometryComesFromTheServer(t *testing.T) {
+	style := canvasSize(CanvasData{Width: 10, Height: 10})
+	for _, want := range []string{
+		"--canvas-card-h:" + strconv.Itoa(cardH) + "px",
+		"--canvas-volume-h:" + strconv.Itoa(volumeH) + "px",
+	} {
+		if !strings.Contains(style, want) {
+			t.Errorf("the canvas does not publish %s — it is %q", want, style)
+		}
+	}
+
+	css, err := os.ReadFile(filepath.Join("..", "..", "assets", "css", "input.css"))
+	if err != nil {
+		t.Fatalf("read input.css: %v", err)
+	}
+	for _, want := range []string{
+		"height: var(--canvas-card-h)",
+		"height: var(--canvas-volume-h)",
+	} {
+		if !strings.Contains(string(css), want) {
+			t.Errorf("the stylesheet does not take %s from the server", want)
+		}
 	}
 }

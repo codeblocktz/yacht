@@ -230,26 +230,33 @@ func TestSettingsShowsOwner(t *testing.T) {
 	}
 }
 
+// An app is reached through its project, so Projects is what lights up on an
+// app's URL — there is no Apps entry to light up instead.
 func TestDefaultSlotsMarkActiveNav(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/apps", nil)
-	s := DefaultSlots{}.Slots(context.Background(), req)
+	for _, path := range []string{"/projects", "/projects/default", "/apps/web", "/canvas"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		s := DefaultSlots{}.Slots(context.Background(), req)
 
-	var checked bool
-	for _, group := range s.Nav {
-		for _, item := range group.Items {
-			if item.Href == "/apps" {
-				checked = true
-				if !item.Active {
-					t.Error("/apps nav item should be active on the apps page")
+		var checked bool
+		for _, group := range s.Nav {
+			for _, item := range group.Items {
+				if item.Href == "/apps" {
+					t.Error("the sidebar still offers a flat list of apps")
+				}
+				if item.Href == "/projects" {
+					checked = true
+					if !item.Active {
+						t.Errorf("projects nav item is not active on %s", path)
+					}
+				}
+				if item.Href == "/" && item.Active {
+					t.Errorf("overview is active on %s", path)
 				}
 			}
-			if item.Href == "/" && item.Active {
-				t.Error("overview should not be active on the apps page")
-			}
 		}
-	}
-	if !checked {
-		t.Fatal("no /apps nav item found")
+		if !checked {
+			t.Fatalf("no /projects nav item found for %s", path)
+		}
 	}
 }
 

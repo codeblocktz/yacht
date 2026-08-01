@@ -3,6 +3,7 @@ package web
 import (
 	"strconv"
 
+	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
@@ -200,35 +201,60 @@ templ appPanelBody(d AppDetailData) {
 }
 
 // ProjectList is every canvas a team has.
+//
+// Shaped like the cluster page, because it answers the same kind of question:
+// how much is here, and what are the pieces. The counts come first so the size
+// of the install is readable without counting rows.
 templ ProjectList(d ProjectListData) {
 	@pageHead("Projects", "A project is one canvas: the apps that make up a system, and what connects them.", nil)
 	if d.Error != "" {
-		<div class="callout callout-err mb-4">{ d.Error }</div>
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">Could not create that project</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
 	}
-	<div class="panel mb-5">
-		<div class="panel-body">
-			<form method="post" action="/projects" class="flex flex-wrap items-end gap-3">
-				<div class="field min-w-[240px] flex-1">
-					<label class="label" for="project-name">New project</label>
-					<input class="control" id="project-name" name="name" placeholder="Billing" required/>
-				</div>
-				<button class="btn btn-primary" type="submit">Create</button>
+	<div class="metrics mb-5">
+		@metric("Projects", strconv.Itoa(len(d.Projects)), "")
+		@metric("Apps", strconv.FormatInt(totalApps(d.Projects), 10), "across every project")
+	</div>
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">All projects</span>
+			<form method="post" action="/projects" class="flex items-center gap-2">
+				<input
+					class="control h-8 w-[180px]"
+					name="name"
+					placeholder="New project"
+					aria-label="New project name"
+					required
+				/>
+				<button class="btn btn-sm" type="submit">Create</button>
 			</form>
 		</div>
+		if len(d.Projects) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No projects</p>
+				<p>Create one above, then deploy an app onto its canvas.</p>
+			</div>
+		} else {
+			<div class="rows">
+				for _, p := range d.Projects {
+					@projectRow(p)
+				}
+			</div>
+		}
 	</div>
-	<div class="panel overflow-hidden">
-		<div class="rows">
-			for _, p := range d.Projects {
-				<a class="row-link" href={ templ.URL("/projects/" + p.Slug) }>
-					<span class="min-w-0 flex-1">
-						<span class="block truncate font-medium">{ p.Name }</span>
-						<span class="mono block truncate text-muted-foreground">/projects/{ p.Slug }</span>
-					</span>
-					<span class="tabular-nums text-muted-foreground">
-						{ plural(int(p.Apps), "app") }
-					</span>
-				</a>
-			}
-		</div>
-	</div>
+}
+
+templ projectRow(p app.Project) {
+	<a class="row-link" href={ templ.URL("/projects/" + p.Slug) }>
+		@icon("grid")
+		<span class="min-w-0 flex-1">
+			<span class="block truncate font-medium">{ p.Name }</span>
+			<span class="mono block truncate text-muted-foreground">/projects/{ p.Slug }</span>
+		</span>
+		<span class="tabular-nums text-muted-foreground">{ plural(int(p.Apps), "app") }</span>
+	</a>
 }

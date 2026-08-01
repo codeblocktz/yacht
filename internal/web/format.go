@@ -164,6 +164,15 @@ func relativeTime(t time.Time) string {
 	return plural(int(d.Hours()/(24*365)), "year") + " ago"
 }
 
+// totalApps counts the apps across every project.
+func totalApps(projects []app.Project) int64 {
+	var n int64
+	for _, p := range projects {
+		n += p.Apps
+	}
+	return n
+}
+
 // boolAttr renders a data attribute as "true" or empty.
 //
 // Empty rather than "false" because [data-x] matches an attribute whose value
@@ -346,8 +355,19 @@ func roleTone(r account.Role) string {
 
 // canvasSize and nodeAt are inline styles because the values are computed per
 // render. A class cannot carry a coordinate.
+// canvasSize carries the surface's size and the card geometry the server laid
+// it out with.
+//
+// The card heights go out as custom properties rather than being written in the
+// stylesheet, because the server draws every edge from them. A card whose CSS
+// height disagreed with cardH would still render — it would just have arrows
+// ending in the air a few pixels past it, which is how this shipped the first
+// time.
 func canvasSize(d CanvasData) string {
-	return "width:" + strconv.Itoa(d.Width) + "px;height:" + strconv.Itoa(d.Height) + "px"
+	return "width:" + strconv.Itoa(d.Width) + "px" +
+		";height:" + strconv.Itoa(d.Height) + "px" +
+		";--canvas-card-h:" + strconv.Itoa(cardH) + "px" +
+		";--canvas-volume-h:" + strconv.Itoa(volumeH) + "px"
 }
 
 func nodeAt(n CanvasNode) string {

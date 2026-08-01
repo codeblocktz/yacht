@@ -396,9 +396,13 @@
      next reload is what will contradict it. */
   .canvas-node-unsaved .canvas-card { @apply border-destructive; }
 
+  /* Height comes from the server, not from the content. The layout is computed
+     in Go and every edge is drawn from these numbers, so a card that sized
+     itself would leave its arrows pointing at where it used to end. */
   .canvas-card {
-    @apply relative flex flex-col gap-2.5 rounded-md border border-border bg-card px-3.5 py-3
-           transition-colors hover:border-foreground/25;
+    @apply relative flex flex-col justify-center gap-2 rounded-md border border-border
+           bg-card px-3.5 transition-colors hover:border-foreground/25;
+    height: var(--canvas-card-h);
   }
   /* The card whose panel is open, marked so it is findable behind the sheet. */
   .canvas-card-open { @apply border-foreground/50 ring-1 ring-foreground/15; }
@@ -420,9 +424,10 @@
   /* Attached beneath the card, sharing its edge, so the volume reads as part
      of the service rather than as a second thing that happens to be nearby. */
   .canvas-volume {
-    @apply -mt-px flex items-center gap-2.5 rounded-b-md border border-border
-           bg-muted/40 px-3.5 py-2 text-[12px] text-muted-foreground
+    @apply flex items-center gap-2.5 rounded-b-md border border-t-0 border-border
+           bg-muted/40 px-3.5 text-[12px] text-muted-foreground
            transition-colors hover:text-foreground;
+    height: var(--canvas-volume-h);
   }
 
   /* The panel over the canvas. Wider than a default sheet because it holds the

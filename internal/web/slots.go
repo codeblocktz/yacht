@@ -144,9 +144,13 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
+				// No Apps entry. An app is drawn on a project's canvas and
+				// reached from it, so a second door into a flat list of every
+				// app in the team would show the same things with the one fact
+				// that matters — what they are connected to — taken out.
 				{Label: "Projects", Href: "/projects", Icon: "grid",
-					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/canvas")},
-				{Label: "Apps", Href: "/apps", Icon: "box", Active: hasPrefix(path, "/apps")},
+					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/apps") ||
+						hasPrefix(path, "/canvas")},
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
 					Active: hasPrefix(path, "/deployments")},
 			}},
