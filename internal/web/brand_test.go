@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -97,5 +98,53 @@ func TestTheBrandLinkIsStillNamed(t *testing.T) {
 	}
 	if !strings.Contains(brand, `aria-label="Yacht"`) {
 		t.Errorf("the brand link has no accessible name: %s", brand)
+	}
+}
+
+// Every mark is framed on artwork that exists.
+//
+// The paths are written in the drawing program's coordinates and moved into
+// place by a translate on the group around them. Framing on the coordinates in
+// the path data — rather than on where the translate leaves them — points the
+// viewBox at empty space: the element takes up its space, reports its size, and
+// draws nothing. It looks like a missing file, not like a wrong number.
+//
+// The source files in assets/brand are the reference: their box starts at the
+// origin, so any frame outside it is looking somewhere the artwork is not.
+func TestEveryMarkIsFramedOnItsArtwork(t *testing.T) {
+	source := struct{ w, h float64 }{885, 292} // assets/brand/logo.svg
+
+	for name, markup := range map[string]string{
+		"mark":     renderToString(t, brandMark("x")),
+		"wordmark": renderToString(t, brandWordmark("x")),
+	} {
+		m := regexp.MustCompile(`viewBox="([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+)"`).FindStringSubmatch(markup)
+		if m == nil {
+			t.Errorf("%s has no viewBox", name)
+			continue
+		}
+		var v [4]float64
+		for i := range v {
+			if _, err := fmt.Sscanf(m[i+1], "%f", &v[i]); err != nil {
+				t.Fatalf("%s viewBox %q: %v", name, m[0], err)
+			}
+		}
+		x, y, w, h := v[0], v[1], v[2], v[3]
+		if x < 0 || y < 0 || x+w > source.w+1 || y+h > source.h+1 {
+			t.Errorf("%s is framed at (%g,%g %gx%g), outside the artwork's %gx%g box — "+
+				"it will take up space and draw nothing", name, x, y, w, h, source.w, source.h)
+		}
+	}
+}
+
+// The favicon is framed on its artwork too, for the same reason.
+func TestTheFaviconIsFramedOnItsArtwork(t *testing.T) {
+	b, err := assetsFS.ReadFile("assets/brand/icon.svg")
+	if err != nil {
+		t.Fatalf("read icon: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`viewBox="0 0 215 292"`)) {
+		t.Errorf("the favicon is not framed on its artwork: %s",
+			regexp.MustCompile(`viewBox="[^"]*"`).Find(b))
 	}
 }

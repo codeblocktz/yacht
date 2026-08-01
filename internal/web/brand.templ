@@ -17,7 +17,7 @@ package web
 // intrinsic size a `w-auto` has nothing to resolve against, and an SVG in a
 // flex row collapses to zero — which is what the text it replaced never did.
 templ brandMark(class string) {
-	<svg class={ class } width="215" height="292" viewBox="958 1596 215 292" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Yacht">
+	<svg class={ class } width="215" height="292" viewBox="0 0 215 292" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Yacht">
 		<g transform="matrix(1,0,0,1,-958.482024,-1596.092892)">
 			<g transform="matrix(0.508174,0,0,0.48621,221.930828,929.700086)">
 				<path d="M1870.593,1721.574L1790.154,1969.141L1529.846,1969.141L1449.407,1721.574L1660,1568.569L1870.593,1721.574ZM1692.973,1910.195L1747.327,1910.195L1801.298,1744.09L1660,1641.431L1518.702,1744.09L1572.673,1910.195L1627.027,1910.195L1660,1753.544L1692.973,1910.195Z" style="fill:rgb(33,149,132);"></path>
@@ -36,9 +36,10 @@ templ brandMark(class string) {
 //
 // Framed to its own artwork rather than to the full logo's box, so it can sit
 // next to the mark at whatever spacing the layout wants instead of carrying the
-// logo's own gap around with it.
+// logo's own gap around with it. The frame is in the coordinates the group's
+// translate leaves the paths in, not the ones the paths are written in.
 templ brandWordmark(class string) {
-	<svg class={ class } width="615" height="190" viewBox="1229 1658 615 190" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+	<svg class={ class } width="615" height="190" viewBox="271 62 615 189" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 		<g transform="matrix(1,0,0,1,-958.482024,-1596.092892)">
 			<g transform="matrix(4.390044,0,0,4.390044,-5044.001768,-5896.841768)">
 				<path d="M1449.258,1729.779L1457.363,1729.755L1442.617,1763.764L1434.463,1763.764L1439.248,1753.51L1429.043,1729.779L1437.368,1729.779L1442.837,1743.256L1443.252,1744.818L1449.258,1729.779Z" fill="currentColor" style="fill-rule:nonzero"></path>
