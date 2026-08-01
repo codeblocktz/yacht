@@ -30,7 +30,7 @@ INSERT INTO apps (
     cpu_request, cpu_limit, memory_request, memory_limit, project_id
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only
 `
 
 type CreateAppParams struct {
@@ -87,6 +87,8 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
 }
@@ -215,7 +217,7 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -248,12 +250,14 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -286,6 +290,8 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
 }
@@ -308,7 +314,7 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -343,6 +349,8 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.ProjectID,
 			&i.CanvasX,
 			&i.CanvasY,
+			&i.HttpsOnly,
+			&i.CnameOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -466,7 +474,7 @@ SET health_path     = $1,
     health_liveness = $2,
     updated_at      = now()
 WHERE owner_id = $3 AND id = $4
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only
 `
 
 type SetAppHealthParams struct {
@@ -505,15 +513,43 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
+}
+
+const setAppNetworking = `-- name: SetAppNetworking :execrows
+UPDATE apps
+SET https_only = $1, cname_only = $2, updated_at = now()
+WHERE owner_id = $3 AND name = $4
+`
+
+type SetAppNetworkingParams struct {
+	HttpsOnly bool
+	CnameOnly bool
+	OwnerID   string
+	Name      string
+}
+
+func (q *Queries) SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAppNetworking,
+		arg.HttpsOnly,
+		arg.CnameOnly,
+		arg.OwnerID,
+		arg.Name,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only
 `
 
 type SetAppReplicasParams struct {
@@ -546,6 +582,8 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
 }
@@ -561,7 +599,7 @@ SET image          = $3,
     memory_limit   = $9,
     updated_at     = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only
 `
 
 type UpdateAppParams struct {
@@ -610,6 +648,8 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.ProjectID,
 		&i.CanvasX,
 		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
 	)
 	return i, err
 }

@@ -20,6 +20,7 @@ import (
 const probeToken = "K10probe::server:hunter2"
 
 type fakeJoiner struct {
+	dns        string
 	configured bool
 	set        []string
 	err        error
@@ -40,6 +41,15 @@ func (f *fakeJoiner) SetJoin(_ context.Context, serverURL, token string, _ uuid.
 	}
 	f.set = append(f.set, serverURL+" "+token)
 	f.configured = true
+	return nil
+}
+
+func (f *fakeJoiner) DNS(context.Context) (cluster.DNS, error) {
+	return cluster.DNS{CNAMETarget: "edge.yacht.test", TXTPrefix: "extdns-"}, nil
+}
+
+func (f *fakeJoiner) SetDNS(_ context.Context, target, prefix string) error {
+	f.dns = target + " " + prefix
 	return nil
 }
 

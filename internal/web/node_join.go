@@ -20,6 +20,12 @@ import (
 // knowing how a join token is stored.
 type Joiner interface {
 	Settings(ctx context.Context) (cluster.Settings, error)
+
+	// DNS is how the install publishes hostnames. It sits here rather than in
+	// its own seam because both are one thing: install-wide cluster settings an
+	// owner sets once, stored together and gated together.
+	DNS(ctx context.Context) (cluster.DNS, error)
+	SetDNS(ctx context.Context, target, prefix string) error
 	SetJoin(ctx context.Context, serverURL, token string, by uuid.UUID) error
 	Command(ctx context.Context, pool string) (string, error)
 }

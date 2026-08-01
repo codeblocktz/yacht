@@ -250,6 +250,15 @@ type AppSpec struct {
 	// routing never names a Secret — an Ingress's TLS Secret must live in the
 	// Ingress's own namespace, and every app has its own namespace.
 	TLS bool
+
+	// CNAMETarget, when set, becomes the ExternalDNS target annotation, so that
+	// controller publishes a CNAME rather than the nodes' own addresses as A
+	// records. Empty leaves the annotation off: an install running no
+	// ExternalDNS should not carry configuration for one.
+	CNAMETarget string
+
+	// HTTPSOnly routes through the ingress controller's secure entrypoint only.
+	HTTPSOnly bool
 }
 
 // VolumeSpec is one piece of storage attached to a workload.

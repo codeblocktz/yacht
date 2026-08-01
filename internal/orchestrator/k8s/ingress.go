@@ -12,6 +12,37 @@ import (
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
+// Annotations the ingress controller and the DNS controller read.
+//
+// Both are other people's software, named by string. They are written only when
+// the corresponding setting is on, so an install running neither controller
+// gets an Ingress with no annotations at all rather than configuration for
+// something that is not there.
+const (
+	// externalDNSTarget makes ExternalDNS publish a CNAME to this value instead
+	// of A records for the nodes. Without it a cluster exposes its own node
+	// addresses in public DNS, which is both a disclosure and a promise that
+	// those addresses will not change.
+	externalDNSTarget = "external-dns.alpha.kubernetes.io/target"
+
+	// traefikEntrypoints limits which of Traefik's entrypoints will route this
+	// Ingress. Set to the secure one, a request arriving on plain HTTP is not
+	// served rather than served and redirected.
+	traefikEntrypoints = "traefik.ingress.kubernetes.io/router.entrypoints"
+)
+
+// ingressAnnotations returns what the spec asks the controllers for.
+func ingressAnnotations(spec orchestrator.AppSpec) map[string]string {
+	ann := map[string]string{}
+	if spec.CNAMETarget != "" {
+		ann[externalDNSTarget] = spec.CNAMETarget
+	}
+	if spec.HTTPSOnly {
+		ann[traefikEntrypoints] = "websecure"
+	}
+	return ann
+}
+
 // applyIngress routes the spec's hostnames to its Service.
 //
 // ingressClassName is left unset so the cluster's default IngressClass
@@ -51,6 +82,10 @@ func (o *Orchestrator) applyIngress(ctx context.Context, spec orchestrator.AppSp
 	ing := networkingv1ac.Ingress(spec.Name, spec.Namespace).
 		WithLabels(orchestrator.ObjectLabels(spec.Ref)).
 		WithSpec(ingSpec)
+
+	if ann := ingressAnnotations(spec); len(ann) > 0 {
+		ing = ing.WithAnnotations(ann)
+	}
 
 	if _, err := o.client.NetworkingV1().Ingresses(spec.Namespace).
 		Apply(ctx, ing, applyOpts()); err != nil {

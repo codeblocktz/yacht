@@ -37,3 +37,45 @@ WHERE app_id = @app_id AND managed;
 SELECT * FROM domains
 WHERE app_id = @app_id AND managed
 LIMIT 1;
+
+-- ---------------------------------------------------------- custom domains
+
+-- Claims a hostname for an app, unverified.
+--
+-- Deliberately not an upsert on host: the global unique index is what makes two
+-- teams claiming one name an error rather than a silent transfer, and papering
+-- over it here is exactly how a domain gets stolen.
+-- name: CreateCustomDomain :one
+INSERT INTO domains (owner_id, app_id, host, tls, verified, managed, verify_target)
+VALUES (@owner_id, @app_id, lower(@host), true, false, false, @verify_target)
+RETURNING *;
+
+-- name: ListCustomDomains :many
+SELECT * FROM domains
+WHERE owner_id = @owner_id AND app_id = @app_id AND NOT managed
+ORDER BY host;
+
+-- Marks a claim proven. Scoped by owner as well as id: verifying is a write,
+-- and a write on somebody else's row is the thing owner scoping exists for.
+-- name: VerifyCustomDomain :execrows
+UPDATE domains
+SET verified = true, verified_at = now()
+WHERE owner_id = @owner_id AND id = @id AND NOT managed;
+
+-- name: DeleteCustomDomain :execrows
+DELETE FROM domains
+WHERE owner_id = @owner_id AND id = @id AND NOT managed;
+
+-- name: GetCustomDomain :one
+SELECT * FROM domains
+WHERE owner_id = @owner_id AND id = @id AND NOT managed;
+
+-- Hostnames that may actually be routed to.
+--
+-- A managed host is routable because the platform issued it; a custom one only
+-- once it is proven. This is the query the Ingress is built from, so the gate
+-- lives here rather than in a caller that might forget it.
+-- name: RoutableHostsForApp :many
+SELECT host FROM domains
+WHERE app_id = @app_id AND (managed OR verified)
+ORDER BY managed DESC, host;

@@ -194,6 +194,9 @@ type Options struct {
 	// Stacks, when set, puts the templates surface on the router.
 	Stacks Stacks
 
+	// Nets, when set, puts the per-app Networking surface on the router.
+	Nets Nets
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -272,6 +275,9 @@ type Server struct {
 	// credentials, and one that could not seal them would fail halfway.
 	stacks Stacks
 
+	// nets is an app's routing. Nil leaves the Networking surface off.
+	nets Nets
+
 	accounts       Accounts
 	mailer         notify.Mailer
 	baseURL        string
@@ -344,6 +350,7 @@ func New(opts Options) (*Server, error) {
 
 		joiner:         opts.Joiner,
 		stacks:         opts.Stacks,
+		nets:           opts.Nets,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -527,6 +534,14 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
+			if s.nets != nil {
+				r.Get("/apps/{name}/networking", s.networkingPage)
+				r.Post("/apps/{name}/networking", s.networkingSet)
+				r.Post("/apps/{name}/domains", s.domainAdd)
+				r.Post("/apps/{name}/domains/{id}/verify", s.domainVerify)
+				r.Post("/apps/{name}/domains/{id}/delete", s.domainRemove)
+			}
+
 			r.Post("/apps/{name}/storage", s.storageAttach)
 			r.Post("/apps/{name}/storage/{volume}/resize", s.storageResize)
 			r.Post("/apps/{name}/storage/{volume}/delete", s.storageDelete)
@@ -555,6 +570,9 @@ func (s *Server) Handler() http.Handler {
 		if s.joiner != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Get("/cluster/dns", s.dnsSettings)
+				r.Post("/cluster/dns", s.dnsSet)
 
 				r.Get("/cluster/nodes/add", s.nodeAdd)
 				r.Get("/cluster/nodes/add/status", s.nodeAddFragment)

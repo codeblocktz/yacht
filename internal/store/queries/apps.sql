@@ -98,3 +98,8 @@ SET health_path     = @health_path,
     updated_at      = now()
 WHERE owner_id = @owner_id AND id = @id
 RETURNING *;
+
+-- name: SetAppNetworking :execrows
+UPDATE apps
+SET https_only = @https_only, cname_only = @cname_only, updated_at = now()
+WHERE owner_id = @owner_id AND name = @name;

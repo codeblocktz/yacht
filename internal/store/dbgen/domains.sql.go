@@ -11,6 +11,67 @@ import (
 	"github.com/google/uuid"
 )
 
+const createCustomDomain = `-- name: CreateCustomDomain :one
+
+INSERT INTO domains (owner_id, app_id, host, tls, verified, managed, verify_target)
+VALUES ($1, $2, lower($3), true, false, false, $4)
+RETURNING id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target
+`
+
+type CreateCustomDomainParams struct {
+	OwnerID      string
+	AppID        uuid.UUID
+	Host         string
+	VerifyTarget string
+}
+
+// ---------------------------------------------------------- custom domains
+// Claims a hostname for an app, unverified.
+//
+// Deliberately not an upsert on host: the global unique index is what makes two
+// teams claiming one name an error rather than a silent transfer, and papering
+// over it here is exactly how a domain gets stolen.
+func (q *Queries) CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error) {
+	row := q.db.QueryRow(ctx, createCustomDomain,
+		arg.OwnerID,
+		arg.AppID,
+		arg.Host,
+		arg.VerifyTarget,
+	)
+	var i Domain
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Host,
+		&i.Tls,
+		&i.Verified,
+		&i.CreatedAt,
+		&i.Managed,
+		&i.VerifiedAt,
+		&i.VerifyTarget,
+	)
+	return i, err
+}
+
+const deleteCustomDomain = `-- name: DeleteCustomDomain :execrows
+DELETE FROM domains
+WHERE owner_id = $1 AND id = $2 AND NOT managed
+`
+
+type DeleteCustomDomainParams struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+func (q *Queries) DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCustomDomain, arg.OwnerID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteManagedDomain = `-- name: DeleteManagedDomain :exec
 DELETE FROM domains
 WHERE app_id = $1 AND managed
@@ -26,8 +87,36 @@ func (q *Queries) DeleteManagedDomain(ctx context.Context, appID uuid.UUID) erro
 	return err
 }
 
+const getCustomDomain = `-- name: GetCustomDomain :one
+SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+WHERE owner_id = $1 AND id = $2 AND NOT managed
+`
+
+type GetCustomDomainParams struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+func (q *Queries) GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error) {
+	row := q.db.QueryRow(ctx, getCustomDomain, arg.OwnerID, arg.ID)
+	var i Domain
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Host,
+		&i.Tls,
+		&i.Verified,
+		&i.CreatedAt,
+		&i.Managed,
+		&i.VerifiedAt,
+		&i.VerifyTarget,
+	)
+	return i, err
+}
+
 const getManagedDomain = `-- name: GetManagedDomain :one
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed FROM domains
+SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
 WHERE app_id = $1 AND managed
 LIMIT 1
 `
@@ -44,12 +133,56 @@ func (q *Queries) GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain
 		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
+		&i.VerifiedAt,
+		&i.VerifyTarget,
 	)
 	return i, err
 }
 
+const listCustomDomains = `-- name: ListCustomDomains :many
+SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+WHERE owner_id = $1 AND app_id = $2 AND NOT managed
+ORDER BY host
+`
+
+type ListCustomDomainsParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+func (q *Queries) ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error) {
+	rows, err := q.db.Query(ctx, listCustomDomains, arg.OwnerID, arg.AppID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Domain{}
+	for rows.Next() {
+		var i Domain
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.AppID,
+			&i.Host,
+			&i.Tls,
+			&i.Verified,
+			&i.CreatedAt,
+			&i.Managed,
+			&i.VerifiedAt,
+			&i.VerifyTarget,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDomainsByApp = `-- name: ListDomainsByApp :many
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed FROM domains
+SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
 WHERE app_id = $1
 ORDER BY managed DESC, host
 `
@@ -72,10 +205,43 @@ func (q *Queries) ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Doma
 			&i.Verified,
 			&i.CreatedAt,
 			&i.Managed,
+			&i.VerifiedAt,
+			&i.VerifyTarget,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const routableHostsForApp = `-- name: RoutableHostsForApp :many
+SELECT host FROM domains
+WHERE app_id = $1 AND (managed OR verified)
+ORDER BY managed DESC, host
+`
+
+// Hostnames that may actually be routed to.
+//
+// A managed host is routable because the platform issued it; a custom one only
+// once it is proven. This is the query the Ingress is built from, so the gate
+// lives here rather than in a caller that might forget it.
+func (q *Queries) RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, routableHostsForApp, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var host string
+		if err := rows.Scan(&host); err != nil {
+			return nil, err
+		}
+		items = append(items, host)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -89,7 +255,7 @@ INSERT INTO domains (owner_id, app_id, host, tls, verified, managed)
 VALUES ($1, $2, lower($3), $4, true, true)
 ON CONFLICT (app_id) WHERE managed
 DO UPDATE SET host = lower($3), tls = $4
-RETURNING id, owner_id, app_id, host, tls, verified, created_at, managed
+RETURNING id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target
 `
 
 type UpsertManagedDomainParams struct {
@@ -129,6 +295,29 @@ func (q *Queries) UpsertManagedDomain(ctx context.Context, arg UpsertManagedDoma
 		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
+		&i.VerifiedAt,
+		&i.VerifyTarget,
 	)
 	return i, err
+}
+
+const verifyCustomDomain = `-- name: VerifyCustomDomain :execrows
+UPDATE domains
+SET verified = true, verified_at = now()
+WHERE owner_id = $1 AND id = $2 AND NOT managed
+`
+
+type VerifyCustomDomainParams struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+// Marks a claim proven. Scoped by owner as well as id: verifying is a write,
+// and a write on somebody else's row is the thing owner scoping exists for.
+func (q *Queries) VerifyCustomDomain(ctx context.Context, arg VerifyCustomDomainParams) (int64, error) {
+	result, err := q.db.Exec(ctx, verifyCustomDomain, arg.OwnerID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

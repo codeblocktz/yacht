@@ -17,6 +17,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -112,6 +113,10 @@ func run() error {
 		WildcardTLS:     cfg.WildcardTLS,
 		Keeper:          keeper,
 		ReservedDomains: cfg.ReservedDomains,
+		// The standard resolver. Verifying a custom domain is a DNS lookup,
+		// and an install that cannot make one says so rather than failing in a
+		// way that looks like the domain being wrong.
+		Resolver: domain.NetResolver{},
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -149,6 +154,7 @@ func run() error {
 		AppDomain:     cfg.AppDomain,
 		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
+		Nets:          apps,
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.

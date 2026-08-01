@@ -90,6 +90,11 @@ type App struct {
 	// Volumes is the storage attached to this app, read alongside it.
 	Volumes []Volume
 
+	// HTTPSOnly and CNAMEOnly are the app's routing choices, written as
+	// annotations on its Ingress.
+	HTTPSOnly bool
+	CNAMEOnly bool
+
 	// TLS reports whether the platform serves Host over TLS. Populated on
 	// read from configuration rather than stored, because it is a property of
 	// the install and not of the app.
@@ -160,6 +165,10 @@ type Options struct {
 	// domain. An app named "admin" would otherwise take admin.<app domain>
 	// simply by being created first.
 	ReservedDomains []string
+
+	// Resolver proves a custom domain points here. Left nil, verification is
+	// refused with a reason rather than silently failing.
+	Resolver domain.Resolver
 }
 
 // Service manages app lifecycle.
@@ -169,6 +178,11 @@ type Service struct {
 	orch orchestrator.Orchestrator
 	log  *slog.Logger
 	opts Options
+
+	// resolver proves a custom domain points here. Nil leaves verification
+	// unavailable rather than failing oddly — an install with no DNS access
+	// cannot prove a claim, and should say so.
+	resolver domain.Resolver
 
 	// keeper seals secret variables. Nil when no key is configured, which is
 	// why every use goes through Configured() rather than a nil check.
@@ -182,7 +196,10 @@ func NewService(
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts, keeper: opts.Keeper}
+	return &Service{
+		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
+		keeper: opts.Keeper, resolver: opts.Resolver,
+	}
 }
 
 // EnsureOwner makes sure the owner row exists, so app inserts have a parent.
@@ -478,6 +495,11 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		Liveness:      a.Liveness,
 		Hosts:         hosts,
 		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
+		HTTPSOnly:     a.HTTPSOnly && len(hosts) > 0,
+		// Only when the install has a target to point at. Writing the
+		// annotation with an empty value would tell ExternalDNS to publish a
+		// CNAME to nothing, which is worse than leaving it to its default.
+		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
 		Volumes:       volumeSpecs(vols),
 	})
 }
@@ -493,6 +515,35 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 // domain reuses the existing "feature is off" path, which already retires a
 // hostname rather than merely skipping it. That matters: an app is created
 // with a port and later has it cleared, and the name has to be released.
+// cnameTarget reads the install's ExternalDNS target.
+//
+// Read on each apply rather than captured at startup, so changing it in
+// settings takes effect on the next deploy instead of at the next restart —
+// a setting that needs the process bounced is one people assume is broken.
+func (s *Service) cnameTarget(ctx context.Context) string {
+	row, err := s.q.GetPlatformDNS(ctx)
+	if err != nil {
+		// No settings yet is the normal starting state, and an unreachable
+		// database has already failed louder elsewhere. Either way the honest
+		// answer is no annotation.
+		return ""
+	}
+	return row.CnameTarget
+}
+
+// cnameTargetFor returns the ExternalDNS target for an app, or empty.
+//
+// Empty for an app that has switched the behaviour off, and empty when the
+// install has no target — an annotation pointing at nothing would be worse
+// than none, because ExternalDNS would publish a CNAME to an empty name rather
+// than fall back to what it does by default.
+func cnameTargetFor(a App, target string) string {
+	if !a.CNAMEOnly || target == "" {
+		return ""
+	}
+	return target
+}
+
 func (s *Service) managedInput(a App) domain.ManagedInput {
 	appDomain := s.opts.AppDomain
 	// A workload with no port cannot be reached, and an internal one speaks a
@@ -513,7 +564,10 @@ func (s *Service) reconcileHosts(
 	if _, err := domain.EnsureManaged(ctx, q, s.managedInput(a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
 	}
-	return domain.HostsForApp(ctx, q, a.ID)
+	// Routable rather than every row: a custom domain that has not been proven
+	// is a claim, and routing one would let somebody take traffic for a name
+	// they do not control.
+	return domain.RoutableHosts(ctx, q, a.ID)
 }
 
 // List returns an owner's apps with live status attached.
@@ -799,6 +853,8 @@ func toApp(row dbgen.App) App {
 		MemoryLimit:   row.MemoryLimit,
 		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     row.UpdatedAt,
+		HTTPSOnly:     row.HttpsOnly,
+		CNAMEOnly:     row.CnameOnly,
 		ProjectID:     row.ProjectID.Bytes,
 		X:             row.CanvasX,
 		Y:             row.CanvasY,

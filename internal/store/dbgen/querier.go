@@ -27,6 +27,13 @@ type Querier interface {
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
+	// ---------------------------------------------------------- custom domains
+	// Claims a hostname for an app, unverified.
+	//
+	// Deliberately not an upsert on host: the global unique index is what makes two
+	// teams claiming one name an error rather than a silent transfer, and papering
+	// over it here is exactly how a domain gets stolen.
+	CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
@@ -46,6 +53,7 @@ type Querier interface {
 	// another team's storage.
 	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
@@ -74,12 +82,16 @@ type Querier interface {
 	// The join settings are install-wide, so unlike every other query here these
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
+	GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.
 	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	// Install-wide DNS settings. No owner_id, for the reason cluster_join has
+	// none: they configure one controller shared by every team.
+	GetPlatformDNS(ctx context.Context) (PlatformDn, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
@@ -120,6 +132,7 @@ type Querier interface {
 	// because assigning one is a write and a read should not have side effects
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
+	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
@@ -142,11 +155,19 @@ type Querier interface {
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
+	// Hostnames that may actually be routed to.
+	//
+	// A managed host is routable because the platform issued it; a custom one only
+	// once it is proven. This is the query the Ingress is built from, so the gate
+	// lives here rather than in a caller that might forget it.
+	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
+	SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error)
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
@@ -178,6 +199,9 @@ type Querier interface {
 	// person means by editing one, and a separate update path would need the
 	// caller to know which case they are in.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
+	// Marks a claim proven. Scoped by owner as well as id: verifying is a write,
+	// and a write on somebody else's row is the thing owner scoping exists for.
+	VerifyCustomDomain(ctx context.Context, arg VerifyCustomDomainParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

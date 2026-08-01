@@ -1,0 +1,267 @@
+package web
+
+import "github.com/codeblocktz/yacht/internal/app"
+
+// NetworkingData is the app's routing panel.
+type NetworkingData struct {
+	App    string
+	Net    app.Networking
+	Notice string
+	Error  string
+}
+
+// NetworkingPanel is the Networking section of an app's settings.
+templ NetworkingPanel(d NetworkingData) {
+	@pageHead("Networking", "How this app is reached from outside the cluster.",
+		backToApp(d.App))
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That did not work</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	if d.Notice != "" {
+		<div class="callout mb-5">
+			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
+		</div>
+	}
+	@publicNetworking(d)
+	@customDomains(d)
+	@routingOptions(d)
+}
+
+templ publicNetworking(d NetworkingData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Public networking</span>
+		</div>
+		<div class="panel-body">
+			if d.Net.Managed == "" {
+				<div class="empty">
+					<p class="font-medium text-foreground">No platform hostname</p>
+					<p>
+						An app gets one when it has a port and is not internal, and when
+						the install has an app domain configured.
+					</p>
+				</div>
+			} else {
+				<div class="rows rounded-md border border-border">
+					<div class="row-item">
+						@icon("external")
+						<span class="min-w-0 flex-1">
+							<a
+								class="mono block truncate hover:underline"
+								href={ templ.URL("https://" + d.Net.Managed) }
+								target="_blank"
+								rel="noreferrer"
+							>{ d.Net.Managed }</a>
+							<span class="block text-muted-foreground">
+								Issued by the platform &middot; resolves through the wildcard record
+							</span>
+						</span>
+						<span class="status status-ok">active</span>
+					</div>
+				</div>
+			}
+		</div>
+	</div>
+}
+
+templ customDomains(d NetworkingData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Custom domains</span>
+		</div>
+		<div class="panel-body">
+			if d.Net.Target == "" {
+				// Said instead of showing a form that cannot work. A domain
+				// added with nothing to point it at could never be verified.
+				<div class="empty">
+					<p class="font-medium text-foreground">No CNAME target is configured</p>
+					<p>
+						A custom domain has to point somewhere. An owner sets that once for
+						the whole install under Infrastructure &rsaquo; DNS.
+					</p>
+				</div>
+			} else {
+				if len(d.Net.Custom) > 0 {
+					<div class="rows mb-4 rounded-md border border-border">
+						for _, c := range d.Net.Custom {
+							<div class="row-item">
+								@icon("layers")
+								<span class="min-w-0 flex-1">
+									<span class="mono block truncate">{ c.Host }</span>
+									if !c.Verified {
+										<span class="block text-muted-foreground">
+											CNAME &rarr; <code class="mono">{ c.Target }</code>
+										</span>
+									}
+								</span>
+								if c.Verified {
+									<span class="status status-ok">routed</span>
+								} else {
+									<span class="status status-warn">not verified</span>
+									<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
+										<button class="btn btn-sm" type="submit">Verify</button>
+									</form>
+								}
+								<form
+									method="post"
+									action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
+									onsubmit="return confirm('Remove this domain? Traffic for it stops being routed to this app.')"
+								>
+									<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+								</form>
+							</div>
+						}
+					</div>
+				}
+				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="flex flex-wrap items-end gap-3">
+					<div class="field min-w-[260px] flex-1">
+						<label class="label" for="host">Add custom domain</label>
+						<input
+							class="control"
+							id="host"
+							name="host"
+							placeholder="shop.example.com"
+							required
+						/>
+					</div>
+					<button class="btn btn-primary" type="submit">Add</button>
+				</form>
+				<p class="mt-3 text-[12.5px] text-muted-foreground">
+					At your DNS provider, point the name at
+					<code class="mono">{ d.Net.Target }</code> with a CNAME. An apex domain
+					cannot carry one — use whatever your provider calls a flattened ALIAS
+					instead, and verification will accept it.
+				</p>
+				<p class="mt-2 text-[12.5px] text-muted-foreground">
+					Nothing is routed until the record resolves. Until then the domain is a
+					claim, and anyone who proves they control it can take it.
+				</p>
+			}
+		</div>
+	</div>
+}
+
+templ routingOptions(d NetworkingData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Routing</span>
+		</div>
+		<div class="panel-body">
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/networking") } class="flex flex-col gap-4">
+				<label class="flex items-start gap-2.5">
+					<input
+						type="checkbox"
+						name="https_only"
+						class="mt-0.5"
+						checked?={ d.Net.HTTPSOnly }
+					/>
+					<span class="min-w-0">
+						<span class="block font-medium">Enforce HTTPS</span>
+						<span class="block text-[12.5px] text-muted-foreground">
+							Routes through the ingress controller's secure entrypoint only, so
+							a request arriving on plain HTTP is not served rather than served
+							and redirected.
+						</span>
+					</span>
+				</label>
+				<label class="flex items-start gap-2.5">
+					<input
+						type="checkbox"
+						name="cname_only"
+						class="mt-0.5"
+						checked?={ d.Net.CNAMEOnly }
+					/>
+					<span class="min-w-0">
+						<span class="block font-medium">Publish a CNAME, never node addresses</span>
+						<span class="block text-[12.5px] text-muted-foreground">
+							Tells ExternalDNS to target
+							if d.Net.Target != "" {
+								<code class="mono">{ d.Net.Target }</code>
+							} else {
+								the platform
+							}
+							rather than publishing this cluster's node addresses as A records.
+							Yacht does not run ExternalDNS; if none is installed this changes
+							nothing.
+						</span>
+					</span>
+				</label>
+				<div>
+					<button class="btn btn-primary" type="submit">Save</button>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+templ backToApp(name string) {
+	<a class="btn" href={ templ.URL("/apps/" + name + "/settings") }>Back to settings</a>
+}
+
+// PlatformDNS is the install-wide DNS configuration.
+templ PlatformDNS(d PlatformDNSData) {
+	@pageHead("DNS",
+		"How this install publishes hostnames. One controller, one setting — not per app.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That did not work</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-body">
+			<form method="post" action="/cluster/dns" class="flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="cname_target">CNAME target</label>
+					<input
+						class="control"
+						id="cname_target"
+						name="cname_target"
+						value={ d.DNS.CNAMETarget }
+						placeholder="edge.yourplatform.com"
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						What a customer points their CNAME at, and what ExternalDNS is told
+						to target so it publishes a CNAME instead of this cluster's node
+						addresses. Leave it empty to switch custom domains off: without a
+						target there is nothing a claim could be verified against.
+					</p>
+				</div>
+				<div class="field">
+					<label class="label" for="txt_prefix">DNS ownership prefix</label>
+					<input
+						class="control"
+						id="txt_prefix"
+						name="txt_prefix"
+						value={ d.DNS.TXTPrefix }
+						placeholder="extdns-"
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						Keeps the ownership record off the name it owns, which is what lets
+						an apex domain work at all. It must match
+						<code class="mono">--txt-prefix</code> on your ExternalDNS
+						controller.
+					</p>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						Recorded here, not applied. Yacht does not deploy that controller and
+						cannot set a flag on it — this is so the two can be kept in step, and
+						so the value is written down somewhere other than a shell history.
+					</p>
+				</div>
+				<div>
+					<button class="btn btn-primary" type="submit">Save</button>
+				</div>
+			</form>
+		</div>
+	</div>
+	if d.DNS.UpdatedAt != "" {
+		<p class="text-[12.5px] text-muted-foreground">Updated { d.DNS.UpdatedAt }.</p>
+	}
+}

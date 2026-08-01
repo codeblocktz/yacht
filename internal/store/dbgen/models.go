@@ -32,6 +32,8 @@ type App struct {
 	ProjectID      pgtype.UUID
 	CanvasX        *int32
 	CanvasY        *int32
+	HttpsOnly      bool
+	CnameOnly      bool
 }
 
 type AppLink struct {
@@ -63,14 +65,16 @@ type Deployment struct {
 }
 
 type Domain struct {
-	ID        uuid.UUID
-	OwnerID   string
-	AppID     uuid.UUID
-	Host      string
-	Tls       bool
-	Verified  bool
-	CreatedAt time.Time
-	Managed   bool
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	Host         string
+	Tls          bool
+	Verified     bool
+	CreatedAt    time.Time
+	Managed      bool
+	VerifiedAt   pgtype.Timestamptz
+	VerifyTarget string
 }
 
 type Invitation struct {
@@ -99,6 +103,13 @@ type Membership struct {
 	OwnerID   string
 	Role      string
 	CreatedAt time.Time
+}
+
+type PlatformDn struct {
+	ID          int32
+	CnameTarget string
+	TxtPrefix   string
+	UpdatedAt   time.Time
 }
 
 type Project struct {
