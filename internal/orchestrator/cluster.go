@@ -64,6 +64,17 @@ type PodInfo struct {
 	App   string
 	Owner OwnerID
 
+	// Reason and Message are why a container is not running, taken from the
+	// container's own waiting state.
+	//
+	// Kubernetes explains itself here the way it does in events, and the phase
+	// alone does not: "Pending" and "CreateContainerConfigError" are the same
+	// picture to somebody watching a deploy, and only one of them says the
+	// image runs as root and the cluster refuses it. Empty while the container
+	// is running or has never been asked to start.
+	Reason  string
+	Message string
+
 	// DrainMoves reports whether draining this pod's node would move it.
 	//
 	// Decided where the drain is implemented rather than by a caller reading

@@ -171,6 +171,18 @@ func (o *Orchestrator) Pods(
 				info.Ready++
 			}
 			info.Restarts += cs.RestartCount
+
+			// The first container that is not running explains the pod. A pod
+			// with several stuck containers is almost always stuck for one
+			// reason, and listing every copy of it buries the fact.
+			if info.Reason == "" && cs.State.Waiting != nil {
+				info.Reason = cs.State.Waiting.Reason
+				info.Message = cs.State.Waiting.Message
+			}
+			if info.Reason == "" && cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+				info.Reason = cs.State.Terminated.Reason
+				info.Message = cs.State.Terminated.Message
+			}
 		}
 		out = append(out, info)
 	}

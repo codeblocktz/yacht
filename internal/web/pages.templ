@@ -923,6 +923,19 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 							@statusDot(p.Phase, podPhaseClass(p))
 						</td>
 					</tr>
+					if p.Reason != "" {
+						// On its own row rather than in the status cell: the
+						// message is a sentence, and a table column sized for
+						// "Running" would truncate the half that says what to do.
+						<tr>
+							<td class="!pt-0 text-muted-foreground" colspan="6">
+								<span class="font-medium text-foreground">{ p.Reason }</span>
+								if p.Message != "" {
+									&mdash; { p.Message }
+								}
+							</td>
+						</tr>
+					}
 				}
 			</tbody>
 		</table>
