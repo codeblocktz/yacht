@@ -161,7 +161,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		// picture of a canvas rather than one.
 		FullBleed:     isCanvasPath(path),
 		Breadcrumb:    breadcrumbFor(path),
-		BrandName:     "Yacht",
+		BrandName:     DefaultBrandName,
 		BrandHref:     "/",
 		SidebarTop:    switcher,
 		SidebarFooter: footer,
@@ -305,3 +305,10 @@ func isCanvasPath(path string) bool {
 		return hasPrefix(path, "/apps/")
 	}
 }
+
+// DefaultBrandName is this engine's own name.
+//
+// Compared against rather than only assigned: the wordmark is this one word
+// drawn, so it is shown when the name is still this one and replaced by plain
+// text the moment a wrapping application sets its own.
+const DefaultBrandName = "Yacht"

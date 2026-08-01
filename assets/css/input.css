@@ -74,7 +74,7 @@
   --success: oklch(0.52 0.13 158);
   --warning: oklch(0.62 0.13 68);
   --info: oklch(0.55 0.16 258);
-  --brand: oklch(0.55 0.11 178);
+  --brand: oklch(0.6042 0.1015 180.3); /* #219584, the mark's deeper teal */
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -103,7 +103,7 @@
   --success: oklch(0.74 0.15 158);
   --warning: oklch(0.79 0.14 76);
   --info: oklch(0.7 0.14 258);
-  --brand: oklch(0.76 0.11 178);
+  --brand: oklch(0.6711 0.0916 182.3); /* #4AA89A, the mark's lighter teal */
   --border: oklch(1 0 0 / 9%);
   --input: oklch(1 0 0 / 13%);
   --ring: oklch(0.556 0 0);

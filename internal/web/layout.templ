@@ -18,7 +18,7 @@ templ Layout(s Slots, page templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<title>{ s.Title }</title>
-			<link rel="icon" href="data:,"/>
+			<link rel="icon" type="image/svg+xml" href={ asset("/assets/brand/icon.svg") }/>
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
 			@themeScript()
 			@sidebarScript()
@@ -77,9 +77,16 @@ templ sidebar(s Slots) {
 		<a
 			href={ templ.URL(s.BrandHref) }
 			class="brand relative mb-1 flex items-center gap-2.5 px-2 py-1.5 text-[14px] font-semibold tracking-tight"
+			aria-label={ s.BrandName }
 		>
-			<span class="size-4 shrink-0 rounded-[5px] bg-gradient-to-br from-brand to-brand/40 ring-1 ring-inset ring-white/10"></span>
-			<span class="rail-hide truncate">{ s.BrandName }</span>
+			@brandMark("h-[19px] w-auto shrink-0")
+			<span class="rail-hide truncate">
+				if s.BrandName == DefaultBrandName {
+					@brandWordmark("h-[13px] w-auto")
+				} else {
+					{ s.BrandName }
+				}
+			</span>
 			<span class="nav-tip">{ s.BrandName }</span>
 		</a>
 		if s.SidebarTop != nil {
@@ -349,7 +356,10 @@ templ sidebarScript() {
 				var collapsed = root.getAttribute("data-sidebar") === "collapsed";
 				root.setAttribute("data-sidebar", collapsed ? "expanded" : "collapsed");
 				try {
-					localStorage.setItem("yacht-sidebar", collapsed ? "expanded" : "collapsed");
+					localStorage.setItem(
+						"yacht-sidebar",
+						collapsed ? "expanded" : "collapsed"
+					);
 				} catch (e) {}
 				sync();
 			};
