@@ -491,3 +491,119 @@ func TestRetiringTheAppDomainReleasesTheHostname(t *testing.T) {
 		t.Errorf("Host = %q, want empty — the dashboard must stop offering a retired URL", got.Host)
 	}
 }
+
+func TestAttachVolumeReachesTheOrchestrator(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-vol")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if _, err := s.AttachVolume(ctx, id, "web", VolumeInput{
+		Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30,
+	}); err != nil {
+		t.Fatalf("AttachVolume: %v", err)
+	}
+
+	spec := orch.lastAppSpec()
+	if len(spec.Volumes) != 1 || spec.Volumes[0].MountPath != "/var/lib/data" {
+		t.Fatalf("spec.Volumes = %+v, want one at /var/lib/data", spec.Volumes)
+	}
+
+	got, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Volumes) != 1 || got.Volumes[0].Name != "data" {
+		t.Fatalf("app volumes on read = %+v, want one named data", got.Volumes)
+	}
+}
+
+// Kubernetes cannot shrink a claim, so neither can this. Refusing before
+// anything reaches the cluster keeps the database and the cluster agreeing.
+func TestVolumesGrowButNeverShrink(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-vol-grow")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.AttachVolume(ctx, id, "web", VolumeInput{
+		Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30,
+	}); err != nil {
+		t.Fatalf("AttachVolume: %v", err)
+	}
+
+	if err := s.ResizeVolume(ctx, id, "web", "data", 2<<30); err != nil {
+		t.Fatalf("growing: %v", err)
+	}
+	if err := s.ResizeVolume(ctx, id, "web", "data", 1<<30); !errors.Is(err, ErrVolumeShrink) {
+		t.Fatalf("shrinking: want ErrVolumeShrink, got %v", err)
+	}
+
+	got, _ := s.Get(ctx, id, "web")
+	if got.Volumes[0].SizeBytes != 2<<30 {
+		t.Fatalf("size = %d, want the grown 2GiB", got.Volumes[0].SizeBytes)
+	}
+}
+
+// A volume with a workload mounted on it is refused. Detaching is an edit of
+// the app; deleting the storage is a separate act.
+func TestDeletingAnAttachedVolumeIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-vol-del")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.AttachVolume(ctx, id, "web", VolumeInput{
+		Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30,
+	}); err != nil {
+		t.Fatalf("AttachVolume: %v", err)
+	}
+
+	if err := s.DeleteVolume(ctx, id, "web", "data", false); !errors.Is(err, ErrVolumeAttached) {
+		t.Fatalf("want ErrVolumeAttached, got %v", err)
+	}
+	// Detached first, it goes.
+	if err := s.DeleteVolume(ctx, id, "web", "data", true); err != nil {
+		t.Fatalf("detach and delete: %v", err)
+	}
+	got, _ := s.Get(ctx, id, "web")
+	if len(got.Volumes) != 0 {
+		t.Fatalf("volumes = %+v, want none", got.Volumes)
+	}
+}
+
+// Storage forces one replica. Scaling an app that has a volume must be
+// refused, not silently produce a workload that can never become ready.
+func TestScalingAnAppWithStorageIsRefused(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	id := owner(t, s, pool, "svc-vol-scale")
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.AttachVolume(ctx, id, "web", VolumeInput{
+		Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30,
+	}); err != nil {
+		t.Fatalf("AttachVolume: %v", err)
+	}
+
+	if _, err := s.Scale(ctx, id, "web", 3); err == nil {
+		t.Fatal("scaled an app with storage to three replicas")
+	}
+}

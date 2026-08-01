@@ -33,6 +33,10 @@ type Querier interface {
 	// another owner's data, and sqlc makes the parameter impossible to omit
 	// because the generated signature requires it.
 	CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (Team, error)
+	// Storage attached to an app. Scoped by owner_id like every other resource
+	// query: a handler that forgets to scope produces no rows here rather than
+	// another team's storage.
+	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
@@ -53,6 +57,7 @@ type Querier interface {
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
+	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
@@ -86,6 +91,11 @@ type Querier interface {
 	GetTeamRow(ctx context.Context, id string) (Team, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	GetVolume(ctx context.Context, arg GetVolumeParams) (Volume, error)
+	// Expansion only, enforced in the WHERE clause rather than by reading the row
+	// and comparing in Go: a check the caller performs is one a caller can skip,
+	// and Kubernetes cannot shrink a claim afterwards to undo it.
+	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
@@ -99,6 +109,7 @@ type Querier interface {
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
+	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// A role change reads the owner count and then writes; taking the team row
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.

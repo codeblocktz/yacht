@@ -107,3 +107,15 @@ type User struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
+
+type Volume struct {
+	ID        uuid.UUID
+	OwnerID   string
+	AppID     uuid.UUID
+	Name      string
+	MountPath string
+	SizeBytes int64
+	Class     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}

@@ -65,6 +65,9 @@ type App struct {
 	// so there is one place a hostname lives.
 	Host string
 
+	// Volumes is the storage attached to this app, read alongside it.
+	Volumes []Volume
+
 	// TLS reports whether the platform serves Host over TLS. Populated on
 	// read from configuration rather than stored, because it is a property of
 	// the install and not of the app.
@@ -305,6 +308,14 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return err
 	}
 
+	// Read here rather than trusted from the caller's copy of the app: an
+	// attach writes a row and then applies, and a stale slice would deploy the
+	// workload without the storage that was just created for it.
+	vols, err := s.volumesFor(ctx, q, a.ID)
+	if err != nil {
+		return err
+	}
+
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
@@ -317,6 +328,7 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		MemoryLimit:   a.MemoryLimit,
 		Hosts:         hosts,
 		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
+		Volumes:       volumeSpecs(vols),
 	})
 }
 
@@ -406,6 +418,16 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	if len(hosts) > 0 {
 		a.Host = hosts[0]
 		a.TLS = s.opts.WildcardTLS
+	}
+
+	// Read on the same pass. Storage changes what the app page can offer —
+	// scaling, and whether a deploy will recreate — so a caller holding an App
+	// without it would be deciding from a partial picture.
+	if vols, err := s.volumesFor(ctx, s.q, a.ID); err == nil {
+		a.Volumes = vols
+	} else {
+		s.log.Debug("volumes unavailable",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
 	}
 }
 
@@ -525,6 +547,15 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
 		return App{}, err
+	}
+
+	// Storage is the reason, not replicas: a volume mounts on one node at a
+	// time, so the second pod has nowhere to go. Said here rather than left to
+	// the orchestrator, because this is where somebody asked for it.
+	if replicas > 1 && len(a.Volumes) > 0 {
+		return App{}, fmt.Errorf(
+			"app: %s has storage attached, so it runs one replica — "+
+				"detach its volumes to scale it", name)
 	}
 
 	row, err := s.q.SetAppReplicas(ctx, dbgen.SetAppReplicasParams{

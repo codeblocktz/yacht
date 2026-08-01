@@ -264,3 +264,36 @@ func TestDetachingAVolumeDoesNotDeleteTheClaim(t *testing.T) {
 		t.Fatalf("the claim was destroyed by an edit that merely detached it: %v", err)
 	}
 }
+
+// The live sequence: an app is created, and storage is attached afterwards.
+// Applying a volume to a Deployment that already exists is the ordinary case,
+// and it is not the same code path as creating one with a volume already on it.
+func TestAttachingAVolumeToAnExistingWorkload(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp without volume: %v", err)
+	}
+	if err := o.ApplyApp(ctx, specWithVolume()); err != nil {
+		t.Fatalf("ApplyApp with volume: %v", err)
+	}
+
+	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+
+	var mounted bool
+	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == "/var/lib/data" {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Errorf("mounts = %+v, want one at /var/lib/data", dep.Spec.Template.Spec.Containers[0].VolumeMounts)
+	}
+	if dep.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("strategy = %q, want Recreate", dep.Spec.Strategy.Type)
+	}
+}

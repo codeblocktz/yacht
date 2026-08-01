@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -127,6 +128,30 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 					orchestrator.AnnotationRevision: specHash(spec),
 				}).
 				WithSpec(podSpec)))
+
+	// The API server defaults spec.strategy.rollingUpdate whenever the strategy
+	// is RollingUpdate, and then refuses type=Recreate while that block is
+	// still present. Those defaulted fields belong to the defaulter rather than
+	// to this field manager, so an apply that simply omits them leaves them in
+	// place and every subsequent deploy fails validation — with the workload
+	// carrying on unchanged, which is what makes it easy to miss.
+	//
+	// Removing them explicitly is the only way to change the strategy of a
+	// Deployment that already exists. A fake clientset does not validate, so
+	// this is invisible to every test that does not touch a real API server.
+	if len(spec.Volumes) > 0 {
+		// Type and block change together. Removing rollingUpdate on its own is
+		// undone immediately: while the type is still RollingUpdate the API
+		// server defaults the block straight back, and the apply that follows
+		// then fails on exactly the field just deleted.
+		const switchToRecreate = `{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}`
+		_, err := o.client.AppsV1().Deployments(spec.Namespace).
+			Patch(ctx, spec.Name, types.MergePatchType,
+				[]byte(switchToRecreate), metav1.PatchOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("k8s: clear rolling update for %s: %w", spec.Ref, err)
+		}
+	}
 
 	if _, err := o.client.AppsV1().Deployments(spec.Namespace).
 		Apply(ctx, dep, applyOpts()); err != nil {
