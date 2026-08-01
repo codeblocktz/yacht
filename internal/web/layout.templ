@@ -1,5 +1,7 @@
 package web
 
+import "github.com/codeblocktz/yacht/internal/web/ui/sheet"
+
 // Layout renders the chrome around a page.
 //
 // Note what this component does NOT do: it never reads an owner, a session, or
@@ -17,6 +19,7 @@ templ Layout(s Slots, page templ.Component) {
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
 			@themeScript()
 			<script src={ asset("/assets/js/htmx.min.js") } defer></script>
+			@sheet.Script()
 		</head>
 		<body class="h-full">
 			<div class="flex h-full">

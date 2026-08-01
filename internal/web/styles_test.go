@@ -1,12 +1,17 @@
 package web
 
 import (
+	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/a-h/templ"
 )
 
 // TestTemplatesOnlyUseClassesThatExist.
@@ -143,7 +148,34 @@ func TestNoRemoteAssets(t *testing.T) {
 
 // And the file it now points at has to actually be there, or every page loads
 // a 404 and the panel silently never opens.
-func TestVendoredScriptIsEmbedded(t *testing.T) {
+// Every script the layout asks for must be a file this binary carries.
+//
+// The failure this catches renders perfectly: a <script src> for a URL nothing
+// serves produces no error anywhere, just a component that never responds to a
+// click. Checking one known filename would not have caught it — the tag that
+// was wrong came from a vendored component, not from a template anyone here
+// wrote.
+func TestEveryScriptTheLayoutAsksForIsEmbedded(t *testing.T) {
+	var buf bytes.Buffer
+	page := templ.ComponentFunc(func(context.Context, io.Writer) error { return nil })
+	if err := Layout(Slots{Title: "t"}, page).Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render layout: %v", err)
+	}
+
+	srcs := regexp.MustCompile(`<script[^>]+src="([^"]+)"`).FindAllStringSubmatch(buf.String(), -1)
+	if len(srcs) == 0 {
+		t.Fatal("the layout loads no scripts at all — this test would pass vacuously")
+	}
+	for _, m := range srcs {
+		// The fingerprint is a query string, not part of the path.
+		path := strings.TrimPrefix(strings.SplitN(m[1], "?", 2)[0], "/")
+		if _, err := assetsFS.ReadFile(path); err != nil {
+			t.Errorf("layout loads %s, which nothing serves: %v", m[1], err)
+		}
+	}
+}
+
+func TestVendoredHtmxIsWholeLibrary(t *testing.T) {
 	b, err := assetsFS.ReadFile("assets/js/htmx.min.js")
 	if err != nil {
 		t.Fatalf("htmx is not embedded: %v", err)

@@ -398,14 +398,12 @@
   /* The graph and its detail panel sit side by side; the panel is empty until
      something is clicked, so it collapses to nothing rather than reserving
      space for a card nobody has selected. */
-  .canvas-wrap { @apply flex min-h-0 flex-1 items-stretch; }
+  .canvas-wrap { @apply flex min-h-0 flex-1; }
   .canvas-wrap > .canvas { @apply min-w-0 flex-1; }
   .canvas-inner { @apply p-6; }
-  /* Full height beside the graph, and its own scroll: a panel that grew with
-     its content would drag the canvas down with it. */
-  .canvas-panel:not(:empty) {
-    @apply flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-border bg-card;
-  }
+  /* The sheet supplies the panel; this only makes its body scroll, so a long
+     variable list does not stretch the sheet past the window. */
+  .canvas-panel-body { @apply flex min-h-0 flex-1 flex-col overflow-hidden; }
   .panel-head {
     @apply flex items-center gap-2 border-b border-border px-4 py-3 text-[13px];
   }

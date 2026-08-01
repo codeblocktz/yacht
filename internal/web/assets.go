@@ -9,6 +9,8 @@ import (
 	"path"
 	"strings"
 	"sync"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/utils"
 )
 
 // Compiled CSS is embedded rather than served from disk, so the binary is the
@@ -58,6 +60,12 @@ func asset(urlPath string) string {
 	}
 	return urlPath
 }
+
+// The vendored templUI components ask for their JavaScript through this
+// variable. Pointing it at asset gives them the same fingerprinting as
+// everything else, instead of upstream's process-start timestamp — which would
+// change on every restart and throw away a cache that had not gone stale.
+func init() { utils.ScriptURL = asset }
 
 // assetHandler serves the embedded assets.
 func assetHandler() http.Handler {

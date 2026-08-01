@@ -1,6 +1,10 @@
 package web
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+)
 
 // Canvas draws the apps and what connects them.
 //
@@ -40,13 +44,14 @@ templ Canvas(d CanvasData) {
 				</svg>
 				for _, n := range d.Nodes {
 					<div class="canvas-node" style={ nodeAt(n) }>
+						@sheet.Trigger(sheet.TriggerProps{For: "canvas-sheet"}) {
 						<a
-						href={ templ.URL("/apps/" + n.App.Name) }
-						class="canvas-card"
-						hx-get={ "/canvas/panel/" + n.App.Name }
-						hx-target="#canvas-panel"
-						hx-swap="innerHTML"
-					>
+							href={ templ.URL("/apps/" + n.App.Name) }
+							class="canvas-card"
+							hx-get={ "/canvas/panel/" + n.App.Name }
+							hx-target="#canvas-panel"
+							hx-swap="innerHTML"
+						>
 							<span class="canvas-card-head">
 								@icon(sourceIcon(n.App.Source))
 								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
@@ -60,28 +65,36 @@ templ Canvas(d CanvasData) {
 								}
 							</span>
 						</a>
-						if n.Volume != nil {
+					}
+					if n.Volume != nil {
+							@sheet.Trigger(sheet.TriggerProps{For: "canvas-sheet"}) {
 							<a
-							href={ templ.URL("/apps/" + n.App.Name + "/storage") }
-							class="canvas-volume"
-							hx-get={ "/canvas/panel/" + n.App.Name + "/volume/" + n.Volume.Name }
-							hx-target="#canvas-panel"
-							hx-swap="innerHTML"
-						>
+								href={ templ.URL("/apps/" + n.App.Name + "/storage") }
+								class="canvas-volume"
+								hx-get={ "/canvas/panel/" + n.App.Name + "/volume/" + n.Volume.Name }
+								hx-target="#canvas-panel"
+								hx-swap="innerHTML"
+							>
 								@icon("disk")
 								<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
 								<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
 							</a>
 						}
+					}
 					</div>
 				}
 			</div>
 		</div>
-		// Empty until something is clicked. href on every card still works, so
-		// the graph is navigable with JavaScript switched off — the panel is an
-		// improvement on that, not a replacement for it.
-		<aside id="canvas-panel" class="canvas-panel"></aside>
 		</div>
+		// One sheet for every card rather than one each: the content is fetched
+		// when something is clicked, so N sheets would be N copies of an empty
+		// panel. Every card keeps its href, so the graph is still navigable with
+		// JavaScript off — this is an improvement on that, not a replacement.
+		@sheet.Sheet(sheet.Props{ID: "canvas-sheet", Side: sheet.SideRight}) {
+			@sheet.Content() {
+				<div id="canvas-panel" class="canvas-panel-body"></div>
+			}
+		}
 	}
 }
 
@@ -92,24 +105,24 @@ templ Canvas(d CanvasData) {
 // it is still a readable page of facts, because a fragment that only works
 // inside one page is a link nobody can share.
 templ CanvasPanel(d CanvasPanelData) {
-	<div class="panel-head">
-		<span class="flex min-w-0 flex-1 items-center gap-2.5">
-			if d.Volume != nil {
-				@icon("disk")
-				<span class="truncate font-medium">{ d.Volume.Name }</span>
-			} else {
-				@icon(sourceIcon(d.App.Source))
-				<span class="truncate font-medium">{ d.App.Name }</span>
+	@sheet.Header() {
+		@sheet.Title() {
+			<span class="flex min-w-0 items-center gap-2.5">
+				if d.Volume != nil {
+					@icon("disk")
+					<span class="truncate">{ d.Volume.Name }</span>
+				} else {
+					@icon(sourceIcon(d.App.Source))
+					<span class="truncate">{ d.App.Name }</span>
+				}
+			</span>
+		}
+		if d.Volume != nil {
+			@sheet.Description() {
+				Storage attached to { d.App.Name }.
 			}
-		</span>
-		<button
-			class="btn btn-ghost btn-sm"
-			hx-get="/canvas/panel/close"
-			hx-target="#canvas-panel"
-			hx-swap="innerHTML"
-			aria-label="Close"
-		>&times;</button>
-	</div>
+		}
+	}
 	<div class="panel-scroll">
 		if d.Volume != nil {
 			<dl class="kv">
