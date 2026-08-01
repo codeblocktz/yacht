@@ -1,5 +1,11 @@
 package domain
 
+// Fixtures use apps.domain.test rather than a shared example domain because
+// `go test ./...` runs this package alongside internal/app against one
+// database, and domains.host is globally unique by design. Two packages both
+// issuing web.apps.example.com collide, and the loser fails with a hostname
+// that looks stale rather than contended.
+
 import (
 	"context"
 	"errors"
@@ -77,33 +83,33 @@ func TestEnsureManagedIssuesAndReissues(t *testing.T) {
 
 	host, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: "apps.example.com", TLS: true,
+		AppDomain: "apps.domain.test", TLS: true,
 	})
 	if err != nil {
 		t.Fatalf("EnsureManaged: %v", err)
 	}
-	if host != "web.apps.example.com" {
-		t.Fatalf("host = %q, want web.apps.example.com", host)
+	if host != "web.apps.domain.test" {
+		t.Fatalf("host = %q, want web.apps.domain.test", host)
 	}
 
 	// The app domain changed. The next call must move the hostname.
 	host, err = EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: "apps.acme.com", TLS: true,
+		AppDomain: "apps.domain-moved.test", TLS: true,
 	})
 	if err != nil {
 		t.Fatalf("EnsureManaged reissue: %v", err)
 	}
-	if host != "web.apps.acme.com" {
-		t.Fatalf("reissued host = %q, want web.apps.acme.com", host)
+	if host != "web.apps.domain-moved.test" {
+		t.Fatalf("reissued host = %q, want web.apps.domain-moved.test", host)
 	}
 
 	hosts, err := HostsForApp(ctx, q, a.ID)
 	if err != nil {
 		t.Fatalf("HostsForApp: %v", err)
 	}
-	if len(hosts) != 1 || hosts[0] != "web.apps.acme.com" {
-		t.Fatalf("hosts = %v, want exactly [web.apps.acme.com]", hosts)
+	if len(hosts) != 1 || hosts[0] != "web.apps.domain-moved.test" {
+		t.Fatalf("hosts = %v, want exactly [web.apps.domain-moved.test]", hosts)
 	}
 }
 
@@ -141,7 +147,7 @@ func TestEnsureManagedReportsACollisionClearly(t *testing.T) {
 
 	if _, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: "apps.example.com",
+		AppDomain: "apps.domain.test",
 	}); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
@@ -152,7 +158,7 @@ func TestEnsureManagedReportsACollisionClearly(t *testing.T) {
 	// constraint violation.
 	_, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: b.OwnerID, AppID: b.ID, AppName: b.Name,
-		AppDomain: "apps.example.com",
+		AppDomain: "apps.domain.test",
 	})
 	if !errors.Is(err, ErrHostTaken) {
 		t.Fatalf("want ErrHostTaken, got %v", err)

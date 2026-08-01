@@ -528,3 +528,31 @@ func (s *Server) invitationFailed(w http.ResponseWriter, r *http.Request, err er
 	}
 	http.Error(w, "this invitation is no longer valid", http.StatusNotFound)
 }
+
+// signInRedirect sends a request with no usable session to the sign-in page.
+//
+// It runs before identity.Middleware rather than replacing it: the middleware
+// stays the single place that resolves an owner, and this only decides what an
+// unresolved request should see. Answering 401 is correct for a machine and
+// useless to a person, who gets a blank page with nothing to click.
+//
+// It does not carry the attempted path through. A return-to parameter is an
+// open-redirect surface, and the benefit — landing back on the page you asked
+// for — is small next to getting that wrong.
+// Only GET is redirected. A person navigating needs somewhere to go; a form
+// post or an API call with a dead session deserves a plain 401, and turning
+// that into a 303 to an HTML page is how a caller ends up parsing a sign-in
+// form as though it were a result.
+func (s *Server) signInRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, err := s.accounts.ResolveSession(r.Context(), sessionToken(r)); err != nil {
+			http.Redirect(w, r, "/sign-in", http.StatusSeeOther)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

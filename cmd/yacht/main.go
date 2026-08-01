@@ -144,6 +144,7 @@ func run() error {
 		// reachable instead of belonging to an owner nobody can authenticate as.
 		opts.BootstrapTeamID = cfg.OwnerID
 		opts.BootstrapTeamName = cfg.OwnerName
+		opts.MailTransport = cfg.MailTransport()
 	}
 
 	srv, err := web.New(opts)
@@ -195,12 +196,14 @@ func newIdentity(
 			slog.String("mail_transport", cfg.MailTransport()),
 			slog.Duration("session_ttl", cfg.SessionTTL),
 		)
-		// Until sign-in pages exist there is no way to obtain a cookie, so an
-		// install that sets YACHT_BASE_URL today gets a dashboard it cannot
-		// enter. Better said out loud than discovered at the login screen that
-		// is not there.
-		log.Warn("this build serves no sign-in page yet — every request will be " +
-			"rejected until one is added; unset YACHT_BASE_URL to stay on token auth")
+		// With no mail transport configured, sign-in links go to the log. That
+		// is the documented break-glass path rather than an accident, but an
+		// operator who does not know it will wait for mail that is never sent.
+		if cfg.MailTransport() == "log" {
+			log.Warn("no mail transport configured — sign-in links will be written " +
+				"to this log instead of being sent; set YACHT_SMTP_ADDR or " +
+				"YACHT_RESEND_API_KEY to deliver them")
+		}
 		return accounts.Provider(web.SessionCookie), nil
 	}
 

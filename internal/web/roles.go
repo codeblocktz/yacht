@@ -80,14 +80,3 @@ func (s *Server) roleOf(r *http.Request) (account.Role, bool) {
 	}
 	return sess.Role, true
 }
-
-// teamRouteStub answers the team-management routes until the tasks that build
-// that page fill them in.
-//
-// The routes are registered now because their gate is: putting each one in its
-// group is what makes "a member cannot invite" and "an admin cannot appoint an
-// admin" true today rather than the day someone remembers. Supplying the
-// behaviour later replaces a handler and leaves the gate alone.
-func (s *Server) teamRouteStub(w http.ResponseWriter, _ *http.Request) {
-	http.Error(w, "team management is not available yet", http.StatusNotImplemented)
-}

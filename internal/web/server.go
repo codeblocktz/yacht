@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -172,6 +173,10 @@ type Options struct {
 	// defaultSessionTTL.
 	SessionTTL time.Duration
 
+	// MailTransport names the delivery route — "smtp", "resend" or "log" — so
+	// the settings page can show whether links are actually being sent.
+	MailTransport string
+
 	// BootstrapTeamID and BootstrapTeamName are the install's configured owner
 	// — YACHT_OWNER_ID and YACHT_OWNER_NAME. The first person to sign in
 	// inherits that team, so the apps an install already deployed under it stay
@@ -209,6 +214,10 @@ type Server struct {
 	sessionTTL    time.Duration
 	bootstrapID   string
 	bootstrapName string
+
+	// mailTransport names how links are delivered, purely so the settings page
+	// can say. "log" means nothing is actually sent.
+	mailTransport string
 	signInLimit   *attemptLimiter
 }
 
@@ -274,6 +283,7 @@ func New(opts Options) (*Server, error) {
 		sessionTTL:    opts.SessionTTL,
 		bootstrapID:   opts.BootstrapTeamID,
 		bootstrapName: opts.BootstrapTeamName,
+		mailTransport: cmp.Or(opts.MailTransport, "log"),
 		signInLimit:   newAttemptLimiter(signInWindow),
 	}, nil
 }
@@ -342,6 +352,16 @@ func (s *Server) Handler() http.Handler {
 	}
 
 	r.Group(func(r chi.Router) {
+		// With accounts on, an unresolved request is sent to the sign-in page
+		// rather than answered 401. A bare 401 is a dead end in a browser:
+		// nothing on it to click, and no way to discover where sign-in lives.
+		//
+		// Only with accounts on. A token-authenticated install has no page to
+		// send anyone to, and redirecting an API caller to HTML would turn a
+		// clear 401 into a confusing 200.
+		if s.accounts != nil {
+			r.Use(s.signInRedirect)
+		}
 		r.Use(identity.Middleware(s.ident))
 
 		// The teams a person may act as, for whatever renders the chrome. Mounted
@@ -427,7 +447,12 @@ func (s *Server) Handler() http.Handler {
 				r.Use(s.requireRole(account.RoleOwner))
 
 				r.Post("/team/members/{id}/role", s.teamSetRole)
-				r.Post("/team/delete", s.teamRouteStub)
+
+				// Deleting a team is deliberately absent rather than stubbed. It
+				// cascades to every app row the team owns while leaving the
+				// workloads running in the cluster, and nothing here reconciles
+				// that. A route answering 501 is worse than no route: advertised,
+				// gated, and useless.
 			})
 		}
 	})
@@ -740,6 +765,9 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		ClusterOK:     s.orch.Ping(r.Context()) == nil,
 		AppDomain:     s.appDomain,
 		WildcardTLS:   s.wildcard,
+		AccountsOn:    s.accounts != nil,
+		MailTransport: s.mailTransport,
+		SessionTTL:    s.sessionTTL.String(),
 	}))
 }
 

@@ -1014,9 +1014,9 @@ func TestSignOutClearsTheCookieAndRevokesTheSession(t *testing.T) {
 	// The cookie being dropped is the browser's side of it and the browser is
 	// not the threat. What matters is that the value, kept by anyone who copied
 	// it, no longer resolves to anything.
-	if code := h.getAs(t, "/apps", here).Code; code != http.StatusUnauthorized {
-		t.Fatalf("GET /apps with the signed-out session = %d, want 401 — the token still works",
-			code)
+	if rec := h.getAs(t, "/apps", here); !deniedGET(t, rec, "web-") {
+		t.Fatalf("GET /apps with the signed-out session = %d — the token still works",
+			rec.Code)
 	}
 	if code := h.getAs(t, "/apps", elsewhere).Code; code != http.StatusOK {
 		t.Fatalf("GET /apps on the other browser = %d, want 200 — signing out of one "+
@@ -1062,8 +1062,8 @@ func TestSignOutEverywhereInvalidatesEveryDevice(t *testing.T) {
 	for name, c := range map[string]*http.Cookie{
 		"this browser": here, "the phone": phone, "the stolen cookie": stolen,
 	} {
-		if code := h.getAs(t, "/apps", c).Code; code != http.StatusUnauthorized {
-			t.Errorf("GET /apps with %s = %d, want 401 — the session survived", name, code)
+		if rec := h.getAs(t, "/apps", c); !deniedGET(t, rec, "web-") {
+			t.Errorf("GET /apps with %s = %d — the session survived", name, rec.Code)
 		}
 	}
 	if code := h.getAs(t, "/apps", other).Code; code != http.StatusOK {
@@ -1132,4 +1132,124 @@ func TestSignOutWithADeadSessionStillClearsTheCookie(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Errorf("POST /sign-out with no cookie = %d, want 303", rec.Code)
 	}
+}
+
+// ------------------------------------------------------------- task 9: wiring
+
+// A browser that is not signed in must land on the sign-in page. A bare 401 is
+// a dead end: there is nothing on it to click, and the person has no way to
+// discover where sign-in lives.
+func TestUnauthenticatedRequestRedirectsToSignIn(t *testing.T) {
+	h := newLiveHarness(t, "web-redirect")
+
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apps", nil))
+
+	if rec.Code != http.StatusSeeOther && rec.Code != http.StatusFound {
+		t.Fatalf("GET /apps signed out = %d, want a redirect", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "/sign-in") {
+		t.Fatalf("redirected to %q, want the sign-in page", loc)
+	}
+
+	// And it must not carry anything about what was behind it.
+	if body := rec.Body.String(); strings.Contains(body, "yacht-") {
+		t.Errorf("the redirect body mentions internal names: %s", body)
+	}
+}
+
+// A load balancer has no credentials, and a health check that needs them is
+// not one. It must answer, not redirect.
+func TestHealthzStaysOutsideAuth(t *testing.T) {
+	h := newLiveHarness(t, "web-healthz")
+
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rec.Code != http.StatusOK && rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /healthz = %d, want 200 or 503 — never a redirect", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("healthz redirected to %q", loc)
+	}
+}
+
+// The settings page has to say whether accounts are on, because otherwise the
+// only way to find out is to sign out and see what happens.
+func TestSettingsShowsAccountsPosture(t *testing.T) {
+	h := newLiveHarness(t, "web-settings-posture")
+	h.user(t, "settings@web.test")
+	c := sessionCookie(h.signIn(t, "settings@web.test"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/settings", nil)
+	req.AddCookie(c)
+	h.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /settings = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Sign-in", "Magic link"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings does not mention %q — the posture is invisible", want)
+		}
+	}
+}
+
+// TestNoStaleNoSignInPageWarning guards against a log line that was true when
+// it was written and is not any more. An operator reading "this build serves
+// no sign-in page" while looking at one has no reason to trust the rest.
+func TestNoStaleNoSignInPageWarning(t *testing.T) {
+	src, err := os.ReadFile("../../cmd/yacht/main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if strings.Contains(string(src), "no sign-in page yet") {
+		t.Error("main.go still warns that there is no sign-in page; there is one")
+	}
+}
+
+// A route that answers 501 is worse than a route that does not exist: it is
+// advertised, gated, and useless.
+func TestNoRoutesAnswerNotImplemented(t *testing.T) {
+	h := newLiveHarness(t, "web-no-stubs")
+	h.user(t, "stub@web.test")
+	c := sessionCookie(h.signIn(t, "stub@web.test"))
+
+	for _, path := range []string{"/team/delete"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, nil)
+		req.AddCookie(c)
+		h.handler.ServeHTTP(rec, req)
+		if rec.Code == http.StatusNotImplemented {
+			t.Errorf("POST %s answers 501 — remove the route or build it", path)
+		}
+	}
+}
+
+// deniedGET reports whether a signed-out GET was refused, either as a plain 401
+// or by being sent to sign in.
+//
+// Both are refusals, and which one arrives is a presentation decision: a
+// browser gets somewhere to click, everything else gets a status. What must be
+// true either way is that no page behind the session came back, so this checks
+// the body as well as the code.
+func deniedGET(t *testing.T, rec *httptest.ResponseRecorder, mustNotContain string) bool {
+	t.Helper()
+	switch rec.Code {
+	case http.StatusUnauthorized:
+	case http.StatusSeeOther, http.StatusFound:
+		if loc := rec.Header().Get("Location"); !strings.Contains(loc, "/sign-in") {
+			t.Errorf("redirected to %q rather than to sign in", loc)
+			return false
+		}
+	default:
+		return false
+	}
+	if mustNotContain != "" && strings.Contains(rec.Body.String(), mustNotContain) {
+		t.Errorf("a refused response still carried %q", mustNotContain)
+		return false
+	}
+	return true
 }

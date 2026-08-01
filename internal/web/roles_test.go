@@ -309,9 +309,11 @@ func TestAdminCanDeleteAppsAndInvite(t *testing.T) {
 func TestOnlyOwnerCanManageAdminsOrDeleteTheTeam(t *testing.T) {
 	rt := newRoleTeam(t, "web-role-owner", "owner-app")
 
+	// /team/delete is deliberately absent from the router rather than stubbed —
+	// it cascades to every app row while leaving the workloads running — so
+	// there is no route here to gate.
 	for _, path := range []string{
 		"/team/members/" + rt.adminID.String() + "/role",
-		"/team/delete",
 	} {
 		for name, c := range map[string]*http.Cookie{
 			"a member": rt.member, "an admin": rt.admin,

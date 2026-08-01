@@ -923,6 +923,14 @@ type SettingsData struct {
 	ClusterOK     bool
 	AppDomain     string
 	WildcardTLS   bool
+
+	// AccountsOn, MailTransport and SessionTTL describe the sign-in posture.
+	// Shown because otherwise the only way to find out whether accounts are on
+	// — and whether links are actually being delivered — is to sign out and
+	// see what happens.
+	AccountsOn    bool
+	MailTransport string
+	SessionTTL    string
 }
 
 templ Settings(d SettingsData) {
@@ -988,6 +996,31 @@ templ Settings(d SettingsData) {
 						@statusDot("Off", "status-neutral")
 					}
 				</dd>
+				<dt>Sign-in</dt>
+				<dd>
+					if d.AccountsOn {
+						@statusDot("Magic link", "status-ok")
+						<span class="ml-1 text-muted-foreground">
+							sessions last { d.SessionTTL }, links delivered by <span class="mono">{ d.MailTransport }</span>
+						</span>
+					} else {
+						@statusDot("Off", "status-neutral")
+						<span class="ml-1 text-muted-foreground">
+							single owner. Set <code class="mono">YACHT_BASE_URL</code> to add people.
+						</span>
+					}
+				</dd>
+				if d.AccountsOn && d.MailTransport == "log" {
+					<dt>Mail</dt>
+					<dd>
+						@statusDot("Written to the log", "status-warn")
+						<span class="ml-1 text-muted-foreground">
+							nothing is sent. This is the way back in if delivery breaks, but
+							set <code class="mono">YACHT_SMTP_ADDR</code> or
+							<code class="mono">YACHT_RESEND_API_KEY</code> before inviting anyone.
+						</span>
+					</dd>
+				}
 				<dt>Version</dt>
 				<dd class="mono">{ d.Version }</dd>
 			</dl>

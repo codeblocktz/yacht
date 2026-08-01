@@ -446,9 +446,9 @@ func TestRemovingAMemberEndsTheirSession(t *testing.T) {
 		t.Fatalf("POST remove = %d, want 303\n%s", rec.Code, rec.Body.String())
 	}
 
-	if code := rt.getAs(t, "/apps", rt.member).Code; code != http.StatusUnauthorized {
-		t.Fatalf("GET /apps as the removed member = %d, want 401 — their cookie still "+
-			"opens the team they were taken out of", code)
+	if rec := rt.getAs(t, "/apps", rt.member); !deniedGET(t, rec, "web-") {
+		t.Fatalf("GET /apps as the removed member = %d — their cookie still "+
+			"opens the team they were taken out of", rec.Code)
 	}
 	if body := rt.getAs(t, "/team", rt.owner).Body.String(); strings.Contains(
 		body, "member@web.test") {
