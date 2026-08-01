@@ -694,6 +694,8 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.apps.Scale(r.Context(), owner.ID, name, int32(replicas)); err != nil {
 		s.log.Error("scale", slog.String("app", name), slog.String("error", err.Error()))
+		s.appActionFailed(w, r, name, "settings", err)
+		return
 	}
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
@@ -704,7 +706,12 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 
 	if s.apps != nil {
 		if err := s.apps.Redeploy(r.Context(), owner.ID, name); err != nil {
+			// Surfaced, not merely logged. A redirect after a failure shows the
+			// page somebody expected, with the workload unchanged and nothing
+			// on screen to say so — which is how a broken deploy goes unnoticed.
 			s.log.Error("redeploy", slog.String("app", name), slog.String("error", err.Error()))
+			s.appActionFailed(w, r, name, "", err)
+			return
 		}
 	}
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
@@ -717,6 +724,8 @@ func (s *Server) appDelete(w http.ResponseWriter, r *http.Request) {
 	if s.apps != nil {
 		if err := s.apps.Delete(r.Context(), owner.ID, name); err != nil {
 			s.log.Error("delete", slog.String("app", name), slog.String("error", err.Error()))
+			s.appActionFailed(w, r, name, "settings", err)
+			return
 		}
 	}
 	http.Redirect(w, r, "/apps", http.StatusSeeOther)

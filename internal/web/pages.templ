@@ -223,7 +223,7 @@ templ AppDetail(d AppDetailData) {
 				case "storage":
 					@appStorage(d)
 				case "settings":
-					@appSettings(d.App)
+					@appSettings(d)
 				default:
 					@appDeployments(d)
 			}
@@ -517,7 +517,13 @@ templ appMetrics(d AppDetailData) {
 
 // ---- settings tab
 
-templ appSettings(a app.App) {
+templ appSettings(d AppDetailData) {
+	{{ a := d.App }}
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">

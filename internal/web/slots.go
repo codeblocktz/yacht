@@ -145,10 +145,10 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 				{Label: "Events", Href: "/cluster/events", Icon: "activity",
 					Active: hasPrefix(path, "/cluster/events")},
 			}},
-			{Heading: "System", Items: []NavItem{
-				{Label: "Settings", Href: "/settings", Icon: "settings",
-					Active: hasPrefix(path, "/settings")},
-			}},
+			{Heading: "System", Items: append(teamNav(ctx, path), NavItem{
+				Label: "Settings", Href: "/settings", Icon: "settings",
+				Active: hasPrefix(path, "/settings"),
+			})},
 		},
 	}
 }
@@ -188,4 +188,19 @@ func slot(c templ.Component) templ.Component {
 		return templ.NopComponent
 	}
 	return c
+}
+
+// teamNav offers team management only where there is a team to manage.
+//
+// An install resolved by a shared token has one owner and no memberships, so
+// the page would show a list of one person nobody can change. The switcher
+// already answers "is this install multi-team?", and this asks it the same way.
+func teamNav(ctx context.Context, path string) []NavItem {
+	if len(TeamsFromContext(ctx)) == 0 {
+		return nil
+	}
+	return []NavItem{{
+		Label: "Team", Href: "/team", Icon: "users",
+		Active: hasPrefix(path, "/team"),
+	}}
 }

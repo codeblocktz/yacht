@@ -13,6 +13,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/app"
 )
 
 // cross-team IDOR. Admin of team A, acting on team B's objects by id.
@@ -175,4 +177,71 @@ func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
 	if c.Value == planted.Value {
 		t.Fatal("sign-in adopted the token the caller presented — session fixation")
 	}
+}
+
+// TestEveryPageIsReachableByClicking is the other half of
+// TestEveryNavTargetResolves.
+//
+// That one proves every advertised page exists. This one proves every page is
+// advertised — a page nobody can navigate to is one only its author knows
+// about, which is how team management shipped and stayed invisible.
+func TestEveryPageIsReachableByClicking(t *testing.T) {
+	h := newLiveHarness(t, "web-nav")
+	h.user(t, "nav@web.test")
+	c := sessionCookie(h.signIn(t, "nav@web.test"))
+
+	body := h.getAs(t, "/", c).Body.String()
+
+	// Every top-level page a person is meant to use. Sub-pages of an app are
+	// reached from the app, so they are not listed here.
+	for _, href := range []string{
+		"/", "/apps", "/deployments",
+		"/cluster/nodes", "/cluster/pods", "/cluster/volumes", "/cluster/events",
+		"/team", "/settings",
+	} {
+		if !strings.Contains(body, `href="`+href+`"`) {
+			t.Errorf("no link to %s — the page exists but nothing points at it", href)
+		}
+	}
+}
+
+// TestFailedActionsDoNotReportSuccess.
+//
+// Scale, redeploy and delete logged their failures and redirected as though
+// they had worked. The person saw the page they expected, the workload was
+// unchanged, and the only record was a log line nobody was reading — which is
+// how a broken deploy strategy went unnoticed through six passing tests.
+func TestFailedActionsDoNotReportSuccess(t *testing.T) {
+	srv := testServer(t, Options{Apps: &failingApps{}})
+
+	for _, path := range []string{
+		"/apps/web/scale", "/apps/web/redeploy", "/apps/web/delete",
+	} {
+		req := httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader("replicas=2"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+
+		if rec.Code == http.StatusSeeOther {
+			t.Errorf("POST %s failed and answered 303 — the caller is told it worked", path)
+		}
+	}
+}
+
+// failingApps refuses everything, so a handler that swallows an error is
+// visible as a success the caller should not have been given.
+type failingApps struct{ fakeApps }
+
+func (f *failingApps) Scale(context.Context, string, string, int32) (app.App, error) {
+	return app.App{}, errors.New("nope")
+}
+func (f *failingApps) Redeploy(context.Context, string, string) error {
+	return errors.New("nope")
+}
+func (f *failingApps) Delete(context.Context, string, string) error {
+	return errors.New("nope")
+}
+func (f *failingApps) Get(context.Context, string, string) (app.App, error) {
+	return app.App{Name: "web"}, nil
 }
