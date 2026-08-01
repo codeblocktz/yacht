@@ -356,8 +356,16 @@
   /* The graph is laid out on the server, so the cards are absolutely
      positioned at coordinates Go computed. The scroll container is what makes
      a wide graph usable without a pan control. */
+  /* The graph fills what the chrome leaves. Height comes from the flex
+     parent rather than a viewport calculation, so a banner or a taller top
+     bar shortens the canvas instead of pushing it off the screen. */
+  .canvas-bar {
+    @apply flex shrink-0 items-center gap-3 border-b border-border px-6 py-3 text-[13px];
+  }
+  .canvas-empty { @apply flex flex-1 items-center justify-center p-6; }
+
   .canvas {
-    @apply overflow-auto rounded-md border border-border bg-muted/30 p-0;
+    @apply overflow-auto bg-muted/30 p-0;
     background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
     background-size: 22px 22px;
   }
@@ -390,12 +398,13 @@
   /* The graph and its detail panel sit side by side; the panel is empty until
      something is clicked, so it collapses to nothing rather than reserving
      space for a card nobody has selected. */
-  .canvas-wrap { @apply flex items-start gap-4; }
+  .canvas-wrap { @apply flex min-h-0 flex-1 items-stretch; }
   .canvas-wrap > .canvas { @apply min-w-0 flex-1; }
+  .canvas-inner { @apply p-6; }
+  /* Full height beside the graph, and its own scroll: a panel that grew with
+     its content would drag the canvas down with it. */
   .canvas-panel:not(:empty) {
-    @apply flex w-[340px] shrink-0 flex-col overflow-hidden rounded-md border
-           border-border bg-card;
-    max-height: 70vh;
+    @apply flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-border bg-card;
   }
   .panel-head {
     @apply flex items-center gap-2 border-b border-border px-4 py-3 text-[13px];

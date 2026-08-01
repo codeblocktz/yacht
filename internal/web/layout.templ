@@ -28,11 +28,20 @@ templ Layout(s Slots, page templ.Component) {
 							@slot(s.Banner)
 						</div>
 					}
-					<main class="min-h-0 flex-1 overflow-y-auto">
-						<div class="mx-auto w-full max-w-[1240px] px-6 py-6">
+					if s.FullBleed {
+						// No wrapper and no scroll here: the page fills what is
+						// left of the window and scrolls its own content, which
+						// is what lets a canvas be the size of the screen.
+						<main class="flex min-h-0 flex-1 flex-col overflow-hidden">
 							@page
-						</div>
-					</main>
+						</main>
+					} else {
+						<main class="min-h-0 flex-1 overflow-y-auto">
+							<div class="mx-auto w-full max-w-[1240px] px-6 py-6">
+								@page
+							</div>
+						</main>
+					}
 				</div>
 			</div>
 		</body>

@@ -80,6 +80,15 @@ type Slots struct {
 	// SidebarFooter renders at the bottom of the sidebar.
 	SidebarFooter templ.Component
 
+	// FullBleed drops the centred, padded content wrapper so the page fills
+	// the window and manages its own scrolling.
+	//
+	// A chrome decision rather than a page one, which is why it lives here: a
+	// wrapping application that replaces the layout decides for itself which
+	// of its pages want the whole window, and the engine's own answer is not
+	// binding on it.
+	FullBleed bool
+
 	// Banner renders above the page content, full width. Intended for
 	// account-level notices such as a low balance or a pending suspension.
 	Banner templ.Component
@@ -123,7 +132,11 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	}
 
 	return Slots{
-		Title:      "Yacht",
+		Title: "Yacht",
+		// The canvas is a workspace rather than a document: a graph inside a
+		// 1240px column with the window's scrollbar beside it reads as a
+		// picture of a canvas rather than one.
+		FullBleed:  hasPrefix(path, "/canvas"),
 		Breadcrumb: breadcrumbFor(path),
 		BrandName:  "Yacht",
 		BrandHref:  "/",

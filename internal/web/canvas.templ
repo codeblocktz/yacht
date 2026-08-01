@@ -9,9 +9,18 @@ import "strconv"
 // project, and a canvas that needs a build step to render is one a self-hoster
 // cannot patch.
 templ Canvas(d CanvasData) {
-	@pageHead("Canvas", "How your apps relate to each other.", deployButton())
+	// A bar rather than a page heading: the graph is the page, and a heading
+	// with a paragraph under it would push the thing somebody came to look at
+	// below the fold.
+	<div class="canvas-bar">
+		<span class="min-w-0 flex-1 truncate font-medium">Canvas</span>
+		<span class="text-muted-foreground">How your apps relate to each other.</span>
+		@deployButton()
+	</div>
 	if d.Empty {
-		@emptyApps()
+		<div class="canvas-empty">
+			@emptyApps()
+		</div>
 	} else {
 		<div class="canvas-wrap">
 		<div class="canvas">
