@@ -4,6 +4,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/url"
 	"os"
 	"regexp"
@@ -66,6 +67,15 @@ type Config struct {
 	OwnerID   string
 	OwnerName string
 
+	// OwnerEmail is the address that may sign in to a fresh install before
+	// anybody has an account.
+	//
+	// Links go only to addresses that already exist, which is what stops the
+	// sign-in form filling the user table — and leaves a new install with
+	// accounts on unenterable. This names the one exception, and only until it
+	// has an account of its own.
+	OwnerEmail string
+
 	// AppDomain is the platform domain every app gets a hostname under, such
 	// as apps.example.com. Empty switches per-app hostnames off entirely.
 	AppDomain string
@@ -124,6 +134,7 @@ func Load() (Config, error) {
 		AuthToken:       env("YACHT_AUTH_TOKEN", ""),
 		OwnerID:         env("YACHT_OWNER_ID", "owner-local"),
 		OwnerName:       env("YACHT_OWNER_NAME", "Local"),
+		OwnerEmail:      strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
 		AppDomain:       env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
 		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
@@ -189,6 +200,11 @@ func (c Config) validate() error {
 	if c.WildcardTLS && c.AppDomain == "" {
 		errs = append(errs, errors.New(
 			"YACHT_WILDCARD_TLS requires YACHT_APP_DOMAIN — there would be no hostnames to serve"))
+	}
+	if c.OwnerEmail != "" {
+		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
+			errs = append(errs, errors.New("YACHT_OWNER_EMAIL must be an email address"))
+		}
 	}
 	errs = append(errs, c.accountFaults()...)
 

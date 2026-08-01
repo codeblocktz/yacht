@@ -145,6 +145,7 @@ func run() error {
 		opts.BootstrapTeamID = cfg.OwnerID
 		opts.BootstrapTeamName = cfg.OwnerName
 		opts.MailTransport = cfg.MailTransport()
+		opts.BootstrapEmail = cfg.OwnerEmail
 	}
 
 	srv, err := web.New(opts)

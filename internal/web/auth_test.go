@@ -175,6 +175,10 @@ func (f *fakeAccounts) asking() []string {
 // that a test which reaches the callback through it fails loudly instead of
 // quietly proving nothing. The callback is exercised against the real service,
 // where consuming a link and claiming a team mean something.
+func (f *fakeAccounts) EnsureUser(context.Context, string, string) (account.User, error) {
+	return account.User{}, errNoFakeAccountsBackend
+}
+
 func (f *fakeAccounts) ConsumeMagicLink(context.Context, string) (account.User, error) {
 	return account.User{}, account.ErrTokenInvalid
 }
@@ -609,6 +613,13 @@ type liveHarness struct {
 // the same time and each purges what it recognises.
 func newLiveHarness(t *testing.T, teamID string) *liveHarness {
 	t.Helper()
+	return newLiveHarnessOwnedBy(t, teamID, "")
+}
+
+// newLiveHarnessOwnedBy is the same, with an address named as the install's
+// owner — the one person a fresh install will admit before anybody exists.
+func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness {
+	t.Helper()
 	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set YACHT_TEST_DATABASE_URL to run the sign-in callback tests")
@@ -659,6 +670,7 @@ func newLiveHarness(t *testing.T, teamID string) *liveHarness {
 		BaseURL:           "https://yacht.test",
 		BootstrapTeamID:   teamID,
 		BootstrapTeamName: "Local",
+		BootstrapEmail:    ownerEmail,
 		SessionTTL:        time.Hour,
 	})
 
@@ -1252,4 +1264,65 @@ func deniedGET(t *testing.T, rec *httptest.ResponseRecorder, mustNotContain stri
 		return false
 	}
 	return true
+}
+
+// TestFreshInstallCanBeEnteredByItsOwner is a regression test for a hole that
+// only a live run found.
+//
+// A link is issued only to an address that already has an account, which is
+// what stops the sign-in form filling the user table. On a fresh install that
+// left nobody able to sign in at all: no user, so no link, so no user. Every
+// existing test missed it because they all seed a person first.
+//
+// YACHT_OWNER_EMAIL names the one address allowed to create itself.
+func TestFreshInstallCanBeEnteredByItsOwner(t *testing.T) {
+	h := newLiveHarnessOwnedBy(t, "web-fresh", "founder-fresh@web.test")
+
+	// Nobody has ever signed in. The configured owner must still get a link.
+	before := len(h.mailer.messages())
+	if code := postSignIn(h.handler, "founder-fresh@web.test", "198.51.100.5:2000").Code; code != http.StatusOK {
+		t.Fatalf("POST /sign-in = %d, want 200", code)
+	}
+	sent := h.mailer.messages()
+	if len(sent) != before+1 {
+		t.Fatal("the configured owner got no sign-in link — the install cannot be entered")
+	}
+
+	// And following it makes them the owner of the configured team.
+	rec := h.follow(t, linkIn(t, sent[len(sent)-1].TextBody))
+	if sessionCookie(rec) == nil {
+		t.Fatal("no session cookie after the founder signed in")
+	}
+	u, err := h.accounts.EnsureUser(context.Background(), "founder-fresh@web.test", "")
+	if err != nil {
+		t.Fatalf("EnsureUser: %v", err)
+	}
+	if role, err := h.accounts.RoleIn(context.Background(), u.ID, "web-fresh"); err != nil ||
+		role != account.RoleOwner {
+		t.Fatalf("founder role = %q (%v), want owner of the configured team", role, err)
+	}
+}
+
+// The bootstrap is one address, not an open door. Anyone else is still unknown,
+// and the sign-in form must not create them.
+func TestFreshInstallDoesNotAdmitAnyoneElse(t *testing.T) {
+	h := newLiveHarnessOwnedBy(t, "web-fresh2", "founder-fresh2@web.test")
+
+	before := len(h.mailer.messages())
+	if code := postSignIn(h.handler, "stranger-fresh2@web.test", "198.51.100.6:2000").Code; code != http.StatusOK {
+		t.Fatalf("POST /sign-in = %d, want 200", code)
+	}
+	if len(h.mailer.messages()) != before {
+		t.Fatal("a stranger was mailed a link on a fresh install")
+	}
+
+	var n int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM users WHERE lower(email) = $1`,
+		"stranger-fresh2@web.test").Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Fatal("the sign-in form created an account for a stranger")
+	}
 }

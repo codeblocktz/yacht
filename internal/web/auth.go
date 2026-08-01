@@ -154,6 +154,12 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 // would be an oracle in its own right, answering "is this address registered?"
 // with "the server behaved differently".
 func (s *Server) mailSignInLink(ctx context.Context, email string) {
+	// A fresh install has nobody, and a link is only issued to somebody — so
+	// without this the first person can never get in. Creating the account is
+	// confined to the one configured address, and only while it has none: after
+	// that this does nothing and the address is ordinary.
+	s.bootstrapAccount(ctx, email)
+
 	raw, user, existed, err := s.accounts.IssueMagicLink(ctx, email, s.magicTTL)
 	if err != nil {
 		s.log.Error("issue sign-in link", slog.String("error", err.Error()))
@@ -555,4 +561,29 @@ func (s *Server) signInRedirect(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// bootstrapAccount creates the install's configured owner, once.
+//
+// The sign-in form must not fill the user table, which is why an unknown
+// address is silently ignored everywhere else. That rule leaves a fresh
+// install unenterable: no user means no link, and no link means no user. This
+// is the single exception — one address, named in configuration, and only
+// while it has no account.
+//
+// Failures are swallowed to the log. The caller renders the same page whatever
+// happened here, and an error that changed the response would say whether the
+// address is the configured one.
+func (s *Server) bootstrapAccount(ctx context.Context, email string) {
+	if s.bootstrapEmail == "" || !strings.EqualFold(email, s.bootstrapEmail) {
+		return
+	}
+	created, err := s.accounts.EnsureUser(ctx, email, "")
+	if err != nil {
+		s.log.Error("bootstrap the configured owner",
+			slog.String("error", err.Error()))
+		return
+	}
+	s.log.Info("created the configured owner on first sign-in",
+		slog.String("user", created.ID.String()))
 }

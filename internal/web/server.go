@@ -53,6 +53,10 @@ type Accounts interface {
 		ctx context.Context, email string, ttl time.Duration,
 	) (raw string, user account.User, existed bool, err error)
 
+	// EnsureUser creates a person, or returns the one already there. Used only
+	// to bootstrap the configured owner of a fresh install.
+	EnsureUser(ctx context.Context, email, displayName string) (account.User, error)
+
 	// ConsumeMagicLink spends a link and returns the person it proves. Unknown,
 	// expired and already-spent links all come back as account.ErrTokenInvalid.
 	ConsumeMagicLink(ctx context.Context, raw string) (account.User, error)
@@ -177,6 +181,15 @@ type Options struct {
 	// the settings page can show whether links are actually being sent.
 	MailTransport string
 
+	// BootstrapEmail is the address allowed to create itself on first sign-in.
+	//
+	// A link is only ever issued to an address that already has an account,
+	// which is what stops the sign-in form filling the user table. On a fresh
+	// install that leaves nobody able to get in at all: no user, so no link, so
+	// no user. This names the one address exempt from that, and only while it
+	// has no account — once it does, it is an ordinary person like anyone else.
+	BootstrapEmail string
+
 	// BootstrapTeamID and BootstrapTeamName are the install's configured owner
 	// — YACHT_OWNER_ID and YACHT_OWNER_NAME. The first person to sign in
 	// inherits that team, so the apps an install already deployed under it stay
@@ -207,13 +220,14 @@ type Server struct {
 	wildcard  bool
 	log       *slog.Logger
 
-	accounts      Accounts
-	mailer        notify.Mailer
-	baseURL       string
-	magicTTL      time.Duration
-	sessionTTL    time.Duration
-	bootstrapID   string
-	bootstrapName string
+	accounts       Accounts
+	mailer         notify.Mailer
+	baseURL        string
+	magicTTL       time.Duration
+	sessionTTL     time.Duration
+	bootstrapID    string
+	bootstrapName  string
+	bootstrapEmail string
 
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
@@ -276,15 +290,16 @@ func New(opts Options) (*Server, error) {
 		wildcard:  opts.WildcardTLS,
 		log:       opts.Logger,
 
-		accounts:      opts.Accounts,
-		mailer:        opts.Mailer,
-		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
-		magicTTL:      opts.MagicLinkTTL,
-		sessionTTL:    opts.SessionTTL,
-		bootstrapID:   opts.BootstrapTeamID,
-		bootstrapName: opts.BootstrapTeamName,
-		mailTransport: cmp.Or(opts.MailTransport, "log"),
-		signInLimit:   newAttemptLimiter(signInWindow),
+		accounts:       opts.Accounts,
+		mailer:         opts.Mailer,
+		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
+		magicTTL:       opts.MagicLinkTTL,
+		sessionTTL:     opts.SessionTTL,
+		bootstrapID:    opts.BootstrapTeamID,
+		bootstrapName:  opts.BootstrapTeamName,
+		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
+		mailTransport:  cmp.Or(opts.MailTransport, "log"),
+		signInLimit:    newAttemptLimiter(signInWindow),
 	}, nil
 }
 
