@@ -19,10 +19,10 @@ SELECT * FROM teams WHERE id = $1;
 
 -- name: CreateApp :one
 INSERT INTO apps (
-    owner_id, name, namespace, image, replicas, port,
+    owner_id, name, namespace, image, replicas, port, source, internal,
     cpu_request, cpu_limit, memory_request, memory_limit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetApp :one

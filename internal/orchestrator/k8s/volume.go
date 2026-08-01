@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,9 +64,23 @@ func (o *Orchestrator) applyVolumes(ctx context.Context, spec orchestrator.AppSp
 	return nil
 }
 
+// scratchName is the pod volume backing one writable path.
+//
+// Derived from the path so two scratch directories cannot collide, and so the
+// name is stable across applies — a generated one would rewrite the pod
+// template on every reconcile and restart the workload each time.
+func scratchName(p string) string {
+	return "scratch-" + strings.Trim(strings.ReplaceAll(strings.Trim(p, "/"), "/", "-"), "-")
+}
+
 // volumeSources returns the pod volumes backing the spec's claims.
 func volumeSources(spec orchestrator.AppSpec) []*corev1ac.VolumeApplyConfiguration {
-	out := make([]*corev1ac.VolumeApplyConfiguration, 0, len(spec.Volumes))
+	out := make([]*corev1ac.VolumeApplyConfiguration, 0, len(spec.Volumes)+len(spec.ScratchPaths))
+	for _, p := range spec.ScratchPaths {
+		out = append(out, corev1ac.Volume().
+			WithName(scratchName(p)).
+			WithEmptyDir(corev1ac.EmptyDirVolumeSource()))
+	}
 	for _, v := range spec.Volumes {
 		out = append(out, corev1ac.Volume().
 			WithName(v.Name).
@@ -77,7 +92,12 @@ func volumeSources(spec orchestrator.AppSpec) []*corev1ac.VolumeApplyConfigurati
 
 // volumeMounts returns the container mounts for the spec's claims.
 func volumeMounts(spec orchestrator.AppSpec) []*corev1ac.VolumeMountApplyConfiguration {
-	out := make([]*corev1ac.VolumeMountApplyConfiguration, 0, len(spec.Volumes))
+	out := make([]*corev1ac.VolumeMountApplyConfiguration, 0, len(spec.Volumes)+len(spec.ScratchPaths))
+	for _, p := range spec.ScratchPaths {
+		out = append(out, corev1ac.VolumeMount().
+			WithName(scratchName(p)).
+			WithMountPath(p))
+	}
 	for _, v := range spec.Volumes {
 		out = append(out, corev1ac.VolumeMount().
 			WithName(v.Name).

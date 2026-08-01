@@ -575,9 +575,29 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, NewApp(NewAppData{
-		Form: NewAppForm{Replicas: "1", Port: "8080"},
-	}))
+	data := NewAppData{Sources: app.Blueprints()}
+
+	src := app.Source(r.URL.Query().Get("source"))
+	if src == "" {
+		// No source chosen: show the picker rather than defaulting to one.
+		// Defaulting is how a database gets deployed as a bare image.
+		s.render(w, r, NewApp(data))
+		return
+	}
+
+	blueprint, err := app.BlueprintFor(src)
+	if err != nil {
+		s.render(w, r, NewApp(data))
+		return
+	}
+
+	data.Source = src
+	data.Blueprint = blueprint
+	data.Form = NewAppForm{Replicas: "1", Port: strconv.Itoa(int(blueprint.Port))}
+	if blueprint.Image != "" {
+		data.Form.Image = blueprint.Image
+	}
+	s.render(w, r, NewApp(data))
 }
 
 func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
@@ -591,6 +611,11 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		s.renderErr(w, r, NewAppForm{}, "could not read the form")
 		return
+	}
+
+	source := app.Source(r.FormValue("source"))
+	if source == "" {
+		source = app.SourceImage
 	}
 
 	form := NewAppForm{
@@ -613,11 +638,12 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	env, err := parseEnv(form.Env)
 	if err != nil {
-		s.renderErr(w, r, form, err.Error())
+		s.renderErrFor(w, r, source, form, err.Error())
 		return
 	}
 
 	_, err = s.apps.Create(ctx, owner.ID, app.CreateInput{
+		Source:   source,
 		Name:     form.Name,
 		Image:    form.Image,
 		Port:     int32(port),
@@ -627,11 +653,24 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Warn("create app failed",
 			slog.String("name", form.Name), slog.String("error", err.Error()))
-		s.renderErr(w, r, form, err.Error())
+		s.renderErrFor(w, r, source, form, err.Error())
 		return
 	}
 
 	http.Redirect(w, r, "/apps/"+form.Name, http.StatusSeeOther)
+}
+
+// renderErrFor keeps the chosen source on a failed submission, so a typo in
+// the name does not send somebody back to the picker to choose again.
+func (s *Server) renderErrFor(
+	w http.ResponseWriter, r *http.Request, src app.Source, form NewAppForm, msg string,
+) {
+	data := NewAppData{Error: msg, Form: form, Sources: app.Blueprints()}
+	if b, err := app.BlueprintFor(src); err == nil {
+		data.Source, data.Blueprint = src, b
+	}
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	s.render(w, r, NewApp(data))
 }
 
 func (s *Server) renderErr(w http.ResponseWriter, r *http.Request, form NewAppForm, msg string) {

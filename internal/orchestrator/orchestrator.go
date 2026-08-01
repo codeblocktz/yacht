@@ -185,6 +185,34 @@ type AppSpec struct {
 	// customer-claimed — is a decision that belongs above this seam.
 	Hosts []string
 
+	// Internal keeps the workload off the public internet: no hostname, and a
+	// Service on the port it actually listens on rather than the fixed one.
+	Internal bool
+
+	// RunAsUser is the uid the container runs as. Zero leaves it to the image.
+	//
+	// Needed because the security posture requires a non-root user and most
+	// stock images do not name one — the kubelet then refuses the pod with
+	// "image will run as root" rather than picking something. A source that
+	// knows its image knows the uid; an arbitrary image does not, and gets
+	// nothing here.
+	RunAsUser int64
+
+	// FSGroup owns the mounted volumes.
+	//
+	// A freshly provisioned claim belongs to root, so a container running as
+	// anyone else cannot write to it. This is what makes a volume usable by a
+	// non-root process, and without it storage and the security posture are
+	// mutually exclusive.
+	FSGroup int64
+
+	// ScratchPaths are writable empty directories inside the container.
+	//
+	// The root filesystem is read-only, which most software is fine with until
+	// it wants one specific path — a socket directory, a lock file. Naming
+	// those is what lets the read-only default stay the default.
+	ScratchPaths []string
+
 	// HealthPath is an HTTP path on the workload's own port that reports
 	// whether it is ready to serve. Empty means no probe.
 	//

@@ -42,9 +42,9 @@ type Session struct {
 	Role Role
 
 	UserAgent string
-	IP           string
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
+	IP        string
+	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 // CreateSession issues a session for a person acting in a team, and returns the
@@ -113,10 +113,10 @@ func (s *Service) ResolveSession(ctx context.Context, raw string) (Session, erro
 		TeamName:  row.TeamName,
 		TeamEmail: row.TeamEmail,
 		Role:      Role(row.MemberRole),
-		UserAgent:    row.UserAgent,
-		IP:           row.Ip,
-		ExpiresAt:    row.ExpiresAt,
-		CreatedAt:    row.CreatedAt,
+		UserAgent: row.UserAgent,
+		IP:        row.Ip,
+		ExpiresAt: row.ExpiresAt,
+		CreatedAt: row.CreatedAt,
 	}, nil
 }
 

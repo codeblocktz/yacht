@@ -133,11 +133,11 @@ func TestAppSpecRejectsAHealthPathWithNoPort(t *testing.T) {
 
 func TestAppSpecRejectsMalformedHealthPaths(t *testing.T) {
 	for name, path := range map[string]string{
-		"relative":    "healthz",
-		"scheme":      "http://x/healthz",
-		"space":       "/health z",
-		"not clean":   "/a/../healthz",
-		"query":       "/healthz?x=1",
+		"relative":  "healthz",
+		"scheme":    "http://x/healthz",
+		"space":     "/health z",
+		"not clean": "/a/../healthz",
+		"query":     "/healthz?x=1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := validSpec()

@@ -305,3 +305,16 @@ func sortedKeys(m map[string]string) []string {
 func gigabytes(b int64) string {
 	return strconv.FormatInt(b/(1<<30), 10)
 }
+
+// sourceIcon maps a source to an icon that already exists.
+func sourceIcon(src app.Source) string {
+	switch src {
+	case app.SourcePostgres:
+		return "storage"
+	case "git":
+		return "external"
+	case "template":
+		return "layers"
+	}
+	return "box"
+}

@@ -46,6 +46,11 @@ type App struct {
 	Replicas  int32
 	Port      int32
 
+	// Source is what this app was created from, and Internal keeps it off the
+	// public internet.
+	Source   Source
+	Internal bool
+
 	// HealthPath is an HTTP path reporting whether the app is serving. Empty
 	// means no probe. Liveness lets the same path also restart the container.
 	HealthPath string
@@ -180,6 +185,10 @@ func (s *Service) EnsureOwner(ctx context.Context, id, displayName, email string
 
 // CreateInput describes a new workload.
 type CreateInput struct {
+	// Source decides what the app is. Empty means an image the person chose,
+	// which is what every app was before sources existed.
+	Source Source
+
 	Name     string
 	Image    string
 	Replicas int32
@@ -222,11 +231,42 @@ func (in CreateInput) Validate() error {
 // database row for a workload that was never applied is not, because nothing
 // would ever retry it.
 func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (App, error) {
+	if in.Source == "" {
+		in.Source = SourceImage
+	}
+	blueprint, err := BlueprintFor(in.Source)
+	if err != nil {
+		return App{}, err
+	}
+
+	// A source that names its own image supplies it; only a plain image asks
+	// the person for one, which is why validation runs after this rather than
+	// before.
+	if blueprint.Image != "" {
+		in.Image = blueprint.Image
+		in.Port = blueprint.Port
+	}
 	if err := in.Validate(); err != nil {
 		return App{}, err
 	}
 
 	namespace := Namespace(ownerID, in.Name)
+
+	// Minted before the transaction so a failure here writes nothing. The
+	// value exists once, in the Secret it is sealed into — there is no path
+	// that shows it again.
+	generated := make(map[string]string, len(blueprint.GeneratedSecrets))
+	for _, key := range blueprint.GeneratedSecrets {
+		value, err := generatedSecret()
+		if err != nil {
+			return App{}, err
+		}
+		generated[key] = value
+	}
+	if len(generated) > 0 && !s.keeper.Configured() {
+		return App{}, fmt.Errorf("%w — %s needs one to store its credentials",
+			ErrNoSecretKey, blueprint.Label)
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -243,6 +283,8 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		Image:         in.Image,
 		Replicas:      in.Replicas,
 		Port:          in.Port,
+		Source:        string(in.Source),
+		Internal:      blueprint.Internal,
 		CpuRequest:    in.CPURequest,
 		CpuLimit:      in.CPULimit,
 		MemoryRequest: in.MemoryRequest,
@@ -256,6 +298,56 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 
 	created := toApp(row)
+
+	// The source's own settings first, so anything the person typed with the
+	// same name wins rather than being silently overridden by a default.
+	for key, value := range blueprint.Env {
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Value: value,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create variable %s: %w", key, err)
+		}
+	}
+	for key, value := range generated {
+		sealed, err := s.keeper.Seal(value)
+		if err != nil {
+			return App{}, err
+		}
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Sealed: sealed, Secret: true,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create secret %s: %w", key, err)
+		}
+	}
+	// The address other apps use, sealed because it carries the password.
+	if blueprint.ConnectionKey != "" {
+		conn := fmt.Sprintf(blueprint.ConnectionTemplate,
+			generated[blueprint.GeneratedSecrets[0]],
+			created.Name+"."+created.Namespace+".svc.cluster.local")
+		sealed, err := s.keeper.Seal(conn)
+		if err != nil {
+			return App{}, err
+		}
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID,
+			Key: blueprint.ConnectionKey, Sealed: sealed, Secret: true,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create connection string: %w", err)
+		}
+	}
+	// Storage the source brings with it. A database with no data directory is
+	// not one somebody has to finish setting up; it is one that has not been
+	// deployed.
+	if blueprint.Volume != nil {
+		if _, err := q.CreateVolume(ctx, dbgen.CreateVolumeParams{
+			OwnerID: ownerID, AppID: created.ID,
+			Name:      blueprint.Volume.Name,
+			MountPath: blueprint.Volume.MountPath,
+			SizeBytes: blueprint.Volume.SizeBytes,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create volume: %w", err)
+		}
+	}
 
 	// In the same transaction as the app row. An app whose variables half
 	// arrived is one that starts missing configuration it was told to have.
@@ -359,6 +451,10 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		CPULimit:      a.CPULimit,
 		MemoryRequest: a.MemoryRequest,
 		MemoryLimit:   a.MemoryLimit,
+		Internal:      a.Internal,
+		RunAsUser:     runtimeOf(a).RunAsUser,
+		FSGroup:       runtimeOf(a).FSGroup,
+		ScratchPaths:  runtimeOf(a).ScratchPaths,
 		HealthPath:    a.HealthPath,
 		Liveness:      a.Liveness,
 		Hosts:         hosts,
@@ -380,7 +476,9 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 // with a port and later has it cleared, and the name has to be released.
 func (s *Service) managedInput(a App) domain.ManagedInput {
 	appDomain := s.opts.AppDomain
-	if a.Port == 0 {
+	// A workload with no port cannot be reached, and an internal one speaks a
+	// protocol an HTTP hostname cannot carry. Neither gets a name.
+	if a.Port == 0 || a.Internal {
 		appDomain = ""
 	}
 	return domain.ManagedInput{
@@ -671,6 +769,8 @@ func toApp(row dbgen.App) App {
 		Image:         row.Image,
 		Replicas:      row.Replicas,
 		Port:          row.Port,
+		Source:        Source(row.Source),
+		Internal:      row.Internal,
 		HealthPath:    row.HealthPath,
 		Liveness:      row.HealthLiveness,
 		CPURequest:    row.CpuRequest,
@@ -746,4 +846,16 @@ func (s *Service) SetHealth(
 		slog.String("app", name), slog.String("path", probe.HealthPath),
 		slog.Bool("liveness", probe.Liveness))
 	return nil
+}
+
+// runtimeOf returns what the app's source knows about running its image.
+//
+// Read from the source rather than stored on the app, so a correction to a
+// blueprint reaches every app already deployed from it on their next apply.
+func runtimeOf(a App) Blueprint {
+	b, err := BlueprintFor(a.Source)
+	if err != nil {
+		return Blueprint{}
+	}
+	return b
 }

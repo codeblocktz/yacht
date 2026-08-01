@@ -707,3 +707,91 @@ func TestSecretRefusedWithoutAKey(t *testing.T) {
 		t.Fatalf("a refused secret was stored anyway: %+v", got.Variables)
 	}
 }
+
+// A database that arrives needing to be finished is not a source, it is a
+// form with defaults. Everything it needs has to be there when it is created.
+func TestPostgresSourceArrivesComplete(t *testing.T) {
+	ctx := context.Background()
+	k, err := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	if err != nil {
+		t.Fatalf("NewKeeper: %v", err)
+	}
+	s, orch, pool := testService(t, Options{Keeper: k, AppDomain: "apps.example.test"})
+	id := owner(t, s, pool, "svc-pg")
+
+	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "db"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := s.Get(ctx, id, "db")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	// Storage, without anybody attaching it.
+	if len(got.Volumes) != 1 || got.Volumes[0].MountPath != "/var/lib/postgresql/data" {
+		t.Fatalf("volumes = %+v, want one at the data directory", got.Volumes)
+	}
+
+	// Credentials nobody chose, and none of them readable.
+	var hasPassword, hasConn bool
+	for _, v := range got.Variables {
+		switch v.Key {
+		case "POSTGRES_PASSWORD":
+			hasPassword = true
+		case "DATABASE_URL":
+			hasConn = true
+		}
+		if v.Key == "POSTGRES_PASSWORD" || v.Key == "DATABASE_URL" {
+			if !v.Secret {
+				t.Errorf("%s is not marked secret", v.Key)
+			}
+			if v.Value != "" {
+				t.Errorf("%s came back readable", v.Key)
+			}
+		}
+	}
+	if !hasPassword || !hasConn {
+		t.Fatalf("variables = %+v, want a password and a connection string", got.Variables)
+	}
+
+	// A database speaks its own protocol, so it gets no HTTP hostname.
+	if got.Host != "" {
+		t.Errorf("a database was given the hostname %q", got.Host)
+	}
+
+	// And the runtime facts the image needs to start at all.
+	spec := orch.lastAppSpec()
+	if spec.RunAsUser != 70 || spec.FSGroup != 70 {
+		t.Errorf("runAsUser=%d fsGroup=%d, want 70 — the image will not start otherwise",
+			spec.RunAsUser, spec.FSGroup)
+	}
+	if len(spec.ScratchPaths) == 0 {
+		t.Error("no writable scratch path — postgres cannot open its socket")
+	}
+	if spec.Secrets["POSTGRES_PASSWORD"] == "" {
+		t.Error("the workload did not receive its password")
+	}
+}
+
+// Two databases must not share a password.
+func TestPostgresPasswordsAreNotShared(t *testing.T) {
+	ctx := context.Background()
+	k, _ := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("k"), 32)))
+	s, orch, pool := testService(t, Options{Keeper: k})
+	id := owner(t, s, pool, "svc-pg2")
+
+	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "one"}); err != nil {
+		t.Fatalf("Create one: %v", err)
+	}
+	first := orch.lastAppSpec().Secrets["POSTGRES_PASSWORD"]
+
+	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "two"}); err != nil {
+		t.Fatalf("Create two: %v", err)
+	}
+	second := orch.lastAppSpec().Secrets["POSTGRES_PASSWORD"]
+
+	if first == "" || first == second {
+		t.Fatal("two databases were given the same password")
+	}
+}

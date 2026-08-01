@@ -374,3 +374,48 @@ func containerOf(
 	}
 	return dep.Spec.Template.Spec.Containers[0]
 }
+
+// An internal workload speaks its own protocol, so its Service has to expose
+// the port it actually listens on.
+//
+// The fixed service port exists so that ingress configuration does not change
+// when an app changes its port. Nothing routes to an internal app through
+// ingress, and a connection string naming 5432 that reaches a Service
+// listening on 80 is a database nobody can connect to.
+func TestInternalServiceExposesTheRealPort(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	spec := testSpec()
+	spec.Port = 5432
+	spec.Internal = true
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+
+	svc, err := client.CoreV1().Services(spec.Namespace).
+		Get(ctx, spec.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get service: %v", err)
+	}
+	if got := svc.Spec.Ports[0].Port; got != 5432 {
+		t.Fatalf("service port = %d, want the workload's own 5432", got)
+	}
+}
+
+// And a public one keeps the fixed port, so ingress stays stable.
+func TestPublicServiceKeepsTheFixedPort(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	svc, err := client.CoreV1().Services("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get service: %v", err)
+	}
+	if got := svc.Spec.Ports[0].Port; got != servicePort {
+		t.Fatalf("service port = %d, want the fixed %d", got, servicePort)
+	}
+}

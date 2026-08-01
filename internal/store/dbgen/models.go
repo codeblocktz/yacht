@@ -27,6 +27,8 @@ type App struct {
 	UpdatedAt      time.Time
 	HealthPath     string
 	HealthLiveness bool
+	Source         string
+	Internal       bool
 }
 
 type Deployment struct {

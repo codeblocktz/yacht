@@ -623,6 +623,17 @@ templ appSettings(d AppDetailData) {
 type NewAppData struct {
 	Error string
 	Form  NewAppForm
+
+	// Source is what the person picked. Empty shows the picker instead of a
+	// form: there is no sensible default, and choosing for them is how you end
+	// up with a database deployed as a bare image.
+	Source app.Source
+
+	// Blueprint is the chosen source's settings, so the form can show what is
+	// already decided rather than asking again.
+	Blueprint app.Blueprint
+
+	Sources []app.Blueprint
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -636,7 +647,66 @@ type NewAppForm struct {
 }
 
 templ NewApp(d NewAppData) {
-	@pageHead("Deploy app", "Run a container image on your cluster.", nil)
+	if d.Source == "" {
+		@sourcePicker(d)
+	} else {
+		@newAppForm(d)
+	}
+}
+
+// sourcePicker is the first step: what is this app?
+//
+// Sources that are not built yet are listed with the reason rather than left
+// out. A menu that silently omits things reads as a product that never
+// considered them, and somebody will ask anyway.
+templ sourcePicker(d NewAppData) {
+	@pageHead("Deploy", "What would you like to run?", nil)
+	<div class="panel max-w-2xl">
+		<div class="rows">
+			for _, b := range d.Sources {
+				if b.Available {
+					<a href={ templ.SafeURL("/apps/new?source=" + string(b.Source)) } class="row-link">
+						<span class="text-muted-foreground">
+							@icon(sourceIcon(b.Source))
+						</span>
+						<span class="min-w-0 flex-1">
+							<span class="block font-medium">{ b.Label }</span>
+							<span class="block text-muted-foreground">{ b.Description }</span>
+						</span>
+						<span class="text-muted-foreground">&rsaquo;</span>
+					</a>
+				} else {
+					<div class="row-link cursor-not-allowed opacity-50">
+						<span class="text-muted-foreground">
+							@icon(sourceIcon(b.Source))
+						</span>
+						<span class="min-w-0 flex-1">
+							<span class="block font-medium">{ b.Label }</span>
+							<span class="block text-muted-foreground">Not yet — { b.Because }.</span>
+						</span>
+					</div>
+				}
+			}
+		</div>
+	</div>
+}
+
+templ newAppForm(d NewAppData) {
+	@pageHead("Deploy "+d.Blueprint.Label, d.Blueprint.Description, backToSources())
+	if d.Blueprint.Source != app.SourceImage {
+		<div class="callout mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">{ d.Blueprint.Label } configures itself</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Image <code class="mono">{ d.Blueprint.Image }</code>, a
+					{ gigabytes(d.Blueprint.Volume.SizeBytes) } GB volume at
+					<code class="mono">{ d.Blueprint.Volume.MountPath }</code>, and generated
+					credentials you will find under Variables. It is reachable from other
+					apps in this install, and not from the internet.
+				</p>
+			</div>
+		</div>
+	}
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div>
@@ -646,6 +716,7 @@ templ NewApp(d NewAppData) {
 		</div>
 	}
 	<form method="post" action="/apps" class="max-w-2xl">
+		<input type="hidden" name="source" value={ string(d.Blueprint.Source) }/>
 		<div class="panel">
 			<div class="panel-header">
 				<span class="panel-title">Source</span>
@@ -1200,4 +1271,8 @@ templ appStorage(d AppDetailData) {
 			</form>
 		</div>
 	</div>
+}
+
+templ backToSources() {
+	<a class="btn btn-ghost" href="/apps/new">Change source</a>
 }

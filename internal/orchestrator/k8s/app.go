@@ -96,7 +96,7 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		// needs a token. Mounting one by default is how a container escape
 		// becomes a cluster escape.
 		WithAutomountServiceAccountToken(false).
-		WithSecurityContext(restrictedPodSecurityContext()).
+		WithSecurityContext(restrictedPodSecurityContext(spec)).
 		WithContainers(container).
 		WithVolumes(append(
 			[]*corev1ac.VolumeApplyConfiguration{
@@ -263,8 +263,8 @@ func (o *Orchestrator) applyService(ctx context.Context, spec orchestrator.AppSp
 			WithType(corev1.ServiceTypeClusterIP).
 			WithSelector(orchestrator.SelectorLabels(spec.Name)).
 			WithPorts(corev1ac.ServicePort().
-				WithName("http").
-				WithPort(servicePort).
+				WithName(servicePortName(spec)).
+				WithPort(exposedPort(spec)).
 				WithProtocol(corev1.ProtocolTCP).
 				WithTargetPort(intstr.FromInt32(spec.Port))))
 
@@ -382,4 +382,25 @@ func maps[K comparable, V any](m map[K]V) func(func(K) bool) {
 			}
 		}
 	}
+}
+
+// exposedPort is the port an app's Service listens on.
+//
+// Public apps get a fixed port so that ingress configuration does not change
+// when the app changes its own. Nothing routes to an internal app through
+// ingress, and giving it the same fixed port would mean a connection string
+// naming its real port reaches a Service that is not listening there.
+func exposedPort(spec orchestrator.AppSpec) int32 {
+	if spec.Internal {
+		return spec.Port
+	}
+	return servicePort
+}
+
+// servicePortName labels the port. "http" would be a lie on a database.
+func servicePortName(spec orchestrator.AppSpec) string {
+	if spec.Internal {
+		return "tcp"
+	}
+	return "http"
 }

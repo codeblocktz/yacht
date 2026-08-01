@@ -2,6 +2,8 @@ package k8s
 
 import (
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 )
 
@@ -58,10 +60,25 @@ func restrictedContainerSecurityContext(writableRoot bool) *corev1ac.SecurityCon
 }
 
 // restrictedPodSecurityContext returns the pod-level counterpart.
-func restrictedPodSecurityContext() *corev1ac.PodSecurityContextApplyConfiguration {
-	return corev1ac.PodSecurityContext().
+func restrictedPodSecurityContext(
+	spec orchestrator.AppSpec,
+) *corev1ac.PodSecurityContextApplyConfiguration {
+	sc := corev1ac.PodSecurityContext().
 		WithRunAsNonRoot(true).
 		WithSeccompProfile(
 			corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeRuntimeDefault),
 		)
+
+	// Set only when a source knows the answer. Guessing a uid for an arbitrary
+	// image gives a container that starts and then cannot read its own files,
+	// which is a worse failure than refusing to start at all.
+	if spec.RunAsUser > 0 {
+		sc = sc.WithRunAsUser(spec.RunAsUser).WithRunAsGroup(spec.RunAsUser)
+	}
+	// Only meaningful with storage: it exists to hand a non-root process
+	// ownership of a claim that was provisioned owned by root.
+	if spec.FSGroup > 0 && len(spec.Volumes) > 0 {
+		sc = sc.WithFSGroup(spec.FSGroup)
+	}
+	return sc
 }
