@@ -108,6 +108,15 @@ type PodListOptions struct {
 
 	// ManagedOnly restricts results to workloads the engine created.
 	ManagedOnly bool
+
+	// Owner limits results to one principal's workloads.
+	//
+	// Empty means every owner, which is right for an operator view and wrong
+	// for anything a member can reach. These pages were written when the engine
+	// had one owner and everything in the cluster belonged to whoever was
+	// looking; teams made that false, and a cluster page is the easiest place
+	// to forget it.
+	Owner OwnerID
 }
 
 // EventInfo is one cluster event.

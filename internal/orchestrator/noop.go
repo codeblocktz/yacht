@@ -114,7 +114,7 @@ func (n *Noop) Nodes(context.Context) ([]NodeInfo, error) { return nil, nil }
 func (n *Noop) Events(context.Context, int) ([]EventInfo, error) { return nil, nil }
 
 // Volumes returns nothing: the engine's in-memory mode provisions no storage.
-func (n *Noop) Volumes(context.Context) ([]VolumeInfo, error) { return nil, nil }
+func (n *Noop) Volumes(context.Context, OwnerID) ([]VolumeInfo, error) { return nil, nil }
 
 // Pods synthesises one entry per replica of each applied workload, so the
 // dashboard has something coherent to render without a cluster.

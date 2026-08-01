@@ -130,8 +130,9 @@ func TestVolumes(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "data-web-0", Namespace: "yacht-a1b2",
 			Labels: map[string]string{
-				orchestrator.LabelApp:   "web",
-				orchestrator.LabelOwner: "owner-local",
+				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+				orchestrator.LabelApp:       "web",
+				orchestrator.LabelOwner:     "owner-local",
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -155,7 +156,7 @@ func TestVolumes(t *testing.T) {
 		t.Fatalf("seed pvc: %v", err)
 	}
 
-	got, err := o.Volumes(ctx)
+	got, err := o.Volumes(ctx, "owner-local")
 	if err != nil {
 		t.Fatalf("Volumes: %v", err)
 	}

@@ -138,9 +138,10 @@ func (o *Orchestrator) Pods(
 	ctx context.Context, opts orchestrator.PodListOptions,
 ) ([]orchestrator.PodInfo, error) {
 	listOpts := metav1.ListOptions{}
-	if opts.ManagedOnly {
-		listOpts.LabelSelector = fmt.Sprintf("%s=%s",
-			orchestrator.LabelManagedBy, orchestrator.ManagedByValue)
+	// An owner implies managed-only: the label that records ownership is one
+	// the engine writes, so nothing unmanaged could match it anyway.
+	if opts.ManagedOnly || opts.Owner != "" {
+		listOpts.LabelSelector = ownedBy(opts.Owner)
 	}
 
 	list, err := o.client.CoreV1().Pods(opts.Namespace).List(ctx, listOpts)
@@ -218,4 +219,17 @@ func nodeAddress(n corev1.Node) string {
 		}
 	}
 	return fallback
+}
+
+// ownedBy builds the label selector that limits a query to one principal.
+//
+// An empty owner selects only objects the engine manages — an operator view,
+// not a member's. Anything without the managed-by label was put in the cluster
+// by somebody else and is nobody's to see here.
+func ownedBy(owner orchestrator.OwnerID) string {
+	sel := orchestrator.LabelManagedBy + "=" + orchestrator.ManagedByValue
+	if owner != "" {
+		sel += "," + orchestrator.LabelOwner + "=" + string(owner)
+	}
+	return sel
 }

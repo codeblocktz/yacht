@@ -26,7 +26,7 @@ func (s inspectorStub) Events(context.Context, int) ([]orchestrator.EventInfo, e
 	return s.events, s.err
 }
 
-func (s inspectorStub) Volumes(context.Context) ([]orchestrator.VolumeInfo, error) {
+func (s inspectorStub) Volumes(context.Context, orchestrator.OwnerID) ([]orchestrator.VolumeInfo, error) {
 	return s.volumes, s.err
 }
 

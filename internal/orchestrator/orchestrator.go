@@ -288,6 +288,11 @@ type ClusterInspector interface {
 	// Events lists recent cluster events, newest first, capped at limit.
 	Events(ctx context.Context, limit int) ([]EventInfo, error)
 
-	// Volumes lists persistent volume claims.
-	Volumes(ctx context.Context) ([]VolumeInfo, error)
+	// Volumes lists an owner's persistent volume claims.
+	//
+	// Scoped rather than cluster-wide: a claim names the workload it belongs to,
+	// and one team reading another's is a disclosure. A claim the engine did not
+	// create carries no owner and belongs to whoever runs the cluster, so it is
+	// shown to nobody here.
+	Volumes(ctx context.Context, owner OwnerID) ([]VolumeInfo, error)
 }

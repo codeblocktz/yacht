@@ -88,10 +88,16 @@ func describeObject(ref corev1.ObjectReference) string {
 	return ref.Kind + "/" + ref.Name
 }
 
-// Volumes lists persistent volume claims.
-func (o *Orchestrator) Volumes(ctx context.Context) ([]orchestrator.VolumeInfo, error) {
+// Volumes lists an owner's persistent volume claims.
+//
+// Filtered in the API server by label rather than in Go: a filter the caller
+// applies is one a caller can forget, and forgetting it here means showing one
+// team another team's storage.
+func (o *Orchestrator) Volumes(
+	ctx context.Context, owner orchestrator.OwnerID,
+) ([]orchestrator.VolumeInfo, error) {
 	list, err := o.client.CoreV1().PersistentVolumeClaims("").
-		List(ctx, metav1.ListOptions{})
+		List(ctx, metav1.ListOptions{LabelSelector: ownedBy(owner)})
 	if err != nil {
 		return nil, fmt.Errorf("k8s: list volumes: %w", err)
 	}

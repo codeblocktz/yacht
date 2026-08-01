@@ -709,7 +709,12 @@ func (s *Server) clusterVolumes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	data := VolumesData{OK: true}
 
-	volumes, err := s.orch.Volumes(ctx)
+	// The owner comes from the resolved identity, never from the request. A
+	// cluster page that listed every namespace was correct while the engine had
+	// one owner and is a disclosure now that it has teams.
+	owner := identity.MustFromContext(ctx)
+
+	volumes, err := s.orch.Volumes(ctx, orchestrator.OwnerID(owner.ID))
 	if err != nil {
 		data.OK = false
 		data.Error = err.Error()
@@ -758,7 +763,9 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 
 	switch tab {
 	case "pods":
-		if pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{}); err == nil {
+		if pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
+			Owner: orchestrator.OwnerID(identity.MustFromContext(ctx).ID),
+		}); err == nil {
 			data.Pods = pods
 		}
 	default:
