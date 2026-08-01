@@ -136,7 +136,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.
-		FullBleed:  hasPrefix(path, "/canvas"),
+		FullBleed:  isCanvasPath(path),
 		Breadcrumb: breadcrumbFor(path),
 		BrandName:  "Yacht",
 		BrandHref:  "/",
@@ -144,8 +144,8 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
-				{Label: "Canvas", Href: "/canvas", Icon: "grid",
-					Active: hasPrefix(path, "/canvas")},
+				{Label: "Projects", Href: "/projects", Icon: "grid",
+					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/canvas")},
 				{Label: "Apps", Href: "/apps", Icon: "box", Active: hasPrefix(path, "/apps")},
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
 					Active: hasPrefix(path, "/deployments")},
@@ -218,4 +218,21 @@ func teamNav(ctx context.Context, path string) []NavItem {
 		Label: "Team", Href: "/team", Icon: "users",
 		Active: hasPrefix(path, "/team"),
 	}}
+}
+
+// isCanvasPath reports whether a path renders the canvas.
+//
+// The canvas fills the window, so it opts out of the centred, padded wrapper
+// every other page sits in. An app is on this list because its detail is a
+// panel over its canvas rather than a page of its own — but /apps and
+// /apps/new are ordinary pages, and a prefix test alone would swallow both.
+func isCanvasPath(path string) bool {
+	switch {
+	case hasPrefix(path, "/projects"), hasPrefix(path, "/canvas"):
+		return true
+	case path == "/apps", path == "/apps/", hasPrefix(path, "/apps/new"):
+		return false
+	default:
+		return hasPrefix(path, "/apps/")
+	}
 }

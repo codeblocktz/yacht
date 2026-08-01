@@ -57,6 +57,7 @@ func TestTemplatesOnlyUseClassesThatExist(t *testing.T) {
 		"capitalize": true, "container": true, "transform": true, "overflow": true,
 		"group": true, "peer": true, "sr": true, "antialiased": true,
 		"tabular": true, "nums": true, "mono": true, "invisible": true, "visible": true,
+		"inline-flex": true, "inline-block": true, "inline-grid": true,
 	}
 
 	files, err := filepath.Glob(filepath.Join(".", "*.templ"))
@@ -156,10 +157,18 @@ func TestNoRemoteAssets(t *testing.T) {
 // was wrong came from a vendored component, not from a template anyone here
 // wrote.
 func TestEveryScriptTheLayoutAsksForIsEmbedded(t *testing.T) {
+	// Both shapes of the layout: the full-bleed one loads the canvas script and
+	// the ordinary one does not, so rendering only the default would leave the
+	// script that is hardest to notice missing entirely unchecked.
 	var buf bytes.Buffer
 	page := templ.ComponentFunc(func(context.Context, io.Writer) error { return nil })
-	if err := Layout(Slots{Title: "t"}, page).Render(context.Background(), &buf); err != nil {
-		t.Fatalf("render layout: %v", err)
+	for _, slots := range []Slots{{Title: "t"}, {Title: "t", FullBleed: true}} {
+		if err := Layout(slots, page).Render(context.Background(), &buf); err != nil {
+			t.Fatalf("render layout: %v", err)
+		}
+	}
+	if !strings.Contains(buf.String(), "canvas.js") {
+		t.Error("the full-bleed layout does not load the canvas script")
 	}
 
 	srcs := regexp.MustCompile(`<script[^>]+src="([^"]+)"`).FindAllStringSubmatch(buf.String(), -1)

@@ -1,13 +1,9 @@
 package web
 
 import (
-	"net/http"
 	"sort"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/codeblocktz/yacht/internal/app"
-	"github.com/codeblocktz/yacht/internal/identity"
 )
 
 // Canvas geometry. Fixed rather than fluid: the layout is computed on the
@@ -29,6 +25,10 @@ type CanvasNode struct {
 	X, Y   int
 	Height int
 
+	// Pinned means somebody dragged this card, so its position is stored
+	// rather than computed.
+	Pinned bool
+
 	// Volume is the storage drawn attached beneath the card. Only the first is
 	// shown: a second would need the card to grow, and no app in this engine
 	// has one yet.
@@ -43,6 +43,11 @@ type CanvasEdge struct {
 	// corner.
 	Path string
 	Via  string
+
+	// From and To name the cards the edge joins, so the script can find the
+	// paths that need re-routing when one of them moves.
+	From string
+	To   string
 }
 
 // CanvasData is the whole graph.
@@ -55,28 +60,15 @@ type CanvasData struct {
 	// Empty distinguishes "no apps" from "apps that do not refer to each
 	// other" — the second is a normal install, the first needs a prompt.
 	Empty bool
-}
 
-// canvas draws the apps and what connects them.
-func (s *Server) canvas(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	owner := identity.MustFromContext(ctx)
+	// Project is the canvas being drawn, and Projects is every one the team
+	// has, so the switcher does not need a second request.
+	Project  app.Project
+	Projects []app.Project
 
-	apps, err := s.apps.List(ctx, owner.ID)
-	if err != nil {
-		s.log.Error("list apps for canvas", "error", err)
-		http.Error(w, "could not load apps", http.StatusInternalServerError)
-		return
-	}
-
-	links, err := s.apps.Links(ctx, owner.ID)
-	if err != nil {
-		// The graph degrades to a plain arrangement of cards rather than
-		// failing: the apps are the point, and the edges are how they relate.
-		s.log.Error("list links for canvas", "error", err)
-	}
-
-	s.render(w, r, Canvas(layout(apps, links)))
+	// Open is the app whose panel is showing, nil when none is. It is the same
+	// data the app page used to render, because the panel IS the app page now.
+	Open *AppDetailData
 }
 
 // layout places the cards and routes the edges.
@@ -153,6 +145,7 @@ func layout(apps []app.App, links []app.Link) CanvasData {
 	nodes := make([]CanvasNode, 0, len(apps))
 	at := make(map[string]CanvasNode, len(apps))
 	width := 0
+	bottom := 0
 	for y, row := range rows {
 		for x, a := range row {
 			n := CanvasNode{
@@ -160,6 +153,14 @@ func layout(apps []app.App, links []app.Link) CanvasData {
 				X:      padX + x*(cardW+gapX),
 				Y:      padY + y*(cardH+volumeH+gapY),
 				Height: cardH,
+			}
+			// A card somebody dragged stays where they put it. The computed
+			// position is still worked out first, so an app added to an
+			// arranged canvas lands somewhere sensible rather than at the
+			// origin under whatever is already there.
+			if a.X != nil && a.Y != nil {
+				n.X, n.Y = int(*a.X), int(*a.Y)
+				n.Pinned = true
 			}
 			if len(a.Volumes) > 0 {
 				v := a.Volumes[0]
@@ -171,6 +172,9 @@ func layout(apps []app.App, links []app.Link) CanvasData {
 			if right := n.X + cardW + padX; right > width {
 				width = right
 			}
+			if low := n.Y + n.Height + padY; low > bottom {
+				bottom = low
+			}
 		}
 	}
 
@@ -181,12 +185,17 @@ func layout(apps []app.App, links []app.Link) CanvasData {
 		if !okF || !okT || l.From == l.To {
 			continue
 		}
-		edges = append(edges, CanvasEdge{Path: route(from, to), Via: l.Via})
+		edges = append(edges, CanvasEdge{
+			Path: route(from, to), Via: l.Via, From: l.From, To: l.To,
+		})
 	}
 
-	height := padY
-	if len(rows) > 0 {
-		height = padY + len(rows)*(cardH+volumeH+gapY)
+	// Measured from the cards rather than from the row count: a dragged card
+	// can sit below every computed row, and a surface that ends above it is one
+	// the card hangs out of.
+	height := padY + cardH + volumeH + padY
+	if bottom > height {
+		height = bottom
 	}
 	return CanvasData{Nodes: nodes, Edges: edges, Width: width, Height: height}
 }
@@ -229,50 +238,4 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
-}
-
-// CanvasPanelData is the detail shown beside the graph.
-type CanvasPanelData struct {
-	App app.App
-
-	// Volume is set when the panel was opened from the storage strip rather
-	// than the card, so clicking the volume shows the volume.
-	Volume *app.Volume
-}
-
-// canvasPanel renders the detail for one card, for htmx to swap in beside the
-// graph.
-//
-// A fragment rather than a page: the canvas stays where it is, which is the
-// point of a panel. It is a normal GET, so the same URL opened directly still
-// returns something readable — a fragment that only works inside one page is a
-// link nobody can share.
-func (s *Server) canvasPanel(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	owner := identity.MustFromContext(ctx)
-
-	a, err := s.apps.Get(ctx, owner.ID, chi.URLParam(r, "name"))
-	if err != nil {
-		http.Error(w, "no such app", http.StatusNotFound)
-		return
-	}
-
-	data := CanvasPanelData{App: a}
-	if chi.URLParam(r, "volume") != "" {
-		for i := range a.Volumes {
-			if a.Volumes[i].Name == chi.URLParam(r, "volume") {
-				data.Volume = &a.Volumes[i]
-			}
-		}
-		if data.Volume == nil {
-			http.Error(w, "no such volume", http.StatusNotFound)
-			return
-		}
-	}
-
-	// Rendered without the layout: this is a fragment that lands inside a page
-	// that already has one.
-	if err := CanvasPanel(data).Render(ctx, w); err != nil {
-		s.log.Error("render canvas panel", "error", err)
-	}
 }

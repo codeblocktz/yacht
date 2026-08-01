@@ -14,6 +14,9 @@ type Querier interface {
 	// One conditional UPDATE, like the magic link: checking first and writing after
 	// leaves a window in which the same invitation is accepted twice.
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
+	// Forget every saved position in a project, so the next render lays it out
+	// again from the dependencies.
+	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
 	// Marking consumed and reading the user are one statement, so there is no
 	// window between the two in which a second request can also find the link
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
@@ -25,6 +28,9 @@ type Querier interface {
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
+	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
+	// the check, not a duplicate of one.
+	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
@@ -56,6 +62,7 @@ type Querier interface {
 	// against every other app forever.
 	DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
+	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
@@ -69,6 +76,8 @@ type Querier interface {
 	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
+	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 	// The team is joined in because the request that carries this cookie needs the
 	// owner it resolves to, and a second round trip per request buys nothing. The
@@ -100,6 +109,13 @@ type Querier interface {
 	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
+	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
+	// Apps that predate projects, or whose project was deleted.
+	//
+	// Returned separately rather than folded into a default project by the query,
+	// because assigning one is a write and a read should not have side effects
+	// that a caller cannot see.
+	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
@@ -108,6 +124,7 @@ type Querier interface {
 	// This list feeds the team page, and a hash that never leaves the database
 	// cannot be rendered into it by a template that innocently prints a struct.
 	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
+	ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
@@ -118,8 +135,12 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
+	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
+	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
+	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)

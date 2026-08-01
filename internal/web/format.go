@@ -164,6 +164,18 @@ func relativeTime(t time.Time) string {
 	return plural(int(d.Hours()/(24*365)), "year") + " ago"
 }
 
+// boolAttr renders a data attribute as "true" or empty.
+//
+// Empty rather than "false" because [data-x] matches an attribute whose value
+// is "false" just as readily as one whose value is "true" — a selector written
+// the obvious way would be wrong for exactly half its inputs.
+func boolAttr(b bool) string {
+	if b {
+		return "true"
+	}
+	return ""
+}
+
 func plural(n int, unit string) string {
 	if n == 1 {
 		return "1 " + unit

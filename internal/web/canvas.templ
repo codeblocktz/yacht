@@ -6,19 +6,32 @@ import (
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
-// Canvas draws the apps and what connects them.
+// Canvas draws a project's apps and what connects them.
 //
 // Server-rendered: the layout is computed in Go and the edges are an SVG path
 // list. There is no client-side graph library because there is no Node in this
 // project, and a canvas that needs a build step to render is one a self-hoster
-// cannot patch.
+// cannot patch. Dragging is progressive — every card is a link first, and the
+// script only adds the ability to move it.
 templ Canvas(d CanvasData) {
 	// A bar rather than a page heading: the graph is the page, and a heading
 	// with a paragraph under it would push the thing somebody came to look at
 	// below the fold.
 	<div class="canvas-bar">
-		<span class="min-w-0 flex-1 truncate font-medium">Canvas</span>
-		<span class="text-muted-foreground">How your apps relate to each other.</span>
+		<a class="canvas-bar-back" href="/projects" aria-label="All projects">
+			@icon("layers")
+		</a>
+		<span class="min-w-0 truncate font-medium">{ d.Project.Name }</span>
+		<span class="min-w-0 flex-1 truncate text-muted-foreground">
+			How these apps relate to each other.
+		</span>
+		if !d.Empty {
+			<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/arrange") }>
+				<button class="btn btn-sm" type="submit" title="Lay the cards out from their dependencies again">
+					Auto-arrange
+				</button>
+			</form>
+		}
 		@deployButton()
 	</div>
 	if d.Empty {
@@ -26,8 +39,16 @@ templ Canvas(d CanvasData) {
 			@emptyApps()
 		</div>
 	} else {
-		<div class="canvas-wrap">
-		<div class="canvas">
+		// The geometry lives here, in one place, so the script that re-routes
+		// an edge mid-drag uses the same numbers the server laid out with
+		// rather than a second copy that can drift from them.
+		<div
+			class="canvas"
+			data-canvas
+			data-card-w={ strconv.Itoa(cardW) }
+			data-card-h={ strconv.Itoa(cardH) }
+			data-volume-h={ strconv.Itoa(volumeH) }
+		>
 			<div class="canvas-inner" style={ canvasSize(d) }>
 				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
 					<defs>
@@ -37,21 +58,37 @@ templ Canvas(d CanvasData) {
 						</marker>
 					</defs>
 					for _, e := range d.Edges {
-						<path d={ e.Path } class="canvas-edge" marker-end="url(#arrow)">
+						<path
+							d={ e.Path }
+							class="canvas-edge"
+							marker-end="url(#arrow)"
+							data-from={ e.From }
+							data-to={ e.To }
+						>
 							<title>{ e.Via }</title>
 						</path>
 					}
 				</svg>
 				for _, n := range d.Nodes {
-					<div class="canvas-node" style={ nodeAt(n) }>
-						@sheet.Trigger(sheet.TriggerProps{For: "canvas-sheet"}) {
+					<div
+						class="canvas-node"
+						style={ nodeAt(n) }
+						data-node={ n.App.Name }
+						data-has-volume={ boolAttr(n.Volume != nil) }
+					>
 						<a
 							href={ templ.URL("/apps/" + n.App.Name) }
-							class="canvas-card"
-							hx-get={ "/canvas/panel/" + n.App.Name }
-							hx-target="#canvas-panel"
-							hx-swap="innerHTML"
+							class={ "canvas-card",
+								templ.KV("canvas-card-open", d.Open != nil && d.Open.App.Name == n.App.Name) }
 						>
+							// The handle is a separate target from the link. Dragging
+							// from anywhere on the card would mean every click has to
+							// be told apart from a very short drag, and the one that
+							// guesses wrong either loses the drag or follows a link
+							// somebody was only moving.
+							<span class="canvas-grip" data-drag-handle aria-hidden="true">
+								@icon("grip")
+							</span>
 							<span class="canvas-card-head">
 								@icon(sourceIcon(n.App.Source))
 								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
@@ -65,112 +102,133 @@ templ Canvas(d CanvasData) {
 								}
 							</span>
 						</a>
-					}
-					if n.Volume != nil {
-							@sheet.Trigger(sheet.TriggerProps{For: "canvas-sheet"}) {
+						if n.Volume != nil {
 							<a
 								href={ templ.URL("/apps/" + n.App.Name + "/storage") }
 								class="canvas-volume"
-								hx-get={ "/canvas/panel/" + n.App.Name + "/volume/" + n.Volume.Name }
-								hx-target="#canvas-panel"
-								hx-swap="innerHTML"
 							>
 								@icon("disk")
 								<span class="min-w-0 flex-1 truncate">{ n.Volume.Name }</span>
 								<span class="text-muted-foreground">{ gigabytes(n.Volume.SizeBytes) } GB</span>
 							</a>
 						}
-					}
 					</div>
 				}
 			</div>
 		</div>
-		</div>
-		// One sheet for every card rather than one each: the content is fetched
-		// when something is clicked, so N sheets would be N copies of an empty
-		// panel. Every card keeps its href, so the graph is still navigable with
-		// JavaScript off — this is an improvement on that, not a replacement.
-		@sheet.Sheet(sheet.Props{ID: "canvas-sheet", Side: sheet.SideRight}) {
-			@sheet.Content() {
-				<div id="canvas-panel" class="canvas-panel-body"></div>
+		if d.Open != nil {
+			// Rendered open, with its content already in it. Fetching the panel
+			// after the page arrives would mean the app somebody navigated
+			// straight to shows an empty sheet until a second request lands.
+			@sheet.Sheet(sheet.Props{ID: "canvas-sheet", Side: sheet.SideRight, Open: true}) {
+				@sheet.Content(sheet.ContentProps{Class: "canvas-sheet"}) {
+					@appPanelBody(*d.Open)
+				}
 			}
 		}
 	}
 }
 
-// CanvasPanel is the detail that slides in beside the graph.
+// appPanelBody is the app's detail, shown in the sheet over its canvas.
 //
-// A fragment: htmx swaps it into the panel container, so the canvas keeps its
-// scroll position and nothing re-renders that did not change. Opened directly
-// it is still a readable page of facts, because a fragment that only works
-// inside one page is a link nobody can share.
-templ CanvasPanel(d CanvasPanelData) {
-	@sheet.Header() {
+// The same tabs the app used to have a page of its own for. It does not need
+// one: what an app relates to is the canvas behind this panel, and a page that
+// replaced the canvas hid every relationship at the moment somebody was
+// changing one.
+templ appPanelBody(d AppDetailData) {
+	@sheet.Header(sheet.HeaderProps{Class: "canvas-sheet-head"}) {
 		@sheet.Title() {
 			<span class="flex min-w-0 items-center gap-2.5">
-				if d.Volume != nil {
-					@icon("disk")
-					<span class="truncate">{ d.Volume.Name }</span>
-				} else {
-					@icon(sourceIcon(d.App.Source))
-					<span class="truncate">{ d.App.Name }</span>
-				}
+				@icon(sourceIcon(d.App.Source))
+				<span class="truncate">{ d.App.Name }</span>
+				@appStatus(d.App)
 			</span>
 		}
-		if d.Volume != nil {
+		if d.App.Host != "" {
 			@sheet.Description() {
-				Storage attached to { d.App.Name }.
+				<a
+					class="mono inline-flex max-w-full items-center gap-1.5 hover:underline"
+					href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) }
+					target="_blank"
+					rel="noreferrer"
+				>
+					<span class="truncate">{ d.App.Host }</span>
+					<span class="[&>svg]:size-3.5">
+						@icon("external")
+					</span>
+				</a>
+			}
+		} else {
+			@sheet.Description() {
+				<span class="mono truncate">{ d.App.Image }</span>
 			}
 		}
 	}
-	<div class="panel-scroll">
-		if d.Volume != nil {
-			<dl class="kv">
-				<dt>Mounted at</dt>
-				<dd class="mono">{ d.Volume.MountPath }</dd>
-				<dt>Size</dt>
-				<dd class="tabular-nums">{ gigabytes(d.Volume.SizeBytes) } GB</dd>
-				<dt>Attached to</dt>
-				<dd>{ d.App.Name }</dd>
-			</dl>
-			<a class="btn mt-4" href={ templ.URL("/apps/" + d.App.Name + "/storage") }>
-				Manage storage
-			</a>
-		} else {
-			<dl class="kv">
-				<dt>Status</dt>
-				<dd>
-					@appStatus(d.App)
-				</dd>
-				<dt>Image</dt>
-				<dd class="mono break-all">{ d.App.Image }</dd>
-				if d.App.Host != "" {
-					<dt>URL</dt>
-					<dd>
-						<a class="mono" href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) } target="_blank" rel="noreferrer">
-							{ d.App.Host }
-						</a>
-					</dd>
-				}
-				if d.App.Internal {
-					<dt>Reachable</dt>
-					<dd class="text-muted-foreground">Inside this install only.</dd>
-				}
-				<dt>Variables</dt>
-				<dd class="tabular-nums">{ strconv.Itoa(len(d.App.Variables)) }</dd>
-				<dt>Storage</dt>
-				<dd>
-					if len(d.App.Volumes) == 0 {
-						<span class="text-muted-foreground">None</span>
-					} else {
-						<span class="mono">{ d.App.Volumes[0].MountPath }</span>
-					}
-				</dd>
-			</dl>
-			<div class="mt-4 flex flex-wrap gap-2">
-				<a class="btn" href={ templ.URL("/apps/" + d.App.Name) }>Open app</a>
-				<a class="btn" href={ templ.URL("/apps/" + d.App.Name + "/variables") }>Variables</a>
-			</div>
+	<div class="canvas-sheet-actions">
+		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/redeploy") }>
+			<button class="btn btn-sm" type="submit">Redeploy</button>
+		</form>
+		<form
+			method="post"
+			action={ templ.URL("/apps/" + d.App.Name + "/delete") }
+			onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+		>
+			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
+		</form>
+	</div>
+	<nav class="tabs canvas-sheet-tabs">
+		@appTab(d, "", "Deployments")
+		@appTab(d, "variables", "Variables")
+		@appTab(d, "metrics", "Metrics")
+		@appTab(d, "storage", "Storage")
+		@appTab(d, "settings", "Settings")
+	</nav>
+	<div class="canvas-sheet-body">
+		switch d.Tab {
+			case "variables":
+				@appVariables(d)
+			case "metrics":
+				@appMetrics(d)
+			case "storage":
+				@appStorage(d)
+			case "settings":
+				@appSettings(d)
+			default:
+				@appDeployments(d)
 		}
+	</div>
+}
+
+// ProjectList is every canvas a team has.
+templ ProjectList(d ProjectListData) {
+	@pageHead("Projects", "A project is one canvas: the apps that make up a system, and what connects them.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-4">{ d.Error }</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-body">
+			<form method="post" action="/projects" class="flex flex-wrap items-end gap-3">
+				<div class="field min-w-[240px] flex-1">
+					<label class="label" for="project-name">New project</label>
+					<input class="control" id="project-name" name="name" placeholder="Billing" required/>
+				</div>
+				<button class="btn btn-primary" type="submit">Create</button>
+			</form>
+		</div>
+	</div>
+	<div class="panel overflow-hidden">
+		<div class="rows">
+			for _, p := range d.Projects {
+				<a class="row-link" href={ templ.URL("/projects/" + p.Slug) }>
+					<span class="min-w-0 flex-1">
+						<span class="block truncate font-medium">{ p.Name }</span>
+						<span class="mono block truncate text-muted-foreground">/projects/{ p.Slug }</span>
+					</span>
+					<span class="tabular-nums text-muted-foreground">
+						{ plural(int(p.Apps), "app") }
+					</span>
+				</a>
+			}
+		</div>
 	</div>
 }

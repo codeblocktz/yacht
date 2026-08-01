@@ -126,3 +126,60 @@ func TestEdgePathIsWellFormed(t *testing.T) {
 		t.Errorf("the edge does not say which variable made it: %q", d.Edges[0].Via)
 	}
 }
+
+// A dragged card stays where it was put.
+//
+// The computed layout still runs first, so an app added later lands somewhere
+// sensible rather than at the origin under whatever is already there.
+func TestADraggedCardKeepsItsPosition(t *testing.T) {
+	x, y := int32(700), int32(410)
+	d := layout(
+		[]app.App{{Name: "api", X: &x, Y: &y}, {Name: "db"}},
+		[]app.Link{{From: "api", To: "db", Via: "DATABASE_URL"}},
+	)
+
+	api := node(t, d, "api")
+	if api.X != 700 || api.Y != 410 {
+		t.Fatalf("api is at (%d,%d), want the position it was dragged to", api.X, api.Y)
+	}
+	if !api.Pinned {
+		t.Error("a card at a stored position is not marked as pinned")
+	}
+	if node(t, d, "db").Pinned {
+		t.Error("a card nobody moved is marked as pinned")
+	}
+}
+
+// The surface has to reach past the lowest card.
+//
+// Height used to come from the number of rows, which is right only while every
+// card sits in one. A card dragged below them all would hang out of a canvas
+// that stopped short, with no way to scroll to it.
+func TestTheCanvasReachesPastTheLowestCard(t *testing.T) {
+	x, y := int32(40), int32(2000)
+	d := layout([]app.App{{Name: "api"}, {Name: "far", X: &x, Y: &y}}, nil)
+
+	if d.Height <= 2000 {
+		t.Fatalf("canvas is %dpx tall but a card sits at y=2000", d.Height)
+	}
+	if d.Width <= 40 {
+		t.Fatalf("canvas is %dpx wide but a card sits at x=40", d.Width)
+	}
+}
+
+// Edges carry the names of the cards they join, so the script can find the
+// paths that need re-routing when one of them moves. Without them a drag moves
+// the card and leaves its connections pointing at where it used to be.
+func TestEdgesNameTheCardsTheyJoin(t *testing.T) {
+	d := layout(
+		[]app.App{{Name: "api"}, {Name: "db"}},
+		[]app.Link{{From: "api", To: "db", Via: "DATABASE_URL"}},
+	)
+
+	if len(d.Edges) != 1 {
+		t.Fatalf("got %d edges, want 1", len(d.Edges))
+	}
+	if d.Edges[0].From != "api" || d.Edges[0].To != "db" {
+		t.Fatalf("edge joins %q to %q, want api to db", d.Edges[0].From, d.Edges[0].To)
+	}
+}

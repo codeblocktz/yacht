@@ -596,3 +596,127 @@ func (f *fakeApps) SetHealth(context.Context, string, string, string, bool) erro
 }
 
 func (f *fakeApps) Links(context.Context, string) ([]app.Link, error) { return nil, nil }
+
+// ---- projects and canvas arrangement
+//
+// One project holding every app the fake knows about. The canvas tests are
+// about what the page draws, not about which project an app is filed under, and
+// a fake that made them file one first would test the fake.
+
+var fakeProject = app.Project{
+	ID:   uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+	Slug: app.DefaultProjectSlug,
+	Name: app.DefaultProjectName,
+}
+
+func (f *fakeApps) Projects(_ context.Context, ownerID string) ([]app.Project, error) {
+	p := fakeProject
+	p.OwnerID = ownerID
+	p.Apps = int64(len(f.byOwner[ownerID]))
+	return []app.Project{p}, nil
+}
+
+func (f *fakeApps) Project(_ context.Context, ownerID, slug string) (app.Project, error) {
+	if slug != "" && slug != app.DefaultProjectSlug {
+		return app.Project{}, app.ErrProjectNotFound
+	}
+	p := fakeProject
+	p.OwnerID = ownerID
+	return p, nil
+}
+
+func (f *fakeApps) ProjectByID(_ context.Context, ownerID string, id uuid.UUID) (app.Project, error) {
+	if id != fakeProject.ID {
+		return app.Project{}, app.ErrProjectNotFound
+	}
+	p := fakeProject
+	p.OwnerID = ownerID
+	return p, nil
+}
+
+func (f *fakeApps) CreateProject(_ context.Context, ownerID, name string) (app.Project, error) {
+	if f.err != nil {
+		return app.Project{}, f.err
+	}
+	return app.Project{OwnerID: ownerID, Slug: app.Slugify(name), Name: name}, nil
+}
+
+func (f *fakeApps) ListInProject(_ context.Context, ownerID string, _ uuid.UUID) ([]app.App, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.byOwner[ownerID], nil
+}
+
+func (f *fakeApps) SetPosition(_ context.Context, ownerID, name string, x, y int32) error {
+	if f.err != nil {
+		return f.err
+	}
+	for i, a := range f.byOwner[ownerID] {
+		if a.Name == name {
+			f.byOwner[ownerID][i].X, f.byOwner[ownerID][i].Y = &x, &y
+			return nil
+		}
+	}
+	return app.ErrNotFound
+}
+
+func (f *fakeApps) ClearPositions(_ context.Context, ownerID string, _ uuid.UUID) error {
+	for i := range f.byOwner[ownerID] {
+		f.byOwner[ownerID][i].X, f.byOwner[ownerID][i].Y = nil, nil
+	}
+	return nil
+}
+
+// An app's URL renders its canvas with its panel open, not a page of its own.
+//
+// The relationships are the point: what a service reads and what reads it stay
+// on screen while somebody changes a variable. A detail page that replaced the
+// canvas would hide every one of them at exactly that moment.
+func TestAnAppURLRendersItsCanvasWithThePanelOpen(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"), sampleApp("owner-1", "db"))
+	h := testServer(t, Options{Apps: apps})
+
+	body := get(t, h, "/apps/web").Body.String()
+
+	// The canvas is behind the panel, with every sibling still drawn.
+	for _, want := range []string{`data-canvas`, `data-node="web"`, `data-node="db"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the app URL did not render the canvas: missing %q", want)
+		}
+	}
+	// Open on arrival. Fetching the panel afterwards would show an empty sheet
+	// to anybody who navigated straight here.
+	if !strings.Contains(body, `data-tui-dialog-open="true"`) {
+		t.Error("the panel is not open on a URL that names an app")
+	}
+	// Everything the app page used to be able to do, it can still do.
+	for _, want := range []string{"Redeploy", "Delete", "Variables", "Metrics", "Storage", "Settings"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the panel lost the app page's %q", want)
+		}
+	}
+}
+
+// The canvas is the project's, so it must not draw another team's apps.
+func TestTheCanvasIsScopedToOwner(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "mine"), sampleApp("owner-2", "theirs"))
+	h := testServer(t, Options{Apps: apps})
+
+	body := get(t, h, "/projects/default").Body.String()
+	if !strings.Contains(body, `data-node="mine"`) {
+		t.Error("own app missing from the canvas")
+	}
+	if strings.Contains(body, "theirs") {
+		t.Error("another owner's app leaked onto the canvas")
+	}
+}
+
+// A project a team does not have is a 404, not somebody else's canvas.
+func TestAnUnknownProjectIsNotFound(t *testing.T) {
+	h := testServer(t, Options{Apps: newFakeApps(sampleApp("owner-1", "web"))})
+
+	if code := get(t, h, "/projects/someone-elses").Code; code != http.StatusNotFound {
+		t.Fatalf("unknown project returned %d, want 404", code)
+	}
+}

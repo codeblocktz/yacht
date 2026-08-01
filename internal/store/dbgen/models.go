@@ -29,6 +29,9 @@ type App struct {
 	HealthLiveness bool
 	Source         string
 	Internal       bool
+	ProjectID      pgtype.UUID
+	CanvasX        *int32
+	CanvasY        *int32
 }
 
 type AppLink struct {
@@ -88,6 +91,15 @@ type Membership struct {
 	OwnerID   string
 	Role      string
 	CreatedAt time.Time
+}
+
+type Project struct {
+	ID        uuid.UUID
+	OwnerID   string
+	Slug      string
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Session struct {

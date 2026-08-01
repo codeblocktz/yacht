@@ -57,6 +57,20 @@ type Apps interface {
 	// another app is written — the only moment a sealed value is readable.
 	Links(ctx context.Context, ownerID string) ([]app.Link, error)
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
+
+	// Projects are the canvases apps are drawn on. Project and Projects both
+	// create the default one when a team has none, so no caller has to decide
+	// whether a team has been set up yet.
+	Projects(ctx context.Context, ownerID string) ([]app.Project, error)
+	Project(ctx context.Context, ownerID, slug string) (app.Project, error)
+	ProjectByID(ctx context.Context, ownerID string, id uuid.UUID) (app.Project, error)
+	CreateProject(ctx context.Context, ownerID, name string) (app.Project, error)
+	ListInProject(ctx context.Context, ownerID string, projectID uuid.UUID) ([]app.App, error)
+
+	// SetPosition and ClearPositions are the canvas arrangement, which belongs
+	// to the team rather than to whoever last dragged something.
+	SetPosition(ctx context.Context, ownerID, name string, x, y int32) error
+	ClearPositions(ctx context.Context, ownerID string, projectID uuid.UUID) error
 }
 
 // Accounts is the sign-in surface's view of the account service.
@@ -420,13 +434,16 @@ func (s *Server) Handler() http.Handler {
 
 			r.Get("/", s.overview)
 
-			r.Get("/canvas", s.canvas)
-			// Closing returns nothing, which is what empties the container.
-			// A client-side hide would leave the panel in the DOM holding the
-			// last app somebody looked at.
-			r.Get("/canvas/panel/close", func(w http.ResponseWriter, _ *http.Request) {})
-			r.Get("/canvas/panel/{name}", s.canvasPanel)
-			r.Get("/canvas/panel/{name}/volume/{volume}", s.canvasPanel)
+			r.Get("/canvas", s.canvasRedirect)
+			r.Get("/projects", s.projectList)
+			r.Post("/projects", s.projectCreate)
+			r.Get("/projects/{slug}", s.projectCanvas)
+
+			// Arranging the canvas sits with the member actions, alongside
+			// deploying: moving a card changes a picture, not a workload, and
+			// the arrangement can be thrown away and recomputed at any time.
+			r.Post("/projects/{slug}/arrange", s.canvasArrange)
+			r.Post("/apps/{name}/position", s.canvasPosition)
 			r.Get("/apps", s.appList)
 			r.Post("/apps", s.appCreate)
 			r.Get("/apps/new", s.appNew)
@@ -687,50 +704,6 @@ func (s *Server) renderErrFor(
 func (s *Server) renderErr(w http.ResponseWriter, r *http.Request, form NewAppForm, msg string) {
 	w.WriteHeader(http.StatusUnprocessableEntity)
 	s.render(w, r, NewApp(NewAppData{Error: msg, Form: form}))
-}
-
-func (s *Server) appDetail(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	owner := identity.MustFromContext(ctx)
-	name := chi.URLParam(r, "name")
-
-	if s.apps == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	a, err := s.apps.Get(ctx, owner.ID, name)
-	if err != nil {
-		if errors.Is(err, app.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		s.log.Error("get app", slog.String("error", err.Error()))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	data := AppDetailData{App: a, Tab: detailTab(r)}
-
-	if pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
-		Namespace: a.Namespace, ManagedOnly: true,
-	}); err == nil {
-		data.Pods = pods
-	}
-
-	// The rail lists every app so you can move between them without going
-	// back to the index. Status is already attached by List.
-	if siblings, err := s.apps.List(ctx, owner.ID); err == nil {
-		data.Siblings = siblings
-	}
-
-	if deps, err := s.apps.Deployments(ctx, owner.ID, a.ID, 20); err == nil {
-		data.Deployments = deps
-	} else {
-		s.log.Error("list deployments", slog.String("error", err.Error()))
-	}
-
-	s.renderWithCrumb(w, r, AppDetail(data), a.Name)
 }
 
 func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {

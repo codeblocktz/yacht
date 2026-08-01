@@ -68,6 +68,14 @@ type App struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
+	// ProjectID is the canvas this app belongs to.
+	ProjectID uuid.UUID
+
+	// X and Y are where somebody dragged the card to, nil when nobody has.
+	// Nil rather than zero because (0,0) is a position a person can choose,
+	// and an app pinned to the corner must not be re-laid-out on every render.
+	X, Y *int32
+
 	// Status is read live from the cluster. Zero value means the cluster did
 	// not answer — which is different from "not running" and is rendered
 	// differently.
@@ -189,6 +197,11 @@ type CreateInput struct {
 	// which is what every app was before sources existed.
 	Source Source
 
+	// ProjectID is the canvas this app is drawn on. Zero leaves it unassigned,
+	// and the next read of the team's projects adopts it into the default one —
+	// which is what a create that never mentioned a project wants.
+	ProjectID uuid.UUID
+
 	Name     string
 	Image    string
 	Replicas int32
@@ -289,6 +302,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		CpuLimit:      in.CPULimit,
 		MemoryRequest: in.MemoryRequest,
 		MemoryLimit:   in.MemoryLimit,
+		ProjectID:     pgUUID(in.ProjectID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -779,6 +793,9 @@ func toApp(row dbgen.App) App {
 		MemoryLimit:   row.MemoryLimit,
 		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     row.UpdatedAt,
+		ProjectID:     row.ProjectID.Bytes,
+		X:             row.CanvasX,
+		Y:             row.CanvasY,
 	}
 }
 
