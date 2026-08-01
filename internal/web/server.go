@@ -191,6 +191,9 @@ type Options struct {
 	// no secret key: it could store nothing and hand out nothing.
 	Joiner Joiner
 
+	// Stacks, when set, puts the templates surface on the router.
+	Stacks Stacks
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -264,6 +267,11 @@ type Server struct {
 	// no page.
 	joiner Joiner
 
+	// stacks deploys templates. Nil leaves the templates surface off, which is
+	// right for an install with no secret key: every stack here mints
+	// credentials, and one that could not seal them would fail halfway.
+	stacks Stacks
+
 	accounts       Accounts
 	mailer         notify.Mailer
 	baseURL        string
@@ -335,6 +343,7 @@ func New(opts Options) (*Server, error) {
 		log:       opts.Logger,
 
 		joiner:         opts.Joiner,
+		stacks:         opts.Stacks,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -459,6 +468,13 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps", s.appList)
 			r.Post("/apps", s.appCreate)
 			r.Get("/apps/new", s.appNew)
+			if s.stacks != nil {
+				// Member, like creating an app. A stack is several apps and
+				// nothing a person could not do one at a time from the same
+				// page, so a stricter gate here would only be theatre.
+				r.Get("/templates", s.templateList)
+				r.Post("/templates", s.templateDeploy)
+			}
 			r.Get("/apps/{name}", s.appDetail)
 			r.Get("/apps/{name}/variables", s.appDetail)
 			r.Get("/apps/{name}/metrics", s.appDetail)

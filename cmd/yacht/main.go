@@ -156,6 +156,10 @@ func run() error {
 	// left off the router entirely rather than shown and refused.
 	if keeper.Configured() {
 		opts.Joiner = cluster.New(pool, keeper, log)
+		// Every stack mints credentials, so the same key that gates joining
+		// gates this. Offered without one it would fail after creating the
+		// first app.
+		opts.Stacks = apps
 	} else {
 		log.Info("add-node is off — set YACHT_SECRET_KEY to store a cluster join token")
 	}

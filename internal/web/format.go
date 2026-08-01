@@ -164,6 +164,18 @@ func relativeTime(t time.Time) string {
 	return plural(int(d.Hours()/(24*365)), "year") + " ago"
 }
 
+// sourceHref is where the picker sends each source.
+//
+// A template makes several apps and a project to hold them, so it cannot use
+// the create form, which is a form for one app. Branching here rather than in
+// the template keeps the picker a list of links.
+func sourceHref(src app.Source) string {
+	if src == app.SourceTemplate {
+		return "/templates"
+	}
+	return "/apps/new?source=" + string(src)
+}
+
 // totalApps counts the apps across every project.
 func totalApps(projects []app.Project) int64 {
 	var n int64

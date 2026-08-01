@@ -661,7 +661,7 @@ templ sourcePicker(d NewAppData) {
 		<div class="rows">
 			for _, b := range d.Sources {
 				if b.Available {
-					<a href={ templ.SafeURL("/apps/new?source=" + string(b.Source)) } class="row-link">
+					<a href={ templ.SafeURL(sourceHref(b.Source)) } class="row-link">
 						<span class="text-muted-foreground">
 							@icon(sourceIcon(b.Source))
 						</span>

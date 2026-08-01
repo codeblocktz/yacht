@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 )
 
@@ -17,6 +18,10 @@ const (
 	// SourceImage is a container image the person chose. Yacht knows nothing
 	// about what is inside it, so it configures nothing on its behalf.
 	SourceImage Source = "image"
+
+	// SourceTemplate is a stack rather than a single app. It never reaches an
+	// app row: the template page creates each app with that app's own source.
+	SourceTemplate Source = "template"
 
 	// SourcePostgres is a Postgres database. Yacht knows what the image is, so
 	// it can mount the data directory, run as the right user, and generate the
@@ -131,16 +136,28 @@ func Blueprints() []Blueprint {
 			Because:     "the build pipeline is not built yet",
 		},
 		{
-			Source:      "template",
+			// Available, but not a source in the way the others are: a template
+			// makes several apps rather than one, so the picker sends it to its
+			// own page instead of the create form. BlueprintFor still refuses
+			// it, which is what stops it reaching Create as if it were an image.
+			Source:      SourceTemplate,
 			Label:       "Template",
-			Description: "Deploy a preconfigured stack.",
-			Because:     "no templates are defined yet",
+			Description: "Deploy a preconfigured stack, already wired together.",
+			Available:   true,
 		},
 	}
 }
 
 // BlueprintFor returns the blueprint for a source.
+//
+// A template has no blueprint. It is not a thing an app can be created from —
+// it creates apps — so asking for one is a wiring mistake rather than a state
+// to handle, and it is refused here where every create path passes through.
 func BlueprintFor(src Source) (Blueprint, error) {
+	if src == SourceTemplate {
+		return Blueprint{}, errors.New(
+			"app: a template makes several apps and cannot be one")
+	}
 	for _, b := range Blueprints() {
 		if b.Source == src {
 			if !b.Available {

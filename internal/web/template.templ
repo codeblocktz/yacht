@@ -1,0 +1,76 @@
+package web
+
+import "github.com/codeblocktz/yacht/internal/app"
+
+// TemplateList offers the stacks that can be deployed in one action.
+templ TemplateList(d TemplateListData) {
+	@pageHead("Templates",
+		"A stack of apps deployed together, already holding each other's addresses.",
+		backToSources())
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">Could not deploy that stack</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	for _, t := range d.Templates {
+		@templateCard(t, d)
+	}
+}
+
+templ templateCard(t app.Template, d TemplateListData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">{ t.Label }</span>
+		</div>
+		<div class="panel-body">
+			<p class="mb-4 text-[12.5px] text-muted-foreground">{ t.Description }</p>
+			<div class="rows mb-4 rounded-md border border-border">
+				for _, a := range t.Apps {
+					<div class="row-item">
+						@icon(sourceIcon(a.Source))
+						<span class="min-w-0 flex-1">
+							<span class="mono block truncate">
+								if d.Stack != "" {
+									{ d.Stack }-{ a.Name }
+								} else {
+									&lt;stack&gt;-{ a.Name }
+								}
+							</span>
+							if a.Image != "" {
+								<span class="mono block truncate text-muted-foreground">{ a.Image }</span>
+							}
+						</span>
+						if a.NeedsFrom != "" {
+							// Named on the row rather than in prose: the wiring is
+							// the reason to use a template at all, and it should be
+							// visible before deploying rather than discovered after.
+							<span class="status status-info">gets { a.NeedsFrom }&#39;s address</span>
+						}
+					</div>
+				}
+			</div>
+			<form method="post" action="/templates" class="flex flex-wrap items-end gap-3">
+				<input type="hidden" name="template" value={ t.Slug }/>
+				<div class="field min-w-[200px]">
+					<label class="label" for={ "stack-" + t.Slug }>Stack name</label>
+					<input
+						class="control"
+						id={ "stack-" + t.Slug }
+						name="stack"
+						value={ d.Stack }
+						placeholder="shop"
+						required
+					/>
+				</div>
+				<button class="btn btn-primary" type="submit">Deploy stack</button>
+			</form>
+			<p class="mt-2 text-[12.5px] text-muted-foreground">
+				Every app is named after the stack, so the same template can be
+				deployed more than once. They land on a new project of their own.
+			</p>
+		</div>
+	</div>
+}
