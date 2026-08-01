@@ -250,7 +250,7 @@ templ ProjectList(d ProjectListData) {
 
 templ projectRow(p app.Project) {
 	<a class="row-link" href={ templ.URL("/projects/" + p.Slug) }>
-		@icon("grid")
+		@icon("boxes")
 		<span class="min-w-0 flex-1">
 			<span class="block truncate font-medium">{ p.Name }</span>
 			<span class="mono block truncate text-muted-foreground">/projects/{ p.Slug }</span>

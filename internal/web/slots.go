@@ -148,7 +148,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 				// reached from it, so a second door into a flat list of every
 				// app in the team would show the same things with the one fact
 				// that matters — what they are connected to — taken out.
-				{Label: "Projects", Href: "/projects", Icon: "grid",
+				{Label: "Projects", Href: "/projects", Icon: "boxes",
 					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/apps") ||
 						hasPrefix(path, "/canvas")},
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
@@ -232,7 +232,13 @@ func teamNav(ctx context.Context, path string) []NavItem {
 // /apps/new are ordinary pages, and a prefix test alone would swallow both.
 func isCanvasPath(path string) bool {
 	switch {
-	case hasPrefix(path, "/projects"), hasPrefix(path, "/canvas"):
+	case path == "/projects", path == "/projects/":
+		// The list of projects is an ordinary page. Only a project itself is a
+		// canvas, and letting the prefix cover both took the padding off the
+		// list — which then sat flush against the chrome while every other
+		// index page was inset.
+		return false
+	case hasPrefix(path, "/projects/"), hasPrefix(path, "/canvas"):
 		return true
 	case path == "/apps", path == "/apps/", hasPrefix(path, "/apps/new"):
 		return false

@@ -275,3 +275,32 @@ func newFailingOrchestrator() failingOrchestrator {
 func (failingOrchestrator) Ping(context.Context) error {
 	return errors.New("no route to cluster")
 }
+
+// Only a canvas fills the window. Everything else keeps the inset, centred
+// wrapper every index page in the dashboard sits in.
+//
+// The list of projects is the case that got this wrong: a prefix test on
+// "/projects" covered the list as well as the canvases under it, so the one
+// page that most needed to look like the cluster page was the one page with no
+// padding at all.
+func TestOnlyTheCanvasIsFullBleed(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/":                   false,
+		"/projects":           false,
+		"/apps":               false,
+		"/apps/new":           false,
+		"/cluster/nodes":      false,
+		"/settings":           false,
+		"/projects/default":   true,
+		"/projects/billing":   true,
+		"/apps/web":           true,
+		"/apps/web/variables": true,
+		"/canvas":             true,
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		got := (DefaultSlots{}).Slots(context.Background(), req).FullBleed
+		if got != want {
+			t.Errorf("FullBleed(%s) = %v, want %v", path, got, want)
+		}
+	}
+}
