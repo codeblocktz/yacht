@@ -111,3 +111,51 @@ func TestAppSpecRejectsDuplicateMountPaths(t *testing.T) {
 		t.Fatal("Validate accepted two volumes mounted at the same path")
 	}
 }
+
+func TestAppSpecAcceptsAHealthPath(t *testing.T) {
+	s := validSpec()
+	s.HealthPath = "/healthz"
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+// A probe is an HTTP GET against the app's own port. With no port there is
+// nothing to probe, and Kubernetes would reject the pod rather than explain.
+func TestAppSpecRejectsAHealthPathWithNoPort(t *testing.T) {
+	s := validSpec()
+	s.Port = 0
+	s.HealthPath = "/healthz"
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted a health path on a workload with no port")
+	}
+}
+
+func TestAppSpecRejectsMalformedHealthPaths(t *testing.T) {
+	for name, path := range map[string]string{
+		"relative":    "healthz",
+		"scheme":      "http://x/healthz",
+		"space":       "/health z",
+		"not clean":   "/a/../healthz",
+		"query":       "/healthz?x=1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := validSpec()
+			s.HealthPath = path
+			if err := s.Validate(); err == nil {
+				t.Fatalf("Validate accepted %q", path)
+			}
+		})
+	}
+}
+
+// Liveness restarts the container. Asking for it without saying what to probe
+// is a request that cannot be honoured, and honouring it by guessing would
+// restart a working app.
+func TestAppSpecRejectsLivenessWithNoHealthPath(t *testing.T) {
+	s := validSpec()
+	s.Liveness = true
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted liveness with nothing to probe")
+	}
+}

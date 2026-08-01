@@ -90,3 +90,11 @@ JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1
 ORDER BY d.started_at DESC
 LIMIT $2;
+
+-- name: SetAppHealth :one
+UPDATE apps
+SET health_path     = @health_path,
+    health_liveness = @health_liveness,
+    updated_at      = now()
+WHERE owner_id = @owner_id AND id = @id
+RETURNING *;

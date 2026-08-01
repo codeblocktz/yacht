@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -296,4 +297,80 @@ func TestAttachingAVolumeToAnExistingWorkload(t *testing.T) {
 	if dep.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
 		t.Errorf("strategy = %q, want Recreate", dep.Spec.Strategy.Type)
 	}
+}
+
+func specWithHealth() orchestrator.AppSpec {
+	s := testSpec()
+	s.HealthPath = "/healthz"
+	return s
+}
+
+func TestHealthPathBecomesAReadinessProbe(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, specWithHealth()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	c := containerOf(t, client, "yacht-demo", "web")
+
+	if c.ReadinessProbe == nil {
+		t.Fatal("no readiness probe")
+	}
+	if got := c.ReadinessProbe.HTTPGet.Path; got != "/healthz" {
+		t.Fatalf("readiness path = %q", got)
+	}
+	// Liveness was not asked for, and it restarts containers.
+	if c.LivenessProbe != nil {
+		t.Fatal("a liveness probe was added without being asked for")
+	}
+}
+
+func TestLivenessIsOptIn(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	spec := specWithHealth()
+	spec.Liveness = true
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	c := containerOf(t, client, "yacht-demo", "web")
+
+	if c.LivenessProbe == nil {
+		t.Fatal("liveness was asked for and not applied")
+	}
+	// Liveness must be slower to give up than readiness. Otherwise a container
+	// is killed at the same moment it would merely have been taken out of
+	// rotation, and a slow start becomes a restart loop.
+	if c.LivenessProbe.FailureThreshold <= c.ReadinessProbe.FailureThreshold {
+		t.Errorf("liveness gives up at %d failures, readiness at %d — liveness must be more patient",
+			c.LivenessProbe.FailureThreshold, c.ReadinessProbe.FailureThreshold)
+	}
+}
+
+func TestNoHealthPathMeansNoProbes(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	c := containerOf(t, client, "yacht-demo", "web")
+
+	if c.ReadinessProbe != nil || c.LivenessProbe != nil {
+		t.Fatal("probes were added to a workload that asked for none")
+	}
+}
+
+func containerOf(
+	t *testing.T, client *fake.Clientset, ns, name string,
+) corev1.Container {
+	t.Helper()
+	dep, err := client.AppsV1().Deployments(ns).Get(
+		context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	return dep.Spec.Template.Spec.Containers[0]
 }

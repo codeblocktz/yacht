@@ -518,6 +518,36 @@ templ appMetrics(d AppDetailData) {
 // ---- settings tab
 
 templ appSettings(a app.App) {
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Health check</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/health") } class="flex flex-wrap items-end gap-4">
+				<div class="field grow">
+					<label class="label" for="health-path">Path</label>
+					<input class="control mono" id="health-path" name="health_path" value={ a.HealthPath } placeholder="/healthz"/>
+					<span class="hint">
+						An HTTP GET on this app's own port. Empty means no probe.
+					</span>
+				</div>
+				<label class="flex items-center gap-2 pb-6 text-[12.5px]">
+					if a.Liveness {
+						<input type="checkbox" name="liveness" value="1" checked/>
+					} else {
+						<input type="checkbox" name="liveness" value="1"/>
+					}
+					Also restart when it fails
+				</label>
+				<button class="btn btn-primary mb-6" type="submit">Save</button>
+			</form>
+			<p class="text-[12px] text-muted-foreground">
+				A health check keeps traffic away from a container that is not serving
+				yet. Restarting on failure is separate and off by default: it kills the
+				container, so a check that is a little too impatient turns a slow start
+				into a restart loop — which looks like the app being broken rather than
+				the check being wrong.
+			</p>
+		</div>
+	</div>
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Scale</span>

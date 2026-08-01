@@ -184,6 +184,16 @@ func (o *Orchestrator) container(
 			volumeMounts(spec)...,
 		)...)
 
+	// Readiness first: it is what keeps traffic away from a container that is
+	// not serving yet, which is the whole of what most workloads need.
+	if spec.HealthPath != "" {
+		c = c.WithReadinessProbe(httpProbe(spec, readinessFailures, 0))
+		if spec.Liveness {
+			c = c.WithLivenessProbe(
+				httpProbe(spec, livenessFailures, livenessInitialDelaySeconds))
+		}
+	}
+
 	// envFrom rather than literals: the values stay in the Secret and out of
 	// the pod template.
 	if len(spec.Secrets) > 0 {

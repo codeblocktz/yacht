@@ -189,3 +189,37 @@ func (s *Server) variableFailed(
 		App: a, Tab: "variables", Error: cause.Error(),
 	}))
 }
+
+// healthSet points the app's probe at a path, or removes it.
+func (s *Server) healthSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	err := s.apps.SetHealth(ctx, owner.ID, name,
+		r.FormValue("health_path"), r.FormValue("liveness") != "")
+	if err != nil {
+		s.appActionFailed(w, r, name, "settings", err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
+// appActionFailed re-renders a tab with the reason it refused.
+func (s *Server) appActionFailed(
+	w http.ResponseWriter, r *http.Request, appName, tab string, cause error,
+) {
+	status := http.StatusUnprocessableEntity
+	if errors.Is(cause, app.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+
+	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
+	if err != nil {
+		http.Error(w, cause.Error(), status)
+		return
+	}
+
+	w.WriteHeader(status)
+	s.render(w, r, AppDetail(AppDetailData{App: a, Tab: tab, Error: cause.Error()}))
+}

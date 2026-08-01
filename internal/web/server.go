@@ -48,6 +48,10 @@ type Apps interface {
 	// it is replaced, and there is no read path for it by design.
 	SetVariable(ctx context.Context, ownerID, appName string, in app.VariableInput) error
 	DeleteVariable(ctx context.Context, ownerID, appName, key string) error
+
+	// SetHealth points the readiness probe at a path, and optionally lets the
+	// same path restart the container.
+	SetHealth(ctx context.Context, ownerID, name, healthPath string, liveness bool) error
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
 }
 
@@ -463,6 +467,7 @@ func (s *Server) Handler() http.Handler {
 			// Variables sit with the admin actions: a value here is often the
 			// credential the app runs as, and setting one is not undone by a
 			// redeploy.
+			r.Post("/apps/{name}/health", s.healthSet)
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 

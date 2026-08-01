@@ -12,19 +12,21 @@ import (
 )
 
 type App struct {
-	ID            uuid.UUID
-	OwnerID       string
-	Name          string
-	Namespace     string
-	Image         string
-	Replicas      int32
-	Port          int32
-	CpuRequest    string
-	CpuLimit      string
-	MemoryRequest string
-	MemoryLimit   string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID             uuid.UUID
+	OwnerID        string
+	Name           string
+	Namespace      string
+	Image          string
+	Replicas       int32
+	Port           int32
+	CpuRequest     string
+	CpuLimit       string
+	MemoryRequest  string
+	MemoryLimit    string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	HealthPath     string
+	HealthLiveness bool
 }
 
 type Deployment struct {

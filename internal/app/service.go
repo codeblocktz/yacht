@@ -46,6 +46,11 @@ type App struct {
 	Replicas  int32
 	Port      int32
 
+	// HealthPath is an HTTP path reporting whether the app is serving. Empty
+	// means no probe. Liveness lets the same path also restart the container.
+	HealthPath string
+	Liveness   bool
+
 	// Variables are this app's environment. A secret's value is not carried
 	// here — see Variable.
 	Variables []Variable
@@ -354,6 +359,8 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		CPULimit:      a.CPULimit,
 		MemoryRequest: a.MemoryRequest,
 		MemoryLimit:   a.MemoryLimit,
+		HealthPath:    a.HealthPath,
+		Liveness:      a.Liveness,
 		Hosts:         hosts,
 		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
 		Volumes:       volumeSpecs(vols),
@@ -664,6 +671,8 @@ func toApp(row dbgen.App) App {
 		Image:         row.Image,
 		Replicas:      row.Replicas,
 		Port:          row.Port,
+		HealthPath:    row.HealthPath,
+		Liveness:      row.HealthLiveness,
 		CPURequest:    row.CpuRequest,
 		CPULimit:      row.CpuLimit,
 		MemoryRequest: row.MemoryRequest,
@@ -696,4 +705,45 @@ func unmarshalEnv(b []byte) map[string]string {
 // violation (SQLSTATE 23505).
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "23505")
+}
+
+// SetHealth points a probe at a path, or removes it.
+//
+// Validated through AppSpec before anything is written: the same rules the
+// cluster would apply, applied where somebody can read the reason.
+func (s *Service) SetHealth(
+	ctx context.Context, ownerID, name, healthPath string, liveness bool,
+) error {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return err
+	}
+
+	probe := a
+	probe.HealthPath = strings.TrimSpace(healthPath)
+	probe.Liveness = liveness
+	if err := (orchestrator.AppSpec{
+		Ref: probe.Ref(), Image: probe.Image, Replicas: probe.Replicas,
+		Port: probe.Port, HealthPath: probe.HealthPath, Liveness: probe.Liveness,
+	}).Validate(); err != nil {
+		return err
+	}
+
+	row, err := s.q.SetAppHealth(ctx, dbgen.SetAppHealthParams{
+		OwnerID: ownerID, ID: a.ID,
+		HealthPath: probe.HealthPath, HealthLiveness: probe.Liveness,
+	})
+	if err != nil {
+		return fmt.Errorf("app: set health: %w", err)
+	}
+
+	updated := toApp(row)
+	if err := s.apply(ctx, s.q, updated); err != nil {
+		return err
+	}
+
+	s.log.Info("health probe set",
+		slog.String("app", name), slog.String("path", probe.HealthPath),
+		slog.Bool("liveness", probe.Liveness))
+	return nil
 }

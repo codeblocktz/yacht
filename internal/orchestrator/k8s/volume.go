@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -126,4 +127,36 @@ func (o *Orchestrator) deleteSecret(ctx context.Context, ref orchestrator.Ref) e
 		return fmt.Errorf("k8s: delete secret %s: %w", ref, err)
 	}
 	return nil
+}
+
+// Probe timings.
+//
+// Readiness is impatient: three failures and traffic stops arriving, which
+// costs nothing but a moment of reduced capacity. Liveness is deliberately
+// slower to act, because it kills the container — a probe that gives up at the
+// same point as readiness turns a slow start into a restart loop, and that
+// presents as the app being broken rather than as the probe being wrong.
+const (
+	probePeriodSeconds        = 10
+	probeTimeoutSeconds       = 3
+	readinessFailures   int32 = 3
+	livenessFailures    int32 = 6
+
+	// Nothing is probed at all for the first half-minute. An app that needs
+	// longer than that to start should say so with a readiness probe that
+	// tolerates it, not be killed while it is still opening its database
+	// connections.
+	livenessInitialDelaySeconds = 30
+)
+
+// httpProbe builds a GET against the workload's own service port.
+func httpProbe(spec orchestrator.AppSpec, failures int32, initialDelay int32) *corev1ac.ProbeApplyConfiguration {
+	return corev1ac.Probe().
+		WithHTTPGet(corev1ac.HTTPGetAction().
+			WithPath(spec.HealthPath).
+			WithPort(intstr.FromInt32(spec.Port))).
+		WithInitialDelaySeconds(initialDelay).
+		WithPeriodSeconds(probePeriodSeconds).
+		WithTimeoutSeconds(probeTimeoutSeconds).
+		WithFailureThreshold(failures)
 }

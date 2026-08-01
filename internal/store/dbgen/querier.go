@@ -116,6 +116,7 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)

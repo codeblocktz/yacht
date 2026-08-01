@@ -590,3 +590,7 @@ func (f *fakeApps) SetVariable(context.Context, string, string, app.VariableInpu
 func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error {
 	return errors.New("fakeApps has no variables")
 }
+
+func (f *fakeApps) SetHealth(context.Context, string, string, string, bool) error {
+	return errors.New("fakeApps has no health probe")
+}

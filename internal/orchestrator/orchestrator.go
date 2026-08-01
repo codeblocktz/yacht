@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strings"
 )
 
 // ErrNotFound is returned when a requested workload does not exist.
@@ -184,6 +185,21 @@ type AppSpec struct {
 	// customer-claimed — is a decision that belongs above this seam.
 	Hosts []string
 
+	// HealthPath is an HTTP path on the workload's own port that reports
+	// whether it is ready to serve. Empty means no probe.
+	//
+	// One path drives both probes, because an app that answers differently on
+	// two paths is answering a question nobody asked it.
+	HealthPath string
+
+	// Liveness turns the same path into a restart condition as well.
+	//
+	// Off by default, and deliberately a separate switch. Readiness only
+	// withholds traffic; liveness kills the container. A probe that is a little
+	// too impatient turns a slow-starting app into a restart loop, which
+	// presents as the app being broken rather than as the probe being wrong.
+	Liveness bool
+
 	// Secrets are environment values that must not appear in the pod template.
 	//
 	// They become a Kubernetes Secret the container reads with envFrom, rather
@@ -246,6 +262,9 @@ func (s AppSpec) Validate() error {
 		}
 	}
 	if err := s.validateVolumes(); err != nil {
+		return err
+	}
+	if err := s.validateHealth(); err != nil {
 		return err
 	}
 	return nil
@@ -368,6 +387,33 @@ func (s AppSpec) validateVolumes() error {
 			return fmt.Errorf("app spec: two volumes are mounted at %q", v.MountPath)
 		}
 		seen[v.MountPath] = true
+	}
+	return nil
+}
+
+// validateHealth checks the probe settings.
+func (s AppSpec) validateHealth() error {
+	if s.Liveness && s.HealthPath == "" {
+		return errors.New(
+			"app spec: liveness needs a health path — restarting a container on a " +
+				"condition nobody specified would restart a working one")
+	}
+	if s.HealthPath == "" {
+		return nil
+	}
+	if s.Port == 0 {
+		return errors.New("app spec: a health path needs a port to probe")
+	}
+	// Kubernetes takes a path, not a URL: anything with a scheme, a query or a
+	// space is a caller who has confused the two, and the pod would be rejected
+	// with a message about the field rather than about what they typed.
+	switch {
+	case !path.IsAbs(s.HealthPath):
+		return fmt.Errorf("app spec: health path %q must be absolute", s.HealthPath)
+	case strings.ContainsAny(s.HealthPath, " ?#"):
+		return fmt.Errorf("app spec: health path %q must be a path, not a URL", s.HealthPath)
+	case path.Clean(s.HealthPath) != s.HealthPath:
+		return fmt.Errorf("app spec: health path %q is not a clean path", s.HealthPath)
 	}
 	return nil
 }
