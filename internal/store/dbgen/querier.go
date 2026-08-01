@@ -83,6 +83,7 @@ type Querier interface {
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
 	GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error)
+	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.

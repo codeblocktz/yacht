@@ -498,6 +498,7 @@ func (s *Server) Handler() http.Handler {
 			if s.logs != nil {
 				r.Get("/apps/{name}/logs", s.appLogs)
 				r.Get("/apps/{name}/logs/lines", s.appLogsFragment)
+				r.Get("/apps/{name}/deployments/{id}/logs", s.deployLogs)
 			}
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)

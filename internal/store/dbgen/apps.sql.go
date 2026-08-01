@@ -296,6 +296,33 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 	return i, err
 }
 
+const getDeployment = `-- name: GetDeployment :one
+SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
+WHERE owner_id = $1 AND id = $2
+`
+
+type GetDeploymentParams struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, getDeployment, arg.OwnerID, arg.ID)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Image,
+		&i.Revision,
+		&i.Status,
+		&i.Message,
+		&i.StartedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const getTeamRow = `-- name: GetTeamRow :one
 SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1
 `

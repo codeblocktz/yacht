@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -205,5 +207,104 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 		if d.FinishedAt == nil {
 			t.Error("a retired deployment has no finish time")
 		}
+	}
+}
+
+// A superseded deployment's logs are gone, and saying so is the feature.
+//
+// The failure this rules out is not a crash. Reading the current pods and
+// captioning them with an old revision would render perfectly and be the live
+// log — somebody would draw conclusions about a deploy from output that
+// postdates it by a week.
+func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
+	ctx := context.Background()
+	orch := &loggingOrchestrator{recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()}}
+	s, _, pool := testService(t, Options{})
+	s.orch = orch
+	ownerID := owner(t, s, pool, "owner-deploy-logs")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	orch.pods = []orchestrator.PodInfo{{Name: "web-1", Namespace: a.Namespace}}
+	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+
+	deps, err := s.Deployments(ctx, ownerID, a.ID, 10)
+	if err != nil {
+		t.Fatalf("Deployments: %v", err)
+	}
+	var live, old Deployment
+	for _, d := range deps {
+		switch d.Status {
+		case DeployActive:
+			live = d
+		case DeploySuperseded:
+			old = d
+		}
+	}
+	if live.ID == uuid.Nil || old.ID == uuid.Nil {
+		t.Fatalf("expected one active and one superseded, got %+v", deps)
+	}
+
+	orch.last = orchestrator.LogOptions{}
+	got, err := s.DeploymentLogs(ctx, ownerID, "web", old.ID, LogRequest{})
+	if err != nil {
+		t.Fatalf("DeploymentLogs: %v", err)
+	}
+	if got.Live {
+		t.Error("a superseded deployment reports itself as live")
+	}
+	if len(got.Logs.Lines) != 0 {
+		t.Fatalf("a replaced deployment returned %d lines of somebody else's run", len(got.Logs.Lines))
+	}
+	if orch.last.Pod != "" {
+		t.Error("the cluster was read for a deployment whose containers are gone")
+	}
+	if got.Logs.Note == "" {
+		t.Error("nothing explains why there are no logs")
+	}
+
+	// And the live one does read.
+	got, err = s.DeploymentLogs(ctx, ownerID, "web", live.ID, LogRequest{})
+	if err != nil {
+		t.Fatalf("DeploymentLogs live: %v", err)
+	}
+	if !got.Live || len(got.Logs.Lines) == 0 {
+		t.Error("the running deployment shows no output")
+	}
+}
+
+// A deployment id from another app is not a way to read across apps.
+func TestADeploymentIDFromAnotherAppIsRefused(t *testing.T) {
+	ctx := context.Background()
+	orch := &loggingOrchestrator{recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()}}
+	s, _, pool := testService(t, Options{})
+	s.orch = orch
+	ownerID := owner(t, s, pool, "owner-deploy-cross")
+
+	one, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "one", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create one: %v", err)
+	}
+	if _, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "two", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	}); err != nil {
+		t.Fatalf("Create two: %v", err)
+	}
+
+	deps, err := s.Deployments(ctx, ownerID, one.ID, 10)
+	if err != nil || len(deps) == 0 {
+		t.Fatalf("Deployments: %v", err)
+	}
+
+	if _, err := s.DeploymentLogs(ctx, ownerID, "two", deps[0].ID, LogRequest{}); err != ErrNotFound {
+		t.Fatalf("reading one app's deployment through another = %v, want ErrNotFound", err)
 	}
 }

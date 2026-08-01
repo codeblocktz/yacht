@@ -1,6 +1,10 @@
 package web
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+)
 
 // AppLogs is the log pane for one app.
 templ AppLogs(d LogsData) {
@@ -91,4 +95,76 @@ templ AppLogLines(d LogsData) {
 
 templ backToDeployments(name string) {
 	<a class="btn" href={ templ.URL("/apps/" + name) }>Back to deployments</a>
+}
+
+// DeployLogPanel is one deployment's logs, shown in a sheet over the list.
+templ DeployLogPanel(d DeployLogsData) {
+	@sheet.Header(sheet.HeaderProps{Class: "canvas-sheet-head"}) {
+		@sheet.Title() {
+			<span class="flex min-w-0 items-center gap-2.5">
+				<span class="mono truncate">{ d.Deploy.Deployment.Revision }</span>
+				@deploymentStatus(d.Deploy.Deployment)
+			</span>
+		}
+		@sheet.Description() {
+			<span class="mono truncate">{ d.Deploy.Deployment.Image }</span>
+		}
+	}
+	if d.Error != "" {
+		<div class="canvas-sheet-body">
+			<div class="callout callout-err">
+				<div class="min-w-0">{ d.Error }</div>
+			</div>
+		</div>
+	} else if !d.Deploy.Live {
+		// Said rather than filled with the live log under an old revision's
+		// heading. That would look like history and be the current output.
+		<div class="canvas-sheet-body">
+			<div class="empty">
+				<p class="font-medium text-foreground">No logs for this deployment</p>
+				<p>{ d.Deploy.Logs.Note }</p>
+			</div>
+		</div>
+	} else {
+		<div class="canvas-sheet-actions">
+			<a
+				class={ "btn btn-sm", templ.KV("btn-primary", !d.Previous) }
+				href="#"
+				hx-get={ deployLogsHref(d, false) }
+				hx-target="#deploy-log-panel"
+				hx-swap="innerHTML"
+			>This run</a>
+			<a
+				class={ "btn btn-sm", templ.KV("btn-primary", d.Previous) }
+				href="#"
+				hx-get={ deployLogsHref(d, true) }
+				hx-target="#deploy-log-panel"
+				hx-swap="innerHTML"
+			>Previous run</a>
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(len(d.Deploy.Logs.Lines)) } { plural(len(d.Deploy.Logs.Lines), "line") }
+			</span>
+		</div>
+		<div class="canvas-sheet-body !p-0">
+			if len(d.Deploy.Logs.Lines) == 0 {
+				<div class="empty">
+					<p class="font-medium text-foreground">Nothing to show</p>
+					if d.Deploy.Logs.Note != "" {
+						<p>{ d.Deploy.Logs.Note }</p>
+					}
+				</div>
+			} else {
+				<div class="logs">
+					for _, l := range d.Deploy.Logs.Lines {
+						<div class="log-line">
+							if !l.At.IsZero() {
+								<span class="log-time">{ l.At.Format("15:04:05") }</span>
+							}
+							<span class="log-text">{ l.Text }</span>
+						</div>
+					}
+				</div>
+			}
+		</div>
+	}
 }

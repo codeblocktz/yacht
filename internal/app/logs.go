@@ -2,9 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
 // LogRequest asks for one app's container output.
@@ -17,6 +22,72 @@ type LogRequest struct {
 	Previous bool
 
 	Tail int64
+}
+
+// DeployLogs is what one deployment's log view can honestly show.
+type DeployLogs struct {
+	Deployment Deployment
+	Logs       Logs
+
+	// Live is true when this deployment is the one currently running, which is
+	// the only case where there are containers left to read.
+	Live bool
+}
+
+// DeploymentLogs reads the output of one deployment.
+//
+// Only the running deployment has any. Kubernetes keeps a container's log with
+// the container, so the pods that served a superseded deployment took their
+// output with them when they were replaced — retaining it would need a log
+// store shipped off the cluster, which this install does not have.
+//
+// Saying that is the point. Reading the current pods and captioning them with
+// an old deployment's revision would look like history and be the live log,
+// which is worse than an empty pane: somebody would draw conclusions about a
+// deploy from output that postdates it.
+func (s *Service) DeploymentLogs(
+	ctx context.Context, ownerID, appName string, deployID uuid.UUID, req LogRequest,
+) (DeployLogs, error) {
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
+		return DeployLogs{}, err
+	}
+
+	row, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{OwnerID: ownerID, ID: deployID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DeployLogs{}, ErrNotFound
+		}
+		return DeployLogs{}, fmt.Errorf("app: read deployment: %w", err)
+	}
+	// The deployment has to belong to the app in the URL, or a deployment id is
+	// a way to read across apps within a team.
+	if row.AppID != a.ID {
+		return DeployLogs{}, ErrNotFound
+	}
+
+	d := Deployment{
+		ID: row.ID, AppID: row.AppID, Image: row.Image,
+		Revision: row.Revision, Status: row.Status,
+		Message: row.Message, StartedAt: row.StartedAt,
+	}
+	if row.FinishedAt.Valid {
+		finished := row.FinishedAt.Time
+		d.FinishedAt = &finished
+	}
+
+	out := DeployLogs{Deployment: d}
+	out.Live = out.Deployment.Status == DeployRunning || out.Deployment.Status == DeployActive
+	if !out.Live {
+		out.Logs.Note = "This deployment has been replaced. Its containers are gone, and " +
+			"their output went with them — nothing here stores logs off the cluster."
+		return out, nil
+	}
+
+	if out.Logs, err = s.Logs(ctx, ownerID, appName, req); err != nil {
+		return DeployLogs{}, err
+	}
+	return out, nil
 }
 
 // Logs is an app's container output, and which pods it could have come from.

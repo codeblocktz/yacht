@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -16,6 +17,53 @@ import (
 // Logger is the dashboard's view of container output.
 type Logger interface {
 	Logs(ctx context.Context, ownerID, appName string, req app.LogRequest) (app.Logs, error)
+	DeploymentLogs(
+		ctx context.Context, ownerID, appName string, deployID uuid.UUID, req app.LogRequest,
+	) (app.DeployLogs, error)
+}
+
+// DeployLogsData is the sheet opened from one deployment.
+type DeployLogsData struct {
+	App      string
+	Deploy   app.DeployLogs
+	Previous bool
+	Error    string
+}
+
+// deployLogs renders the log sheet for one deployment.
+//
+// A fragment swapped into the sheet rather than a page: the deployments list
+// stays where it was, which is the point of opening a panel over it instead of
+// navigating away from it.
+func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	d := DeployLogsData{App: name, Previous: r.URL.Query().Get("previous") == "1"}
+	dl, err := s.logs.DeploymentLogs(ctx, owner.ID, name, id, app.LogRequest{
+		Pod: r.URL.Query().Get("pod"), Previous: d.Previous,
+	})
+	switch {
+	case errors.Is(err, app.ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case err != nil:
+		s.log.Error("read deployment logs", slog.String("error", err.Error()))
+		d.Error = "Could not read the logs."
+	default:
+		d.Deploy = dl
+	}
+
+	if err := DeployLogPanel(d).Render(ctx, w); err != nil {
+		s.log.Error("render deployment logs", slog.String("error", err.Error()))
+	}
 }
 
 // logsFragmentHref keeps the poll on the same view the controls chose.
@@ -72,4 +120,13 @@ func (s *Server) logsData(r *http.Request) LogsData {
 	}
 	d.Logs = l
 	return d
+}
+
+// deployLogsHref keeps the sheet on the same deployment when switching runs.
+func deployLogsHref(d DeployLogsData, previous bool) string {
+	u := "/apps/" + d.App + "/deployments/" + d.Deploy.Deployment.ID.String() + "/logs"
+	if previous {
+		u += "?previous=1"
+	}
+	return u
 }

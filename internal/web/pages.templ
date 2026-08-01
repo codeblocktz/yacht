@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
@@ -329,7 +330,7 @@ templ appDeployments(d AppDetailData) {
 				</div>
 				<div class="rows">
 					for _, dep := range d.Deployments[1:] {
-						@deploymentRow(dep)
+						@deploymentRow(d.App.Name, dep)
 					}
 				</div>
 			</div>
@@ -357,9 +358,7 @@ templ appDeployments(d AppDetailData) {
 templ activeDeployment(d AppDetailData, dep app.Deployment) {
 	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
 		<div class="flex flex-wrap items-center justify-between gap-3">
-			<a class="btn btn-sm order-last" href={ templ.URL("/apps/" + d.App.Name + "/logs") }>
-				View logs
-			</a>
+			@deployLogsButton(d.App.Name, dep)
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">
 					@deploymentStatus(dep)
@@ -383,7 +382,7 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 	</div>
 }
 
-templ deploymentRow(dep app.Deployment) {
+templ deploymentRow(appName string, dep app.Deployment) {
 	<div class="row-item !py-2.5">
 		<span class="w-24 shrink-0">
 			@deploymentStatus(dep)
@@ -394,7 +393,24 @@ templ deploymentRow(dep app.Deployment) {
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { dep.Source() }
 		</span>
+		@deployLogsButton(appName, dep)
 	</div>
+}
+
+// deployLogsButton opens one deployment's logs over the list.
+//
+// A sheet rather than a page: the list stays where it was, and the logs belong
+// to the deployment that was clicked rather than to whatever is running now.
+templ deployLogsButton(appName string, dep app.Deployment) {
+	@sheet.Trigger(sheet.TriggerProps{For: "deploy-logs-sheet"}) {
+		<button
+			class="btn btn-sm order-last"
+			type="button"
+			hx-get={ "/apps/" + appName + "/deployments/" + dep.ID.String() + "/logs" }
+			hx-target="#deploy-log-panel"
+			hx-swap="innerHTML"
+		>View logs</button>
+	}
 }
 
 templ deploymentStatus(dep app.Deployment) {

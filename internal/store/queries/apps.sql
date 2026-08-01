@@ -114,3 +114,7 @@ UPDATE deployments
 SET status = 'superseded', finished_at = COALESCE(finished_at, now())
 WHERE owner_id = @owner_id AND app_id = @app_id
   AND status IN ('running', 'active');
+
+-- name: GetDeployment :one
+SELECT * FROM deployments
+WHERE owner_id = @owner_id AND id = @id;
