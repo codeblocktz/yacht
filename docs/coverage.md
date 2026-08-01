@@ -16,15 +16,29 @@ decision instead of quietly becoming an oversight.
 | **Overview** | Cluster capacity, app count, recent workloads |
 | **Apps** | Deploy from image, scale, redeploy, delete, live status |
 | **App detail** | Tabbed: Deployments · Variables · Metrics · Settings. Left rail switches apps without returning to the index |
+| **Per-app hostnames** | `<name>.<YACHT_APP_DOMAIN>`, issued at create time in the same transaction as the app |
+| **TLS** | One shared wildcard, served by the ingress controller's default certificate |
+| **Persistent storage** | Per-app volumes, mounted, kept across redeploys, expandable |
+| **Accounts** | Magic-link sign-in, sessions, sign-out everywhere |
+| **Teams** | Owner / Admin / Member, invitations, team switcher, member management |
 | **Deployments** | Cross-app activity feed with trigger and relative time |
 | **Nodes** | Capacity, live utilisation, roles, pools, cordoned state |
-| **Pods** | Ready counts, restarts, node placement, phase |
-| **Volumes** | Claims with size, class, access modes, bind status |
+| **Pods** | Ready counts, restarts, node placement, phase — scoped to your team |
+| **Volumes** | Claims with size, class, access modes, bind status — scoped to your team |
 | **Events** | Cluster events with warnings hoisted above routine chatter |
-| **Settings** | Owner, auth posture, cluster reachability, version |
+| **Settings** | Owner, auth and sign-in posture, mail transport, hostname policy, cluster reachability, version |
 
 Utilisation figures need `metrics-server`. Without it everything else works and
 those numbers read `—` rather than a misleading zero.
+
+Two consequences worth stating, because they surprise people:
+
+- **Images that run as root will not start.** Every namespace is Pod Security
+  Admission `restricted` and there is no API for relaxing it.
+- **An app with storage runs one replica and recreates on deploy**, so it has
+  brief downtime. A `ReadWriteOnce` claim mounts on one node at a time: a second
+  pod has nowhere to schedule, and a rolling update deadlocks waiting for a
+  volume the outgoing pod still holds.
 
 ---
 
@@ -37,12 +51,20 @@ authenticated registry → deploy) is designed but not built. Everything
 downstream of it — commit messages in deployment history, "deployed via GitHub",
 branch tracking — waits on this.
 
-### Ingress, TLS, custom domains
-The `domains` table exists in the schema. What is missing is cert-manager
-wiring: a wildcard certificate via DNS-01 for platform subdomains, and CNAME
-delegation for customer apex domains. Note the constraint that shapes the
-design: **Let's Encrypt allows 50 certificates per registered domain per week**,
-so per-app subdomains must come from one wildcard, not a certificate each.
+### Customer custom domains
+Platform hostnames and their shared wildcard certificate are built. What is
+missing is the other half: letting a customer point their own domain at an app —
+claim, prove by DNS TXT, publish, and a cert-manager `Certificate` per host.
+
+The constraint that shaped the built half still shapes this one: **Let's Encrypt
+allows 50 certificates per registered domain per week**, which is why platform
+subdomains come from one wildcard. Customer domains are different registered
+domains, so the limit does not aggregate and one certificate per host is right
+there.
+
+`domain.Reserved` already exists and is tested — it refuses any claim under the
+platform domain, which is the piece that is unsafe to retrofit once tenants can
+claim names.
 
 ### Live log streaming
 The dashboard already uses SSE, so the transport is not the work — following a
@@ -73,10 +95,24 @@ Deliberately late. Exec-over-websockets is fiddly, and it is the single most
 dangerous endpoint a multi-tenant control plane can expose. Logs answer most of
 the questions a shell would.
 
+### Secrets
+`AppSpec.Env` is a plain map stored as `jsonb` and rendered straight into the
+Deployment. A password pasted into it is plaintext in Postgres, in every
+backup, and in `kubectl get deploy -o yaml` — and nothing on the form says so.
+Splitting secret from non-secret, and mounting the secret half with `envFrom`,
+is the highest-value item on this list.
+
+### Health probes
+Liveness and readiness on `AppSpec`. More pressing since storage landed: an app
+with a volume recreates on deploy rather than rolling, so there is a real gap
+between the old pod stopping and the new one serving, and without a readiness
+probe traffic arrives before the container is up.
+
 ### Deferred small items
 Helm release listing, DaemonSet inspection, node topology visualisation,
-namespace browser, PVC expansion, cluster garbage collection, metric history
-snapshots, alert rules, notification channels, 2FA.
+namespace browser, cluster garbage collection, metric history snapshots, alert
+rules, notification channels beyond email, 2FA enrolment (the columns exist),
+and a cap on outstanding magic links.
 
 ---
 

@@ -31,11 +31,17 @@ nothing you build here is locked in.
 | Namespace provisioning with enforced security posture | ✅ |
 | Cluster view — nodes, pods, capacity, utilisation | ✅ |
 | Dashboard with pluggable chrome, light and dark | ✅ |
-| Identity seam with single-owner and bearer-token providers | ✅ |
+| A hostname per app, served the moment it starts | ✅ |
+| TLS from one shared wildcard certificate | ✅ |
+| Persistent volumes, mounted and expandable | ✅ |
+| Magic-link sign-in, sessions, sign-out everywhere | ✅ |
+| Teams with Owner / Admin / Member and invitations | ✅ |
+| Identity seam — single owner, bearer token, or session | ✅ |
 | Postgres schema + embedded migrations | ✅ |
 | Build from a Git repository | next |
-| Ingress, TLS, custom domains | next |
-| Live log streaming, persistent volumes | next |
+| Secrets kept out of the app record | next |
+| Health probes, live log streaming | next |
+| Customer custom domains | next |
 
 Utilisation percentages need `metrics-server` in the cluster. Without it
 everything else still works and those figures read `—` rather than zero.
@@ -69,9 +75,17 @@ without digging through logs.
 | `YACHT_ADDR` | `:8080` | Listen address |
 | `YACHT_KUBECONFIG` | `$KUBECONFIG` | Path to a kubeconfig |
 | `YACHT_KUBE_IN_CLUSTER` | `false` | Use the mounted service account instead |
-| `YACHT_AUTH_TOKEN` | — | Bearer token. Unset means **no authentication** |
-| `YACHT_OWNER_ID` | `owner-local` | The single owner every resource belongs to |
+| `YACHT_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
+| `YACHT_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
+| `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
+| `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
+| `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
+| `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
 | `YACHT_DEBUG` | `false` | Verbose logging |
+
+The full list, with the reasoning behind each, is in
+[`.env.example`](.env.example).
 
 ## Security posture
 
