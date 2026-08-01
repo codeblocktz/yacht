@@ -11,6 +11,13 @@ import (
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
+// ErrHostReserved means the operator has put this hostname out of reach.
+//
+// Distinct from ErrHostTaken: nobody holds it, and waiting will not free it.
+// Telling somebody a name is taken when it is reserved sends them to look for
+// the app that has it.
+var ErrHostReserved = errors.New("domain: hostname is reserved")
+
 // ErrHostTaken means another app already holds the hostname.
 //
 // Hostnames are globally unique because DNS has one owner per name. The engine
@@ -26,6 +33,10 @@ type ManagedInput struct {
 	AppName   string
 	AppDomain string
 	TLS       bool
+
+	// Reserved are the operator's additional reserved suffixes. An app name
+	// that would claim one of them is refused rather than issued.
+	Reserved []string
 }
 
 // EnsureManaged issues the app's platform hostname, or moves it if the app
@@ -50,6 +61,15 @@ func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (stri
 	}
 	if err != nil {
 		return "", err
+	}
+
+	// Checked against the operator's list only, with the app domain left out
+	// on purpose. Reserved treats everything under the app domain as reserved
+	// — correct when asking whether a tenant may bring a name, and useless
+	// here, where every issued host is under it by construction. What an
+	// operator reserves are particular names within it, like admin.apps.example.com.
+	if Reserved(host, "", in.Reserved) {
+		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 
 	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{

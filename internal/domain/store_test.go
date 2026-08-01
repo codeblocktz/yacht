@@ -164,3 +164,88 @@ func TestEnsureManagedReportsACollisionClearly(t *testing.T) {
 		t.Fatalf("want ErrHostTaken, got %v", err)
 	}
 }
+
+// An operator can put a name out of reach, and an app claiming it is refused.
+//
+// Without this the list is parsed from the environment and read by nothing: an
+// app called "admin" takes admin.<app domain> simply by being created first,
+// whatever the operator reserved.
+func TestAReservedHostnameIsNotIssued(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-reserved", "admin", "ns-test-reserved")
+	q := dbgen.New(pool)
+
+	_, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
+		AppDomain: "apps.domain.test", TLS: true,
+		Reserved: []string{"admin.apps.domain.test"},
+	})
+	if !errors.Is(err, ErrHostReserved) {
+		t.Fatalf("EnsureManaged = %v, want ErrHostReserved", err)
+	}
+
+	// And nothing was written. A refusal that still claims the globally unique
+	// name would hold it against every other app.
+	hosts, err := HostsForApp(ctx, q, a.ID)
+	if err != nil {
+		t.Fatalf("HostsForApp: %v", err)
+	}
+	if len(hosts) != 0 {
+		t.Fatalf("a refused hostname was stored anyway: %v", hosts)
+	}
+}
+
+// Reserving a suffix reserves what is under it, on the label boundary.
+//
+// The bug this rules out is the classic one: "eviladmin.apps.domain.test" ends
+// with "admin.apps.domain.test" as a substring while being a different name
+// entirely, and a suffix test on the raw string refuses it.
+func TestReservingASuffixMatchesOnLabels(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	q := dbgen.New(pool)
+	reserved := []string{"internal.domain.test"}
+
+	under := seedApp(t, pool, "test-reserved-under", "thing", "ns-test-res-under")
+	if _, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: under.OwnerID, AppID: under.ID, AppName: under.Name,
+		AppDomain: "internal.domain.test", TLS: true, Reserved: reserved,
+	}); !errors.Is(err, ErrHostReserved) {
+		t.Fatalf("a name under the reserved domain = %v, want ErrHostReserved", err)
+	}
+
+	beside := seedApp(t, pool, "test-reserved-beside", "thing", "ns-test-res-beside")
+	host, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: beside.OwnerID, AppID: beside.ID, AppName: beside.Name,
+		AppDomain: "notinternal.domain.test", TLS: true, Reserved: reserved,
+	})
+	if err != nil {
+		t.Fatalf("a name merely sharing a substring was refused: %v", err)
+	}
+	if host != "thing.notinternal.domain.test" {
+		t.Fatalf("host = %q, want thing.notinternal.domain.test", host)
+	}
+}
+
+// The app domain itself is not a reserved list. Reserved treats everything
+// under it as reserved — right for "may a tenant bring this name", wrong here,
+// where every issued host is under it by construction. Getting this backwards
+// refuses every app on an install that reserves nothing.
+func TestReservingNothingIssuesNormally(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-reserved-none", "web", "ns-test-res-none")
+	q := dbgen.New(pool)
+
+	host, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
+		AppDomain: "apps.domain.test", TLS: true, Reserved: nil,
+	})
+	if err != nil {
+		t.Fatalf("EnsureManaged with nothing reserved: %v", err)
+	}
+	if host != "web.apps.domain.test" {
+		t.Fatalf("host = %q, want web.apps.domain.test", host)
+	}
+}

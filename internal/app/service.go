@@ -155,6 +155,11 @@ type Options struct {
 	// WildcardTLS serves those hostnames over TLS from the ingress
 	// controller's default certificate.
 	WildcardTLS bool
+
+	// ReservedDomains are hostnames no app may claim, even under the app
+	// domain. An app named "admin" would otherwise take admin.<app domain>
+	// simply by being created first.
+	ReservedDomains []string
 }
 
 // Service manages app lifecycle.
@@ -498,6 +503,7 @@ func (s *Service) managedInput(a App) domain.ManagedInput {
 	return domain.ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
 		AppDomain: appDomain, TLS: s.opts.WildcardTLS,
+		Reserved: s.opts.ReservedDomains,
 	}
 }
 

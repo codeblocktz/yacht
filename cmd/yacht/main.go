@@ -108,9 +108,10 @@ func run() error {
 	}
 
 	apps := app.NewService(pool, orch, log, app.Options{
-		AppDomain:   cfg.AppDomain,
-		WildcardTLS: cfg.WildcardTLS,
-		Keeper:      keeper,
+		AppDomain:       cfg.AppDomain,
+		WildcardTLS:     cfg.WildcardTLS,
+		Keeper:          keeper,
+		ReservedDomains: cfg.ReservedDomains,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
