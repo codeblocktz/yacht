@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 )
 
@@ -183,6 +184,13 @@ type AppSpec struct {
 	// customer-claimed — is a decision that belongs above this seam.
 	Hosts []string
 
+	// Volumes are storage the workload keeps across redeploys.
+	//
+	// Attaching any forces the workload to recreate rather than roll on
+	// deploy, and limits it to one replica — both because a ReadWriteOnce
+	// claim mounts on one node at a time. See VolumeSpec.
+	Volumes []VolumeSpec
+
 	// TLS requests terminated TLS for Hosts.
 	//
 	// It carries no certificate reference. Platform hostnames are served from
@@ -190,6 +198,21 @@ type AppSpec struct {
 	// routing never names a Secret — an Ingress's TLS Secret must live in the
 	// Ingress's own namespace, and every app has its own namespace.
 	TLS bool
+}
+
+// VolumeSpec is one piece of storage attached to a workload.
+//
+// Size is bytes rather than a Kubernetes quantity string so that comparing a
+// new size against the old is arithmetic. That comparison is the whole of the
+// expansion rule: Kubernetes cannot shrink a claim, and neither can anything
+// else — the filesystem on it may be full.
+type VolumeSpec struct {
+	Name      string
+	MountPath string
+	SizeBytes int64
+
+	// Class is the StorageClass. Empty means the cluster default.
+	Class string
 }
 
 // Validate checks the spec well enough to avoid sending nonsense to a cluster.
@@ -213,6 +236,9 @@ func (s AppSpec) Validate() error {
 		if !hostRE.MatchString(h) {
 			return fmt.Errorf("app spec: %q is not a valid hostname", h)
 		}
+	}
+	if err := s.validateVolumes(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -295,4 +321,45 @@ type ClusterInspector interface {
 	// create carries no owner and belongs to whoever runs the cluster, so it is
 	// shown to nobody here.
 	Volumes(ctx context.Context, owner OwnerID) ([]VolumeInfo, error)
+}
+
+// validateVolumes checks the storage attached to a workload.
+func (s AppSpec) validateVolumes() error {
+	if len(s.Volumes) == 0 {
+		return nil
+	}
+
+	// A ReadWriteOnce claim mounts on one node at a time, so a second pod has
+	// nowhere to schedule that can also reach the volume. Refused here rather
+	// than left to the cluster, where it appears as a pod that stays Pending
+	// with the reason somewhere nobody is looking.
+	if s.Replicas > 1 {
+		return fmt.Errorf(
+			"app spec: a workload with storage runs one replica, not %d — "+
+				"its volume can only be mounted by one pod at a time", s.Replicas)
+	}
+
+	seen := make(map[string]bool, len(s.Volumes))
+	for _, v := range s.Volumes {
+		switch {
+		case !dnsLabel.MatchString(v.Name):
+			return fmt.Errorf("app spec: %q is not a valid volume name", v.Name)
+		case v.SizeBytes <= 0:
+			return fmt.Errorf("app spec: volume %q needs a size", v.Name)
+		case !path.IsAbs(v.MountPath):
+			return fmt.Errorf("app spec: volume %q mount path must be absolute", v.Name)
+		case v.MountPath == "/":
+			return fmt.Errorf("app spec: volume %q cannot be mounted at /", v.Name)
+		// path.Clean removes a trailing slash and resolves "..", so a path that
+		// is not already clean is one where what was asked for and what would
+		// be mounted differ.
+		case path.Clean(v.MountPath) != v.MountPath:
+			return fmt.Errorf("app spec: volume %q mount path %q is not a clean path",
+				v.Name, v.MountPath)
+		case seen[v.MountPath]:
+			return fmt.Errorf("app spec: two volumes are mounted at %q", v.MountPath)
+		}
+		seen[v.MountPath] = true
+	}
+	return nil
 }

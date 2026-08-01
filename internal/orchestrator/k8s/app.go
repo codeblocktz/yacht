@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,13 @@ const servicePort int32 = 80
 // reconcile.
 func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) error {
 	if err := spec.Validate(); err != nil {
+		return err
+	}
+
+	// Before the Deployment that mounts them: a pod naming a claim that does
+	// not exist yet sits Pending, and the recovery is invisible to whoever is
+	// watching the deploy.
+	if err := o.applyVolumes(ctx, spec); err != nil {
 		return err
 	}
 
@@ -82,15 +90,34 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		WithAutomountServiceAccountToken(false).
 		WithSecurityContext(restrictedPodSecurityContext()).
 		WithContainers(container).
-		WithVolumes(
-			corev1ac.Volume().
-				WithName(tmpVolumeName).
-				WithEmptyDir(corev1ac.EmptyDirVolumeSource()),
-		)
+		WithVolumes(append(
+			[]*corev1ac.VolumeApplyConfiguration{
+				corev1ac.Volume().
+					WithName(tmpVolumeName).
+					WithEmptyDir(corev1ac.EmptyDirVolumeSource()),
+			},
+			volumeSources(spec)...,
+		)...)
+
+	// A rolling update starts the replacement before the original stops. With a
+	// ReadWriteOnce claim the replacement cannot mount what the original still
+	// holds, so it waits forever and the deploy never completes — no error, no
+	// timeout, just a pod that never becomes ready.
+	//
+	// Recreating costs downtime on every deploy, which is why it is applied
+	// only when there is storage to justify it, and said out loud in the
+	// dashboard rather than changed underneath the operator.
+	strategy := appsv1ac.DeploymentStrategy().
+		WithType(appsv1.RollingUpdateDeploymentStrategyType)
+	if len(spec.Volumes) > 0 {
+		strategy = appsv1ac.DeploymentStrategy().
+			WithType(appsv1.RecreateDeploymentStrategyType)
+	}
 
 	dep := appsv1ac.Deployment(spec.Name, spec.Namespace).
 		WithLabels(orchestrator.ObjectLabels(spec.Ref)).
 		WithSpec(appsv1ac.DeploymentSpec().
+			WithStrategy(strategy).
 			WithReplicas(spec.Replicas).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(orchestrator.SelectorLabels(spec.Name))).
@@ -116,11 +143,14 @@ func (o *Orchestrator) container(
 		WithImage(spec.Image).
 		WithImagePullPolicy(corev1.PullIfNotPresent).
 		WithSecurityContext(restrictedContainerSecurityContext(spec.WritableRootFilesystem)).
-		WithVolumeMounts(
-			corev1ac.VolumeMount().
-				WithName(tmpVolumeName).
-				WithMountPath("/tmp"),
-		)
+		WithVolumeMounts(append(
+			[]*corev1ac.VolumeMountApplyConfiguration{
+				corev1ac.VolumeMount().
+					WithName(tmpVolumeName).
+					WithMountPath("/tmp"),
+			},
+			volumeMounts(spec)...,
+		)...)
 
 	if spec.Port > 0 {
 		c = c.WithPorts(

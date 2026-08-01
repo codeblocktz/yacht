@@ -56,3 +56,58 @@ func TestAppSpecRejectsHostsWithoutAPort(t *testing.T) {
 		t.Fatal("Validate accepted hosts on a spec with no port")
 	}
 }
+
+func TestAppSpecAcceptsVolumes(t *testing.T) {
+	s := validSpec()
+	s.Volumes = []VolumeSpec{{Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30}}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+// A ReadWriteOnce volume mounts on one node at a time, so the second pod can
+// never schedule. Refusing here means the person is told at the moment they
+// ask; the alternative is a pod stuck Pending forever with the reason buried
+// in kubectl describe.
+func TestAppSpecRefusesVolumesWithMoreThanOneReplica(t *testing.T) {
+	s := validSpec()
+	s.Replicas = 2
+	s.Volumes = []VolumeSpec{{Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30}}
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted a volume on a workload with two replicas")
+	}
+}
+
+func TestAppSpecRejectsMalformedVolumes(t *testing.T) {
+	cases := map[string]VolumeSpec{
+		"no name":         {MountPath: "/data", SizeBytes: 1 << 30},
+		"bad name":        {Name: "Data!", MountPath: "/data", SizeBytes: 1 << 30},
+		"relative mount":  {Name: "data", MountPath: "var/lib", SizeBytes: 1 << 30},
+		"root mount":      {Name: "data", MountPath: "/", SizeBytes: 1 << 30},
+		"no size":         {Name: "data", MountPath: "/data"},
+		"negative size":   {Name: "data", MountPath: "/data", SizeBytes: -1},
+		"trailing slash":  {Name: "data", MountPath: "/data/", SizeBytes: 1 << 30},
+		"dot dot in path": {Name: "data", MountPath: "/data/../etc", SizeBytes: 1 << 30},
+	}
+	for name, v := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := validSpec()
+			s.Volumes = []VolumeSpec{v}
+			if err := s.Validate(); err == nil {
+				t.Fatalf("Validate accepted %+v", v)
+			}
+		})
+	}
+}
+
+// Two volumes at one path is a workload where one silently wins.
+func TestAppSpecRejectsDuplicateMountPaths(t *testing.T) {
+	s := validSpec()
+	s.Volumes = []VolumeSpec{
+		{Name: "a", MountPath: "/var/lib/data", SizeBytes: 1 << 30},
+		{Name: "b", MountPath: "/var/lib/data", SizeBytes: 1 << 30},
+	}
+	if err := s.Validate(); err == nil {
+		t.Fatal("Validate accepted two volumes mounted at the same path")
+	}
+}

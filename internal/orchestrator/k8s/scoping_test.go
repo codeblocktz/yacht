@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -137,5 +139,128 @@ func TestUnmanagedVolumesAreShownToNobody(t *testing.T) {
 	}
 	if len(vols) != 0 {
 		t.Fatalf("volumes = %v, want none — an unmanaged claim is not a team's", vols)
+	}
+}
+
+func specWithVolume() orchestrator.AppSpec {
+	s := testSpec()
+	s.Replicas = 1
+	s.Volumes = []orchestrator.VolumeSpec{
+		{Name: "data", MountPath: "/var/lib/data", SizeBytes: 2 << 30},
+	}
+	return s
+}
+
+func TestApplyAppCreatesAndMountsTheVolume(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	spec := specWithVolume()
+
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+
+	pvc, err := client.CoreV1().PersistentVolumeClaims(spec.Namespace).
+		Get(ctx, spec.Name+"-data", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pvc: %v", err)
+	}
+	if got := pvc.Labels[orchestrator.LabelOwner]; got != string(spec.Ref.Owner) {
+		t.Errorf("pvc owner label = %q, want %q — the team scoping reads this",
+			got, spec.Ref.Owner)
+	}
+
+	dep, err := client.AppsV1().Deployments(spec.Namespace).
+		Get(ctx, spec.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+
+	var mounted bool
+	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == "/var/lib/data" {
+			mounted = true
+		}
+	}
+	if !mounted {
+		t.Fatal("the container has no mount for the volume that was created")
+	}
+}
+
+// A rolling update starts the new pod before the old one stops. With a
+// ReadWriteOnce claim the new pod cannot mount what the old one holds, so it
+// waits forever and the deploy never finishes.
+func TestVolumesForceRecreateStrategy(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, specWithVolume()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if dep.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Fatalf("strategy = %q, want Recreate — a rolling update deadlocks on a "+
+			"ReadWriteOnce claim", dep.Spec.Strategy.Type)
+	}
+}
+
+// And without storage it must stay rolling: recreating every deploy would be
+// downtime nobody asked for.
+func TestNoVolumesLeavesTheStrategyRolling(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if dep.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
+		t.Fatal("a workload with no storage was made to recreate on every deploy")
+	}
+}
+
+// Detaching the last volume must return the workload to rolling updates.
+func TestRemovingTheLastVolumeRestoresRollingUpdates(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, specWithVolume()); err != nil {
+		t.Fatalf("ApplyApp with volume: %v", err)
+	}
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp without: %v", err)
+	}
+
+	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if dep.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType {
+		t.Fatal("the workload still recreates after its last volume was detached")
+	}
+}
+
+// The claim outlives the apply that stopped mentioning it. Deleting storage is
+// a separate act with its own confirmation, never a side effect of an edit.
+func TestDetachingAVolumeDoesNotDeleteTheClaim(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	if err := o.ApplyApp(ctx, specWithVolume()); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+		t.Fatalf("ApplyApp without: %v", err)
+	}
+
+	if _, err := client.CoreV1().PersistentVolumeClaims("yacht-demo").
+		Get(ctx, "web-data", metav1.GetOptions{}); err != nil {
+		t.Fatalf("the claim was destroyed by an edit that merely detached it: %v", err)
 	}
 }

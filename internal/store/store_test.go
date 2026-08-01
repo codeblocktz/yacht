@@ -421,3 +421,43 @@ func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
 		t.Fatalf("managed rows = %d, want exactly 1", managed)
 	}
 }
+
+// A volume belongs to one app under one name, and one mount path. Two claims
+// at the same path is a workload where one silently wins.
+func TestVolumeNameAndMountAreUniquePerApp(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	q := dbgen.New(pool)
+
+	const ownerID = "test-volumes"
+	seedOwners(t, pool, ownerID)
+
+	a, err := q.CreateApp(ctx, dbgen.CreateAppParams{
+		OwnerID: ownerID, Name: "web", Namespace: "ns-test-volumes",
+		Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	insert := func(name, mount string) error {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO volumes (owner_id, app_id, name, mount_path, size_bytes)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			ownerID, a.ID, name, mount, 1<<30)
+		return err
+	}
+
+	if err := insert("data", "/var/lib/data"); err != nil {
+		t.Fatalf("first volume: %v", err)
+	}
+	if err := insert("data", "/somewhere/else"); err == nil {
+		t.Error("two volumes with the same name on one app were accepted")
+	}
+	if err := insert("other", "/var/lib/data"); err == nil {
+		t.Error("two volumes at the same mount path on one app were accepted")
+	}
+	if err := insert("other", "/var/lib/other"); err != nil {
+		t.Errorf("a second, distinct volume was refused: %v", err)
+	}
+}
