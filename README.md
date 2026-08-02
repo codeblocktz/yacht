@@ -6,9 +6,9 @@ plane you can read in an afternoon.
 
 Runs on K3s, so a $5 VPS is enough to start.
 
-> **Status: early, but usable.** You can deploy a container image, scale it,
-> redeploy it, and watch it from the dashboard. Building from a Git repository
-> is the next milestone. See [What works today](#what-works-today).
+> **Status: early, but usable.** You can deploy from a container image or from
+> a Git repository, give it a domain, attach storage, and watch it from the
+> dashboard. See [What works today](#what-works-today).
 
 ## Why
 
@@ -23,32 +23,57 @@ nothing you build here is locked in.
 
 ## What works today
 
+**Shipping an app**
+
 | | |
 |---|---|
 | Deploy a container image, with env vars and replicas | ✅ |
+| Build and deploy from a Git repository, using buildpacks | ✅ |
+| Builds run as an isolated Job, with the log kept | ✅ |
+| A built-in registry for the images those builds produce | ✅ |
 | Scale, redeploy, delete | ✅ |
-| Live workload status read from the cluster | ✅ |
-| Namespace provisioning with enforced security posture | ✅ |
-| Cluster view — nodes, pods, capacity, utilisation | ✅ |
-| Dashboard with pluggable chrome, light and dark | ✅ |
-| A hostname per app, served the moment it starts | ✅ |
-| TLS from one shared wildcard certificate | ✅ |
+| Liveness and readiness probes | ✅ |
+| Deployment history, with a log per deployment | ✅ |
+| App logs, and per-request HTTP logs you can search and page | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
+| Secrets sealed at rest, kept out of the app record | ✅ |
+| Deploy a wired stack from a template in one action | ✅ |
+
+**Reaching it**
+
+| | |
+|---|---|
+| A hostname per app, served the moment it starts | ✅ |
+| Custom domains people bring, with verification | ✅ |
+| TLS from one shared wildcard certificate | ✅ |
+
+**Running the cluster**
+
+| | |
+|---|---|
+| Live workload status read from the cluster | ✅ |
+| Cluster view — nodes, pods, volumes, events, utilisation | ✅ |
+| Add a node, then cordon, drain, or remove one | ✅ |
+| Namespace provisioning with enforced security posture | ✅ |
+| A project canvas apps can be arranged on | ✅ |
+
+**Accounts and foundations**
+
+| | |
+|---|---|
 | Magic-link sign-in, sessions, sign-out everywhere | ✅ |
 | Teams with Owner / Admin / Member and invitations | ✅ |
 | Identity seam — single owner, bearer token, or session | ✅ |
+| Dashboard with pluggable chrome, light and dark | ✅ |
 | Postgres schema + embedded migrations | ✅ |
-| Build from a Git repository | next |
-| Secrets kept out of the app record | next |
-| Health probes, live log streaming | next |
-| Customer custom domains | next |
+| Logs stream rather than refresh on a 5s poll | next |
 
 Utilisation percentages need `metrics-server` in the cluster. Without it
 everything else still works and those figures read `—` rather than zero.
 
 ## Quick start
 
-Requirements: Go 1.25+, Postgres, and a kubeconfig pointing at a cluster.
+Requirements: Go 1.26+, Postgres, and a kubeconfig pointing at a cluster.
 
 ```bash
 git clone https://github.com/codeblocktz/yacht.git
@@ -131,7 +156,13 @@ Two rules keep the seams honest:
 ```
 cmd/yacht             entrypoint and wiring
 internal/app          workload lifecycle — keeps database and cluster agreeing
+internal/account      people: users, teams, roles, invitations
+internal/cluster      how a machine joins this cluster
 internal/config       environment configuration
+internal/domain       hostnames — the one we issue, and the ones people bring
+internal/notify       delivers messages to people
+internal/registry     where images this install builds are pushed
+internal/secret       values that must survive a database dump
 internal/identity     SEAM 2 — who owns this request
 internal/orchestrator SEAM 1 — the runtime contract
           └── k8s     Kubernetes implementation
