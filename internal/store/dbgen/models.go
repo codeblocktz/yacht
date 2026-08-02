@@ -34,6 +34,9 @@ type App struct {
 	CanvasY        *int32
 	HttpsOnly      bool
 	CnameOnly      bool
+	RepoUrl        string
+	RepoBranch     string
+	RepoSubdir     string
 }
 
 type AppLink struct {
@@ -42,6 +45,22 @@ type AppLink struct {
 	ToAppID   uuid.UUID
 	ViaKey    string
 	CreatedAt time.Time
+}
+
+type Build struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	RepoUrl      string
+	RepoRef      string
+	CommitSha    string
+	Image        string
+	Status       string
+	Message      string
+	Log          string
+	StartedAt    time.Time
+	FinishedAt   pgtype.Timestamptz
 }
 
 type ClusterJoin struct {

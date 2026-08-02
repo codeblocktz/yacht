@@ -23,6 +23,11 @@ const (
 	// app row: the template page creates each app with that app's own source.
 	SourceTemplate Source = "template"
 
+	// SourceGit is a repository Yacht builds into an image and then deploys.
+	// The image on the app row is what the last build produced, so it is set
+	// by the build rather than chosen.
+	SourceGit Source = "git"
+
 	// SourcePostgres is a Postgres database. Yacht knows what the image is, so
 	// it can mount the data directory, run as the right user, and generate the
 	// credentials — none of which a person should have to look up.
@@ -80,12 +85,32 @@ type Blueprint struct {
 	ConnectionKey      string
 }
 
-// Blueprints returns every source, in the order a picker should show them.
+// Capabilities is what this install can actually do.
+//
+// Passed in rather than discovered here, because whether a source works is a
+// fact about how this install is configured and this file is a description of
+// what the sources are. The zero value claims nothing, which is the right
+// default for a caller that has not asked: a picker that offers building on an
+// install with nowhere to push produces a create that fails at the end.
+type Capabilities struct {
+	// CanBuild reports whether there is an image registry to push to. Without
+	// one a build has nowhere to put the result and the cluster nothing to
+	// pull, so the source is listed and refused rather than offered.
+	CanBuild bool
+}
+
+// Blueprints returns every source with nothing optional available.
+//
+// Kept for callers that only need the list — the labels, the descriptions, the
+// order. Anything deciding whether a source can be used wants BlueprintsFor.
+func Blueprints() []Blueprint { return BlueprintsFor(Capabilities{}) }
+
+// BlueprintsFor returns every source, in the order a picker should show them.
 //
 // Unavailable ones are included. What a product does not do yet is worth
 // stating plainly in the place somebody looks for it, rather than leaving them
 // to conclude it was never considered.
-func Blueprints() []Blueprint {
+func BlueprintsFor(c Capabilities) []Blueprint {
 	return []Blueprint{
 		{
 			Source:      SourceImage,
@@ -130,10 +155,15 @@ func Blueprints() []Blueprint {
 			ConnectionTemplate: "postgres://yacht:%s@%s:5432/yacht?sslmode=disable",
 		},
 		{
-			Source:      "git",
+			Source:      SourceGit,
 			Label:       "GitHub Repository",
 			Description: "Build from a repository and deploy the result.",
-			Because:     "the build pipeline is not built yet",
+			Available:   c.CanBuild,
+			Because:     "no image registry is configured for this install",
+			// No image: a build produces one. No port either — that is the
+			// person's to say, because only they know what their code listens
+			// on, and guessing produces a service that routes to nothing.
+			Port: 8080,
 		},
 		{
 			// Available, but not a source in the way the others are: a template
@@ -154,11 +184,16 @@ func Blueprints() []Blueprint {
 // it creates apps — so asking for one is a wiring mistake rather than a state
 // to handle, and it is refused here where every create path passes through.
 func BlueprintFor(src Source) (Blueprint, error) {
+	return BlueprintForWith(src, Capabilities{})
+}
+
+// BlueprintForWith returns the blueprint for a source on this install.
+func BlueprintForWith(src Source, c Capabilities) (Blueprint, error) {
 	if src == SourceTemplate {
 		return Blueprint{}, errors.New(
 			"app: a template makes several apps and cannot be one")
 	}
-	for _, b := range Blueprints() {
+	for _, b := range BlueprintsFor(c) {
 		if b.Source == src {
 			if !b.Available {
 				return Blueprint{}, fmt.Errorf("app: %s is not available — %s", b.Label, b.Because)

@@ -51,6 +51,10 @@ type App struct {
 	Source   Source
 	Internal bool
 
+	// Repo is where the source comes from, for an app built rather than
+	// pulled. Zero on an image-sourced app.
+	Repo Repo
+
 	// HealthPath is an HTTP path reporting whether the app is serving. Empty
 	// means no probe. Liveness lets the same path also restart the container.
 	HealthPath string
@@ -169,6 +173,12 @@ type Options struct {
 	// Resolver proves a custom domain points here. Left nil, verification is
 	// refused with a reason rather than silently failing.
 	Resolver domain.Resolver
+
+	// Builder turns a repository into an image, and Images says where that
+	// image goes. Either left nil, building from a repository is listed as
+	// unavailable with the reason rather than offered and failed.
+	Builder Builder
+	Images  Images
 }
 
 // Service manages app lifecycle.
@@ -178,6 +188,9 @@ type Service struct {
 	orch orchestrator.Orchestrator
 	log  *slog.Logger
 	opts Options
+
+	builder Builder
+	images  Images
 
 	// resolver proves a custom domain points here. Nil leaves verification
 	// unavailable rather than failing oddly — an install with no DNS access
@@ -199,6 +212,7 @@ func NewService(
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
+		builder: opts.Builder, images: opts.Images,
 	}
 }
 
@@ -223,6 +237,10 @@ type CreateInput struct {
 	// and the next read of the team's projects adopts it into the default one —
 	// which is what a create that never mentioned a project wants.
 	ProjectID uuid.UUID
+
+	// Repo is where to build from, for SourceGit. Ignored by every other
+	// source: an image nobody builds has no repository to name.
+	Repo Repo
 
 	Name     string
 	Image    string
@@ -269,7 +287,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if in.Source == "" {
 		in.Source = SourceImage
 	}
-	blueprint, err := BlueprintFor(in.Source)
+	blueprint, err := BlueprintForWith(in.Source, s.Capabilities(ctx))
 	if err != nil {
 		return App{}, err
 	}
@@ -280,6 +298,23 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if blueprint.Image != "" {
 		in.Image = blueprint.Image
 		in.Port = blueprint.Port
+	}
+
+	// A repository is built into an image, so the app starts with a
+	// placeholder that is replaced by the first successful build. Validating
+	// the repository here means a URL nobody could clone is refused at the
+	// form rather than several minutes into a build.
+	if in.Source == SourceGit {
+		in.Repo = in.Repo.Normalise()
+		if !in.Repo.Set() {
+			return App{}, errors.New("app: a repository URL is required")
+		}
+		if err := in.Repo.Validate(); err != nil {
+			return App{}, err
+		}
+		if in.Image == "" {
+			in.Image = PendingImage
+		}
 	}
 	if err := in.Validate(); err != nil {
 		return App{}, err
@@ -325,6 +360,9 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		MemoryRequest: in.MemoryRequest,
 		MemoryLimit:   in.MemoryLimit,
 		ProjectID:     pgUUID(in.ProjectID),
+		RepoUrl:       in.Repo.URL,
+		RepoBranch:    in.Repo.Branch,
+		RepoSubdir:    in.Repo.Subdir,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -843,9 +881,53 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 		return err
 	}
 	id := s.beginDeployment(ctx, ownerID, a, "redeploy")
-	err = s.apply(ctx, s.q, a)
+	a, err = s.buildIfNeeded(ctx, ownerID, a, id)
+	if err == nil {
+		err = s.apply(ctx, s.q, a)
+	}
 	s.endDeployment(ctx, ownerID, id, err)
 	return err
+}
+
+// buildIfNeeded turns a repository into an image before the app is applied.
+//
+// Returns the app with the image the build produced. Nothing is applied when a
+// build fails: the alternative is redeploying the previous image under a
+// deployment that says it built the current commit, which is a lie the
+// deployments list would then tell for as long as it is kept.
+//
+// An image-sourced app passes straight through — there is nothing to build,
+// which is also why the Build logs tab says so for those.
+func (s *Service) buildIfNeeded(
+	ctx context.Context, ownerID string, a App, deployID uuid.UUID,
+) (App, error) {
+	if a.Source != SourceGit {
+		return a, nil
+	}
+
+	image, err := s.runBuild(ctx, ownerID, a, deployID, revisionFor(deployID))
+	if err != nil {
+		return a, err
+	}
+
+	// Stored before the apply. If the apply fails, the image is still the one
+	// that was built, and retrying deploys it rather than building it again.
+	if _, err := s.q.SetAppImage(ctx, dbgen.SetAppImageParams{
+		OwnerID: ownerID, ID: a.ID, Image: image,
+	}); err != nil {
+		return a, fmt.Errorf("app: record built image: %w", err)
+	}
+	a.Image = image
+	return a, nil
+}
+
+// revisionFor is the tag a build pushes to.
+//
+// Derived from the deployment id, so the tag names the deploy that produced it
+// and two deploys of the same commit do not overwrite each other's image —
+// which matters because rolling back means pulling the older one.
+func revisionFor(deployID uuid.UUID) string {
+	return "d" + strings.ReplaceAll(deployID.String(), "-", "")[:16]
 }
 
 // Delete removes the workload from the cluster and then the record.
@@ -895,6 +977,9 @@ func toApp(row dbgen.App) App {
 		Replicas:      row.Replicas,
 		Port:          row.Port,
 		Source:        Source(row.Source),
+		Repo: Repo{
+			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
+		},
 		Internal:      row.Internal,
 		HealthPath:    row.HealthPath,
 		Liveness:      row.HealthLiveness,

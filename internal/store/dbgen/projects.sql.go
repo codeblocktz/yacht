@@ -129,7 +129,7 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, arg GetProjectBySlugPara
 }
 
 const listAppsInProject = `-- name: ListAppsInProject :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir FROM apps
 WHERE owner_id = $1 AND project_id = $2
 ORDER BY name
 `
@@ -171,6 +171,9 @@ func (q *Queries) ListAppsInProject(ctx context.Context, arg ListAppsInProjectPa
 			&i.CanvasY,
 			&i.HttpsOnly,
 			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
 		); err != nil {
 			return nil, err
 		}
@@ -183,7 +186,7 @@ func (q *Queries) ListAppsInProject(ctx context.Context, arg ListAppsInProjectPa
 }
 
 const listAppsWithoutProject = `-- name: ListAppsWithoutProject :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir FROM apps
 WHERE owner_id = $1 AND project_id IS NULL
 ORDER BY name
 `
@@ -225,6 +228,9 @@ func (q *Queries) ListAppsWithoutProject(ctx context.Context, ownerID string) ([
 			&i.CanvasY,
 			&i.HttpsOnly,
 			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
 		); err != nil {
 			return nil, err
 		}

@@ -14,6 +14,9 @@ type Querier interface {
 	// One conditional UPDATE, like the magic link: checking first and writing after
 	// leaves a window in which the same invitation is accepted twice.
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
+	// Appended rather than replaced, so a build streaming its output does not have
+	// to hold the whole log in memory to write any of it.
+	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
 	ClearClusterJoin(ctx context.Context) (int64, error)
 	ClearPlatformRegistry(ctx context.Context) error
 	// Forget every saved position in a project, so the next render lays it out
@@ -28,6 +31,10 @@ type Querier interface {
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
+	// Builds. Owner-scoped in the row rather than through the deployment, because
+	// the log is readable output and the scoping has to be checkable in the query
+	// that reads it.
+	CreateBuild(ctx context.Context, arg CreateBuildParams) (Build, error)
 	// ---------------------------------------------------------- custom domains
 	// Claims a hostname for an app, unverified.
 	//
@@ -77,9 +84,12 @@ type Querier interface {
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
+	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
+	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
 	// The join settings are install-wide, so unlike every other query here these
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
@@ -167,6 +177,10 @@ type Querier interface {
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
+	// The image a build produced. Separate from UpdateApp because a build sets
+	// only this: the replicas and limits a person configured are not a build's to
+	// overwrite, and passing them through would make every build a chance to.
+	SetAppImage(ctx context.Context, arg SetAppImageParams) (App, error)
 	SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error)
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
