@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func rows(n int) []string {
@@ -167,5 +169,56 @@ func TestFilteringDoesNotDisturbTheOriginal(t *testing.T) {
 		if all[i] != before[i] {
 			t.Fatalf("row %d changed from %q to %q", i, before[i], all[i])
 		}
+	}
+}
+
+// Highlighting cuts a line into spans rather than building markup.
+//
+// The template escapes each span, which is the whole point: a log line is
+// arbitrary output from somebody's container, and a version that built a
+// string with <mark> in it and trusted it would turn a crash message into
+// script running in the dashboard.
+func TestHighlightSplitsWithoutBuildingMarkup(t *testing.T) {
+	spans := splitMatches("connect failed: CONNECT refused", "connect")
+	if len(spans) != 4 {
+		t.Fatalf("got %d spans, want 4: %+v", len(spans), spans)
+	}
+	// Case-insensitive, but each span keeps the log's own casing — showing
+	// "connect" where the log said "CONNECT" would be editing the output.
+	if spans[0].Text != "connect" || !spans[0].Match {
+		t.Errorf("first span = %+v", spans[0])
+	}
+	if spans[2].Text != "CONNECT" || !spans[2].Match {
+		t.Errorf("third span = %+v, want the log's own casing", spans[2])
+	}
+
+	// Rejoining the spans gives the line back, unchanged.
+	var joined string
+	for _, s := range spans {
+		joined += s.Text
+	}
+	if joined != "connect failed: CONNECT refused" {
+		t.Errorf("rejoined to %q", joined)
+	}
+}
+
+// An empty search leaves the line whole rather than exploding it.
+func TestHighlightWithNoSearchIsOneSpan(t *testing.T) {
+	spans := splitMatches("a line", "")
+	if len(spans) != 1 || spans[0].Match {
+		t.Errorf("got %+v", spans)
+	}
+}
+
+// The method selector offers only verbs the data actually contains.
+//
+// A fixed list would offer PATCH on an app that has never seen one, and a
+// filter that can only return nothing is worse than not offering it.
+func TestTheMethodListComesFromTheData(t *testing.T) {
+	got := methodsIn([]orchestrator.HTTPLogLine{
+		{Method: "GET"}, {Method: "POST"}, {Method: "GET"}, {Method: ""},
+	})
+	if len(got) != 2 || got[0] != "GET" || got[1] != "POST" {
+		t.Errorf("methods = %v, want [GET POST]", got)
 	}
 }

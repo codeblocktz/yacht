@@ -68,6 +68,16 @@ type DeployLogsData struct {
 	// HTTPBuckets is the whole timeline, computed before paging.
 	HTTPBuckets []app.HTTPBucket
 
+	// Find is the search inside a log's own text, and Method narrows the
+	// request list to one verb. Separate from the page's query only in name:
+	// they travel the same way and are read the same way.
+	Find   string
+	Method string
+
+	// Methods is what this app's requests actually used, so the selector
+	// offers nothing that could only return an empty list.
+	Methods []string
+
 	// HTTPPage is the window of requests being shown. The chart above them is
 	// deliberately not paged: it summarises the traffic, and a summary of one
 	// page of it would answer a question nobody asked.
@@ -99,6 +109,8 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 		App:      name,
 		View:     logView(r.URL.Query().Get("view")),
 		Previous: r.URL.Query().Get("previous") == "1",
+		Find:     strings.TrimSpace(r.URL.Query().Get("q")),
+		Method:   strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("method"))),
 	}
 
 	// The build and HTTP views read no container output: there is none for
@@ -143,6 +155,10 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 	default:
 		d.Deploy = dl
 	}
+	// The container log is searched in place rather than paged: it is already
+	// capped at what the API returns, and a page control over it would break
+	// the one thing a log is for, which is reading downwards.
+	d.Deploy.Logs.Lines = filterLines(d.Deploy.Logs.Lines, d.Find)
 	s.renderPanel(ctx, w, d)
 }
 
@@ -278,10 +294,26 @@ func (s *Server) httpLogsEnable(w http.ResponseWriter, r *http.Request) {
 // much less useful picture.
 func (d *DeployLogsData) pageHTTP(r *http.Request, app string, deploy uuid.UUID) {
 	d.HTTPBuckets = d.HTTP.Buckets()
+	d.Methods = methodsIn(d.HTTP.Lines)
+
+	// The method narrows before anything else, so the count beside the search
+	// and the pages under it both describe what is on screen.
+	if d.Method != "" {
+		kept := d.HTTP.Lines[:0:0]
+		for _, l := range d.HTTP.Lines {
+			if l.Method == d.Method {
+				kept = append(kept, l)
+			}
+		}
+		d.HTTP.Lines = kept
+	}
 
 	query, number := pageRequest(r)
 	base := "/apps/" + app + "/deployments/" + deploy.String() + "/logs"
 	extra := url.Values{"view": {viewHTTP}}
+	if d.Method != "" {
+		extra.Set("method", d.Method)
+	}
 
 	d.HTTP.Lines, d.HTTPPage = paginate(
 		d.HTTP.Lines, query, number, base, extra, requestMatches)

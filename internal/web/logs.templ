@@ -183,6 +183,9 @@ templ deployLogView(d DeployLogsData) {
 				{ plural(len(d.Deploy.Logs.Lines), "line") }
 			</span>
 		</div>
+		<div class="canvas-sheet-actions">
+			@findBox(d, viewDeploy)
+		</div>
 		if len(d.Deploy.Logs.Lines) == 0 {
 			<div class="canvas-sheet-body">
 				<div class="empty">
@@ -203,7 +206,9 @@ templ deployLogView(d DeployLogsData) {
 							if !l.At.IsZero() {
 								<span class="log-time">{ l.At.Format("15:04:05") }</span>
 							}
-							<span class="log-text">{ l.Text }</span>
+							<span class="log-text">
+								@highlight(l.Text, d.Find)
+							</span>
 						</div>
 					}
 				</div>
@@ -260,11 +265,16 @@ templ buildLogView(d DeployLogsData) {
 				</div>
 			</div>
 		} else {
+			<div class="canvas-sheet-actions">
+				@findBox(d, viewBuild)
+			</div>
 			<div class="canvas-sheet-log">
 				<div class="logs">
-					for _, line := range buildLines(d.Build.Log) {
+					for _, line := range filterBuildLog(buildLines(d.Build.Log), d.Find) {
 						<div class="log-line">
-							<span class="log-text">{ line }</span>
+							<span class="log-text">
+								@highlight(line, d.Find)
+							</span>
 						</div>
 					}
 				</div>
@@ -304,7 +314,8 @@ templ httpLogView(d DeployLogsData) {
 	</div>
 	if len(d.HTTP.Hosts) > 0 {
 		<div class="canvas-sheet-actions">
-			@searchBox(d.HTTPPage, "Search path, method, status")
+			@methodPicker(d)
+			@searchBox(d.HTTPPage, "Search path, status or client")
 		</div>
 	}
 	if len(d.HTTP.Lines) == 0 {

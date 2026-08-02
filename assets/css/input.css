@@ -729,3 +729,15 @@
     @apply bg-warning/[0.10];
   }
 }
+
+@layer components {
+  /* A search hit inside a log.
+     
+     A tinted background rather than a colour change: the log is monospaced and
+     mostly one colour, so recolouring a few characters is easy to miss while
+     scrolling. The text keeps its own colour so a highlighted error is still
+     legibly an error. */
+  .hl {
+    @apply rounded-[2px] bg-warning/25 px-[1px] text-inherit;
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -446,4 +447,88 @@ func shortTime(t time.Time) string {
 		return "—"
 	}
 	return t.Local().Format("15:04:05")
+}
+
+// matchSpan is one piece of a line, and whether the search found it.
+type matchSpan struct {
+	Text  string
+	Match bool
+}
+
+// splitMatches cuts a line around every occurrence of a search term.
+//
+// Returned as spans rather than as marked-up HTML, so the template escapes the
+// log's own text. A log line is arbitrary output from somebody's container —
+// building a string with <mark> in it and trusting it is how a crash message
+// becomes script running in the dashboard.
+func splitMatches(line, needle string) []matchSpan {
+	if needle == "" || line == "" {
+		return []matchSpan{{Text: line}}
+	}
+
+	lowLine, lowNeedle := strings.ToLower(line), strings.ToLower(needle)
+	var out []matchSpan
+	for {
+		i := strings.Index(lowLine, lowNeedle)
+		if i < 0 {
+			if line != "" {
+				out = append(out, matchSpan{Text: line})
+			}
+			return out
+		}
+		if i > 0 {
+			out = append(out, matchSpan{Text: line[:i]})
+		}
+		out = append(out, matchSpan{Text: line[i : i+len(needle)], Match: true})
+		line, lowLine = line[i+len(needle):], lowLine[i+len(needle):]
+	}
+}
+
+// filterLines keeps the log lines that match a search.
+func filterLines(lines []orchestrator.LogLine, query string) []orchestrator.LogLine {
+	if query == "" {
+		return lines
+	}
+	needle := strings.ToLower(query)
+	kept := make([]orchestrator.LogLine, 0, len(lines))
+	for _, l := range lines {
+		if strings.Contains(strings.ToLower(l.Text), needle) {
+			kept = append(kept, l)
+		}
+	}
+	return kept
+}
+
+// filterBuildLog keeps the build-log lines that match a search.
+func filterBuildLog(lines []string, query string) []string {
+	if query == "" {
+		return lines
+	}
+	needle := strings.ToLower(query)
+	kept := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if strings.Contains(strings.ToLower(l), needle) {
+			kept = append(kept, l)
+		}
+	}
+	return kept
+}
+
+// methodsIn lists the HTTP methods present, for a selector that only offers
+// what the data actually contains.
+//
+// A fixed list of every verb would offer PATCH on an app that has never seen
+// one, and a filter that can only ever return nothing is a worse answer than
+// not offering it.
+func methodsIn(lines []orchestrator.HTTPLogLine) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range lines {
+		if l.Method != "" && !seen[l.Method] {
+			seen[l.Method] = true
+			out = append(out, l.Method)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

@@ -8,7 +8,7 @@ import "strconv"
 // reload. It also means the search survives a page refresh without any state
 // on the server — which is the difference between a filter and a mode.
 templ searchBox(p Page, placeholder string) {
-	<form method="get" action={ templ.URL(p.Base) } class="flex items-center gap-2">
+	<form method="get" action={ templ.URL(p.Base) } class="flex min-w-0 flex-1 items-center gap-2">
 		// Anything the surface needs kept travels as hidden fields. A form
 		// submits only what it contains, so without these, searching would
 		// quietly drop whichever view somebody was looking at.
@@ -18,7 +18,7 @@ templ searchBox(p Page, placeholder string) {
 			}
 		}
 		<input
-			class="control h-8 w-[220px]"
+			class="control h-8 min-w-[240px] flex-1"
 			type="search"
 			name="q"
 			value={ p.Query }
@@ -79,4 +79,81 @@ templ noMatches(p Page, empty, because string) {
 			}
 		}
 	</div>
+}
+
+// highlight renders a line with every match of a search marked.
+//
+// Spans rather than pre-built markup: a log line is arbitrary output from
+// somebody's container, so the template escapes it and the marks are elements
+// this file wrote. Building a string with <mark> in it and trusting it is how
+// a crash message becomes script running in the dashboard.
+templ highlight(line, needle string) {
+	for _, span := range splitMatches(line, needle) {
+		if span.Match {
+			<mark class="hl">{ span.Text }</mark>
+		} else {
+			{ span.Text }
+		}
+	}
+}
+
+// findBox searches inside a log rather than across a list.
+//
+// Its own control because it does a different thing: the list search picks
+// which rows exist, and this picks which lines of one log are shown, then
+// marks what it found so the eye lands on it.
+templ findBox(d DeployLogsData, view string) {
+	<form
+		method="get"
+		action={ templ.URL("/apps/" + d.App + "/deployments/" + d.Deploy.Deployment.ID.String() + "/logs") }
+		class="flex min-w-0 flex-1 items-center gap-2"
+	>
+		<input type="hidden" name="view" value={ view }/>
+		if d.Previous {
+			<input type="hidden" name="previous" value="1"/>
+		}
+		<input
+			class="control h-8 min-w-[240px] flex-1"
+			type="search"
+			name="q"
+			value={ d.Find }
+			placeholder="Find in log"
+			aria-label="Find in log"
+		/>
+		<button class="btn btn-sm" type="submit">Find</button>
+		if d.Find != "" {
+			<a
+				class="btn btn-ghost btn-sm"
+				href={ templ.URL(deployViewHref(d, view)) }
+			>Clear</a>
+		}
+	</form>
+}
+
+// methodPicker narrows the request list to one verb.
+templ methodPicker(d DeployLogsData) {
+	<form
+		method="get"
+		action={ templ.URL("/apps/" + d.App + "/deployments/" + d.Deploy.Deployment.ID.String() + "/logs") }
+		class="flex shrink-0 items-center gap-2"
+	>
+		<input type="hidden" name="view" value={ viewHTTP }/>
+		if d.HTTPPage.Query != "" {
+			<input type="hidden" name="q" value={ d.HTTPPage.Query }/>
+		}
+		// Submits on change. A verb filter behind a second button is two
+		// actions for one decision.
+		<select
+			class="control h-8 w-[104px]"
+			name="method"
+			aria-label="Filter by method"
+			onchange="this.form.submit()"
+		>
+			<option value="" selected?={ d.Method == "" }>All methods</option>
+			for _, m := range d.Methods {
+				<option value={ m } selected?={ d.Method == m }>{ m }</option>
+			}
+		</select>
+		<noscript><button class="btn btn-sm" type="submit">Filter</button></noscript>
+	</form>
 }
