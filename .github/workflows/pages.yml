@@ -1,10 +1,15 @@
 name: pages
 
-# Publishes the install and upgrade scripts at yacht.codeblock.co.tz.
+# Publishes the install and upgrade scripts at codeblocktz.github.io/yacht/.
 #
 # The scripts are served straight from the repository root rather than kept as a
-# second copy under site/, so what the domain hands to a shell is the file that
-# was reviewed on main and nothing else.
+# second copy under site/, so what the URL hands to a shell is the file that was
+# reviewed on main and nothing else.
+#
+# No CNAME file: this is a project site on the organisation's own Pages domain,
+# which needs no DNS and cannot be taken over by a dangling record. Adding a
+# custom domain later means writing a CNAME here and verifying the domain at the
+# organisation level first.
 
 on:
   push:
@@ -44,7 +49,6 @@ jobs:
           cp site/index.html _site/index.html
           cp install.sh _site/install.sh
           cp upgrade.sh _site/upgrade.sh
-          echo "yacht.codeblock.co.tz" > _site/CNAME
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -74,7 +74,7 @@ everything else still works and those figures read `—` rather than zero.
 ## Install on a VPS
 
 ```bash
-curl -sSL https://yacht.codeblock.co.tz/install.sh | sudo sh
+curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
 ```
 
 Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Yacht as a
@@ -84,7 +84,7 @@ About ninety seconds on a fresh box.
 To upgrade later:
 
 ```bash
-curl -sSL https://yacht.codeblock.co.tz/upgrade.sh | sudo sh
+curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
 ```
 
 That one only swaps the binary and restarts. If the new version does not come
@@ -108,8 +108,8 @@ and put it behind TLS before you rely on it; until then `ssh -L 8080:127.0.0.1:8
 is the safer way in.
 
 Both scripts are worth reading before you pipe them to a root shell —
-[`install.sh`](install.sh) and [`upgrade.sh`](upgrade.sh) are what the domain
-serves, straight from this repository.
+[`install.sh`](install.sh) and [`upgrade.sh`](upgrade.sh) are exactly what those
+URLs serve, published straight from this repository.
 
 To remove it all:
 

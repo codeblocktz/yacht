@@ -2,7 +2,7 @@
 #
 # Yacht upgrader.
 #
-#   curl -sSL https://yacht.codeblock.co.tz/upgrade.sh | sudo sh
+#   curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
 #
 # Replaces the binary and restarts the service. It does not touch K3s, Postgres,
 # the environment file, or the unit — an upgrade that re-provisions the machine
@@ -38,7 +38,7 @@ usage() {
 	cat <<-EOF
 		Yacht upgrader.
 
-		  curl -sSL https://yacht.codeblock.co.tz/upgrade.sh | sudo sh
+		  curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
 
 		Replaces the binary and restarts the service. It does not touch K3s,
 		Postgres, the environment file, or the unit. If the new version does not

@@ -2,7 +2,7 @@
 #
 # Yacht installer.
 #
-#   curl -sSL https://yacht.codeblock.co.tz/install.sh | sudo sh
+#   curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
 #
 # Provisions K3s, Postgres, and Yacht itself as a systemd unit on a fresh
 # Debian or Ubuntu box. Safe to re-run: it replaces the binary and the unit and
@@ -85,7 +85,7 @@ usage() {
 	cat <<-EOF
 		Yacht installer.
 
-		  curl -sSL https://yacht.codeblock.co.tz/install.sh | sudo sh
+		  curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
 
 		Provisions K3s, Postgres, and Yacht as a systemd unit on Debian or
 		Ubuntu. Safe to re-run: it replaces the binary and the unit and leaves
