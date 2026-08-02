@@ -71,7 +71,58 @@ nothing you build here is locked in.
 Utilisation percentages need `metrics-server` in the cluster. Without it
 everything else still works and those figures read `—` rather than zero.
 
+## Install on a VPS
+
+```bash
+curl -sSL https://yacht.codeblock.co.tz/install.sh | sudo sh
+```
+
+Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Yacht as a
+systemd service, then prints the dashboard URL and a token to sign in with.
+About ninety seconds on a fresh box.
+
+To upgrade later:
+
+```bash
+curl -sSL https://yacht.codeblock.co.tz/upgrade.sh | sudo sh
+```
+
+That one only swaps the binary and restarts. If the new version does not come
+up healthy it puts the old one back, so a bad release costs a restart rather
+than an outage.
+
+| | |
+|---|---|
+| Binary | `/usr/local/bin/yacht` |
+| Config | `/etc/yacht/yacht.env` |
+| Service | `systemctl status yacht` |
+| Logs | `journalctl -u yacht -f` |
+
+**Back up `/etc/yacht/yacht.env`.** It holds `YACHT_SECRET_KEY`, which seals
+your stored secrets and cannot be regenerated — losing it loses them. Re-running
+the installer preserves it, and every other generated value, on purpose.
+
+The installer serves the dashboard over plain HTTP, so the token crosses the
+network in the clear. Set `YACHT_BASE_URL` and `YACHT_APP_DOMAIN` in the config
+and put it behind TLS before you rely on it; until then `ssh -L 8080:127.0.0.1:8080`
+is the safer way in.
+
+Both scripts are worth reading before you pipe them to a root shell —
+[`install.sh`](install.sh) and [`upgrade.sh`](upgrade.sh) are what the domain
+serves, straight from this repository.
+
+To remove it all:
+
+```bash
+sudo systemctl disable --now yacht
+sudo rm -rf /etc/yacht /etc/systemd/system/yacht.service /usr/local/bin/yacht
+sudo /usr/local/bin/k3s-uninstall.sh          # only if you want the cluster gone too
+sudo -u postgres dropdb yacht && sudo -u postgres dropuser yacht
+```
+
 ## Quick start
+
+For development, or to run against a cluster you already have.
 
 Requirements: Go 1.26+, Postgres, and a kubeconfig pointing at a cluster.
 

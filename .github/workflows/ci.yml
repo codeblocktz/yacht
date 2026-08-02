@@ -55,6 +55,13 @@ jobs:
           git diff --exit-code -- internal/web/assets/css/app.css \
             || (echo "::error::stylesheet is stale — run 'make css' and commit" && exit 1)
 
+      # These two get piped into a root shell on somebody else's machine, which
+      # is the least forgiving place for a quoting mistake to surface.
+      - name: Shellcheck the install and upgrade scripts
+        run: |
+          shellcheck -s sh install.sh upgrade.sh
+          sh -n install.sh && sh -n upgrade.sh
+
       - name: Vet
         run: go vet ./...
 

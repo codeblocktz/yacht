@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yacht — a self-hosted PaaS for Kubernetes</title>
+<meta name="description" content="Deploy your app to your own server, with real Kubernetes underneath. Runs on K3s, so a $5 VPS is enough to start.">
+<style>
+  :root {
+    --bg: #ffffff; --fg: #18181b; --muted: #71717a;
+    --line: #e4e4e7; --code-bg: #fafafa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b; --fg: #fafafa; --muted: #a1a1aa;
+      --line: #27272a; --code-bg: #18181b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 4rem 1.5rem; background: var(--bg); color: var(--fg);
+    font: 13px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 43rem; margin: 0 auto; }
+  h1 { font-size: 1.55rem; letter-spacing: -0.02em; margin: 0 0 .5rem; }
+  h2 {
+    font-size: .75rem; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); font-weight: 600; margin: 2.75rem 0 .75rem;
+  }
+  p { margin: 0 0 1rem; max-width: 34rem; }
+  .lede { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: .85rem 1rem; overflow-x: auto; margin: 0 0 .75rem;
+  }
+  code {
+    font: 12.5px/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  .note { color: var(--muted); font-size: 12px; }
+  a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  footer {
+    margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Yacht</h1>
+  <p class="lede">
+    A self-hosted PaaS for Kubernetes. Deploy your app to your own server, with
+    real Kubernetes underneath rather than a Docker wrapper. Runs on K3s, so a
+    $5 VPS is enough to start.
+  </p>
+
+  <h2>Install</h2>
+  <pre><code>curl -sSL https://yacht.codeblock.co.tz/install.sh | sudo sh</code></pre>
+  <p class="note">
+    Debian or Ubuntu, amd64 or arm64. Installs K3s, Postgres, and Yacht as a
+    systemd service, then prints your dashboard URL and token.
+  </p>
+
+  <h2>Upgrade</h2>
+  <pre><code>curl -sSL https://yacht.codeblock.co.tz/upgrade.sh | sudo sh</code></pre>
+  <p class="note">
+    Swaps the binary and restarts. Rolls back automatically if the new version
+    does not come up healthy.
+  </p>
+
+  <h2>Read it first</h2>
+  <p>
+    Piping a script to a root shell deserves a look before you run it:
+    <a href="https://github.com/codeblocktz/yacht/blob/main/install.sh">install.sh</a>
+    and
+    <a href="https://github.com/codeblocktz/yacht/blob/main/upgrade.sh">upgrade.sh</a>.
+    Both are served here straight from the repository.
+  </p>
+
+  <footer>
+    <a href="https://github.com/codeblocktz/yacht">github.com/codeblocktz/yacht</a> — MIT
+  </footer>
+</main>
+</body>
+</html>

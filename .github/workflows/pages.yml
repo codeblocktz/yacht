@@ -1,0 +1,54 @@
+name: pages
+
+# Publishes the install and upgrade scripts at yacht.codeblock.co.tz.
+#
+# The scripts are served straight from the repository root rather than kept as a
+# second copy under site/, so what the domain hands to a shell is the file that
+# was reviewed on main and nothing else.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - install.sh
+      - upgrade.sh
+      - site/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one midway: an interrupted publish
+# is a domain serving half a script to whoever pipes it into a shell.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble
+        run: |
+          set -eu
+          mkdir -p _site
+          cp site/index.html _site/index.html
+          cp install.sh _site/install.sh
+          cp upgrade.sh _site/upgrade.sh
+          echo "yacht.codeblock.co.tz" > _site/CNAME
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

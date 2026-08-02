@@ -1,0 +1,59 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A release is the one build nobody rebuilds by hand, so the drift checks
+      # that guard main guard it here too. Shipping a binary whose embedded
+      # stylesheet or templates are stale is a bug that only the people who
+      # installed it ever see.
+      - name: Verify generated output is current
+        run: |
+          go tool templ generate
+          make css
+          git diff --exit-code -- '*_templ.go' internal/web/assets/css/app.css \
+            || (echo "::error::generated output is stale — run 'make assets' and commit" && exit 1)
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME}"
+          num="${version#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "dist/yacht" ./cmd/yacht
+            tar -czf "dist/yacht_${num}_linux_${arch}.tar.gz" -C dist yacht
+            rm dist/yacht
+          done
+          cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > checksums.txt
+          cat checksums.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            dist/*.tar.gz dist/checksums.txt
