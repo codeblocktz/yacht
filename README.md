@@ -73,6 +73,13 @@ everything else still works and those figures read `—` rather than zero.
 
 ## Install on a VPS
 
+> **Not live yet.** The scripts below are written and tested, but the URLs do
+> not serve anything while this repository is private: GitHub Pages is not
+> available for private repositories on the free plan, and release assets need
+> a token, so an anonymous `curl` gets a 404 from both. They start working the
+> day the repository goes public and the first tag is pushed — no change to the
+> scripts is needed. Until then, use [Quick start](#quick-start).
+
 ```bash
 curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
 ```
