@@ -1,7 +1,10 @@
+// templui component dialog - version: v1.12.1 installed by templui v1.12.1
+// 📚 Documentation: https://templui.io/docs/components/dialog
 package dialog
 
 import (
 	"context"
+	"github.com/codeblocktz/yacht/internal/web/ui/icon"
 	"github.com/codeblocktz/yacht/internal/web/ui/utils"
 )
 
@@ -171,7 +174,7 @@ templ Content(props ...ContentProps) {
 				aria-label="Close"
 				type="button"
 			>
-				@closeGlyph()
+				@icon.X()
 				<span class="sr-only">Close</span>
 			</button>
 		}
@@ -268,24 +271,4 @@ templ Script() {
 	@scriptOnce.Once() {
 		@utils.ComponentScript("dialog")
 	}
-}
-
-// closeGlyph is the dismiss affordance. Local so this component does not drag
-// in an icon set for one path.
-templ closeGlyph() {
-	<svg
-		xmlns="http://www.w3.org/2000/svg"
-		width="16"
-		height="16"
-		viewBox="0 0 24 24"
-		fill="none"
-		stroke="currentColor"
-		stroke-width="2"
-		stroke-linecap="round"
-		stroke-linejoin="round"
-		aria-hidden="true"
-	>
-		<path d="M18 6 6 18"></path>
-		<path d="m6 6 12 12"></path>
-	</svg>
 }

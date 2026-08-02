@@ -1,6 +1,10 @@
 package web
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
 
 // searchBox is the filter above a list.
 //
@@ -143,17 +147,29 @@ templ methodPicker(d DeployLogsData) {
 		}
 		// Submits on change. A verb filter behind a second button is two
 		// actions for one decision.
-		<select
-			class="control h-8 w-[104px]"
-			name="method"
-			aria-label="Filter by method"
-			onchange="this.form.submit()"
-		>
-			<option value="" selected?={ d.Method == "" }>All methods</option>
-			for _, m := range d.Methods {
-				<option value={ m } selected?={ d.Method == m }>{ m }</option>
+		// Submits on change, so choosing a verb is one action rather than two.
+		// The button behind noscript is the fallback for a browser that never
+		// runs the component at all, where the trigger degrades to a plain
+		// field and the form still works.
+		@selectbox.SelectBox() {
+			@selectbox.Trigger(selectbox.TriggerProps{
+				Name:       "method",
+				Class:      "h-8 w-[124px]",
+				Attributes: templ.Attributes{"onchange": "this.closest('form').submit()"},
+			}) {
+				@selectbox.Value(selectbox.ValueProps{Placeholder: "All methods"})
 			}
-		</select>
+			@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+				@selectbox.Item(selectbox.ItemProps{Value: "", Selected: d.Method == ""}) {
+					All methods
+				}
+				for _, m := range d.Methods {
+					@selectbox.Item(selectbox.ItemProps{Value: m, Selected: d.Method == m}) {
+						{ m }
+					}
+				}
+			}
+		}
 		<noscript><button class="btn btn-sm" type="submit">Filter</button></noscript>
 	</form>
 }

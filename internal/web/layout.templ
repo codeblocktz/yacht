@@ -2,6 +2,7 @@ package web
 
 import (
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
@@ -35,6 +36,7 @@ templ Layout(s Slots, page templ.Component) {
 			@sidebarScript()
 			<script src={ asset("/assets/js/htmx.min.js") } defer></script>
 			@sheet.Script()
+			@selectbox.Script()
 			if s.FullBleed {
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>

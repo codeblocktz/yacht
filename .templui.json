@@ -1,0 +1,7 @@
+{
+  "componentsDir": "internal/web/ui",
+  "utilsDir": "internal/web/ui/utils",
+  "moduleName": "github.com/codeblocktz/yacht",
+  "jsDir": "internal/web/assets/js/templui",
+  "jsPublicPath": "/assets/js/templui"
+}

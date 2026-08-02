@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/account"
+import (
+	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
 
 // TeamPage lists who is in the team and who has been invited.
 //
@@ -37,15 +40,22 @@ templ TeamPage(d TeamPageData) {
 							<div class="flex gap-2 justify-end">
 								if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
 									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="inline">
-										<select class="control !py-1 !text-[12px]" name="role">
-											for _, r := range []account.Role{account.RoleMember, account.RoleAdmin, account.RoleOwner} {
-												if r == m.Role {
-													<option value={ string(r) } selected>{ string(r) }</option>
-												} else {
-													<option value={ string(r) }>{ string(r) }</option>
+										@selectbox.SelectBox() {
+											@selectbox.Trigger(selectbox.TriggerProps{
+												Name: "role", Class: "h-8 w-[116px] text-[12px]",
+											}) {
+												@selectbox.Value(selectbox.ValueProps{Placeholder: string(m.Role)})
+											}
+											@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+												for _, r := range []account.Role{account.RoleMember, account.RoleAdmin, account.RoleOwner} {
+													@selectbox.Item(selectbox.ItemProps{
+														Value: string(r), Selected: r == m.Role,
+													}) {
+														{ string(r) }
+													}
 												}
 											}
-										</select>
+										}
 										<button class="btn btn-sm" type="submit">Change role</button>
 									</form>
 								}
@@ -99,13 +109,27 @@ templ TeamPage(d TeamPageData) {
 					</div>
 					<div class="field">
 						<label class="label" for="role">Role</label>
-						<select class="control" id="role" name="role">
-							<option value="member">member</option>
-							<option value="admin">admin</option>
-							if d.Viewer.CanOwn() {
-								<option value="owner">owner</option>
+						@selectbox.SelectBox() {
+							@selectbox.Trigger(selectbox.TriggerProps{ID: "role", Name: "role"}) {
+								@selectbox.Value(selectbox.ValueProps{Placeholder: "member"})
 							}
-						</select>
+							@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+								@selectbox.Item(selectbox.ItemProps{Value: "member", Selected: true}) {
+									member
+								}
+								@selectbox.Item(selectbox.ItemProps{Value: "admin"}) {
+									admin
+								}
+								// Only an owner may appoint one. The server checks this
+								// again; leaving it out here is so the form does not
+								// offer something it will refuse.
+								if d.Viewer.CanOwn() {
+									@selectbox.Item(selectbox.ItemProps{Value: "owner"}) {
+										owner
+									}
+								}
+							}
+						}
 					</div>
 					<button class="btn btn-primary" type="submit">Send invitation</button>
 				</form>

@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
@@ -21,11 +22,23 @@ templ AppLogs(d LogsData) {
 				if len(d.Logs.Pods) > 1 {
 					<div class="field min-w-[220px]">
 						<label class="label" for="pod">Pod</label>
-						<select class="control" id="pod" name="pod">
-							for _, p := range d.Logs.Pods {
-								<option value={ p } selected?={ p == d.Logs.Pod }>{ p }</option>
+						// Searchable, unlike the others: a replica set's pod names differ
+						// only in a random suffix, so a list of twenty is read by typing
+						// rather than by looking.
+						@selectbox.SelectBox() {
+							@selectbox.Trigger(selectbox.TriggerProps{ID: "pod", Name: "pod"}) {
+								@selectbox.Value(selectbox.ValueProps{Placeholder: "Choose a pod"})
 							}
-						</select>
+							@selectbox.Content(selectbox.ContentProps{SearchPlaceholder: "Filter pods"}) {
+								for _, pod := range d.Logs.Pods {
+									@selectbox.Item(selectbox.ItemProps{
+										Value: pod, Selected: pod == d.Logs.Pod,
+									}) {
+										{ pod }
+									}
+								}
+							}
+						}
 					</div>
 				} else if d.Logs.Pod != "" {
 					<div class="field">

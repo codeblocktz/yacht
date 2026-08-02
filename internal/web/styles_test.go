@@ -281,3 +281,40 @@ func TestTheCardGeometryComesFromTheServer(t *testing.T) {
 		}
 	}
 }
+
+// No native select survives anywhere in the dashboard.
+//
+// A rule rather than a preference: a native select is styled by the operating
+// system, so it is the one control that ignores this theme entirely — it looks
+// like a different application in the middle of a page, and in dark mode it is
+// usually the only white rectangle on screen.
+//
+// Scanned across the source rather than asserted on one page, because the way
+// this regresses is somebody adding a form later and reaching for the tag they
+// know.
+func TestNoNativeSelectsRemain(t *testing.T) {
+	files, err := filepath.Glob("*.templ")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no templates found: %v", err)
+	}
+
+	var found []string
+	for _, name := range files {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if strings.Contains(string(src), "<select") {
+			found = append(found, name)
+		}
+	}
+	if len(found) > 0 {
+		t.Errorf("native <select> in %v — use the selectbox component", found)
+	}
+
+	// And the scan is not vacuous: these files exist and do contain form
+	// controls, so a glob that matched nothing would not pass silently.
+	if !strings.Contains(strings.Join(files, " "), "team.templ") {
+		t.Fatal("the scan did not reach team.templ")
+	}
+}

@@ -1,9 +1,4 @@
-// Package utils supports the vendored templUI components.
-//
-// Trimmed to what sheet and dialog actually call. The upstream file also
-// serves component JavaScript over its own route; this project embeds and
-// fingerprints its assets already, so that would be a second way to do the
-// same thing.
+// templui util templui.go - version: v1.12.1 installed by templui v1.12.1
 package utils
 
 import (
@@ -80,11 +75,7 @@ var ScriptURL = func(path string) string {
 }
 
 // componentScriptBasePath is the base public path for component JavaScript files.
-//
-// Pointed at this project's embedded assets rather than upstream's own
-// "/templui/js" route. The route is the thing that was dropped when this
-// package was trimmed, so leaving the default would emit a script tag for a URL
-// nothing serves — markup that renders fine and a component that never opens.
+// In the import workflow this stays "/templui/js". The CLI rewrites it to the user's local jsPublicPath.
 var componentScriptBasePath = "/assets/js/templui"
 
 // UseUnminifiedScripts switches component script loading to the unminified files.
@@ -129,3 +120,12 @@ func ComponentScript(component string) templ.Component {
 		return nil
 	})
 }
+
+// SetupScriptRoutes is removed from this copy.
+//
+// It serves component JavaScript out of the upstream module's embedded FS,
+// which is the import workflow. This project uses the copy-in workflow: the
+// files are in assets/js/templui and served by this application's own asset
+// handler. Keeping it would mean depending on the module the copy exists to
+// avoid — and it early-returns on any base path but "/templui/js" anyway, so
+// it was dead here in both senses.
