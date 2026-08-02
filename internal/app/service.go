@@ -145,13 +145,33 @@ func (a App) Ref() orchestrator.Ref {
 	}
 }
 
-// URLScheme is https when the platform serves TLS and http otherwise, so the
-// dashboard never offers a link that cannot connect.
+// URLScheme is the scheme an app can actually be reached on.
+//
+// It follows HTTPSOnly rather than TLS, and the difference is the whole point.
+// TLS says whether the platform has a certificate anybody will trust;
+// HTTPSOnly decides which of the ingress controller's entrypoints serves this
+// app at all. An app that is HTTPS-only on an install with no certificate is
+// still only reachable over https — it simply presents the controller's
+// default certificate when it gets there.
+//
+// Reading TLS here is what produced a dashboard offering http:// links to
+// apps that answer nothing on port 80, which is the exact failure this method
+// exists to prevent.
 func (a App) URLScheme() string {
-	if a.TLS {
+	if a.HTTPSOnly || a.TLS {
 		return "https"
 	}
 	return "http"
+}
+
+// UntrustedCert reports that this app is served over https with a certificate
+// nobody will trust.
+//
+// Worth saying rather than leaving to a browser warning: the warning names the
+// certificate, not the reason, and the reason is that this install has no
+// wildcard certificate configured.
+func (a App) UntrustedCert() bool {
+	return a.Host != "" && a.HTTPSOnly && !a.TLS
 }
 
 // Options are the settings the service needs beyond its dependencies.

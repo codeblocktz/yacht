@@ -4,8 +4,13 @@ import "github.com/codeblocktz/yacht/internal/app"
 
 // NetworkingData is the app's routing panel.
 type NetworkingData struct {
-	App    string
-	Net    app.Networking
+	App string
+	Net app.Networking
+
+	// UntrustedCert means this app is served over https with a certificate
+	// nobody will trust, because the install has no wildcard certificate.
+	UntrustedCert bool
+
 	Notice string
 	Error  string
 }
@@ -38,6 +43,18 @@ templ publicNetworking(d NetworkingData) {
 							<span class="block text-muted-foreground">
 								Issued by the platform &middot; resolves through the wildcard record
 							</span>
+							if d.UntrustedCert {
+								// Said here rather than left to the browser. The warning
+								// somebody gets names the certificate; it does not say
+								// that the install has none configured, which is the
+								// part they can do something about.
+								<span class="block text-muted-foreground">
+									Served over https from the ingress controller's default
+									certificate, which browsers will not trust. Configure a
+									wildcard certificate for this app domain, or turn off
+									Enforce HTTPS below to serve it on plain http.
+								</span>
+							}
 						</span>
 						<span class="status status-ok">active</span>
 					</div>

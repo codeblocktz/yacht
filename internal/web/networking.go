@@ -153,5 +153,7 @@ func (s *Server) dnsSet(w http.ResponseWriter, r *http.Request) {
 // Settings tab; keeping them on their own small type means they still say what
 // they need rather than reaching into everything the tab happens to hold.
 func netOf(d AppDetailData) NetworkingData {
-	return NetworkingData{App: d.App.Name, Net: d.Net}
+	return NetworkingData{
+		App: d.App.Name, Net: d.Net, UntrustedCert: d.App.UntrustedCert(),
+	}
 }

@@ -795,3 +795,46 @@ func TestPostgresPasswordsAreNotShared(t *testing.T) {
 		t.Fatal("two databases were given the same password")
 	}
 }
+
+// The scheme has to match the entrypoint that actually serves the app.
+//
+// HTTPSOnly writes traefik.ingress.kubernetes.io/router.entrypoints=websecure
+// onto the Ingress, so nothing answers on port 80. A dashboard reading the
+// platform's certificate instead of that setting offers an http:// link to an
+// app that 404s — which is what it did, and what somebody reports as the app
+// being broken rather than as the link being wrong.
+func TestTheSchemeFollowsWhatActuallyServes(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		httpsOnly, tls bool
+		want           string
+	}{
+		{"https-only without a platform certificate", true, false, "https"},
+		{"https-only with one", true, true, "https"},
+		{"plain http", false, false, "http"},
+		// The platform serving TLS is reason enough on its own: the app is
+		// reachable on both entrypoints and the secure one is the better link.
+		{"platform TLS without the app enforcing it", false, true, "https"},
+	} {
+		a := App{Host: "web.apps.example.com", HTTPSOnly: tc.httpsOnly, TLS: tc.tls}
+		if got := a.URLScheme(); got != tc.want {
+			t.Errorf("%s: scheme = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// An app served over https with nothing to prove it says so.
+//
+// The browser's warning names the certificate. It does not say the install has
+// none configured, which is the only part anybody can act on.
+func TestAnUntrustedCertificateIsReported(t *testing.T) {
+	if !(App{Host: "web.example.com", HTTPSOnly: true}).UntrustedCert() {
+		t.Error("https with no platform certificate is not reported")
+	}
+	if (App{Host: "web.example.com", HTTPSOnly: true, TLS: true}).UntrustedCert() {
+		t.Error("a properly certificated app is reported as untrusted")
+	}
+	if (App{HTTPSOnly: true}).UntrustedCert() {
+		t.Error("an app with no hostname is reported as untrusted")
+	}
+}
