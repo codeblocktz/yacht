@@ -79,8 +79,13 @@ jobs:
       # application is multi-tenant" in a doc comment does not trip it.
       - name: Boundary check — no commercial concepts declared in the engine
         run: |
+          # internal/web/ui is vendored templUI, copied in unmodified. The Lucide
+          # set it ships declares `var Wallet`, and an icon named after a wallet
+          # is not a billing concept — it is a picture. Scanning it would train
+          # the reader to ignore this check, which is the only way a check like
+          # this actually fails.
           if grep -rnE '^[[:space:]]*(type|func|var|const)[[:space:]]+[A-Za-z_]*(Tenant|tenant|Wallet|wallet|Billing|billing|Invoice|invoice|Subscription)' \
-               --include='*.go' ./cmd ./internal 2>/dev/null; then
+               --include='*.go' --exclude-dir=ui ./cmd ./internal 2>/dev/null; then
             echo "::error::engine declares a commercial-layer concept — it belongs in the wrapping layer"
             exit 1
           fi
