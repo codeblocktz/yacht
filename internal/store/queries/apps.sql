@@ -128,3 +128,8 @@ UPDATE apps
 SET image = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
 RETURNING *;
+
+-- name: SetAppRunAsUser :exec
+-- Recorded by a build, which is the only thing that can discover it.
+UPDATE apps SET run_as_user = @run_as_user, updated_at = now()
+WHERE owner_id = @owner_id AND id = @id;

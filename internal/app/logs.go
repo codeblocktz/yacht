@@ -168,6 +168,14 @@ func (s *Service) Logs(ctx context.Context, ownerID, appName string, req LogRequ
 	lines, err := s.orch.Logs(ctx, orchestrator.LogOptions{
 		Namespace: a.Namespace, Pod: out.Pod, Tail: req.Tail, Previous: req.Previous,
 	})
+	if errors.Is(err, orchestrator.ErrNotStarted) {
+		// Not a failure to report as one. The container has no log because it
+		// never ran, and why it never ran is on the pod, which the page shows
+		// directly above this.
+		out.Note = "This container has not started, so it has written nothing. " +
+			"The status above says why it could not start."
+		return out, nil
+	}
 	if err != nil {
 		return Logs{}, fmt.Errorf("app: read logs: %w", err)
 	}

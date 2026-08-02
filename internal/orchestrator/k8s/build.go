@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,6 +309,12 @@ func (o *Orchestrator) streamBuildLog(
 			line := sc.Text()
 			if sha, ok := strings.CutPrefix(line, commitMarker); ok {
 				result.CommitSHA = strings.TrimSpace(sha)
+				continue
+			}
+			if uid, ok := strings.CutPrefix(line, uidMarker); ok {
+				if n, err := strconv.ParseInt(strings.TrimSpace(uid), 10, 64); err == nil {
+					result.RunAsUser = n
+				}
 				continue
 			}
 			logf(line + "\n")

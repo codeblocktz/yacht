@@ -57,6 +57,13 @@ func (o *Orchestrator) Logs(
 			// for a pod that has never restarted. Empty rather than an error:
 			// there is nothing wrong, there is simply nothing to show.
 			return nil, nil
+		case apierrors.IsBadRequest(err):
+			// The other BadRequest here is "is waiting to start", which is a
+			// container that could not be created — a bad image reference, a
+			// security context the image cannot satisfy, a missing secret. The
+			// pod already says which; this must not answer "could not read the
+			// logs", because that sends somebody looking for a broken log.
+			return nil, fmt.Errorf("%w: %s", orchestrator.ErrNotStarted, err)
 		}
 		return nil, fmt.Errorf("k8s: read logs %s/%s: %w", opts.Namespace, opts.Pod, err)
 	}

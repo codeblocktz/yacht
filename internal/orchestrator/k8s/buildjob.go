@@ -23,6 +23,9 @@ const (
 // to ask what was checked out.
 const commitMarker = "yacht-commit:"
 
+// uidMarker prefixes the resolved numeric uid, the same way.
+const uidMarker = "yacht-uid:"
+
 // dockerfileMarker is written by the Dockerfile step when it has pushed an
 // image, and read by the buildpack step as its instruction to do nothing.
 //
@@ -74,6 +77,43 @@ func insecureHost(req orchestrator.BuildRequest) string {
 	host, _, _ := strings.Cut(req.Image, "/")
 	return host
 }
+
+// resolveUIDScript asks the built image what user it actually runs as.
+//
+// Kubernetes refuses runAsNonRoot unless it can prove the user is not root,
+// and it cannot prove that from a name — an image ending "USER node" builds,
+// pushes and pulls perfectly and then fails to start. The name-to-uid mapping
+// lives in the image's own /etc/passwd, so the only thing that can resolve it
+// is the image.
+//
+// So it resolves itself: a throwaway build FROM the image runs "id -u", which
+// runs as whatever USER the image set, and the answer is copied out to a
+// scratch stage so only that one number crosses back. No layers are pushed and
+// nothing is kept.
+//
+// Best effort by design. A distroless image has no shell and this finds
+// nothing, which is not a failure — the deploy then behaves exactly as it did
+// before, and the pod says why.
+const resolveUIDScript = `
+mkdir -p /tmp/uidprobe
+# Written to /tmp, not to /. The whole reason this probe exists is that the
+# image runs as a non-root user, and that user cannot write to the root
+# directory — so the obvious path is the one guaranteed to fail.
+printf 'FROM %s AS app\nRUN id -u > /tmp/uid\nFROM scratch\nCOPY --from=app /tmp/uid /uid\n' "$IMAGE" \
+  > /tmp/uidprobe/Dockerfile
+if buildctl-daemonless.sh build \
+  --frontend dockerfile.v0 \
+  --local context=/tmp/uidprobe \
+  --local dockerfile=/tmp/uidprobe \
+  --output type=local,dest=/tmp/uidout 2>/tmp/uidprobe.err; then
+  echo "` + uidMarker + `$(cat /tmp/uidout/uid | tr -d "[:space:]")"
+else
+  # Printed rather than swallowed. Hiding this made a broken probe look like
+  # an image that simply had no answer, which is the failure that cannot be
+  # told apart from success without reading it.
+  echo "Could not work out which user this image runs as:"
+  tail -5 /tmp/uidprobe.err
+fi`
 
 // buildJob describes one build.
 //
@@ -205,9 +245,22 @@ func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 			// An empty value leaves the output option off entirely, so the
 			// secure path carries no trace of the insecure one.
 			{Name: "INSECURE", Value: insecureOutput(req)},
+			// The host, separately, because a plain-HTTP registry has to be
+			// declared to the daemon as well: the output option covers the
+			// push, and pulling from one is daemon configuration.
+			{Name: "INSECURE_HOST", Value: insecureHost(req)},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
+# A plain-HTTP registry has to be declared to buildkitd, not just to the
+# output. Without this the push works — it carries its own option — and every
+# pull from that registry fails, which is a confusing pair of behaviours to
+# debug from the outside.
+if [ -n "$INSECURE_HOST" ]; then
+  printf '[registry."%s"]\n  http = true\n' "$INSECURE_HOST" > /tmp/buildkitd.toml
+  export BUILDKITD_FLAGS="$BUILDKITD_FLAGS --config /tmp/buildkitd.toml"
+fi
+
 cd /workspace/src/$SUBDIR
 if [ ! -f Dockerfile ]; then
   echo "No Dockerfile here — falling back to buildpacks."
@@ -222,6 +275,7 @@ buildctl-daemonless.sh build \
   --progress plain
 touch ` + dockerfileMarker + `
 echo "Pushed $IMAGE"
+` + resolveUIDScript + `
 `},
 		// This is BuildKit's own documented Kubernetes configuration for the
 		// rootless image, and the deviations from it were tried and reverted
@@ -331,6 +385,7 @@ mkdir -p /workspace/layers /workspace/cache /workspace/platform/env
   -log-level=info \
   "$IMAGE"
 echo "Pushed $IMAGE"
+` + resolveUIDScript + `
 `},
 		SecurityContext: hardenedAs(cnbUID, cnbGID),
 		VolumeMounts: []corev1.VolumeMount{

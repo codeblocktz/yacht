@@ -189,6 +189,8 @@ type Querier interface {
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
+	// Recorded by a build, which is the only thing that can discover it.
+	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)

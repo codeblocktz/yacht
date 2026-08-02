@@ -31,7 +31,7 @@ INSERT INTO apps (
     repo_url, repo_branch, repo_subdir
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type CreateAppParams struct {
@@ -99,6 +99,7 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }
@@ -227,7 +228,7 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -265,12 +266,13 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -308,6 +310,7 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }
@@ -357,7 +360,7 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -397,6 +400,7 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.RepoUrl,
 			&i.RepoBranch,
 			&i.RepoSubdir,
+			&i.RunAsUser,
 		); err != nil {
 			return nil, err
 		}
@@ -520,7 +524,7 @@ SET health_path     = $1,
     health_liveness = $2,
     updated_at      = now()
 WHERE owner_id = $3 AND id = $4
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type SetAppHealthParams struct {
@@ -564,6 +568,7 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }
@@ -572,7 +577,7 @@ const setAppImage = `-- name: SetAppImage :one
 UPDATE apps
 SET image = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type SetAppImageParams struct {
@@ -613,6 +618,7 @@ func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, 
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }
@@ -647,7 +653,7 @@ const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type SetAppReplicasParams struct {
@@ -685,8 +691,26 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
+}
+
+const setAppRunAsUser = `-- name: SetAppRunAsUser :exec
+UPDATE apps SET run_as_user = $1, updated_at = now()
+WHERE owner_id = $2 AND id = $3
+`
+
+type SetAppRunAsUserParams struct {
+	RunAsUser int64
+	OwnerID   string
+	ID        uuid.UUID
+}
+
+// Recorded by a build, which is the only thing that can discover it.
+func (q *Queries) SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error {
+	_, err := q.db.Exec(ctx, setAppRunAsUser, arg.RunAsUser, arg.OwnerID, arg.ID)
+	return err
 }
 
 const supersedeDeployments = `-- name: SupersedeDeployments :execrows
@@ -725,7 +749,7 @@ SET image          = $3,
     memory_limit   = $9,
     updated_at     = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type UpdateAppParams struct {
@@ -779,6 +803,7 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.RepoUrl,
 		&i.RepoBranch,
 		&i.RepoSubdir,
+		&i.RunAsUser,
 	)
 	return i, err
 }

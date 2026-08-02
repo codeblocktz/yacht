@@ -192,6 +192,17 @@ func (s *Service) runBuild(
 	if buildErr != nil {
 		return "", buildErr
 	}
+
+	// What the image runs as, when the build could work it out. Stored on the
+	// app because it is a fact about the image and the deploy needs it every
+	// time, not just this once.
+	if result.RunAsUser > 0 {
+		if err := s.q.SetAppRunAsUser(ctx, dbgen.SetAppRunAsUserParams{
+			OwnerID: ownerID, ID: a.ID, RunAsUser: result.RunAsUser,
+		}); err != nil {
+			s.log.Warn("record the image's user", "error", err)
+		}
+	}
 	return image, nil
 }
 

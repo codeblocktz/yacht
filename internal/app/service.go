@@ -55,6 +55,10 @@ type App struct {
 	// pulled. Zero on an image-sourced app.
 	Repo Repo
 
+	// RunAsUser is the numeric uid a built image runs as, discovered by the
+	// build. Zero means unknown, which is every app not built from source.
+	RunAsUser int64
+
 	// HealthPath is an HTTP path reporting whether the app is serving. Empty
 	// means no probe. Liveness lets the same path also restart the container.
 	HealthPath string
@@ -990,6 +994,15 @@ func (s *Service) buildIfNeeded(
 		return a, fmt.Errorf("app: record built image: %w", err)
 	}
 	a.Image = image
+
+	// Re-read rather than patched by hand: the build wrote the image and,
+	// when it could work it out, the uid the image runs as. Applying the
+	// caller's stale copy would deploy the new image with the old answer to
+	// "who does this run as", which is the difference between starting and
+	// CreateContainerConfigError.
+	if fresh, err := s.Get(ctx, ownerID, a.Name); err == nil {
+		return fresh, nil
+	}
 	return a, nil
 }
 
@@ -1049,6 +1062,7 @@ func toApp(row dbgen.App) App {
 		Replicas:      row.Replicas,
 		Port:          row.Port,
 		Source:        Source(row.Source),
+		RunAsUser:     row.RunAsUser,
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
@@ -1142,7 +1156,16 @@ func (s *Service) SetHealth(
 func runtimeOf(a App) Blueprint {
 	b, err := BlueprintFor(a.Source)
 	if err != nil {
-		return Blueprint{}
+		b = Blueprint{}
+	}
+	// A built image's uid was discovered rather than declared, so it is not in
+	// the blueprint — but it belongs in the same place, because every consumer
+	// asks this one function what the app runs as.
+	if a.RunAsUser > 0 {
+		b.RunAsUser = a.RunAsUser
+		if b.FSGroup == 0 {
+			b.FSGroup = a.RunAsUser
+		}
 	}
 	return b
 }

@@ -500,6 +500,15 @@ func (s AppSpec) validateHealth() error {
 	return nil
 }
 
+// ErrNotStarted means a container exists but has not run yet.
+//
+// Its own error because it is not a failure to read: there is genuinely no log
+//, and the reason is on the pod rather than in the log. Reported as a failure
+// it reads as "the log is broken" for a container whose problem is that it
+// never started — which is the more useful thing to say and is already on
+// screen a few lines above.
+var ErrNotStarted = errors.New("orchestrator: the container has not started")
+
 // PullSecretName is the Secret an app's namespace holds its pull credential
 // in. Named here rather than in the Kubernetes layer because the app service
 // decides when to supply one.
@@ -545,6 +554,11 @@ type BuildResult struct {
 	// CommitSHA is what was actually built. A branch moves; this is the answer
 	// to "what is running" a week later.
 	CommitSHA string
+
+	// RunAsUser is the numeric uid the image runs as, resolved during the
+	// build. Zero when it could not be worked out, which leaves the decision
+	// where it was before.
+	RunAsUser int64
 }
 
 // Builder turns a repository into an image.
