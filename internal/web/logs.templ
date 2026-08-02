@@ -1,6 +1,8 @@
 package web
 
 import (
+	"strconv"
+
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
@@ -121,7 +123,7 @@ templ DeployLogPanel(d DeployLogsData) {
 			case viewBuild:
 				@buildLogView(d)
 			case viewHTTP:
-				@httpLogView()
+				@httpLogView(d)
 			default:
 				@deployLogView(d)
 		}
@@ -282,21 +284,62 @@ templ buildStatus(b app.Build) {
 	}
 }
 
-// httpLogView explains an empty pane rather than leaving one.
-templ httpLogView() {
-	<div class="canvas-sheet-body">
-		<div class="empty">
-			<p class="font-medium text-foreground">Requests are not recorded</p>
-			<p>
-				Requests reach this app through the cluster's ingress controller, which
-				is not configured to write an access log — and its log would hold every
-				tenant's traffic, so it is not somewhere one app's requests can be read
-				from as it stands.
-			</p>
-			<p>
-				The app's own output is under Deploy logs, and a server that logs its
-				requests writes them there.
-			</p>
-		</div>
+// httpLogView shows what the ingress controller recorded for this app.
+//
+// One controller logs every tenant's traffic into one stream, so what makes
+// this one app's log is the hostname filter — built from an owner-scoped query
+// upstream, never from anything the request said.
+templ httpLogView(d DeployLogsData) {
+	<div class="canvas-sheet-actions">
+		<span class="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+			if len(d.HTTP.Hosts) > 0 {
+				Requests to <span class="mono">{ joinHosts(d.HTTP.Hosts) }</span>
+			} else {
+				No hostname
+			}
+		</span>
+		<span class="text-[12px] text-muted-foreground tabular-nums">
+			{ plural(len(d.HTTP.Lines), "request") }
+		</span>
 	</div>
+	if len(d.HTTP.Lines) == 0 {
+		<div class="canvas-sheet-body">
+			<div class="empty">
+				<p class="font-medium text-foreground">No requests recorded</p>
+				if d.HTTP.Note != "" {
+					<p>{ d.HTTP.Note }</p>
+				}
+			</div>
+			if d.HTTP.Hint != "" {
+				<p class="mt-4 text-[12.5px] text-muted-foreground">
+					Yacht does not own the ingress controller — it is part of the cluster,
+					and every other workload routes through it — so switching its access
+					log on is yours to do:
+				</p>
+				<div class="logs mt-2 rounded-md border border-border">
+					for _, line := range buildLines(d.HTTP.Hint) {
+						<div class="log-line"><span class="log-text">{ line }</span></div>
+					}
+				</div>
+			}
+		</div>
+	} else {
+		<div class="canvas-sheet-log">
+			<div class="logs">
+				for _, l := range d.HTTP.Lines {
+					<div class="log-line">
+						if !l.At.IsZero() {
+							<span class="log-time">{ l.At.Format("15:04:05") }</span>
+						}
+						<span class={ "shrink-0 tabular-nums", statusClass(l.Status) }>
+							{ strconv.Itoa(l.Status) }
+						</span>
+						<span class="log-text">
+							{ l.Method } { l.Path } &middot; { requestTiming(l) }
+						</span>
+					</div>
+				}
+			</div>
+		</div>
+	}
 }

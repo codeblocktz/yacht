@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -22,6 +23,7 @@ var testDeployID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 type recordingLogs struct {
 	readLogs bool
 	build    *app.Build
+	http     *app.HTTPLogs
 }
 
 func (l *recordingLogs) Logs(
@@ -50,6 +52,17 @@ func (l *recordingLogs) BuildForDeployment(
 		return app.Build{}, app.ErrNotFound
 	}
 	return *l.build, nil
+}
+
+// DeploymentHTTPLogs answers with whatever the test set, so the HTTP tab can
+// be driven without an ingress controller.
+func (l *recordingLogs) DeploymentHTTPLogs(
+	context.Context, string, string,
+) (app.HTTPLogs, error) {
+	if l.http == nil {
+		return app.HTTPLogs{}, nil
+	}
+	return *l.http, nil
 }
 
 func (l *recordingLogs) Deployment(
@@ -112,7 +125,7 @@ func TestTheSheetOffersEachLog(t *testing.T) {
 func TestAnEmptyLogSaysWhyItIsEmpty(t *testing.T) {
 	for _, tc := range []struct{ view, want string }{
 		{viewBuild, "Nothing was built"},
-		{viewHTTP, "Requests are not recorded"},
+		{viewHTTP, "No requests recorded"},
 	} {
 		d := liveDeploy()
 		d.View = tc.view
@@ -223,5 +236,45 @@ func TestAFailedBuildShowsItsReason(t *testing.T) {
 	}
 	if !strings.Contains(body, "failed") {
 		t.Error("the build is not marked failed")
+	}
+}
+
+// The HTTP tab shows real requests when the controller recorded any.
+func TestTheHTTPTabShowsRecordedRequests(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{http: &app.HTTPLogs{
+		Hosts: []string{"web.apps.example.com"},
+		Lines: []orchestrator.HTTPLogLine{
+			{Method: "GET", Path: "/health", Status: 200, Duration: 2 * time.Millisecond},
+			{Method: "POST", Path: "/orders", Status: 500, Duration: 41 * time.Millisecond},
+		},
+	}}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
+		Body.String()
+
+	for _, want := range []string{"/health", "/orders", "200", "500", "web.apps.example.com"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the request log does not show %q", want)
+		}
+	}
+}
+
+// When the access log is switched off, the page says so and hands over the
+// configuration rather than leaving somebody to work out why it is empty.
+func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{http: &app.HTTPLogs{
+		Hosts: []string{"web.apps.example.com"},
+		Note:  "The ingress controller is running but is not writing an access log",
+		Hint:  "kind: HelmChartConfig",
+	}}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
+		Body.String()
+
+	if !strings.Contains(body, "not writing an access log") {
+		t.Error("nothing says why there are no requests")
+	}
+	if !strings.Contains(body, "HelmChartConfig") {
+		t.Error("the configuration that would fix it is not offered")
 	}
 }

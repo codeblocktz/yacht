@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -177,6 +178,78 @@ func (s *Service) Logs(ctx context.Context, ownerID, appName string, req LogRequ
 			out.Note = "This container has not restarted, so there is no earlier run to show."
 		} else {
 			out.Note = "The container has not written anything yet."
+		}
+	}
+	return out, nil
+}
+
+// HTTPLogs is what the ingress controller recorded for one app.
+type HTTPLogs struct {
+	Lines []orchestrator.HTTPLogLine
+
+	// Hosts are the names these requests could have arrived on, shown so an
+	// empty result can be told from one for an app with no hostname at all.
+	Hosts []string
+
+	// Note explains an empty result, and Hint is the configuration that would
+	// fix it when the answer is a setting.
+	Note string
+	Hint string
+}
+
+// DeploymentHTTPLogs reads the requests made to an app.
+//
+// The app is resolved by owner first and the hostnames come from that app's own
+// rows, which is the entire tenancy boundary: one ingress controller logs every
+// tenant's traffic into one stream, so what makes this one app's log is that
+// the filter was built from an owner-scoped query and nothing else.
+//
+// An app with no hostname gets nothing, not everything. That is the failure
+// worth naming, because an empty filter over a shared log is the difference
+// between this feature and a way to read the whole cluster's traffic.
+func (s *Service) DeploymentHTTPLogs(
+	ctx context.Context, ownerID, appName string,
+) (HTTPLogs, error) {
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
+		return HTTPLogs{}, err
+	}
+
+	logger, ok := s.orch.(orchestrator.HTTPLogger)
+	if !ok {
+		return HTTPLogs{Note: "This install cannot read the ingress controller's log."}, nil
+	}
+
+	hosts, err := domain.RoutableHosts(ctx, s.q, a.ID)
+	if err != nil {
+		return HTTPLogs{}, err
+	}
+	out := HTTPLogs{Hosts: hosts}
+	if len(hosts) == 0 {
+		out.Note = "This app has no hostname, so nothing reaches it through the " +
+			"ingress controller and there is nothing to record."
+		return out, nil
+	}
+
+	got, err := logger.HTTPLogs(ctx, orchestrator.HTTPLogOptions{Hosts: hosts})
+	if err != nil {
+		return HTTPLogs{}, fmt.Errorf("app: read http logs: %w", err)
+	}
+	out.Lines = got.Lines
+
+	switch got.Reason {
+	case orchestrator.HTTPLogNotEnabled:
+		out.Note = "The ingress controller is running but is not writing an access " +
+			"log, so no requests are being recorded — for this app or any other."
+		out.Hint = logger.HTTPLogHint()
+	case orchestrator.HTTPLogNoController:
+		out.Note = "No ingress controller was found, so nothing in this cluster is " +
+			"recording requests."
+	default:
+		if len(out.Lines) == 0 {
+			out.Note = "No requests to this app appear in the part of the " +
+				"controller's log that is still available. Every app's traffic " +
+				"shares that one log, so a busy cluster overwrites it quickly."
 		}
 	}
 	return out, nil

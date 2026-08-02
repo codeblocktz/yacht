@@ -29,6 +29,10 @@ type Logger interface {
 	BuildForDeployment(
 		ctx context.Context, ownerID string, deployID uuid.UUID,
 	) (app.Build, error)
+
+	// DeploymentHTTPLogs is what the ingress controller recorded for this
+	// app's hostnames.
+	DeploymentHTTPLogs(ctx context.Context, ownerID, appName string) (app.HTTPLogs, error)
 }
 
 // The log views one deployment's sheet offers.
@@ -50,6 +54,9 @@ type DeployLogsData struct {
 	// Build is what produced this deployment's image, when anything did.
 	Build    app.Build
 	HasBuild bool
+
+	// HTTP is what the ingress controller recorded for this app.
+	HTTP app.HTTPLogs
 
 	// View is which of the three logs is showing.
 	View     string
@@ -94,8 +101,14 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 		default:
 			d.Deploy.Deployment = dep
 		}
-		if d.View == viewBuild {
+		switch d.View {
+		case viewBuild:
 			d.Build, d.HasBuild = s.buildFor(ctx, owner.ID, id)
+		case viewHTTP:
+			if d.HTTP, err = s.logs.DeploymentHTTPLogs(ctx, owner.ID, name); err != nil {
+				s.log.Error("read http logs", slog.String("error", err.Error()))
+				d.Error = "Could not read the ingress controller's log."
+			}
 		}
 		s.renderPanel(ctx, w, d)
 		return

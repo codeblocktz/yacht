@@ -410,3 +410,28 @@ func shortSHA(sha string) string {
 	}
 	return sha
 }
+
+// joinHosts lists an app's hostnames for a heading.
+func joinHosts(hosts []string) string { return strings.Join(hosts, ", ") }
+
+// statusClass colours an HTTP status by class, because scanning a log for the
+// one request that failed is the whole reason to open it.
+func statusClass(code int) string {
+	switch {
+	case code >= 500:
+		return "status-err"
+	case code >= 400:
+		return "status-warn"
+	default:
+		return "status-ok"
+	}
+}
+
+// requestTiming renders how long a request took and how much it returned.
+func requestTiming(l orchestrator.HTTPLogLine) string {
+	out := l.Duration.Round(time.Millisecond).String()
+	if l.Bytes > 0 {
+		out += " · " + strconv.FormatInt(l.Bytes, 10) + " B"
+	}
+	return out
+}

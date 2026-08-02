@@ -25,6 +25,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is returned when a requested workload does not exist.
@@ -575,4 +576,57 @@ type BuildState struct {
 	Done   bool
 	Failed bool
 	Reason string
+}
+
+// Why an app's HTTP log is empty.
+const (
+	// HTTPLogNotEnabled means the ingress controller is running and is not
+	// writing an access log. A setting, not a fault, and a different thing to
+	// tell somebody than "no requests yet".
+	HTTPLogNotEnabled = "not-enabled"
+
+	// HTTPLogNoController means no ingress controller was found at all.
+	HTTPLogNoController = "no-controller"
+)
+
+// HTTPLogOptions asks for the requests made to some hostnames.
+type HTTPLogOptions struct {
+	// Hosts is the tenancy boundary. One controller logs every tenant's
+	// traffic, so the caller resolves which hosts belong to the app from an
+	// owner-scoped query and this layer never decides it.
+	Hosts []string
+}
+
+// HTTPLogs is what the ingress controller recorded.
+type HTTPLogs struct {
+	Lines []HTTPLogLine
+
+	// Reason explains an empty result that is not simply "no traffic".
+	Reason string
+}
+
+// HTTPLogLine is one request as the ingress controller saw it.
+type HTTPLogLine struct {
+	At       time.Time
+	Host     string
+	Method   string
+	Path     string
+	Protocol string
+	Status   int
+	Bytes    int64
+	Client   string
+	Duration time.Duration
+}
+
+// HTTPLogger is an orchestrator that can report requests.
+//
+// Optional, like Builder and NodeManager: an orchestrator with no ingress
+// controller in front of it is still a working orchestrator.
+type HTTPLogger interface {
+	HTTPLogs(ctx context.Context, opts HTTPLogOptions) (HTTPLogs, error)
+
+	// HTTPLogHint is the configuration that switches the access log on, for
+	// the page to show. Yacht does not own the ingress controller, so this is
+	// something to hand over rather than something to apply.
+	HTTPLogHint() string
 }
