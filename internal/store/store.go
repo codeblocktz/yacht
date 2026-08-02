@@ -11,6 +11,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,6 +24,23 @@ var migrationsFS embed.FS
 
 // migrationsDir is the path inside migrationsFS.
 const migrationsDir = "migrations"
+
+// migrationLock serialises migrators against one database.
+//
+// Two instances starting together both migrate at boot, and goose is not safe
+// to run twice at once: the second finds a table the first has just created and
+// fails with "already exists", which reads as a broken migration rather than as
+// a race. An arbitrary constant, shared by every Yacht that talks to this
+// database.
+const migrationLock int64 = 0x796163687421
+
+// goose keeps its dialect and filesystem in package-level state, so setting it
+// once is both correct and the only way concurrent migrators avoid writing to
+// the same variables at the same time.
+var (
+	gooseOnce sync.Once
+	gooseErr  error
+)
 
 // Connect opens a pooled connection and verifies the database answers.
 func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -60,11 +78,35 @@ func Migrate(ctx context.Context, dsn string, log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	goose.SetBaseFS(migrationsFS)
-	goose.SetLogger(goose.NopLogger())
-	if err := goose.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("store: set dialect: %w", err)
+	gooseOnce.Do(func() {
+		goose.SetBaseFS(migrationsFS)
+		goose.SetLogger(goose.NopLogger())
+		gooseErr = goose.SetDialect("postgres")
+	})
+	if gooseErr != nil {
+		return fmt.Errorf("store: set dialect: %w", gooseErr)
 	}
+
+	// Held on its own connection for the length of the migration. An advisory
+	// lock is session-scoped, so a second migrator blocks here rather than
+	// racing through and failing on a table this one is midway through
+	// creating. Closing the connection would release it even if the unlock
+	// below never ran.
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("store: open migration lock connection: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck // releasing the lock is the point
+
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLock); err != nil {
+		return fmt.Errorf("store: take migration lock: %w", err)
+	}
+	defer func() {
+		// WithoutCancel so a cancelled migration still gives the lock back
+		// rather than leaving the next instance waiting on a dead session.
+		_, _ = conn.ExecContext(
+			context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLock)
+	}()
 
 	before, _ := goose.GetDBVersionContext(ctx, db)
 	if err := goose.UpContext(ctx, db, migrationsDir); err != nil {

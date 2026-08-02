@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -521,5 +522,39 @@ func TestSecretVariablesCannotBeStoredReadable(t *testing.T) {
 	}
 	if err := insert("PLAIN", "again", nil, false); err == nil {
 		t.Error("two variables with the same key on one app were accepted")
+	}
+}
+
+// Migrations must survive being run twice at once.
+//
+// Two Yacht instances starting together both migrate at boot, and the test
+// suite does the same thing harder: `go test ./...` runs packages in parallel
+// and several of them migrate the same database. Without a lock the second one
+// finds a table the first has just created and fails with "already exists" —
+// which reads as a broken migration rather than as a race.
+func TestConcurrentMigrationsAllSucceed(t *testing.T) {
+	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set YACHT_TEST_DATABASE_URL to run store tests")
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	const racers = 4
+	errs := make(chan error, racers)
+	var start sync.WaitGroup
+	start.Add(1)
+
+	for range racers {
+		go func() {
+			start.Wait() // let them all reach the migration together
+			errs <- Migrate(context.Background(), dsn, log)
+		}()
+	}
+	start.Done()
+
+	for range racers {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent migration failed: %v", err)
+		}
 	}
 }
