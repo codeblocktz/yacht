@@ -259,6 +259,11 @@ type AppSpec struct {
 
 	// HTTPSOnly routes through the ingress controller's secure entrypoint only.
 	HTTPSOnly bool
+
+	// RegistryAuth is a Docker config.json for pulling this app's image, when
+	// it comes from a private registry. Empty leaves the namespace without a
+	// pull secret, which is right for a public image.
+	RegistryAuth []byte
 }
 
 // VolumeSpec is one piece of storage attached to a workload.
@@ -492,4 +497,55 @@ func (s AppSpec) validateHealth() error {
 		return fmt.Errorf("app spec: health path %q is not a clean path", s.HealthPath)
 	}
 	return nil
+}
+
+// PullSecretName is the Secret an app's namespace holds its pull credential
+// in. Named here rather than in the Kubernetes layer because the app service
+// decides when to supply one.
+const PullSecretName = "yacht-registry"
+
+// BuildRequest is one build of a repository into an image.
+type BuildRequest struct {
+	// Owner scopes the build's own resources, so a Job can be found and
+	// cleaned up by the team it belongs to.
+	Owner OwnerID
+
+	// App is the app being built, for naming and labelling only.
+	App string
+
+	// Image is where the result must be pushed, fully qualified. Decided by
+	// the caller rather than here: the path encodes which team owns the image,
+	// and a builder choosing it could put one team's build in another's path.
+	Image string
+
+	// RepoURL, Ref and Subdir are what to build.
+	RepoURL string
+	Ref     string
+	Subdir  string
+
+	// RegistryAuth is a Docker config.json authorising the push. Passed per
+	// build rather than held by the orchestrator, so the credential lives in
+	// the one package allowed to unseal it and crosses this seam only when a
+	// build actually needs it.
+	RegistryAuth []byte
+
+	// Log receives output as it arrives. A build that only reported at the end
+	// would be silent for the several minutes it is most worth watching.
+	Log func(chunk string)
+}
+
+// BuildResult is what a build produced.
+type BuildResult struct {
+	// CommitSHA is what was actually built. A branch moves; this is the answer
+	// to "what is running" a week later.
+	CommitSHA string
+}
+
+// Builder turns a repository into an image.
+//
+// Optional, like NodeManager, and for the same reason: an orchestrator that
+// cannot run a build is a working orchestrator, and folding this into the
+// required interface would make every implementation carry it.
+type Builder interface {
+	Build(ctx context.Context, req BuildRequest) (BuildResult, error)
 }

@@ -109,7 +109,22 @@ func run() error {
 			"generate a key with `openssl rand -base64 32`")
 	}
 
+	// Where built images go, and what runs the build. Both optional: without a
+	// key there is no registry, and an orchestrator that cannot run a Job is a
+	// working orchestrator — the source is listed as unavailable rather than
+	// offered and failed.
+	var images app.Images
+	var builder app.Builder
+	if keeper.Configured() {
+		images = registry.New(pool, keeper, log)
+		if b, ok := orch.(orchestrator.Builder); ok {
+			builder = b
+		}
+	}
+
 	apps := app.NewService(pool, orch, log, app.Options{
+		Builder:         builder,
+		Images:          images,
 		AppDomain:       cfg.AppDomain,
 		WildcardTLS:     cfg.WildcardTLS,
 		Keeper:          keeper,

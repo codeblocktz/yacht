@@ -517,6 +517,7 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
 		Ref:           a.Ref(),
 		Image:         a.Image,
+		RegistryAuth:  s.pullAuth(ctx, a),
 		Replicas:      a.Replicas,
 		Port:          a.Port,
 		Env:           plain,

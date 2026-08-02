@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
@@ -35,37 +36,17 @@ const (
 var ErrNoBuilder = errors.New(
 	"app: this install cannot build from a repository — no image registry is configured")
 
-// BuildRequest is one build.
-type BuildRequest struct {
-	// Image is where the result must be pushed. Decided by the caller rather
-	// than the builder: the path encodes which team owns the image, and a
-	// builder choosing it could put one team's build in another's path.
-	Image string
-
-	Repo Repo
-
-	// Log receives output as it arrives. A build that only reported its log at
-	// the end would be silent for the several minutes it is most worth
-	// watching.
-	Log func(chunk string)
-}
-
-// BuildResult is what a build produced.
-type BuildResult struct {
-	// CommitSHA is what was actually built. A branch moves; this is the answer
-	// to "what is running" a week later.
-	CommitSHA string
-}
-
 // Builder turns a repository into an image.
 //
 // A seam for the reason the orchestrator is one: what runs the build is a
 // Kubernetes Job here and could be something else, and nothing above this line
 // should have to know which. It is also what lets the rest of the pipeline be
 // tested without a cluster.
-type Builder interface {
-	Build(ctx context.Context, req BuildRequest) (BuildResult, error)
-}
+//
+// The request and result types live in the orchestrator package rather than
+// here, so a Kubernetes implementation can satisfy this without importing the
+// service that calls it.
+type Builder = orchestrator.Builder
 
 // Images says where a build's result goes.
 //
@@ -78,6 +59,11 @@ type Images interface {
 
 	// Configured reports whether there is a registry at all.
 	Configured(ctx context.Context) bool
+
+	// DockerConfig is the credential, in the form a builder and a kubelet
+	// both read. Fetched per use rather than held, so it is unsealed only
+	// when something is about to push or pull.
+	DockerConfig(ctx context.Context) ([]byte, error)
 }
 
 // Build is a record of one.
@@ -159,10 +145,21 @@ func (s *Service) runBuild(
 		return "", fmt.Errorf("app: record build: %w", err)
 	}
 
-	result, buildErr := s.builder.Build(ctx, BuildRequest{
-		Image: image,
-		Repo:  a.Repo,
-		Log:   s.buildLogger(ctx, row.ID),
+	auth, err := s.images.DockerConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	result, buildErr := s.builder.Build(ctx, orchestrator.BuildRequest{
+		Owner:   orchestrator.OwnerID(ownerID),
+		App:     a.Name,
+		Image:   image,
+		RepoURL: a.Repo.URL,
+		Ref:     a.Repo.Ref(),
+		Subdir:  a.Repo.Subdir,
+
+		RegistryAuth: auth,
+		Log:          s.buildLogger(ctx, row.ID),
 	})
 
 	status, message, pushed := BuildSucceeded, "", image
@@ -216,4 +213,26 @@ func buildFrom(row dbgen.Build) Build {
 		b.FinishedAt = &finished
 	}
 	return b
+}
+
+// pullAuth is the credential this app needs to pull its own image.
+//
+// Only for an app whose image this install built. A public image needs no
+// credential, and putting the registry password in every tenant namespace to
+// pull nginx would spread it for nothing.
+//
+// A failure here returns no credential rather than failing the deploy. The
+// alternative is that a registry problem stops apps that do not use the
+// registry from deploying at all.
+func (s *Service) pullAuth(ctx context.Context, a App) []byte {
+	if a.Source != SourceGit || s.images == nil {
+		return nil
+	}
+	auth, err := s.images.DockerConfig(ctx)
+	if err != nil {
+		s.log.Warn("no pull credential for a built image",
+			"app", a.Name, "error", err)
+		return nil
+	}
+	return auth
 }

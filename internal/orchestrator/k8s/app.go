@@ -89,6 +89,14 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		return err
 	}
 
+	// Before the workload, so the kubelet has the credential by the time it
+	// tries the pull. The other order produces one failed pull per app on
+	// every first deploy, reported as ImagePullBackOff, which reads as a bad
+	// image name.
+	if err := o.ensurePullSecret(ctx, spec); err != nil {
+		return err
+	}
+
 	podLabels := orchestrator.ObjectLabels(spec.Ref)
 
 	podSpec := corev1ac.PodSpec().
@@ -98,6 +106,13 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		WithAutomountServiceAccountToken(false).
 		WithSecurityContext(restrictedPodSecurityContext(spec)).
 		WithContainers(container).
+		// An image this install built lives in a private registry, so the
+		// kubelet needs a credential to pull it. Referenced unconditionally
+		// and created only when there is one: a pull secret that does not
+		// exist is ignored, whereas a missing reference means an app that
+		// deploys and then cannot start, reported as ImagePullBackOff.
+		WithImagePullSecrets(corev1ac.LocalObjectReference().
+			WithName(orchestrator.PullSecretName)).
 		WithVolumes(append(
 			[]*corev1ac.VolumeApplyConfiguration{
 				corev1ac.Volume().
@@ -403,4 +418,39 @@ func servicePortName(spec orchestrator.AppSpec) string {
 		return "tcp"
 	}
 	return "http"
+}
+
+// ensurePullSecret puts a pull credential in the app's own namespace.
+//
+// A copy per namespace rather than one shared secret, because a Secret is
+// namespaced and a pod can only reference one in its own namespace. That is
+// also the containment: a tenant who can read secrets in their namespace gets
+// the registry credential, which is why the registry account should be one
+// that can pull and push this install's images and nothing else.
+func (o *Orchestrator) ensurePullSecret(ctx context.Context, spec orchestrator.AppSpec) error {
+	if len(spec.RegistryAuth) == 0 {
+		return nil
+	}
+
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      orchestrator.PullSecretName,
+			Namespace: spec.Namespace,
+			Labels: map[string]string{
+				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+				orchestrator.LabelOwner:     string(spec.Owner),
+			},
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{corev1.DockerConfigJsonKey: spec.RegistryAuth},
+	}
+
+	_, err := o.client.CoreV1().Secrets(spec.Namespace).Create(ctx, sec, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		_, err = o.client.CoreV1().Secrets(spec.Namespace).Update(ctx, sec, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		return fmt.Errorf("k8s: store the pull credential in %s: %w", spec.Namespace, err)
+	}
+	return nil
 }

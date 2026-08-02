@@ -292,3 +292,39 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
+
+// ImageFor returns the reference a build should push to.
+//
+// Reads the settings on every call rather than caching them. A registry that
+// changed between two deploys should take effect on the second, and a cache
+// here would mean builds pushing to a registry nobody configured any more.
+func (s *Store) ImageFor(ctx context.Context, ownerID, app, revision string) (string, error) {
+	set, err := s.Settings(ctx)
+	if err != nil {
+		return "", err
+	}
+	if !set.Configured() {
+		return "", ErrNotConfigured
+	}
+	return set.ImageRef(ownerID, app, revision), nil
+}
+
+// Configured reports whether there is a registry to push to.
+//
+// Swallows the read error deliberately: this answers a question a picker asks
+// while rendering, and "the database is unreachable" is not something a source
+// list can act on. An install that cannot read its settings shows building as
+// unavailable, which is what it is.
+func (s *Store) Configured(ctx context.Context) bool {
+	set, err := s.Settings(ctx)
+	return err == nil && set.Configured()
+}
+
+// DockerConfig returns the credential in the form Kubernetes and BuildKit read.
+func (s *Store) DockerConfig(ctx context.Context) ([]byte, error) {
+	creds, err := s.Credentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return creds.DockerConfigJSON()
+}
