@@ -150,7 +150,7 @@ func (s *Service) runBuild(
 		return "", err
 	}
 
-	result, buildErr := s.builder.Build(ctx, orchestrator.BuildRequest{
+	req := orchestrator.BuildRequest{
 		Owner:   orchestrator.OwnerID(ownerID),
 		App:     a.Name,
 		Image:   image,
@@ -160,7 +160,18 @@ func (s *Service) runBuild(
 
 		RegistryAuth: auth,
 		Log:          s.buildLogger(ctx, row.ID),
-	})
+	}
+
+	// Recorded before the build starts. A Job whose name was never stored is a
+	// Job the reconciler cannot ask about, which is exactly the build that
+	// would then sit claiming to run forever.
+	if err := s.q.SetBuildJob(ctx, dbgen.SetBuildJobParams{
+		ID: row.ID, JobName: s.builder.BuildJobName(req),
+	}); err != nil {
+		return "", fmt.Errorf("app: record build job: %w", err)
+	}
+
+	result, buildErr := s.builder.Build(ctx, req)
 
 	status, message, pushed := BuildSucceeded, "", image
 	if buildErr != nil {

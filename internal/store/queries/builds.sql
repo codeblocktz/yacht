@@ -31,3 +31,12 @@ WHERE owner_id = @owner_id AND deployment_id = @deployment_id;
 -- name: GetBuild :one
 SELECT * FROM builds
 WHERE owner_id = @owner_id AND id = @id;
+
+-- name: SetBuildJob :exec
+UPDATE builds SET job_name = @job_name WHERE id = @id;
+
+-- name: ListRunningBuilds :many
+-- Every build still claiming to run, oldest first. Not owner-scoped: this
+-- feeds the reconciler, which is the platform settling its own records rather
+-- than a team reading theirs.
+SELECT * FROM builds WHERE status = 'running' ORDER BY started_at;

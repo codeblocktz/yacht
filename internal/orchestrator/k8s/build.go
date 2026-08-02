@@ -27,6 +27,14 @@ import (
 // names, is a much smaller claim than that.
 const BuildNamespace = "yacht-builds"
 
+// BuildServiceAccount is what build pods run as.
+//
+// Its own account, created with no RoleBinding of any kind, rather than the
+// namespace's "default". A build executes whatever a repository's Dockerfile
+// says to execute, so the account it runs under is the blast radius — and the
+// default account is the one every admission-hardening guide names first.
+const BuildServiceAccount = "yacht-builder"
+
 // The images a build runs. Pinned rather than floating: a build that silently
 // changes what compiled it is one nobody can reproduce, and ":latest" here
 // means the toolchain moves under a running install.
@@ -139,6 +147,22 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 	_, err := o.client.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("k8s: create build namespace: %w", err)
+	}
+
+	// No RoleBinding accompanies this, deliberately and permanently. The
+	// account exists so build pods are not the namespace default, and it is
+	// useful precisely because nothing is ever granted to it.
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: BuildServiceAccount, Namespace: BuildNamespace,
+			Labels: map[string]string{orchestrator.LabelManagedBy: orchestrator.ManagedByValue},
+		},
+		AutomountServiceAccountToken: boolPtr(false),
+	}
+	_, err = o.client.CoreV1().ServiceAccounts(BuildNamespace).
+		Create(ctx, sa, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("k8s: create build service account: %w", err)
 	}
 	return nil
 }
@@ -416,4 +440,49 @@ func sanitiseLabel(s string) string {
 		return "build"
 	}
 	return out
+}
+
+// BuildJobName is the Job name a request will use.
+func (o *Orchestrator) BuildJobName(req orchestrator.BuildRequest) string {
+	return buildJobName(req)
+}
+
+// BuildState reports what the cluster says about a build started earlier.
+//
+// The Job is asked rather than any record this process kept, which is the
+// point: a build interrupted by a restart is settled by looking at the cluster,
+// the same way a controller reconciles observed state against desired state
+// instead of trusting that it was running when it last looked.
+func (o *Orchestrator) BuildState(
+	ctx context.Context, jobName string,
+) (orchestrator.BuildState, error) {
+	if jobName == "" {
+		// A build recorded before its Job was named. Nothing is running under
+		// a name nobody stored, so it is reported the same way as a Job that
+		// has gone.
+		return orchestrator.BuildState{}, nil
+	}
+
+	job, err := o.client.BatchV1().Jobs(BuildNamespace).Get(ctx, jobName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return orchestrator.BuildState{}, nil
+		}
+		return orchestrator.BuildState{}, fmt.Errorf("k8s: read build job: %w", err)
+	}
+
+	state := orchestrator.BuildState{Found: true}
+	for _, c := range job.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case batchv1.JobComplete:
+			state.Done = true
+		case batchv1.JobFailed:
+			state.Done, state.Failed = true, true
+			state.Reason = o.buildFailureReason(ctx, jobName, c)
+		}
+	}
+	return state, nil
 }

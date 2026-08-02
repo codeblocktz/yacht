@@ -61,6 +61,7 @@ type Build struct {
 	Log          string
 	StartedAt    time.Time
 	FinishedAt   pgtype.Timestamptz
+	JobName      string
 }
 
 type ClusterJoin struct {

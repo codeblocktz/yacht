@@ -161,6 +161,10 @@ type Querier interface {
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
+	// Every build still claiming to run, oldest first. Not owner-scoped: this
+	// feeds the reconciler, which is the platform settling its own records rather
+	// than a team reading theirs.
+	ListRunningBuilds(ctx context.Context) ([]Build, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// A role change reads the owner count and then writes; taking the team row
@@ -185,6 +189,7 @@ type Querier interface {
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
+	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)

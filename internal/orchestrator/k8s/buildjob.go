@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"strconv"
+
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +33,25 @@ const dockerfileMarker = "/workspace/.dockerfile-built"
 
 // buildVolume holds the checkout and the marker, shared by all three steps.
 const buildVolume = "workspace"
+
+// The user the Cloud Native Buildpacks lifecycle runs as, and which it stamps
+// on the layers it writes.
+//
+// Read out of the pinned builder image rather than assumed: it publishes
+// CNB_USER_ID=1001 and CNB_GROUP_ID=1000, and the uid is not the gid. Guessing
+// 1000 for both fails with "unknown userid 1000" after the clone has already
+// run, which is a slow way to find out.
+//
+// They are constants because the builder image is pinned. Unpinning it means
+// reading these from the image, which is what the lifecycle's own tooling does.
+const (
+	cnbUID = 1001
+	cnbGID = 1000
+)
+
+// buildUID is the user the clone and BuildKit steps run as. It shares the
+// buildpack step's group so all three can write the shared volume.
+const buildUID = 1000
 
 // buildJob describes one build.
 //
@@ -64,6 +85,25 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+
+					// A build runs whatever a repository's Dockerfile says to
+					// run. Without this it would run it with a token for the
+					// Kubernetes API mounted at a well-known path — which is
+					// the standard finding against in-cluster builders, and
+					// why Tekton and Knative both disable it and bind their
+					// build pods to a service account holding no permissions.
+					ServiceAccountName:           BuildServiceAccount,
+					AutomountServiceAccountToken: boolPtr(false),
+
+					// The three steps share a volume and do not share a user:
+					// the buildpack lifecycle runs as 1001 while the clone and
+					// BuildKit run as 1000. An emptyDir belongs to root, so
+					// without a common group the second step to touch it
+					// cannot write. fsGroup is what Kubernetes provides for
+					// exactly this, and all three are in group 1000.
+					SecurityContext: &corev1.PodSecurityContext{
+						FSGroup: int64Ptr(cnbGID),
+					},
 					Volumes: []corev1.Volume{
 						{
 							Name: buildVolume,
@@ -115,7 +155,8 @@ git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"
 echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 `},
-		VolumeMounts: []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}},
+		SecurityContext: hardened(buildUID),
+		VolumeMounts:    []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}},
 	}
 }
 
@@ -128,7 +169,8 @@ echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 // nothing but these Jobs.
 func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 	unconfined := corev1.SeccompProfileTypeUnconfined
-	user := int64(1000)
+	user := int64(buildUID)
+	group := int64(cnbGID)
 
 	return corev1.Container{
 		Name:  dockerfileContainer,
@@ -156,10 +198,31 @@ buildctl-daemonless.sh build \
 touch ` + dockerfileMarker + `
 echo "Pushed $IMAGE"
 `},
+		// This is BuildKit's own documented Kubernetes configuration for the
+		// rootless image, and the deviations from it were tried and reverted
+		// rather than assumed to be safe improvements.
+		//
+		// Unconfined seccomp is required: rootlesskit cannot fork under
+		// RuntimeDefault, which fails with "fork/exec /proc/self/exe:
+		// operation not permitted". That single requirement is what forces
+		// this namespace to "privileged", since baseline forbids Unconfined.
+		//
+		// allowPrivilegeEscalation stays true and capabilities are not
+		// dropped, which looks like an omission and is not. Rootless BuildKit
+		// sets up its user namespace with newuidmap, a setuid helper; denying
+		// privilege escalation sets no_new_privs and the build dies with
+		// "newuidmap: operation not permitted". Dropping ALL takes CAP_SETUID
+		// out of the bounding set and breaks the same call a second way. The
+		// clone and buildpack steps take both, because they need neither.
+		//
+		// AppArmor is unconfined for the same class of reason: on a node that
+		// enforces it, the default profile blocks the mounts BuildKit makes.
+		// It is a no-op where AppArmor is not enforced.
 		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:      &user,
-			RunAsGroup:     &user,
-			SeccompProfile: &corev1.SeccompProfile{Type: unconfined},
+			RunAsUser:       &user,
+			RunAsGroup:      &group,
+			SeccompProfile:  &corev1.SeccompProfile{Type: unconfined},
+			AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: buildVolume, MountPath: "/workspace"},
@@ -167,6 +230,33 @@ echo "Pushed $IMAGE"
 		},
 	}
 }
+
+// hardened is the security context for the steps that need nothing special.
+//
+// Only the BuildKit step needs the seccomp exception; the clone and the
+// buildpack lifecycle are ordinary programs. Giving them the same relaxation
+// would widen it for no reason.
+func hardened(user int64) *corev1.SecurityContext {
+	return hardenedAs(user, cnbGID)
+}
+
+func hardenedAs(uid, gid int64) *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		RunAsUser:                &uid,
+		RunAsGroup:               &gid,
+		RunAsNonRoot:             boolPtr(true),
+		AllowPrivilegeEscalation: boolPtr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
+func boolPtr(b bool) *bool    { return &b }
+func int64Ptr(i int64) *int64 { return &i }
+
+// itoa keeps the lifecycle flags built from the same constants the security
+// context uses, so the two cannot drift apart.
+func itoa(i int64) string { return strconv.FormatInt(i, 10) }
 
 // buildpackStep builds a repository that has no Dockerfile.
 //
@@ -178,7 +268,6 @@ echo "Pushed $IMAGE"
 // container in a pod runs, so "did the previous step handle this" is a
 // question this one has to ask rather than something the pod can express.
 func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
-	user := int64(1000)
 
 	return corev1.Container{
 		Name:  buildpackContainer,
@@ -186,7 +275,12 @@ func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
 		Env: []corev1.EnvVar{
 			{Name: "IMAGE", Value: req.Image},
 			{Name: "SUBDIR", Value: req.Subdir},
+			// The lifecycle reads registry credentials from this, the same
+			// place BuildKit does, so one secret serves both.
 			{Name: "DOCKER_CONFIG", Value: "/registry"},
+			// The platform API the lifecycle is asked to speak. Pinned rather
+			// than left to default, because the builder image and the
+			// lifecycle inside it move independently of this code.
 			{Name: "CNB_PLATFORM_API", Value: "0.13"},
 		},
 		Command: []string{"/bin/sh", "-euc"},
@@ -196,16 +290,21 @@ if [ -f ` + dockerfileMarker + ` ]; then
   exit 0
 fi
 echo "No Dockerfile — detecting what this is with buildpacks."
+# The lifecycle writes layers, a cache and a platform directory, and refuses
+# to guess where. They go on the shared volume rather than the image's own
+# filesystem, which is read-only to a non-root user.
+mkdir -p /workspace/layers /workspace/cache /workspace/platform/env
 /cnb/lifecycle/creator \
-  -app=/workspace/src/$SUBDIR \
+  -app="/workspace/src/$SUBDIR" \
+  -layers=/workspace/layers \
+  -cache-dir=/workspace/cache \
+  -platform=/workspace/platform \
+  -uid=` + itoa(cnbUID) + ` -gid=` + itoa(cnbGID) + ` \
   -log-level=info \
   "$IMAGE"
 echo "Pushed $IMAGE"
 `},
-		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:  &user,
-			RunAsGroup: &user,
-		},
+		SecurityContext: hardenedAs(cnbUID, cnbGID),
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: buildVolume, MountPath: "/workspace"},
 			{Name: "registry", MountPath: "/registry", ReadOnly: true},

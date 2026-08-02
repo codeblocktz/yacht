@@ -212,6 +212,12 @@ func run() error {
 		return err
 	}
 
+	// Settles builds whose process went away — a restart mid-build, or a
+	// replica that stopped. Level-triggered against the Job rather than driven
+	// by anything this process remembers, so it is correct after a restart and
+	// correct when several replicas run it at once.
+	go apps.RunReconciler(ctx)
+
 	return serve(ctx, cfg, srv.Handler(), log)
 }
 

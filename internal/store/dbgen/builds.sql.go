@@ -33,7 +33,7 @@ const createBuild = `-- name: CreateBuild :one
 
 INSERT INTO builds (owner_id, app_id, deployment_id, repo_url, repo_ref)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name
 `
 
 type CreateBuildParams struct {
@@ -70,6 +70,7 @@ func (q *Queries) CreateBuild(ctx context.Context, arg CreateBuildParams) (Build
 		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.JobName,
 	)
 	return i, err
 }
@@ -82,7 +83,7 @@ SET status      = $1,
     commit_sha  = $4,
     finished_at = now()
 WHERE id = $5
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name
 `
 
 type FinishBuildParams struct {
@@ -116,12 +117,13 @@ func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build
 		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.JobName,
 	)
 	return i, err
 }
 
 const getBuild = `-- name: GetBuild :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -147,12 +149,13 @@ func (q *Queries) GetBuild(ctx context.Context, arg GetBuildParams) (Build, erro
 		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.JobName,
 	)
 	return i, err
 }
 
 const getBuildForDeployment = `-- name: GetBuildForDeployment :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
 WHERE owner_id = $1 AND deployment_id = $2
 `
 
@@ -178,6 +181,63 @@ func (q *Queries) GetBuildForDeployment(ctx context.Context, arg GetBuildForDepl
 		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.JobName,
 	)
 	return i, err
+}
+
+const listRunningBuilds = `-- name: ListRunningBuilds :many
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds WHERE status = 'running' ORDER BY started_at
+`
+
+// Every build still claiming to run, oldest first. Not owner-scoped: this
+// feeds the reconciler, which is the platform settling its own records rather
+// than a team reading theirs.
+func (q *Queries) ListRunningBuilds(ctx context.Context) ([]Build, error) {
+	rows, err := q.db.Query(ctx, listRunningBuilds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Build{}
+	for rows.Next() {
+		var i Build
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.AppID,
+			&i.DeploymentID,
+			&i.RepoUrl,
+			&i.RepoRef,
+			&i.CommitSha,
+			&i.Image,
+			&i.Status,
+			&i.Message,
+			&i.Log,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.JobName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setBuildJob = `-- name: SetBuildJob :exec
+UPDATE builds SET job_name = $1 WHERE id = $2
+`
+
+type SetBuildJobParams struct {
+	JobName string
+	ID      uuid.UUID
+}
+
+func (q *Queries) SetBuildJob(ctx context.Context, arg SetBuildJobParams) error {
+	_, err := q.db.Exec(ctx, setBuildJob, arg.JobName, arg.ID)
+	return err
 }

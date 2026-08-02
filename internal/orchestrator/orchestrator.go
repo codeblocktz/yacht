@@ -548,4 +548,31 @@ type BuildResult struct {
 // required interface would make every implementation carry it.
 type Builder interface {
 	Build(ctx context.Context, req BuildRequest) (BuildResult, error)
+
+	// BuildJobName is the name the Job for a request will have, known before
+	// the build starts so it can be recorded. Deriving it here rather than
+	// passing one in keeps the naming in the layer that has to make it a legal
+	// Kubernetes object name.
+	BuildJobName(req BuildRequest) string
+
+	// BuildState reports what the cluster says about a build that was started
+	// earlier, by name.
+	//
+	// This is what makes an interrupted build recoverable: the goroutine that
+	// started it does not survive a restart and never existed on the other
+	// replicas, but the Job is there for all of them to read.
+	BuildState(ctx context.Context, jobName string) (BuildState, error)
+}
+
+// BuildState is what the cluster knows about a build.
+type BuildState struct {
+	// Found is false when there is no such Job. That means it finished and was
+	// cleaned up, or it never started — either way nothing is running, which
+	// is the answer the reconciler needs.
+	Found bool
+
+	// Done and Failed describe a Job that is still there.
+	Done   bool
+	Failed bool
+	Reason string
 }
