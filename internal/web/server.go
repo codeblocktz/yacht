@@ -620,6 +620,11 @@ func (s *Server) Handler() http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireRole(account.RoleOwner))
 
+				// Reached from an app's HTTP logs tab, gated here rather than
+				// there: it restarts the ingress controller for the whole
+				// cluster, which is the same class of decision as adding a node.
+				r.Post("/apps/{name}/logs/http/enable", s.httpLogsEnable)
+
 				r.Get("/cluster/registry", s.registrySettings)
 				r.Post("/cluster/registry", s.registrySet)
 				r.Post("/cluster/registry/clear", s.registryClear)

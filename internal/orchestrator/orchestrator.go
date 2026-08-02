@@ -641,11 +641,24 @@ type HTTPLogLine struct {
 //
 // Optional, like Builder and NodeManager: an orchestrator with no ingress
 // controller in front of it is still a working orchestrator.
+// ErrNotSupported means this cluster cannot be asked to do something.
+//
+// A configuration answer rather than a failure: an ingress controller somebody
+// else installed is not broken, it is simply not Yacht's to reconfigure.
+var ErrNotSupported = errors.New("orchestrator: not supported on this cluster")
+
 type HTTPLogger interface {
 	HTTPLogs(ctx context.Context, opts HTTPLogOptions) (HTTPLogs, error)
 
 	// HTTPLogHint is the configuration that switches the access log on, for
-	// the page to show. Yacht does not own the ingress controller, so this is
-	// something to hand over rather than something to apply.
+	// the page to show when Yacht cannot apply it.
 	HTTPLogHint() string
+
+	// EnableHTTPLogs applies it, where this cluster's controller is one Yacht
+	// can reconfigure. An action somebody takes rather than something done on
+	// their behalf: it restarts a controller every workload routes through.
+	EnableHTTPLogs(ctx context.Context) error
+
+	// HTTPLogsEnabled reports whether the running controller is writing one.
+	HTTPLogsEnabled(ctx context.Context) bool
 }

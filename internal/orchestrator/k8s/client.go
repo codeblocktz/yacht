@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,6 +34,11 @@ type Config struct {
 // Orchestrator applies workloads to a single Kubernetes cluster.
 type Orchestrator struct {
 	client kubernetes.Interface
+
+	// dynamic reaches custom resources — the k3s Helm controller's
+	// HelmChartConfig, so far. Nil in tests using the fake clientset, which is
+	// why every use checks: a fake cluster has no CRDs to configure.
+	dynamic dynamic.Interface
 
 	// metrics is optional. metrics-server is not installed in every K3s
 	// cluster, and utilisation percentages are a nice-to-have rather than a
@@ -61,6 +67,16 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 	}
 
 	o := NewWithClient(client, log)
+
+	// Best effort, like the metrics client: a cluster this cannot build a
+	// dynamic client for is still perfectly usable, it just cannot be asked to
+	// reconfigure things installed by an operator.
+	if dc, err := dynamic.NewForConfig(restCfg); err == nil {
+		o.dynamic = dc
+	} else {
+		log.Warn("dynamic client unavailable; custom resources cannot be configured",
+			slog.String("error", err.Error()))
+	}
 
 	// Best effort: a cluster without metrics-server is still perfectly
 	// usable, so failing to build this client must not fail startup.

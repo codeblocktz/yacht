@@ -203,6 +203,20 @@ type HTTPLogs struct {
 	// fix it when the answer is a setting.
 	Note string
 	Hint string
+
+	// CanEnable means Yacht can apply that configuration itself.
+	CanEnable bool
+}
+
+// canApplyHTTPLogs reports whether enabling would actually do something.
+//
+// Asked by attempting nothing: a dry run against the cluster is the only
+// honest answer, and there is no dry run for this, so the question is narrowed
+// to the one thing that decides it — whether k3s installed the controller.
+func (s *Service) canApplyHTTPLogs(ctx context.Context, l orchestrator.HTTPLogger) bool {
+	type prober interface{ CanConfigureIngress(context.Context) bool }
+	p, ok := l.(prober)
+	return ok && p.CanConfigureIngress(ctx)
 }
 
 // DeploymentHTTPLogs reads the requests made to an app.
@@ -250,6 +264,10 @@ func (s *Service) DeploymentHTTPLogs(
 		out.Note = "The ingress controller is running but is not writing an access " +
 			"log, so no requests are being recorded — for this app or any other."
 		out.Hint = logger.HTTPLogHint()
+		// Whether Yacht can do it, rather than only describe it. False on a
+		// cluster whose controller somebody else installed, where the page
+		// falls back to handing over the configuration.
+		out.CanEnable = s.canApplyHTTPLogs(ctx, logger)
 	case orchestrator.HTTPLogNoController:
 		out.Note = "No ingress controller was found, so nothing in this cluster is " +
 			"recording requests."
@@ -261,4 +279,24 @@ func (s *Service) DeploymentHTTPLogs(
 		}
 	}
 	return out, nil
+}
+
+// CanEnableHTTPLogs reports whether this install can switch the access log on
+// itself, rather than only telling somebody how to.
+func (s *Service) CanEnableHTTPLogs(ctx context.Context) bool {
+	logger, ok := s.orch.(orchestrator.HTTPLogger)
+	return ok && !logger.HTTPLogsEnabled(ctx)
+}
+
+// EnableHTTPLogs turns on the ingress controller's access log.
+//
+// Cluster-wide, and deliberately not per app: there is one controller and one
+// log. The caller is responsible for having said so — this restarts a
+// controller every workload routes through.
+func (s *Service) EnableHTTPLogs(ctx context.Context) error {
+	logger, ok := s.orch.(orchestrator.HTTPLogger)
+	if !ok {
+		return orchestrator.ErrNotSupported
+	}
+	return logger.EnableHTTPLogs(ctx)
 }

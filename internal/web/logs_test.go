@@ -24,6 +24,7 @@ type recordingLogs struct {
 	readLogs bool
 	build    *app.Build
 	http     *app.HTTPLogs
+	enabled  bool
 }
 
 func (l *recordingLogs) Logs(
@@ -63,6 +64,12 @@ func (l *recordingLogs) DeploymentHTTPLogs(
 		return app.HTTPLogs{}, nil
 	}
 	return *l.http, nil
+}
+
+// EnableHTTPLogs records that the cluster-wide switch was thrown.
+func (l *recordingLogs) EnableHTTPLogs(context.Context) error {
+	l.enabled = true
+	return nil
 }
 
 func (l *recordingLogs) Deployment(
@@ -276,5 +283,48 @@ func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(body, "HelmChartConfig") {
 		t.Error("the configuration that would fix it is not offered")
+	}
+}
+
+// The panel offers to turn logging on where Yacht can do it.
+func TestTheHTTPTabOffersToTurnLoggingOn(t *testing.T) {
+	logs := &recordingLogs{http: &app.HTTPLogs{
+		Hosts:     []string{"web.apps.example.com"},
+		Note:      "not writing an access log",
+		Hint:      "kind: HelmChartConfig",
+		CanEnable: true,
+	}}
+	h := testServer(t, Options{Logs: logs})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
+		Body.String()
+	if !strings.Contains(body, "Turn on request logging") {
+		t.Fatal("no way to turn it on")
+	}
+	// The restart is the cost, and it is cluster-wide. Somebody clicking this
+	// from one app's page must not learn that afterwards.
+	if !strings.Contains(body, "restarts the ingress controller") {
+		t.Error("the restart is not mentioned")
+	}
+	if !strings.Contains(body, "whole cluster") {
+		t.Error("the blast radius is not mentioned")
+	}
+}
+
+// Where it cannot, it hands over the configuration instead.
+func TestWhereYachtCannotConfigureItSaysSo(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{http: &app.HTTPLogs{
+		Hosts: []string{"web.apps.example.com"},
+		Note:  "not writing an access log",
+		Hint:  "kind: HelmChartConfig",
+	}}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
+		Body.String()
+	if strings.Contains(body, "Turn on request logging") {
+		t.Error("it offers to do something it cannot do")
+	}
+	if !strings.Contains(body, "HelmChartConfig") {
+		t.Error("the configuration is not handed over")
 	}
 }

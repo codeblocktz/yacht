@@ -310,11 +310,25 @@ templ httpLogView(d DeployLogsData) {
 					<p>{ d.HTTP.Note }</p>
 				}
 			</div>
-			if d.HTTP.Hint != "" {
+			if d.HTTP.CanEnable {
+				<form
+					method="post"
+					action={ templ.URL("/apps/" + d.App + "/logs/http/enable") }
+					class="mt-4"
+					onsubmit="return confirm('Turn on request logging? The ingress controller restarts, so every app in this cluster drops connections for a few seconds.')"
+				>
+					<button class="btn btn-primary" type="submit">Turn on request logging</button>
+					<p class="mt-2 text-[12.5px] text-muted-foreground">
+						This restarts the ingress controller, so every app in the cluster drops
+						connections for a few seconds. It applies to the whole cluster, not just
+						this app — there is one controller and one log.
+					</p>
+				</form>
+			} else if d.HTTP.Hint != "" {
 				<p class="mt-4 text-[12.5px] text-muted-foreground">
-					Yacht does not own the ingress controller — it is part of the cluster,
-					and every other workload routes through it — so switching its access
-					log on is yours to do:
+					This cluster's ingress controller was installed by something other than
+					k3s, so Yacht cannot reconfigure it. Apply this wherever it was
+					installed from:
 				</p>
 				<div class="logs mt-2 rounded-md border border-border">
 					for _, line := range buildLines(d.HTTP.Hint) {

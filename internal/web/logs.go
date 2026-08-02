@@ -33,6 +33,10 @@ type Logger interface {
 	// DeploymentHTTPLogs is what the ingress controller recorded for this
 	// app's hostnames.
 	DeploymentHTTPLogs(ctx context.Context, ownerID, appName string) (app.HTTPLogs, error)
+
+	// EnableHTTPLogs turns the ingress controller's access log on. Cluster
+	// wide, because there is one controller and one log.
+	EnableHTTPLogs(ctx context.Context) error
 }
 
 // The log views one deployment's sheet offers.
@@ -234,4 +238,21 @@ func deployLogsHref(d DeployLogsData, previous bool) string {
 func deployViewHref(d DeployLogsData, view string) string {
 	return "/apps/" + d.App + "/deployments/" +
 		d.Deploy.Deployment.ID.String() + "/logs?view=" + view
+}
+
+// httpLogsEnable turns the ingress controller's access log on.
+//
+// A POST, and gated on the owner role, because it restarts the ingress
+// controller — every app in the cluster drops connections for a moment. That
+// is not a per-app decision even though it is reached from an app's page.
+func (s *Server) httpLogsEnable(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	name := chi.URLParam(r, "name")
+
+	if err := s.logs.EnableHTTPLogs(ctx); err != nil {
+		s.log.Error("enable http logs", slog.String("error", err.Error()))
+	}
+	// Back to the tab that asked, which will now say the controller is
+	// restarting rather than that logging is off.
+	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
