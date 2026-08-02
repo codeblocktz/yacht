@@ -389,3 +389,24 @@ func nodeAt(n CanvasNode) string {
 	return "left:" + strconv.Itoa(n.X) + "px;top:" + strconv.Itoa(n.Y) + "px;width:" +
 		strconv.Itoa(cardW) + "px"
 }
+
+// buildLines splits a stored build log for rendering.
+//
+// The log is appended to as it arrives, so the last chunk usually ends without
+// a newline and a naive split leaves a trailing empty row that grows and
+// shrinks as the build writes.
+func buildLines(log string) []string {
+	log = strings.TrimRight(log, "\n")
+	if log == "" {
+		return nil
+	}
+	return strings.Split(log, "\n")
+}
+
+// shortSHA is the prefix people actually quote.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}

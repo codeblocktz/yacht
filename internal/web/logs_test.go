@@ -19,7 +19,10 @@ var testDeployID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 //
 // The distinction the empty views turn on is not what renders — it is whether
 // the cluster was read at all.
-type recordingLogs struct{ readLogs bool }
+type recordingLogs struct {
+	readLogs bool
+	build    *app.Build
+}
 
 func (l *recordingLogs) Logs(
 	context.Context, string, string, app.LogRequest,
@@ -36,6 +39,17 @@ func (l *recordingLogs) DeploymentLogs(
 		Deployment: app.Deployment{ID: testDeployID, Status: app.DeployActive},
 		Live:       true,
 	}, nil
+}
+
+// BuildForDeployment answers with the build this fake was given, so a test can
+// drive the Build logs tab without a builder.
+func (l *recordingLogs) BuildForDeployment(
+	context.Context, string, uuid.UUID,
+) (app.Build, error) {
+	if l.build == nil {
+		return app.Build{}, app.ErrNotFound
+	}
+	return *l.build, nil
 }
 
 func (l *recordingLogs) Deployment(
@@ -152,5 +166,62 @@ func TestTheLineCountIsNotWrittenTwice(t *testing.T) {
 	}
 	if !strings.Contains(html, "3 lines") {
 		t.Error("the line count is missing")
+	}
+}
+
+// A build's log survives the deployment that produced it.
+//
+// This is the tab's whole reason for existing: container output dies with the
+// container, but a build is bounded and stored, so a deployment replaced weeks
+// ago can still answer what compiled it.
+func TestTheBuildLogIsShownForAReplacedDeployment(t *testing.T) {
+	logs := &recordingLogs{build: &app.Build{
+		Status: app.BuildSucceeded, RepoURL: "https://github.com/you/app.git",
+		RepoRef: "main", CommitSHA: "4bec5f8b07ffc4d16eb6354f7dc5ee6d56122cc4",
+		Log: "Cloning\nStep 1/3\nPushed\n",
+	}}
+	h := testServer(t, Options{Logs: logs})
+
+	w := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=build")
+	body := w.Body.String()
+
+	if !strings.Contains(body, "Step 1/3") {
+		t.Error("the stored build log is not shown")
+	}
+	if !strings.Contains(body, "4bec5f8") {
+		t.Error("the commit that was built is not shown")
+	}
+	// And it did not read the cluster to produce any of that.
+	if logs.readLogs {
+		t.Error("the build view read container output")
+	}
+}
+
+// An app nobody built says so rather than showing an empty pane.
+func TestAnAppWithNoBuildSaysSo(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=build").
+		Body.String()
+	if !strings.Contains(body, "Nothing was built") {
+		t.Error("an image-sourced deployment does not explain the empty build tab")
+	}
+}
+
+// A failed build shows why on the tab, not only in the log.
+func TestAFailedBuildShowsItsReason(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{build: &app.Build{
+		Status:  app.BuildFailed,
+		Message: "the dockerfile step exited 1",
+		Log:     "ERROR: failed to solve\n",
+	}}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=build").
+		Body.String()
+	if !strings.Contains(body, "the dockerfile step exited 1") {
+		t.Error("the failure reason is not shown")
+	}
+	if !strings.Contains(body, "failed") {
+		t.Error("the build is not marked failed")
 	}
 }

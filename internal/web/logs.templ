@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/web/ui/sheet"
+import (
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
+)
 
 // AppLogs is the log pane for one app.
 templ AppLogs(d LogsData) {
@@ -116,7 +119,7 @@ templ DeployLogPanel(d DeployLogsData) {
 	} else {
 		switch d.View {
 			case viewBuild:
-				@buildLogView()
+				@buildLogView(d)
 			case viewHTTP:
 				@httpLogView()
 			default:
@@ -207,23 +210,76 @@ templ deployLogView(d DeployLogsData) {
 	}
 }
 
-// buildLogView explains an empty pane rather than leaving one.
+// buildLogView shows what the build wrote, or says why there is nothing.
 //
-// Yacht does not build images: an app is deployed from one that already
-// exists, so there is no build to have a log. This tab is here because the
-// question it answers — did this fail before it ever ran — is a real one, and
-// the answer today is that nothing here built anything.
-templ buildLogView() {
-	<div class="canvas-sheet-body">
-		<div class="empty">
-			<p class="font-medium text-foreground">Nothing was built</p>
-			<p>
-				This app runs an image that already existed, so this deploy pulled it
-				and started it. Building from source is what would write a log here,
-				and Yacht does not do that yet.
-			</p>
+// This is the one log Yacht keeps. A build is bounded and there is exactly one
+// per deploy, so it is stored — which is why this tab still answers for a
+// deployment replaced weeks ago, and the deploy log cannot.
+templ buildLogView(d DeployLogsData) {
+	if !d.HasBuild {
+		<div class="canvas-sheet-body">
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing was built</p>
+				<p>
+					This app runs an image that already existed, so this deploy pulled it
+					and started it. Only an app deployed from a repository has a build.
+				</p>
+			</div>
 		</div>
-	</div>
+	} else {
+		<div class="canvas-sheet-actions">
+			@buildStatus(d.Build)
+			if d.Build.CommitSHA != "" {
+				<span class="mono text-[12px] text-muted-foreground">
+					{ shortSHA(d.Build.CommitSHA) }
+				</span>
+			}
+			<span class="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+				{ d.Build.RepoURL } &middot; { d.Build.RepoRef }
+			</span>
+		</div>
+		if d.Build.Message != "" {
+			<div class="canvas-sheet-body !pb-0">
+				<div class="callout callout-err">
+					<div class="min-w-0">{ d.Build.Message }</div>
+				</div>
+			</div>
+		}
+		if d.Build.Log == "" {
+			<div class="canvas-sheet-body">
+				<div class="empty">
+					if d.Build.Running() {
+						<p class="font-medium text-foreground">Starting the build…</p>
+						<p>Output appears here as it arrives.</p>
+					} else {
+						<p class="font-medium text-foreground">The build wrote nothing</p>
+						<p>It ended before any step produced output.</p>
+					}
+				</div>
+			</div>
+		} else {
+			<div class="canvas-sheet-log">
+				<div class="logs">
+					for _, line := range buildLines(d.Build.Log) {
+						<div class="log-line">
+							<span class="log-text">{ line }</span>
+						</div>
+					}
+				</div>
+			</div>
+		}
+	}
+}
+
+templ buildStatus(b app.Build) {
+	switch b.Status {
+		case app.BuildSucceeded:
+			<span class="status status-ok">built</span>
+		case app.BuildFailed:
+			<span class="status status-err">failed</span>
+		default:
+			<span class="status status-warn">building</span>
+	}
 }
 
 // httpLogView explains an empty pane rather than leaving one.

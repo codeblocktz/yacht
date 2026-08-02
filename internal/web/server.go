@@ -740,7 +740,7 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
-	data := NewAppData{Sources: app.Blueprints()}
+	data := NewAppData{Sources: s.sources(r.Context())}
 
 	src := app.Source(r.URL.Query().Get("source"))
 	if src == "" {
@@ -750,8 +750,11 @@ func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	blueprint, err := app.BlueprintFor(src)
+	blueprint, err := app.BlueprintForWith(src, s.capabilities(r.Context()))
 	if err != nil {
+		// Back to the picker, where the source is listed with the reason it
+		// cannot be used. Rendering the form anyway would offer a create that
+		// is refused at the end for a reason the form never mentioned.
 		s.render(w, r, NewApp(data))
 		return
 	}
@@ -784,11 +787,14 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	form := NewAppForm{
-		Name:     strings.TrimSpace(r.FormValue("name")),
-		Image:    strings.TrimSpace(r.FormValue("image")),
-		Port:     r.FormValue("port"),
-		Replicas: r.FormValue("replicas"),
-		Env:      r.FormValue("env"),
+		Name:       strings.TrimSpace(r.FormValue("name")),
+		Image:      strings.TrimSpace(r.FormValue("image")),
+		Port:       r.FormValue("port"),
+		Replicas:   r.FormValue("replicas"),
+		Env:        r.FormValue("env"),
+		RepoURL:    strings.TrimSpace(r.FormValue("repo_url")),
+		RepoBranch: strings.TrimSpace(r.FormValue("repo_branch")),
+		RepoSubdir: strings.TrimSpace(r.FormValue("repo_subdir")),
 	}
 
 	port, err := parseIntField(form.Port, 0)
@@ -814,6 +820,9 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Port:     int32(port),
 		Replicas: int32(replicas),
 		Env:      env,
+		Repo: app.Repo{
+			URL: form.RepoURL, Branch: form.RepoBranch, Subdir: form.RepoSubdir,
+		},
 	})
 	if err != nil {
 		s.log.Warn("create app failed",
@@ -830,8 +839,8 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderErrFor(
 	w http.ResponseWriter, r *http.Request, src app.Source, form NewAppForm, msg string,
 ) {
-	data := NewAppData{Error: msg, Form: form, Sources: app.Blueprints()}
-	if b, err := app.BlueprintFor(src); err == nil {
+	data := NewAppData{Error: msg, Form: form, Sources: s.sources(r.Context())}
+	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b
 	}
 	w.WriteHeader(http.StatusUnprocessableEntity)
@@ -1099,4 +1108,28 @@ func parseEnv(raw string) (map[string]string, error) {
 		out[key] = strings.TrimSpace(value)
 	}
 	return out, nil
+}
+
+// sources lists what an app can be created from on this install.
+//
+// Asked of the service rather than of the package, because whether a source
+// works depends on how this install is configured — and a picker built from
+// the static list offers building on an install with nowhere to push.
+func (s *Server) sources(ctx context.Context) []app.Blueprint {
+	if c, ok := s.apps.(interface {
+		Sources(context.Context) []app.Blueprint
+	}); ok {
+		return c.Sources(ctx)
+	}
+	return app.Blueprints()
+}
+
+// capabilities is what this install can do, for the same reason.
+func (s *Server) capabilities(ctx context.Context) app.Capabilities {
+	if c, ok := s.apps.(interface {
+		Capabilities(context.Context) app.Capabilities
+	}); ok {
+		return c.Capabilities(ctx)
+	}
+	return app.Capabilities{}
 }

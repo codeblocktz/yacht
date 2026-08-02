@@ -460,15 +460,32 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		return App{}, err
 	}
 
-	if _, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
+	// A built app has nothing running yet — the first deploy is the build, and
+	// it starts once this transaction has committed. Recorded as running
+	// rather than active so the deployments list says "building" instead of
+	// claiming a placeholder image is live.
+	status := DeployActive
+	if created.Source == SourceGit {
+		status = DeployRunning
+	}
+	deploy, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: created.ID, Image: created.Image,
-		Revision: "initial", Status: DeployActive,
-	}); err != nil {
+		Revision: "initial", Status: status,
+	})
+	if err != nil {
 		return App{}, fmt.Errorf("app: record deployment: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit: %w", err)
+	}
+
+	// After the commit, never inside it. A build takes minutes and a
+	// transaction held open for them would block every other write to these
+	// tables — including the build's own log, which is written from the
+	// goroutine that would be waiting on it.
+	if created.Source == SourceGit {
+		s.deployInBackground(ctx, ownerID, created, deploy.ID)
 	}
 
 	s.log.Info("app created",
@@ -499,6 +516,15 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 	hosts, err := s.reconcileHosts(ctx, q, a)
 	if err != nil {
 		return err
+	}
+
+	// An app whose image has not been built yet gets its namespace and its
+	// hostname and nothing else. Applying the placeholder would create a
+	// Deployment that cannot pull, and Kubernetes would report that as
+	// ImagePullBackOff — an error about the image name, for an app whose image
+	// simply does not exist yet.
+	if a.Image == PendingImage {
+		return nil
 	}
 
 	// Read here rather than trusted from the caller's copy of the app: an
@@ -882,12 +908,57 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 		return err
 	}
 	id := s.beginDeployment(ctx, ownerID, a, "redeploy")
-	a, err = s.buildIfNeeded(ctx, ownerID, a, id)
-	if err == nil {
-		err = s.apply(ctx, s.q, a)
+
+	// A build takes minutes, so it does not happen on the request. The
+	// deployment is already recorded as running; the goroutine finishes it,
+	// and the page that started it polls the same row.
+	if a.Source == SourceGit {
+		s.deployInBackground(ctx, ownerID, a, id)
+		return nil
 	}
+
+	err = s.apply(ctx, s.q, a)
 	s.endDeployment(ctx, ownerID, id, err)
 	return err
+}
+
+// deployInBackground builds and applies without holding the request.
+//
+// The context is detached from the caller's. A build outlives the HTTP request
+// that asked for it by minutes, and one cancelled when the browser navigated
+// away would leave a deployment stuck on "running" with a half-built image
+// behind it.
+//
+// Nothing waits on the returned goroutine. That is a deliberate limit: a
+// process stopped mid-build leaves its deployment marked running, which the
+// deployments list shows as running because that is what it was when this
+// process last knew. Recovering those needs a reconciler, and inventing one
+// here would be worse than the gap — a build has no resumable state, so the
+// only honest recovery is to notice and say so.
+func (s *Service) deployInBackground(
+	ctx context.Context, ownerID string, a App, deployID uuid.UUID,
+) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeout)
+
+	go func() {
+		defer cancel()
+
+		built, err := s.buildIfNeeded(ctx, ownerID, a, deployID)
+		if err == nil {
+			err = s.apply(ctx, s.q, built)
+		}
+		s.endDeployment(ctx, ownerID, deployID, err)
+
+		if err != nil {
+			s.log.Warn("deploy failed",
+				slog.String("owner", ownerID), slog.String("app", a.Name),
+				slog.String("error", err.Error()))
+			return
+		}
+		s.log.Info("deployed",
+			slog.String("owner", ownerID), slog.String("app", a.Name),
+			slog.String("image", built.Image))
+	}()
 }
 
 // buildIfNeeded turns a repository into an image before the app is applied.

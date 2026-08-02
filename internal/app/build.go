@@ -236,3 +236,10 @@ func (s *Service) pullAuth(ctx context.Context, a App) []byte {
 	}
 	return auth
 }
+
+// deployTimeout caps a background deploy.
+//
+// Longer than the builder's own cap, because it covers the build and the apply
+// that follows it — a deploy that timed out while applying an image that built
+// fine would be the most confusing possible failure.
+const deployTimeout = 40 * time.Minute

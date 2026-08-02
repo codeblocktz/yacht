@@ -689,6 +689,11 @@ type NewAppForm struct {
 	Port     string
 	Replicas string
 	Env      string
+
+	// The repository, for a source that is built rather than pulled.
+	RepoURL    string
+	RepoBranch string
+	RepoSubdir string
 }
 
 templ NewApp(d NewAppData) {
@@ -736,9 +741,59 @@ templ sourcePicker(d NewAppData) {
 	</div>
 }
 
+// repoFields asks where the source is.
+//
+// No image field: the image is what the build produces, so offering a box for
+// one would be offering to overwrite the answer.
+templ repoFields(d NewAppData) {
+	<div class="field">
+		<label class="label" for="repo_url">Repository</label>
+		<input
+			class="control mono"
+			id="repo_url"
+			name="repo_url"
+			value={ d.Form.RepoURL }
+			placeholder="https://github.com/you/app.git"
+			required
+		/>
+		<span class="hint">
+			An https or ssh URL. It is cloned, built, and run here, so plain http is
+			refused — anyone on the path could replace what arrives.
+		</span>
+	</div>
+	<div class="grid gap-4 sm:grid-cols-2">
+		<div class="field">
+			<label class="label" for="repo_branch">Branch</label>
+			<input
+				class="control mono"
+				id="repo_branch"
+				name="repo_branch"
+				value={ d.Form.RepoBranch }
+				placeholder={ app.DefaultBranch }
+			/>
+			<span class="hint">Empty builds { app.DefaultBranch }.</span>
+		</div>
+		<div class="field">
+			<label class="label" for="repo_subdir">Directory</label>
+			<input
+				class="control mono"
+				id="repo_subdir"
+				name="repo_subdir"
+				value={ d.Form.RepoSubdir }
+				placeholder="services/api"
+			/>
+			<span class="hint">For a monorepo. Empty builds the root.</span>
+		</div>
+	</div>
+	<p class="text-[12.5px] text-muted-foreground">
+		A Dockerfile in that directory is what gets built. Without one, buildpacks
+		try to work out what the code is — which is slower and can guess wrong.
+	</p>
+}
+
 templ newAppForm(d NewAppData) {
 	@pageHead("Deploy "+d.Blueprint.Label, d.Blueprint.Description, backToSources())
-	if d.Blueprint.Source != app.SourceImage {
+	if d.Blueprint.Source != app.SourceImage && d.Blueprint.Volume != nil {
 		<div class="callout mb-5">
 			<div class="min-w-0">
 				<div class="font-medium">{ d.Blueprint.Label } configures itself</div>
@@ -772,13 +827,17 @@ templ newAppForm(d NewAppData) {
 					<input class="control" id="name" name="name" value={ d.Form.Name } placeholder="web" required/>
 					<span class="hint">Lowercase letters, numbers and dashes. Becomes the DNS name.</span>
 				</div>
-				<div class="field">
-					<label class="label" for="image">Image</label>
-					<input class="control mono" id="image" name="image" value={ d.Form.Image } placeholder="nginx:alpine" required/>
-					<span class="hint">
-						Must run as a non-root user — a restricted security context is enforced.
-					</span>
-				</div>
+				if d.Blueprint.Source == app.SourceGit {
+					@repoFields(d)
+				} else {
+					<div class="field">
+						<label class="label" for="image">Image</label>
+						<input class="control mono" id="image" name="image" value={ d.Form.Image } placeholder="nginx:alpine" required/>
+						<span class="hint">
+							Must run as a non-root user — a restricted security context is enforced.
+						</span>
+					</div>
+				}
 			</div>
 		</div>
 		<div class="panel mt-4">

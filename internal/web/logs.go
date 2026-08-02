@@ -23,6 +23,12 @@ type Logger interface {
 	Deployment(
 		ctx context.Context, ownerID, appName string, deployID uuid.UUID,
 	) (app.Deployment, error)
+
+	// BuildForDeployment is the build behind one deployment, when there was
+	// one. ErrNotFound means the app was deployed from an image nobody built.
+	BuildForDeployment(
+		ctx context.Context, ownerID string, deployID uuid.UUID,
+	) (app.Build, error)
 }
 
 // The log views one deployment's sheet offers.
@@ -41,8 +47,11 @@ type DeployLogsData struct {
 	App    string
 	Deploy app.DeployLogs
 
-	// View is which of the three logs is showing. Only viewDeploy has anything
-	// to read on this install; the others say what would fill them.
+	// Build is what produced this deployment's image, when anything did.
+	Build    app.Build
+	HasBuild bool
+
+	// View is which of the three logs is showing.
 	View     string
 	Previous bool
 	Error    string
@@ -70,8 +79,9 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 		Previous: r.URL.Query().Get("previous") == "1",
 	}
 
-	// The build and HTTP views read nothing from the cluster: there is nothing
-	// for them to read. Only the deployment itself is fetched, for the heading.
+	// The build and HTTP views read no container output: there is none for
+	// them. Only the deployment itself is fetched, for the heading — and the
+	// build, which is stored rather than read from the cluster.
 	if d.View != viewDeploy {
 		dep, err := s.logs.Deployment(ctx, owner.ID, name, id)
 		switch {
@@ -83,6 +93,9 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 			d.Error = "Could not read the deployment."
 		default:
 			d.Deploy.Deployment = dep
+		}
+		if d.View == viewBuild {
+			d.Build, d.HasBuild = s.buildFor(ctx, owner.ID, id)
 		}
 		s.renderPanel(ctx, w, d)
 		return
@@ -102,6 +115,24 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 		d.Deploy = dl
 	}
 	s.renderPanel(ctx, w, d)
+}
+
+// buildFor reads the build behind a deployment.
+//
+// A missing one is not a failure: an app deployed from an image nobody built
+// has no build, which is the ordinary case and has its own answer on the page.
+func (s *Server) buildFor(
+	ctx context.Context, ownerID string, deployID uuid.UUID,
+) (app.Build, bool) {
+	b, err := s.logs.BuildForDeployment(ctx, ownerID, deployID)
+	switch {
+	case errors.Is(err, app.ErrNotFound):
+		return app.Build{}, false
+	case err != nil:
+		s.log.Error("read build", slog.String("error", err.Error()))
+		return app.Build{}, false
+	}
+	return b, true
 }
 
 // logView keeps an unknown view from rendering a sheet with no body.
