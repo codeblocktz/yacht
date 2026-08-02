@@ -3,11 +3,15 @@ package web
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"iter"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,6 +24,13 @@ import (
 // Logger is the dashboard's view of container output.
 type Logger interface {
 	Logs(ctx context.Context, ownerID, appName string, req app.LogRequest) (app.Logs, error)
+
+	// LogStream follows an app's container output until ctx is done. The
+	// iterator holds a connection open while it is read, so the handler must
+	// stop reading when the client goes away.
+	LogStream(
+		ctx context.Context, ownerID, appName string, req app.LogRequest,
+	) (iter.Seq2[orchestrator.LogLine, error], error)
 	DeploymentLogs(
 		ctx context.Context, ownerID, appName string, deployID uuid.UUID, req app.LogRequest,
 	) (app.DeployLogs, error)
@@ -206,6 +217,14 @@ func logsFragmentHref(d LogsData) string {
 	return q
 }
 
+// logsStreamHref is the event stream for the pod the controls chose.
+//
+// Previous runs have none: that container has already died, so a stream would
+// hold a connection open on output that can never grow.
+func logsStreamHref(d LogsData) string {
+	return "/apps/" + d.App + "/logs/stream?pod=" + url.QueryEscape(d.Logs.Pod)
+}
+
 // LogsData is the log pane.
 type LogsData struct {
 	App      string
@@ -218,6 +237,82 @@ type LogsData struct {
 func (s *Server) appLogs(w http.ResponseWriter, r *http.Request) {
 	d := s.logsData(r)
 	s.renderWithCrumb(w, r, AppLogs(d), d.App+" logs")
+}
+
+// maxStreamAge bounds how long one log stream stays open.
+//
+// A followed stream has no natural end, so without this a tab left open on a
+// forgotten log holds a goroutine and a connection to the apiserver for as long
+// as the browser lives. EventSource reconnects on its own, so the reader sees
+// nothing; what it stops is an install accumulating streams it will never close.
+const maxStreamAge = 30 * time.Minute
+
+// appLogsStream follows the log over server-sent events.
+//
+// SSE rather than a socket: the data goes one way and is already text, so a
+// socket would add framing and a keepalive loop to carry the same bytes — and
+// EventSource reconnects by itself, which is most of the error handling.
+func (s *Server) appLogsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Nothing can be streamed through a writer that cannot flush; every
+		// line would arrive at once when the handler returned.
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), maxStreamAge)
+	defer cancel()
+
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	lines, err := s.logs.LogStream(ctx, owner.ID, name, app.LogRequest{
+		Pod: r.URL.Query().Get("pod"),
+	})
+	if err != nil {
+		if errors.Is(err, app.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.log.Error("stream logs", slog.String("error", err.Error()))
+		http.Error(w, "could not read the logs", http.StatusInternalServerError)
+		return
+	}
+
+	// Written before the first line so the browser opens the stream rather than
+	// waiting on a body it thinks is a document.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// nginx buffers proxied responses by default, which holds every line until
+	// the response ends — and this one does not end.
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for line, err := range lines {
+		if err != nil {
+			s.log.Error("stream logs", slog.String("error", err.Error()))
+			return
+		}
+		writeLogEvent(w, line)
+		flusher.Flush()
+	}
+}
+
+// writeLogEvent writes one line as a server-sent event.
+//
+// The text is split across data fields rather than sent whole: a newline inside
+// a line would end the event early and the remainder would arrive as a field
+// name the client does not know, which drops it silently. A stack trace is
+// exactly such a line.
+func writeLogEvent(w io.Writer, line orchestrator.LogLine) {
+	fmt.Fprintf(w, "id: %d\n", line.At.UnixNano())
+	for _, part := range strings.Split(line.Text, "\n") {
+		fmt.Fprintf(w, "data: %s\n", part)
+	}
+	fmt.Fprint(w, "\n")
 }
 
 // appLogsFragment is the polled body, so following a log does not re-render

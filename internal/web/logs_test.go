@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"iter"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ var testDeployID = uuid.MustParse("11111111-2222-3333-4444-555555555555")
 // the cluster was read at all.
 type recordingLogs struct {
 	readLogs bool
+	stream   []string
 	build    *app.Build
 	http     *app.HTTPLogs
 	enabled  bool
@@ -326,5 +328,79 @@ func TestWhereYachtCannotConfigureItSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(body, "HelmChartConfig") {
 		t.Error("the configuration is not handed over")
+	}
+}
+
+func (l *recordingLogs) LogStream(
+	context.Context, string, string, app.LogRequest,
+) (iter.Seq2[orchestrator.LogLine, error], error) {
+	l.readLogs = true
+	return func(yield func(orchestrator.LogLine, error) bool) {
+		for _, text := range l.stream {
+			if !yield(orchestrator.LogLine{At: time.Unix(0, 0), Text: text}, nil) {
+				return
+			}
+		}
+	}, nil
+}
+
+// The stream is an event stream, not a page. A proxy or a browser that reads it
+// as anything else buffers it, and a buffered live log is a slow batch one.
+func TestLogStreamAnnouncesItselfAsAnEventStream(t *testing.T) {
+	logs := &recordingLogs{stream: []string{"first", "second"}}
+	h := testServer(t, Options{Logs: logs})
+
+	rec := get(t, h, "/apps/web/logs/stream")
+
+	if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", got)
+	}
+	// nginx buffers proxied responses by default, which would hold every line
+	// until the stream ended — and a followed stream does not end.
+	if got := rec.Header().Get("X-Accel-Buffering"); got != "no" {
+		t.Errorf("X-Accel-Buffering = %q, want no", got)
+	}
+}
+
+func TestLogStreamSendsEachLineAsAnEvent(t *testing.T) {
+	logs := &recordingLogs{stream: []string{"first", "second"}}
+	h := testServer(t, Options{Logs: logs})
+
+	body := get(t, h, "/apps/web/logs/stream").Body.String()
+
+	for _, want := range []string{"first", "second"} {
+		if !strings.Contains(body, "data: ") || !strings.Contains(body, want) {
+			t.Errorf("stream body %q missing an event for %q", body, want)
+		}
+	}
+	if strings.Count(body, "data: ") != 2 {
+		t.Errorf("got %d events, want 2 — one per line", strings.Count(body, "data: "))
+	}
+}
+
+// A line with a newline in it would otherwise end the event early and the rest
+// would arrive as a field the client does not understand, silently losing it.
+func TestLogStreamEscapesNewlinesWithinALine(t *testing.T) {
+	logs := &recordingLogs{stream: []string{"panic:\nstack trace"}}
+	h := testServer(t, Options{Logs: logs})
+
+	body := get(t, h, "/apps/web/logs/stream").Body.String()
+
+	// One event, not two: a blank line is what ends an event, and the log line
+	// contains none.
+	if n := strings.Count(body, "id: "); n != 1 {
+		t.Errorf("one log line became %d events: %q", n, body)
+	}
+	// The real failure this guards is a fragment arriving as a bare line. SSE
+	// reads such a line as a field name it does not know and drops it, so the
+	// second half of a stack trace would vanish with nothing reporting it.
+	for _, l := range strings.Split(strings.TrimSuffix(body, "\n\n"), "\n") {
+		if l == "" || strings.HasPrefix(l, "data: ") || strings.HasPrefix(l, "id: ") {
+			continue
+		}
+		t.Errorf("line %q is not a field, so a client would drop it", l)
+	}
+	if !strings.Contains(body, "panic:") || !strings.Contains(body, "stack trace") {
+		t.Errorf("event lost part of the line: %q", body)
 	}
 }

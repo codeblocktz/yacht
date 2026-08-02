@@ -41,6 +41,10 @@ templ Layout(s Slots, page templ.Component) {
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>
 			}
+			// Loaded everywhere rather than behind a flag: it does nothing on a
+			// page with no [data-log-stream], and gating it would mean every
+			// future page that shows a log remembering to ask for it.
+			<script src={ asset("/assets/js/logs.js") } defer></script>
 		</head>
 		<body class="h-full">
 			<div class="flex h-full">

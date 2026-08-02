@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"iter"
 	"strings"
 	"time"
 
@@ -85,6 +87,96 @@ func (o *Orchestrator) Logs(
 		return out, fmt.Errorf("k8s: reading logs %s/%s: %w", opts.Namespace, opts.Pod, err)
 	}
 	return out, nil
+}
+
+// LogStream follows a container's output until ctx is done.
+//
+// A separate method rather than a Follow flag on Logs: the batch call returns
+// []LogLine, and a flag that makes it never return would leave that signature
+// telling the truth for one value of one field and lying for the other.
+//
+// The stream stays open until the caller stops reading or ctx is cancelled, so
+// every caller must do one of the two — an abandoned iterator holds a
+// connection to the apiserver open.
+func (o *Orchestrator) LogStream(
+	ctx context.Context, opts orchestrator.LogOptions,
+) (iter.Seq2[orchestrator.LogLine, error], error) {
+	if opts.Namespace == "" || opts.Pod == "" {
+		return nil, fmt.Errorf("k8s: logs need a namespace and a pod")
+	}
+
+	tail := opts.Tail
+	if tail <= 0 || tail > maxTail {
+		tail = maxTail
+	}
+
+	// Previous is not offered: a container that has already died writes nothing
+	// more, so following it would hold a connection open on a stream that can
+	// never produce another line. That view keeps the batch read.
+	req := o.client.CoreV1().Pods(opts.Namespace).GetLogs(opts.Pod, &corev1.PodLogOptions{
+		Timestamps: true,
+		TailLines:  &tail,
+		Follow:     true,
+	})
+
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		switch {
+		case apierrors.IsNotFound(err):
+			return nil, fmt.Errorf("k8s: no pod %s/%s: %w",
+				opts.Namespace, opts.Pod, orchestrator.ErrNotFound)
+		case apierrors.IsBadRequest(err):
+			return nil, fmt.Errorf("%w: %s", orchestrator.ErrNotStarted, err)
+		}
+		return nil, fmt.Errorf("k8s: stream logs %s/%s: %w", opts.Namespace, opts.Pod, err)
+	}
+
+	lines := streamLines(ctx, stream)
+	return func(yield func(orchestrator.LogLine, error) bool) {
+		// Closed here rather than by the caller: the iterator is the only thing
+		// that knows when reading stopped, whether that was EOF, an error, or a
+		// consumer that broke out of its range.
+		defer stream.Close() //nolint:errcheck // reading is done
+		for line, err := range lines {
+			if !yield(line, err) {
+				return
+			}
+		}
+	}, nil
+}
+
+// streamLines yields each line of a log stream as it arrives.
+//
+// Separate from the reading of the stream so the part with the interesting
+// behaviour — yielding as lines arrive, stopping when the caller stops, and a
+// stream that breaks midway — can be tested against an ordinary reader. The
+// fake clientset answers with a canned string and cannot follow.
+func streamLines(ctx context.Context, r io.Reader) iter.Seq2[orchestrator.LogLine, error] {
+	return func(yield func(orchestrator.LogLine, error) bool) {
+		sc := bufio.NewScanner(r)
+		// Same bound as the batch read: a container can emit a line longer than
+		// the scanner's default, and the default is to give up reading entirely.
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		for sc.Scan() {
+			// Checked per line rather than only at the end. A followed stream
+			// has no end, so a cancelled reader that only noticed on EOF would
+			// never notice at all.
+			if ctx.Err() != nil {
+				return
+			}
+			if !yield(parseLogLine(sc.Text()), nil) {
+				return
+			}
+		}
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			// Reported rather than swallowed, and only when the caller did not
+			// cause it: a cancelled stream fails on read, and surfacing that as
+			// an error would put "connection closed" on the page every time
+			// somebody navigates away.
+			yield(orchestrator.LogLine{}, err)
+		}
+	}
 }
 
 // parseLogLine splits the RFC3339 timestamp the API prefixes onto each line.

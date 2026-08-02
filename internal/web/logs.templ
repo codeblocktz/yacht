@@ -59,12 +59,20 @@ templ AppLogs(d LogsData) {
 			</p>
 		</div>
 	</div>
-	// Polled on its own so following a log does not re-render the controls
-	// under a cursor that is halfway through changing them.
+	// Separate from the controls so following a log does not re-render them
+	// under a cursor that is halfway through changing one.
+	//
+	// Both a stream and a poll are declared. logs.js takes the poll off when it
+	// has a stream open, and puts it back if the stream will not hold — so a
+	// network that eats server-sent events degrades to the old behaviour rather
+	// than to an empty pane. With scripting off, the poll is what runs.
 	<div
 		hx-get={ logsFragmentHref(d) }
 		hx-trigger="load, every 5s"
 		hx-swap="innerHTML"
+		if !d.Previous {
+			data-log-stream={ logsStreamHref(d) }
+		}
 	>
 		@AppLogLines(d)
 	</div>

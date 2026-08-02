@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -116,6 +117,15 @@ func (n *Noop) Events(context.Context, int) ([]EventInfo, error) { return nil, n
 // Logs returns nothing. There is no container to have written any, and
 // inventing lines would make an empty install look like a running one.
 func (n *Noop) Logs(context.Context, LogOptions) ([]LogLine, error) { return nil, nil }
+
+// LogStream ends immediately. Without a cluster there is no container writing,
+// and a stream that stayed open would hang every caller waiting for a line that
+// is never coming.
+func (n *Noop) LogStream(
+	context.Context, LogOptions,
+) (iter.Seq2[LogLine, error], error) {
+	return func(func(LogLine, error) bool) {}, nil
+}
 
 // Volumes returns nothing: the engine's in-memory mode provisions no storage.
 func (n *Noop) Volumes(context.Context, OwnerID) ([]VolumeInfo, error) { return nil, nil }

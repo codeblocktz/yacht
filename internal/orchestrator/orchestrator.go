@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"path"
 	"regexp"
 	"strings"
@@ -422,6 +423,19 @@ type ClusterInspector interface {
 	// caller looked up by owner, because a pod name on its own is enough to
 	// read another tenant's logs.
 	Logs(ctx context.Context, opts LogOptions) ([]LogLine, error)
+
+	// LogStream follows a container's output until ctx is done.
+	//
+	// Separate from Logs rather than a flag on LogOptions: the batch call
+	// returns a complete slice, and a flag that makes it never return would
+	// leave that signature honest for one value of one field and false for the
+	// other.
+	//
+	// The iterator holds a connection open for as long as it is read, so a
+	// caller must either drain it or cancel ctx. Scoping is the caller's job
+	// here exactly as it is for Logs — the namespace and pod arrive already
+	// resolved from an app looked up by owner.
+	LogStream(ctx context.Context, opts LogOptions) (iter.Seq2[LogLine, error], error)
 
 	// Volumes lists an owner's persistent volume claims.
 	//

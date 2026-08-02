@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,45 +130,16 @@ type Logs struct {
 // pod name is enough to read any tenant's output, so it is never trusted from
 // the request: the name is checked against the pods this app actually has.
 func (s *Service) Logs(ctx context.Context, ownerID, appName string, req LogRequest) (Logs, error) {
-	a, err := s.Get(ctx, ownerID, appName)
+	namespace, out, err := s.resolveLogTarget(ctx, ownerID, appName, req)
 	if err != nil {
 		return Logs{}, err
 	}
-
-	pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
-		Namespace: a.Namespace, ManagedOnly: true, Owner: orchestrator.OwnerID(ownerID),
-	})
-	if err != nil {
-		return Logs{}, fmt.Errorf("app: list pods for logs: %w", err)
-	}
-
-	out := Logs{Previous: req.Previous}
-	for _, p := range pods {
-		out.Pods = append(out.Pods, p.Name)
-	}
-	if len(out.Pods) == 0 {
-		out.Note = "This app has no running pods, so there is no output to read."
+	if out.Pod == "" {
 		return out, nil
 	}
 
-	// A pod named by the request is honoured only if it is one of this app's.
-	// Otherwise the name is a way to read somebody else's container.
-	out.Pod = out.Pods[0]
-	if req.Pod != "" {
-		var ok bool
-		for _, name := range out.Pods {
-			if name == req.Pod {
-				out.Pod, ok = name, true
-				break
-			}
-		}
-		if !ok {
-			return Logs{}, ErrNotFound
-		}
-	}
-
 	lines, err := s.orch.Logs(ctx, orchestrator.LogOptions{
-		Namespace: a.Namespace, Pod: out.Pod, Tail: req.Tail, Previous: req.Previous,
+		Namespace: namespace, Pod: out.Pod, Tail: req.Tail, Previous: req.Previous,
 	})
 	if errors.Is(err, orchestrator.ErrNotStarted) {
 		// Not a failure to report as one. The container has no log because it
@@ -190,6 +162,81 @@ func (s *Service) Logs(ctx context.Context, ownerID, appName string, req LogRequ
 		}
 	}
 	return out, nil
+}
+
+// resolveLogTarget resolves an app to the namespace and pod a log read may
+// touch, and is the only place that decides it.
+//
+// Shared by the batch read and the stream rather than written twice. A pod name
+// is enough to read any tenant's output, so the check that it belongs to this
+// app is the whole security of both paths — and a guard implemented once per
+// caller is a guard that will eventually be applied to all but one of them.
+//
+// An empty Pod on the returned Logs means there is nothing to read, with Note
+// already saying why.
+func (s *Service) resolveLogTarget(
+	ctx context.Context, ownerID, appName string, req LogRequest,
+) (namespace string, out Logs, err error) {
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
+		return "", Logs{}, err
+	}
+
+	pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
+		Namespace: a.Namespace, ManagedOnly: true, Owner: orchestrator.OwnerID(ownerID),
+	})
+	if err != nil {
+		return "", Logs{}, fmt.Errorf("app: list pods for logs: %w", err)
+	}
+
+	out = Logs{Previous: req.Previous}
+	for _, p := range pods {
+		out.Pods = append(out.Pods, p.Name)
+	}
+	if len(out.Pods) == 0 {
+		out.Note = "This app has no running pods, so there is no output to read."
+		return a.Namespace, out, nil
+	}
+
+	// A pod named by the request is honoured only if it is one of this app's.
+	// Otherwise the name is a way to read somebody else's container.
+	out.Pod = out.Pods[0]
+	if req.Pod != "" {
+		var ok bool
+		for _, name := range out.Pods {
+			if name == req.Pod {
+				out.Pod, ok = name, true
+				break
+			}
+		}
+		if !ok {
+			return "", Logs{}, ErrNotFound
+		}
+	}
+	return a.Namespace, out, nil
+}
+
+// LogStream follows an app's container output until ctx is done.
+//
+// Scoped exactly as Logs is, through the same resolver. Previous runs are not
+// offered: a container that has already died writes nothing more, so following
+// it would hold a connection open on a stream that can never produce a line.
+func (s *Service) LogStream(
+	ctx context.Context, ownerID, appName string, req LogRequest,
+) (iter.Seq2[orchestrator.LogLine, error], error) {
+	namespace, target, err := s.resolveLogTarget(ctx, ownerID, appName, req)
+	if err != nil {
+		return nil, err
+	}
+	if target.Pod == "" {
+		// Nothing to follow, and an empty iterator says so without the caller
+		// needing a second way to ask.
+		return func(func(orchestrator.LogLine, error) bool) {}, nil
+	}
+
+	return s.orch.LogStream(ctx, orchestrator.LogOptions{
+		Namespace: namespace, Pod: target.Pod, Tail: req.Tail,
+	})
 }
 
 // HTTPLogs is what the ingress controller recorded for one app.

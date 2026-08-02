@@ -35,6 +35,7 @@ nothing you build here is locked in.
 | Liveness and readiness probes | ✅ |
 | Deployment history, with a log per deployment | ✅ |
 | App logs, and per-request HTTP logs you can search and page | ✅ |
+| Live logs, streamed as the container writes them | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
 | Secrets sealed at rest, kept out of the app record | ✅ |
 | Deploy a wired stack from a template in one action | ✅ |
@@ -66,7 +67,6 @@ nothing you build here is locked in.
 | Identity seam — single owner, bearer token, or session | ✅ |
 | Dashboard with pluggable chrome, light and dark | ✅ |
 | Postgres schema + embedded migrations | ✅ |
-| Logs stream rather than refresh on a 5s poll | next |
 
 Utilisation percentages need `metrics-server` in the cluster. Without it
 everything else still works and those figures read `—` rather than zero.

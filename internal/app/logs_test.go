@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"iter"
 	"strings"
 	"testing"
 
@@ -306,5 +307,74 @@ func TestADeploymentIDFromAnotherAppIsRefused(t *testing.T) {
 
 	if _, err := s.DeploymentLogs(ctx, ownerID, "two", deps[0].ID, LogRequest{}); err != ErrNotFound {
 		t.Fatalf("reading one app's deployment through another = %v, want ErrNotFound", err)
+	}
+}
+
+func (l *loggingOrchestrator) LogStream(
+	_ context.Context, opts orchestrator.LogOptions,
+) (iter.Seq2[orchestrator.LogLine, error], error) {
+	l.last = opts
+	return func(yield func(orchestrator.LogLine, error) bool) {
+		yield(orchestrator.LogLine{Text: "streamed from " + opts.Pod}, nil)
+	}, nil
+}
+
+// The streaming read is a second door onto the same output, so it needs the
+// same lock. A guard applied to one path and not the other is the bug the guard
+// was written to prevent.
+func TestAPodNameIsNotTrustedWhenStreamingEither(t *testing.T) {
+	ctx := context.Background()
+	orch := &loggingOrchestrator{recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()}}
+	s, _, pool := testService(t, Options{})
+	s.orch = orch
+	ownerID := owner(t, s, pool, "owner-stream")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	orch.pods = []orchestrator.PodInfo{
+		{Name: "web-1", Namespace: a.Namespace},
+		{Name: "victim-db-1", Namespace: "yacht-someone-else"},
+	}
+
+	if _, err := s.LogStream(ctx, ownerID, "web", LogRequest{Pod: "victim-db-1"}); err != ErrNotFound {
+		t.Fatalf("streaming another app's pod = %v, want ErrNotFound", err)
+	}
+	if orch.last.Pod == "victim-db-1" {
+		t.Fatal("another app's pod was streamed")
+	}
+}
+
+// The namespace comes from the app row on this path too.
+func TestLogStreamReadsFromTheAppsOwnNamespace(t *testing.T) {
+	ctx := context.Background()
+	orch := &loggingOrchestrator{recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()}}
+	s, _, pool := testService(t, Options{})
+	s.orch = orch
+	ownerID := owner(t, s, pool, "owner-stream-ns")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	orch.pods = []orchestrator.PodInfo{{Name: "web-1", Namespace: a.Namespace}}
+
+	seq, err := s.LogStream(ctx, ownerID, "web", LogRequest{})
+	if err != nil {
+		t.Fatalf("LogStream: %v", err)
+	}
+	for range seq { //nolint:revive // draining is the point
+	}
+
+	if orch.last.Namespace != a.Namespace {
+		t.Errorf("streamed from namespace %q, want %q", orch.last.Namespace, a.Namespace)
+	}
+	if orch.last.Previous {
+		t.Error("a followed stream asked for the previous container, which can never produce a line")
 	}
 }

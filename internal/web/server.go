@@ -512,7 +512,12 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/settings", s.appDetail)
 			if s.logs != nil {
 				r.Get("/apps/{name}/logs", s.appLogs)
+				// The fragment stays alongside the stream. It is what the page
+				// falls back to where SSE does not survive the network in
+				// between, which is a thing that happens and shows as a log
+				// pane that never fills.
 				r.Get("/apps/{name}/logs/lines", s.appLogsFragment)
+				r.Get("/apps/{name}/logs/stream", s.appLogsStream)
 				r.Get("/apps/{name}/deployments/{id}/logs", s.deployLogs)
 			}
 			r.Post("/apps/{name}/scale", s.appScale)
