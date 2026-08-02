@@ -1201,30 +1201,58 @@ templ Events(d EventsData) {
 				"Nothing reported, or the cluster is unreachable. Kubernetes also "+
 					"expires events after about an hour.")
 		} else {
-			<div class="rows">
-				for _, e := range d.Events {
-					<div class="row-item !items-start">
-						<span class="w-28 shrink-0 pt-px">
-							if e.Warning() {
-								@statusDot(e.Reason, "status-warn")
-							} else {
-								@statusDot(e.Reason, "status-neutral")
-							}
-						</span>
-						<span class="min-w-0 flex-1">
-							<span class="block break-words">{ e.Message }</span>
-							<span class="mono mt-0.5 block text-muted-foreground">
-								{ e.Namespace } · { e.Object }
-							</span>
-						</span>
-						<span class="shrink-0 text-right text-[12px] text-muted-foreground">
-							{ relativeTime(e.LastSeen) }
-							if e.Count > 1 {
-								<span class="tag ml-1.5">&times;{ fmt.Sprintf("%d", e.Count) }</span>
-							}
-						</span>
-					</div>
-				}
+			// A table rather than stacked cards. An event list is read by
+			// scanning one column at a time — every warning, or everything
+			// touching one pod — and text that starts at a different x on
+			// every row cannot be scanned at all.
+			<div class="overflow-x-auto">
+				<table class="dtable evt">
+					<thead>
+						<tr>
+							<th class="w-[68px]">Time</th>
+							<th class="w-[132px]">Reason</th>
+							<th class="w-[220px]">Object</th>
+							<th>Message</th>
+							<th class="w-[52px] text-right">Count</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, e := range d.Events {
+							<tr class={ templ.KV("evt-warn", e.Warning()) }>
+								<td class="text-muted-foreground tabular-nums">
+									{ shortTime(e.LastSeen) }
+								</td>
+								<td>
+									if e.Warning() {
+										@statusDot(e.Reason, "status-warn")
+									} else {
+										@statusDot(e.Reason, "status-neutral")
+									}
+								</td>
+								// Namespace and object together. The object name alone
+								// is not unique across a cluster, so two rows for
+								// different pods in different namespaces would read
+								// as the same thing said twice.
+								<td class="mono max-w-[220px] truncate text-muted-foreground" title={ e.Namespace + "/" + e.Object }>
+									<span class="opacity-60">{ e.Namespace }/</span>{ e.Object }
+								</td>
+								// Not truncated. The message is the one field
+								// worth reading in full, and an ellipsis here
+								// hides the half that says what to do.
+								<td class="whitespace-normal break-words" title={ e.Message }>
+									<span class="evt-msg">{ e.Message }</span>
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">
+									if e.Count > 1 {
+										{ fmt.Sprintf("%d", e.Count) }
+									} else {
+										<span class="opacity-40">&mdash;</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
 			</div>
 		}
 		@pageControls(d.Page)

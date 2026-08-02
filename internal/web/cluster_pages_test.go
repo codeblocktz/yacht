@@ -78,7 +78,12 @@ func TestEventsPage(t *testing.T) {
 	// "insufficient cpu" is.
 	for _, want := range []string{
 		"FailedScheduling", "insufficient cpu",
-		"Pod/api-5c8b7d94f6-hq2mz", "yacht-a1b2", "&times;7",
+		"Pod/api-5c8b7d94f6-hq2mz", "yacht-a1b2",
+		// How many times it happened. A count column rather than a "×7" tag
+		// since the list became a table, but the number still has to be there:
+		// one FailedScheduling is a scheduling delay and seven is a cluster
+		// that cannot place the pod.
+		">7<",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("events page missing %q", want)

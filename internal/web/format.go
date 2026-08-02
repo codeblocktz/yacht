@@ -435,3 +435,15 @@ func requestTiming(l orchestrator.HTTPLogLine) string {
 	}
 	return out
 }
+
+// shortTime is the clock time an event was last seen.
+//
+// Just the time, not the date. Kubernetes expires events after about an hour,
+// so every row on this page happened today — a date on each one would be the
+// same date repeated down the column.
+func shortTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	return t.Local().Format("15:04:05")
+}

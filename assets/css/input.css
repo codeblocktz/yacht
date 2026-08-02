@@ -645,16 +645,33 @@
 @layer components {
   /* Container output. Monospaced and dense, because a log is read by scanning
      for the one line that differs rather than by reading every line. */
+  /* Container output.
+     
+     Smaller and tighter than body text. A log is not read, it is scanned for
+     the one line that differs, and more lines in view beats larger type — the
+     terminal emulators people already read logs in sit around this size for
+     the same reason. */
   .logs {
-    @apply max-h-[540px] overflow-auto px-3 py-2 font-mono text-[12px] leading-[1.55];
+    @apply max-h-[540px] overflow-auto px-3 py-1.5 font-mono text-[11.5px] leading-[1.5];
+    /* Ligatures off. A mono face that turns != into a glyph is fine in an
+       editor and wrong here, where the text is output nobody wrote. */
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
   }
   .log-line {
-    @apply flex gap-3 whitespace-pre-wrap break-all;
+    @apply flex gap-3 whitespace-pre-wrap break-all rounded-[3px] px-1.5 -mx-0.5;
+  }
+  /* A row under the cursor, so a wrapped line stays readable as one line while
+     the eye follows it across. Subtle enough not to be a selection. */
+  .log-line:hover {
+    @apply bg-foreground/[0.035];
   }
   /* The timestamp does not wrap and does not shrink: a log whose times drift
-     out of alignment is much harder to scan than one with a wide gutter. */
+     out of alignment is much harder to scan than one with a wide gutter. It is
+     also dimmer than the output, because it is the same on most rows and the
+     one thing that differs should be what carries. */
   .log-time {
-    @apply shrink-0 tabular-nums text-muted-foreground;
+    @apply shrink-0 select-none tabular-nums text-muted-foreground/70;
   }
   .log-text { @apply min-w-0; }
 }
@@ -681,5 +698,34 @@
      library's defaults. */
   .http-chart text {
     @apply fill-muted-foreground text-[10.5px];
+  }
+}
+
+@layer components {
+  /* The events table.
+     
+     Tighter than .dtable's default, because this list is read the way a log is
+     — scanned down a column for the one line that differs — and the row height
+     that suits a table of six volumes is wrong for a hundred events. */
+  .evt tbody td {
+    @apply px-3 py-[5px] align-top text-[11.5px] leading-[1.45];
+  }
+  .evt thead th {
+    @apply px-3 py-1.5 text-[10px];
+  }
+  /* A long message wraps to at most two lines. Three-line rows break the
+     scanning rhythm the table exists for, and the full text is on the row's
+     title for the one message somebody actually needs to read whole. */
+  .evt .evt-msg {
+    @apply line-clamp-2;
+  }
+  /* A warning is worth finding at a glance. A tint on the row rather than only
+     a coloured word: at this density a single word does not carry far enough
+     across a wide table. */
+  .evt tbody tr.evt-warn {
+    @apply bg-warning/[0.06];
+  }
+  .evt tbody tr.evt-warn:hover {
+    @apply bg-warning/[0.10];
   }
 }
