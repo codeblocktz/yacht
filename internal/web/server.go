@@ -200,6 +200,11 @@ type Options struct {
 	// Logs, when set, puts the log surface on the router.
 	Logs Logger
 
+	// Registries, when set, puts the image registry surface on the router.
+	// Nil leaves it off: an install with nowhere to push cannot build, and a
+	// form for a setting nothing reads is a worse answer than no form.
+	Registries Registries
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -281,6 +286,10 @@ type Server struct {
 	// nets is an app's routing. Nil leaves the Networking surface off.
 	nets Nets
 
+	// registries is where built images go. Nil leaves the Registry surface
+	// off, which is right for an install that cannot build anything.
+	registries Registries
+
 	// logs reads container output. Nil leaves the log surface off, which is
 	// right for an install whose orchestrator has no containers to read.
 	logs Logger
@@ -358,6 +367,7 @@ func New(opts Options) (*Server, error) {
 		joiner:         opts.Joiner,
 		stacks:         opts.Stacks,
 		nets:           opts.Nets,
+		registries:     opts.Registries,
 		logs:           opts.Logs,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
@@ -454,6 +464,11 @@ func (s *Server) Handler() http.Handler {
 		if s.accounts != nil {
 			r.Use(s.withTeams)
 		}
+
+		// Which optional pages exist, for the same reason and in the same
+		// place: the sidebar is built from a path and a context, so without
+		// this it offers entries whose routes were never mounted.
+		r.Use(s.withSurfaces)
 
 		// The split between these groups is at the line where an action stops
 		// being undoable by redeploying. Each gate is on the group rather than in
@@ -589,6 +604,25 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/cluster/nodes/add", s.nodeAdd)
 				r.Get("/cluster/nodes/add/status", s.nodeAddFragment)
 				r.Post("/cluster/join", s.nodeJoinSet)
+			})
+		}
+
+		// The registry, gated the same way and for the same reason. One
+		// registry serves every team, and the credential stored here can push
+		// images the cluster will then run — so setting it is not a decision
+		// one team's admin makes on behalf of the others.
+		//
+		// Its own group rather than the joiner's: an install can have a
+		// registry and no way to add nodes, or the reverse, and coupling them
+		// would switch off a working feature because an unrelated one is
+		// unavailable.
+		if s.registries != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+
+				r.Get("/cluster/registry", s.registrySettings)
+				r.Post("/cluster/registry", s.registrySet)
+				r.Post("/cluster/registry/clear", s.registryClear)
 			})
 		}
 

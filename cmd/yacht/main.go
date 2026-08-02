@@ -22,6 +22,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
+	"github.com/codeblocktz/yacht/internal/registry"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
 	"github.com/codeblocktz/yacht/internal/web"
@@ -167,8 +168,13 @@ func run() error {
 		// gates this. Offered without one it would fail after creating the
 		// first app.
 		opts.Stacks = apps
+		// And the registry, for the third time the same reason: it holds a
+		// push credential, and a credential this install cannot seal is one it
+		// declines to hold.
+		opts.Registries = registry.New(pool, keeper, log)
 	} else {
-		log.Info("add-node is off — set YACHT_SECRET_KEY to store a cluster join token")
+		log.Info("add-node and the image registry are off — " +
+			"set YACHT_SECRET_KEY to store a cluster join token or registry password")
 	}
 
 	if cfg.AccountsEnabled() {

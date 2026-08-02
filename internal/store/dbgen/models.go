@@ -112,6 +112,16 @@ type PlatformDn struct {
 	UpdatedAt   time.Time
 }
 
+type PlatformRegistry struct {
+	ID             int32
+	Host           string
+	Repository     string
+	Username       string
+	PasswordSealed []byte
+	UpdatedAt      time.Time
+	UpdatedBy      pgtype.UUID
+}
+
 type Project struct {
 	ID        uuid.UUID
 	OwnerID   string

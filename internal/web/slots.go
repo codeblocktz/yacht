@@ -178,7 +178,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
 					Active: hasPrefix(path, "/deployments")},
 			}},
-			{Heading: "Infrastructure", Items: []NavItem{
+			{Heading: "Infrastructure", Items: append([]NavItem{
 				{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
 					Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")},
 				{Label: "Pods", Href: "/cluster/pods", Icon: "layers",
@@ -187,7 +187,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 					Active: hasPrefix(path, "/cluster/volumes")},
 				{Label: "Events", Href: "/cluster/events", Icon: "activity",
 					Active: hasPrefix(path, "/cluster/events")},
-			}},
+			}, infraNav(ctx, path)...)},
 			{Heading: "System", Items: append(teamNav(ctx, path), NavItem{
 				Label: "Settings", Href: "/settings", Icon: "settings",
 				Active: hasPrefix(path, "/settings"),
@@ -213,6 +213,10 @@ func breadcrumbFor(path string) []Crumb {
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Volumes"}}
 	case hasPrefix(path, "/cluster/events"):
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Events"}}
+	case hasPrefix(path, "/cluster/dns"):
+		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "DNS"}}
+	case hasPrefix(path, "/cluster/registry"):
+		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Registry"}}
 	case hasPrefix(path, "/cluster"):
 		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}}
 	case hasPrefix(path, "/settings"):
@@ -281,6 +285,30 @@ func teamNav(ctx context.Context, path string) []NavItem {
 		Label: "Team", Href: "/team", Icon: "users",
 		Active: hasPrefix(path, "/team"),
 	}}
+}
+
+// infraNav lists the install-wide settings pages this install actually has.
+//
+// Conditional for the reason the Team entry is: an entry whose route was never
+// mounted is a link to a 404, which reads as a broken feature rather than an
+// absent one. DNS had exactly that problem from the day it was written — a
+// page with no way in, and a custom-domain panel telling people to go to it.
+func infraNav(ctx context.Context, path string) []NavItem {
+	var items []NavItem
+	s := SurfacesFromContext(ctx)
+	if s.DNS {
+		items = append(items, NavItem{
+			Label: "DNS", Href: "/cluster/dns", Icon: "globe",
+			Active: hasPrefix(path, "/cluster/dns"),
+		})
+	}
+	if s.Registry {
+		items = append(items, NavItem{
+			Label: "Registry", Href: "/cluster/registry", Icon: "package",
+			Active: hasPrefix(path, "/cluster/registry"),
+		})
+	}
+	return items
 }
 
 // isCanvasPath reports whether a path renders the canvas.

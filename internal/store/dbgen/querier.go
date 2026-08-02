@@ -15,6 +15,7 @@ type Querier interface {
 	// leaves a window in which the same invitation is accepted twice.
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
 	ClearClusterJoin(ctx context.Context) (int64, error)
+	ClearPlatformRegistry(ctx context.Context) error
 	// Forget every saved position in a project, so the next render lays it out
 	// again from the dependencies.
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
@@ -93,6 +94,9 @@ type Querier interface {
 	// Install-wide DNS settings. No owner_id, for the reason cluster_join has
 	// none: they configure one controller shared by every team.
 	GetPlatformDNS(ctx context.Context) (PlatformDn, error)
+	// The install's image registry. No owner_id, for the reason platform_dns has
+	// none: one registry serves every team's builds.
+	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
@@ -169,6 +173,7 @@ type Querier interface {
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
+	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
 	// Retires the deployments a new one replaces.
 	//

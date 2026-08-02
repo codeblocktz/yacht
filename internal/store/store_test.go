@@ -190,6 +190,9 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"cluster_join": "a cluster is not a team's — a node one team adds runs " +
 			"every team's workloads, so an owner here would encode the false " +
 			"claim that each team has a cluster of its own",
+		"platform_registry": "one registry holds every team's images, which is " +
+			"why an image's path is derived from the owner rather than chosen — " +
+			"the scoping is in the path, where a per-team row could not put it",
 	}
 
 	rows, err := pool.Query(ctx, `

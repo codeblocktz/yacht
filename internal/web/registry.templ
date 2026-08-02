@@ -1,0 +1,123 @@
+package web
+
+// RegistryPage is where images this install builds are pushed and pulled from.
+templ RegistryPage(d RegistryData) {
+	@pageHead("Registry",
+		"Where images built from a repository are pushed, and where the cluster pulls them back from.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That did not work</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	if d.Notice != "" {
+		<div class="callout mb-5">
+			<div class="min-w-0">{ d.Notice }</div>
+		</div>
+	}
+	if !d.HasKey {
+		// Said before the form rather than after a submission fails. A
+		// password field that cannot store anything is worse than one that is
+		// not there: it looks like the feature works.
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">No encryption key is configured</div>
+				<p class="mt-0.5 text-muted-foreground">
+					A registry password is sealed with <code class="mono">YACHT_SECRET_KEY</code>
+					before it is stored. Without one it would sit readable in the database,
+					so it is refused rather than kept that way.
+				</p>
+			</div>
+		</div>
+	}
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Image registry</span>
+			if d.Registry.Configured() {
+				<span class="status status-ok">configured</span>
+			} else {
+				<span class="status status-warn">not set</span>
+			}
+		</div>
+		<div class="panel-body">
+			<form method="post" action="/cluster/registry" class="flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="host">Host</label>
+					<input
+						class="control"
+						id="host"
+						name="host"
+						value={ d.Registry.Host }
+						placeholder="ghcr.io"
+						disabled?={ !d.HasKey }
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						Where an image name starts — no scheme and no path. The cluster has to
+						be able to reach it too, since this is also where it pulls from.
+					</p>
+				</div>
+				<div class="field">
+					<label class="label" for="repository">Repository</label>
+					<input
+						class="control"
+						id="repository"
+						name="repository"
+						value={ d.Registry.Repository }
+						placeholder="your-org"
+						disabled?={ !d.HasKey }
+					/>
+					<p class="mt-1 text-[12.5px] text-muted-foreground">
+						The organisation or user images are pushed under. Each app gets its own
+						path beneath this, derived from the team and the app — one account holds
+						every team's images, so the path is what keeps them apart.
+					</p>
+				</div>
+				<div class="grid gap-4 sm:grid-cols-2">
+					<div class="field">
+						<label class="label" for="username">Username</label>
+						<input
+							class="control"
+							id="username"
+							name="username"
+							value={ d.Registry.Username }
+							autocomplete="off"
+							disabled?={ !d.HasKey }
+						/>
+					</div>
+					<div class="field">
+						<label class="label" for="password">Password or token</label>
+						<input
+							class="control"
+							id="password"
+							name="password"
+							type="password"
+							autocomplete="new-password"
+							placeholder={ passwordPlaceholder(d.Registry) }
+							disabled?={ !d.HasKey }
+						/>
+						<p class="mt-1 text-[12.5px] text-muted-foreground">
+							Stored sealed and never shown again. A token scoped to pushing
+							packages is enough — this does not need account access.
+						</p>
+					</div>
+				</div>
+				<div class="flex items-center gap-2">
+					<button class="btn btn-primary" type="submit" disabled?={ !d.HasKey }>Save</button>
+					if d.Registry.Configured() {
+						<button
+							class="btn btn-ghost"
+							type="submit"
+							formaction="/cluster/registry/clear"
+							onclick="return confirm('Remove the registry? Building from a repository stops working until another is set.')"
+						>Remove</button>
+					}
+				</div>
+			</form>
+		</div>
+	</div>
+	if d.Registry.UpdatedAt != "" {
+		<p class="text-[12.5px] text-muted-foreground">Updated { d.Registry.UpdatedAt }.</p>
+	}
+}
