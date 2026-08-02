@@ -37,6 +37,7 @@ templ Layout(s Slots, page templ.Component) {
 			@sheet.Script()
 			if s.FullBleed {
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
+				<script src={ asset("/assets/js/charts.js") } defer></script>
 			}
 		</head>
 		<body class="h-full">

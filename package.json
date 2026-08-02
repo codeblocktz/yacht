@@ -1,0 +1,18 @@
+{
+  "name": "yacht-assets",
+  "private": true,
+  "description": "Authoring-time tooling for the dashboard's TypeScript. The built output is committed, so building Yacht and running it need neither Node nor this file.",
+  "scripts": {
+    "build": "esbuild assets/ts/charts.ts --bundle --format=iife --global-name=YachtCharts --minify --target=es2020 --outfile=internal/web/assets/js/charts.js",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@tanstack/charts": "^0.3.1",
+    "@types/d3-scale": "^4.0.9",
+    "d3-scale": "^4.0.2"
+  }
+}

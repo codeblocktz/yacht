@@ -27,3 +27,7 @@ kubeconfig
 .idea/
 .vscode/
 *.swp
+
+# Authoring-time only. The built bundle in internal/web/assets/js is committed,
+# so building and running Yacht need neither Node nor these.
+/node_modules/

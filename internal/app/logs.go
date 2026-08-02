@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -299,4 +300,96 @@ func (s *Service) EnableHTTPLogs(ctx context.Context) error {
 		return orchestrator.ErrNotSupported
 	}
 	return logger.EnableHTTPLogs(ctx)
+}
+
+// HTTPBucket is one column of the request timeline.
+//
+// Counted by status class rather than kept as raw requests, because the chart
+// answers "when did this app get traffic, and when did it go wrong" — and a
+// thousand identical 200s answer that no better than a number does.
+type HTTPBucket struct {
+	At time.Time `json:"at"`
+
+	// To is where this column ends. Sent rather than inferred, because a bar
+	// on a time axis has to be told how wide it is: without an interval the
+	// chart spreads whatever bars exist across the whole width, so two busy
+	// minutes drew as two bars half a chart wide each.
+	To time.Time `json:"to"`
+
+	OK   int `json:"ok"`
+	Warn int `json:"warn"`
+	Err  int `json:"err"`
+}
+
+// httpBuckets is how many columns the timeline is drawn with.
+//
+// Fixed rather than derived from the data, so the chart has the same shape
+// whether an app served six requests or six thousand. A bar count that tracked
+// the request count would be a histogram of nothing.
+const httpBuckets = 48
+
+// Buckets groups requests into a timeline.
+//
+// The range comes from the requests themselves rather than a fixed window,
+// because the controller's log is a moving window of unknown span: asking for
+// the last hour when the log only reaches back four minutes draws fifty-six
+// empty columns and squeezes everything real into the last four.
+func (h HTTPLogs) Buckets() []HTTPBucket {
+	if len(h.Lines) == 0 {
+		return nil
+	}
+
+	var first, last time.Time
+	for _, l := range h.Lines {
+		if l.At.IsZero() {
+			continue
+		}
+		if first.IsZero() || l.At.Before(first) {
+			first = l.At
+		}
+		if l.At.After(last) {
+			last = l.At
+		}
+	}
+	if first.IsZero() {
+		return nil
+	}
+	if !last.After(first) {
+		// Everything in one instant. One column wide is the honest picture of
+		// that; spreading it over an invented range would draw a trend that is
+		// not in the data.
+		last = first.Add(time.Second)
+	}
+
+	width := last.Sub(first) / httpBuckets
+	if width <= 0 {
+		width = time.Millisecond
+	}
+
+	out := make([]HTTPBucket, httpBuckets)
+	for i := range out {
+		out[i].At = first.Add(time.Duration(i) * width)
+		out[i].To = out[i].At.Add(width)
+	}
+	for _, l := range h.Lines {
+		if l.At.IsZero() {
+			continue
+		}
+		i := int(l.At.Sub(first) / width)
+		if i < 0 {
+			i = 0
+		}
+		if i >= httpBuckets {
+			i = httpBuckets - 1
+		}
+		switch {
+		case l.Status >= 500:
+			out[i].Err++
+		case l.Status >= 400:
+			out[i].Warn++
+		default:
+			out[i].OK++
+		}
+	}
+	return out
 }

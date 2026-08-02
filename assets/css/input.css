@@ -658,3 +658,28 @@
   }
   .log-text { @apply min-w-0; }
 }
+
+@layer components {
+  /* The request timeline above an app's HTTP log.
+     
+     Its own colours rather than the status classes used on rows: those are
+     text colours chosen to be readable at 12px, and a chart needs fills that
+     read as areas. Both follow the same three-way split, so a red bar and a
+     red status word mean the same thing. */
+  :root {
+    --chart-ok: color-mix(in oklab, var(--success) 70%, transparent);
+    --chart-warn: color-mix(in oklab, var(--warning) 80%, transparent);
+    --chart-err: color-mix(in oklab, var(--destructive) 85%, transparent);
+  }
+  .http-chart-wrap {
+    @apply shrink-0 border-b border-border px-5 py-3;
+  }
+  .http-chart {
+    @apply h-24 w-full;
+  }
+  /* The chart draws its own text; keep it in the sheet's voice rather than the
+     library's defaults. */
+  .http-chart text {
+    @apply fill-muted-foreground text-[10.5px];
+  }
+}

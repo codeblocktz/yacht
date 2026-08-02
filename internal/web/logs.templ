@@ -338,6 +338,13 @@ templ httpLogView(d DeployLogsData) {
 			}
 		</div>
 	} else {
+		// The timeline reads its counts from the script beside it rather than
+		// from the rows below, because the rows are paged and the shape of the
+		// traffic is not.
+		<div class="http-chart-wrap">
+			@templ.JSONScript("http-chart-data", d.HTTP.Buckets())
+			<div class="http-chart" data-http-chart data-source="http-chart-data"></div>
+		</div>
 		<div class="canvas-sheet-log">
 			<div class="logs">
 				for _, l := range d.HTTP.Lines {
