@@ -140,6 +140,7 @@ type PlatformRegistry struct {
 	PasswordSealed []byte
 	UpdatedAt      time.Time
 	UpdatedBy      pgtype.UUID
+	Insecure       bool
 }
 
 type Project struct {

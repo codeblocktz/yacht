@@ -13,7 +13,7 @@ import (
 // Registries is the dashboard's view of where images go.
 type Registries interface {
 	Settings(ctx context.Context) (registry.Settings, error)
-	Set(ctx context.Context, by uuid.UUID, host, repository, username, password string) error
+	Set(ctx context.Context, by uuid.UUID, host, repository, username, password string, insecure bool) error
 	Clear(ctx context.Context) error
 
 	// CanStore reports whether a password can be sealed. Asked here rather
@@ -79,7 +79,8 @@ func (s *Server) registrySet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := s.registries.Set(ctx, by,
-		r.FormValue("host"), r.FormValue("repository"), r.FormValue("username"), password)
+		r.FormValue("host"), r.FormValue("repository"), r.FormValue("username"), password,
+		r.FormValue("insecure") == "on")
 	if err != nil {
 		d := s.registryData(r, "", err.Error())
 		w.WriteHeader(http.StatusUnprocessableEntity)

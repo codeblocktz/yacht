@@ -524,6 +524,11 @@ type BuildRequest struct {
 	Ref     string
 	Subdir  string
 
+	// Insecure means the registry speaks plain HTTP, so the push has to be
+	// told not to expect TLS. Both build strategies need it and neither
+	// discovers it, so it travels with the request.
+	Insecure bool
+
 	// RegistryAuth is a Docker config.json authorising the push. Passed per
 	// build rather than held by the orchestrator, so the credential lives in
 	// the one package allowed to unseal it and crosses this seam only when a

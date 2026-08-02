@@ -22,7 +22,7 @@ func (q *Queries) ClearPlatformRegistry(ctx context.Context) error {
 
 const getPlatformRegistry = `-- name: GetPlatformRegistry :one
 
-SELECT id, host, repository, username, password_sealed, updated_at, updated_by FROM platform_registry WHERE id = 1
+SELECT id, host, repository, username, password_sealed, updated_at, updated_by, insecure FROM platform_registry WHERE id = 1
 `
 
 // The install's image registry. No owner_id, for the reason platform_dns has
@@ -38,21 +38,23 @@ func (q *Queries) GetPlatformRegistry(ctx context.Context) (PlatformRegistry, er
 		&i.PasswordSealed,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.Insecure,
 	)
 	return i, err
 }
 
 const setPlatformRegistry = `-- name: SetPlatformRegistry :one
-INSERT INTO platform_registry (id, host, repository, username, password_sealed, updated_by)
-VALUES (1, $1, $2, $3, $4, $5)
+INSERT INTO platform_registry (id, host, repository, username, password_sealed, insecure, updated_by)
+VALUES (1, $1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
     SET host            = EXCLUDED.host,
         repository      = EXCLUDED.repository,
         username        = EXCLUDED.username,
         password_sealed = EXCLUDED.password_sealed,
+        insecure        = EXCLUDED.insecure,
         updated_at      = now(),
         updated_by      = EXCLUDED.updated_by
-RETURNING id, host, repository, username, password_sealed, updated_at, updated_by
+RETURNING id, host, repository, username, password_sealed, updated_at, updated_by, insecure
 `
 
 type SetPlatformRegistryParams struct {
@@ -60,6 +62,7 @@ type SetPlatformRegistryParams struct {
 	Repository     string
 	Username       string
 	PasswordSealed []byte
+	Insecure       bool
 	UpdatedBy      pgtype.UUID
 }
 
@@ -69,6 +72,7 @@ func (q *Queries) SetPlatformRegistry(ctx context.Context, arg SetPlatformRegist
 		arg.Repository,
 		arg.Username,
 		arg.PasswordSealed,
+		arg.Insecure,
 		arg.UpdatedBy,
 	)
 	var i PlatformRegistry
@@ -80,6 +84,7 @@ func (q *Queries) SetPlatformRegistry(ctx context.Context, arg SetPlatformRegist
 		&i.PasswordSealed,
 		&i.UpdatedAt,
 		&i.UpdatedBy,
+		&i.Insecure,
 	)
 	return i, err
 }

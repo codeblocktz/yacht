@@ -57,8 +57,10 @@ type Images interface {
 	// ImageFor returns the full reference a build should push to.
 	ImageFor(ctx context.Context, ownerID, app, revision string) (string, error)
 
-	// Configured reports whether there is a registry at all.
+	// Configured reports whether there is a registry at all, and Insecure
+	// whether it speaks plain HTTP.
 	Configured(ctx context.Context) bool
+	Insecure(ctx context.Context) bool
 
 	// DockerConfig is the credential, in the form a builder and a kubelet
 	// both read. Fetched per use rather than held, so it is unsealed only
@@ -158,6 +160,7 @@ func (s *Service) runBuild(
 		Ref:     a.Repo.Ref(),
 		Subdir:  a.Repo.Subdir,
 
+		Insecure:     s.images.Insecure(ctx),
 		RegistryAuth: auth,
 		Log:          s.buildLogger(ctx, row.ID),
 	}

@@ -51,7 +51,17 @@ type Settings struct {
 	Host       string
 	Repository string
 	Username   string
-	UpdatedAt  string
+
+	// Insecure means the registry is served over plain HTTP.
+	//
+	// Yacht can only act on half of this. It can tell the builder to push over
+	// HTTP; it cannot tell the cluster's container runtime to pull that way,
+	// because that is node configuration and Yacht does not touch nodes. The
+	// page says so rather than leaving somebody to discover it as
+	// ImagePullBackOff.
+	Insecure bool
+
+	UpdatedAt string
 }
 
 // Configured reports whether images have somewhere to go.
@@ -66,6 +76,9 @@ type Credentials struct {
 	Host     string
 	Username string
 	Password string
+
+	// Insecure means push and pull go over plain HTTP.
+	Insecure bool
 }
 
 // Store reads and writes the install's registry.
@@ -103,6 +116,7 @@ func (s *Store) Settings(ctx context.Context) (Settings, error) {
 		Host:       row.Host,
 		Repository: row.Repository,
 		Username:   row.Username,
+		Insecure:   row.Insecure,
 		UpdatedAt:  row.UpdatedAt.Format("2006-01-02 15:04"),
 	}, nil
 }
@@ -123,11 +137,16 @@ func (s *Store) Credentials(ctx context.Context) (Credentials, error) {
 	if err != nil {
 		return Credentials{}, fmt.Errorf("registry: unseal password: %w", err)
 	}
-	return Credentials{Host: row.Host, Username: row.Username, Password: password}, nil
+	return Credentials{
+		Host: row.Host, Username: row.Username, Password: password,
+		Insecure: row.Insecure,
+	}, nil
 }
 
 // Set stores where images go.
-func (s *Store) Set(ctx context.Context, by uuid.UUID, host, repository, username, password string) error {
+func (s *Store) Set(
+	ctx context.Context, by uuid.UUID, host, repository, username, password string, insecure bool,
+) error {
 	host = strings.TrimSpace(strings.ToLower(host))
 	repository = strings.Trim(strings.TrimSpace(strings.ToLower(repository)), "/")
 	username = strings.TrimSpace(username)
@@ -153,7 +172,7 @@ func (s *Store) Set(ctx context.Context, by uuid.UUID, host, repository, usernam
 
 	if _, err := s.q.SetPlatformRegistry(ctx, dbgen.SetPlatformRegistryParams{
 		Host: host, Repository: repository, Username: username,
-		PasswordSealed: sealed, UpdatedBy: pgUUID(by),
+		PasswordSealed: sealed, Insecure: insecure, UpdatedBy: pgUUID(by),
 	}); err != nil {
 		return fmt.Errorf("registry: store settings: %w", err)
 	}
@@ -162,7 +181,7 @@ func (s *Store) Set(ctx context.Context, by uuid.UUID, host, repository, usernam
 	// a credential sitting in a log file.
 	s.log.Info("registry configured",
 		slog.String("host", host), slog.String("repository", repository),
-		slog.String("username", username))
+		slog.String("username", username), slog.Bool("insecure", insecure))
 	return nil
 }
 
@@ -327,4 +346,14 @@ func (s *Store) DockerConfig(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return creds.DockerConfigJSON()
+}
+
+// Insecure reports whether the registry is served over plain HTTP.
+//
+// Swallows the read error like Configured does, and for the same reason: this
+// answers a question asked while assembling a build, and the safe answer to
+// "should this connection expect TLS" is yes.
+func (s *Store) Insecure(ctx context.Context) bool {
+	set, err := s.Settings(ctx)
+	return err == nil && set.Insecure
 }

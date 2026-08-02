@@ -39,6 +39,7 @@ func (stubImages) ImageFor(_ context.Context, owner, app, rev string) (string, e
 	return "registry.test/" + owner + "-" + app + ":" + rev, nil
 }
 func (stubImages) Configured(context.Context) bool { return true }
+func (stubImages) Insecure(context.Context) bool   { return false }
 func (stubImages) DockerConfig(context.Context) ([]byte, error) {
 	return []byte(`{"auths":{}}`), nil
 }

@@ -28,14 +28,16 @@ func (f *fakeRegistries) Settings(context.Context) (registry.Settings, error) {
 }
 
 func (f *fakeRegistries) Set(
-	_ context.Context, _ uuid.UUID, host, repository, username, password string,
+	_ context.Context, _ uuid.UUID, host, repository, username, password string, insecure bool,
 ) error {
 	if f.err != nil {
 		return f.err
 	}
 	f.sets++
 	f.lastPassword = password
-	f.set = registry.Settings{Host: host, Repository: repository, Username: username}
+	f.set = registry.Settings{
+		Host: host, Repository: repository, Username: username, Insecure: insecure,
+	}
 	return nil
 }
 

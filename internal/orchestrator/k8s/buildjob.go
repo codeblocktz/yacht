@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"strconv"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +53,27 @@ const (
 // buildUID is the user the clone and BuildKit steps run as. It shares the
 // buildpack step's group so all three can write the shared volume.
 const buildUID = 1000
+
+// insecureOutput is the BuildKit output option for a plain-HTTP registry.
+//
+// Appended to the output rather than set as a daemon-wide flag, so it applies
+// to this push and not to every registry the build happens to touch — a base
+// image pulled from a public registry still gets TLS.
+func insecureOutput(req orchestrator.BuildRequest) string {
+	if !req.Insecure {
+		return ""
+	}
+	return ",registry.insecure=true"
+}
+
+// insecureHost names the one registry the lifecycle may reach over HTTP.
+func insecureHost(req orchestrator.BuildRequest) string {
+	if !req.Insecure {
+		return ""
+	}
+	host, _, _ := strings.Cut(req.Image, "/")
+	return host
+}
 
 // buildJob describes one build.
 //
@@ -180,6 +202,9 @@ func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 			{Name: "SUBDIR", Value: req.Subdir},
 			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
 			{Name: "DOCKER_CONFIG", Value: "/registry"},
+			// An empty value leaves the output option off entirely, so the
+			// secure path carries no trace of the insecure one.
+			{Name: "INSECURE", Value: insecureOutput(req)},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
@@ -193,7 +218,7 @@ buildctl-daemonless.sh build \
   --frontend dockerfile.v0 \
   --local context=. \
   --local dockerfile=. \
-  --output type=image,name=$IMAGE,push=true \
+  --output type=image,name=$IMAGE,push=true$INSECURE \
   --progress plain
 touch ` + dockerfileMarker + `
 echo "Pushed $IMAGE"
@@ -282,6 +307,9 @@ func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
 			// than left to default, because the builder image and the
 			// lifecycle inside it move independently of this code.
 			{Name: "CNB_PLATFORM_API", Value: "0.13"},
+			// The lifecycle takes its insecure registries as a list rather
+			// than a flag on the output, so the same fact is spelled twice.
+			{Name: "CNB_INSECURE_REGISTRIES", Value: insecureHost(req)},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
