@@ -1170,6 +1170,12 @@ type EventsData struct {
 	OK     bool
 	Error  string
 	Events []orchestrator.EventInfo
+
+	// Page is the window being shown, and Read is how much of the stream was
+	// looked at to build it — shown because a search that found nothing needs
+	// to say how far it looked.
+	Page Page
+	Read int
 }
 
 // Events is where Kubernetes explains itself. "Pending" is not actionable;
@@ -1180,14 +1186,20 @@ templ Events(d EventsData) {
 		@clusterCallout(d.Error)
 	}
 	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">
+				if d.Page.Filtered() {
+					{ plural(d.Page.Matched, "match") } in { plural(d.Read, "event") }
+				} else {
+					{ plural(d.Page.Matched, "event") }
+				}
+			</span>
+			@searchBox(d.Page, "Search events")
+		</div>
 		if len(d.Events) == 0 {
-			<div class="empty">
-				<p class="font-medium text-foreground">No events</p>
-				<p>
-					Nothing reported, or the cluster is unreachable. Kubernetes also
-					expires events after about an hour.
-				</p>
-			</div>
+			@noMatches(d.Page, "No events",
+				"Nothing reported, or the cluster is unreachable. Kubernetes also "+
+					"expires events after about an hour.")
 		} else {
 			<div class="rows">
 				for _, e := range d.Events {
@@ -1215,6 +1227,7 @@ templ Events(d EventsData) {
 				}
 			</div>
 		}
+		@pageControls(d.Page)
 	</div>
 }
 

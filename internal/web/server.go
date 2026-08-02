@@ -943,14 +943,41 @@ func (s *Server) clusterEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	data := EventsData{OK: true}
 
-	events, err := s.orch.Events(ctx, 100)
+	// Deeper than a page, so searching has something to search. The window is
+	// still bounded: Kubernetes discards events after an hour or so anyway, and
+	// reading without a limit would make a busy cluster's churn this page's
+	// problem.
+	events, err := s.orch.Events(ctx, eventReadLimit)
 	if err != nil {
 		data.OK = false
 		data.Error = err.Error()
 	}
-	data.Events = events
+
+	query, number := pageRequest(r)
+	data.Events, data.Page = paginate(events, query, number,
+		"/cluster/events", nil, eventMatches)
+	data.Read = len(events)
 
 	s.render(w, r, Events(data))
+}
+
+// eventReadLimit is how much of the cluster's event stream is read.
+//
+// Larger than a page and far smaller than everything. Searching only sees what
+// was read, which the page says rather than implying it searched history.
+const eventReadLimit = 1000
+
+// eventMatches is what a search looks at.
+//
+// Every field shown on the row, so what somebody can see is what they can
+// search for. A search that silently ignored the message column would be worse
+// than none: it would answer "no matches" about text on the screen.
+func eventMatches(e orchestrator.EventInfo, needle string) bool {
+	return strings.Contains(strings.ToLower(e.Object), needle) ||
+		strings.Contains(strings.ToLower(e.Reason), needle) ||
+		strings.Contains(strings.ToLower(e.Message), needle) ||
+		strings.Contains(strings.ToLower(e.Namespace), needle) ||
+		strings.Contains(strings.ToLower(e.Type), needle)
 }
 
 func (s *Server) clusterNodes(w http.ResponseWriter, r *http.Request) {

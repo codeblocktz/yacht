@@ -1,0 +1,82 @@
+package web
+
+import "strconv"
+
+// searchBox is the filter above a list.
+//
+// A GET form, so a filtered view has a URL somebody can bookmark, link, or
+// reload. It also means the search survives a page refresh without any state
+// on the server — which is the difference between a filter and a mode.
+templ searchBox(p Page, placeholder string) {
+	<form method="get" action={ templ.URL(p.Base) } class="flex items-center gap-2">
+		// Anything the surface needs kept travels as hidden fields. A form
+		// submits only what it contains, so without these, searching would
+		// quietly drop whichever view somebody was looking at.
+		for key, values := range p.Extra {
+			for _, v := range values {
+				<input type="hidden" name={ key } value={ v }/>
+			}
+		}
+		<input
+			class="control h-8 w-[220px]"
+			type="search"
+			name="q"
+			value={ p.Query }
+			placeholder={ placeholder }
+			aria-label={ placeholder }
+		/>
+		<button class="btn btn-sm" type="submit">Search</button>
+		if p.Filtered() {
+			<a class="btn btn-ghost btn-sm" href={ templ.URL(p.Href(1)) }>Clear</a>
+		}
+	</form>
+}
+
+// pageControls is the footer under a list.
+//
+// Drawn only when there is more than one page. Controls that are always
+// present but usually disabled are furniture; these appear when they mean
+// something.
+templ pageControls(p Page) {
+	if p.Total > 1 {
+		<div class="flex items-center justify-between gap-3 border-t border-border px-4 py-2.5">
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(p.From) }&ndash;{ strconv.Itoa(p.To) } of { strconv.Itoa(p.Matched) }
+			</span>
+			<div class="flex items-center gap-2">
+				if p.HasPrev() {
+					<a class="btn btn-sm" href={ templ.URL(p.PrevHref()) }>Previous</a>
+				} else {
+					<span class="btn btn-sm opacity-40" aria-disabled="true">Previous</span>
+				}
+				<span class="text-[12px] text-muted-foreground tabular-nums">
+					{ strconv.Itoa(p.Number) } / { strconv.Itoa(p.Total) }
+				</span>
+				if p.HasNext() {
+					<a class="btn btn-sm" href={ templ.URL(p.NextHref()) }>Next</a>
+				} else {
+					<span class="btn btn-sm opacity-40" aria-disabled="true">Next</span>
+				}
+			</div>
+		</div>
+	}
+}
+
+// noMatches distinguishes an empty list from an empty search.
+//
+// They look identical and mean opposite things: one says this cluster is quiet,
+// the other says the thing you asked for is not in what was read.
+templ noMatches(p Page, empty, because string) {
+	<div class="empty">
+		if p.Filtered() {
+			<p class="font-medium text-foreground">Nothing matched &ldquo;{ p.Query }&rdquo;</p>
+			<p>Only what has been read is searched, not the whole history.</p>
+			<a class="btn btn-sm mt-3" href={ templ.URL(p.Href(1)) }>Clear the search</a>
+		} else {
+			<p class="font-medium text-foreground">{ empty }</p>
+			if because != "" {
+				<p>{ because }</p>
+			}
+		}
+	</div>
+}

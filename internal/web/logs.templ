@@ -299,17 +299,26 @@ templ httpLogView(d DeployLogsData) {
 			}
 		</span>
 		<span class="text-[12px] text-muted-foreground tabular-nums">
-			{ plural(len(d.HTTP.Lines), "request") }
+			{ plural(d.HTTPPage.Matched, "request") }
 		</span>
 	</div>
+	if len(d.HTTP.Hosts) > 0 {
+		<div class="canvas-sheet-actions">
+			@searchBox(d.HTTPPage, "Search path, method, status")
+		</div>
+	}
 	if len(d.HTTP.Lines) == 0 {
 		<div class="canvas-sheet-body">
-			<div class="empty">
-				<p class="font-medium text-foreground">No requests recorded</p>
-				if d.HTTP.Note != "" {
-					<p>{ d.HTTP.Note }</p>
-				}
-			</div>
+			if d.HTTPPage.Filtered() {
+				@noMatches(d.HTTPPage, "No requests recorded", d.HTTP.Note)
+			} else {
+				<div class="empty">
+					<p class="font-medium text-foreground">No requests recorded</p>
+					if d.HTTP.Note != "" {
+						<p>{ d.HTTP.Note }</p>
+					}
+				</div>
+			}
 			if d.HTTP.CanEnable {
 				<form
 					method="post"
@@ -342,7 +351,7 @@ templ httpLogView(d DeployLogsData) {
 		// from the rows below, because the rows are paged and the shape of the
 		// traffic is not.
 		<div class="http-chart-wrap">
-			@templ.JSONScript("http-chart-data", d.HTTP.Buckets())
+			@templ.JSONScript("http-chart-data", d.HTTPBuckets)
 			<div class="http-chart" data-http-chart data-source="http-chart-data"></div>
 		</div>
 		<div class="canvas-sheet-log">
@@ -362,5 +371,6 @@ templ httpLogView(d DeployLogsData) {
 				}
 			</div>
 		</div>
+		@pageControls(d.HTTPPage)
 	}
 }

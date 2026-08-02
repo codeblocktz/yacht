@@ -5,13 +5,16 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // Logger is the dashboard's view of container output.
@@ -61,6 +64,14 @@ type DeployLogsData struct {
 
 	// HTTP is what the ingress controller recorded for this app.
 	HTTP app.HTTPLogs
+
+	// HTTPBuckets is the whole timeline, computed before paging.
+	HTTPBuckets []app.HTTPBucket
+
+	// HTTPPage is the window of requests being shown. The chart above them is
+	// deliberately not paged: it summarises the traffic, and a summary of one
+	// page of it would answer a question nobody asked.
+	HTTPPage Page
 
 	// View is which of the three logs is showing.
 	View     string
@@ -113,6 +124,7 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 				s.log.Error("read http logs", slog.String("error", err.Error()))
 				d.Error = "Could not read the ingress controller's log."
 			}
+			d.pageHTTP(r, name, id)
 		}
 		s.renderPanel(ctx, w, d)
 		return
@@ -255,4 +267,35 @@ func (s *Server) httpLogsEnable(w http.ResponseWriter, r *http.Request) {
 	// Back to the tab that asked, which will now say the controller is
 	// restarting rather than that logging is off.
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+}
+
+// pageHTTP cuts the requests into a page, leaving the chart whole.
+//
+// The buckets are computed before the slice and kept on their own copy, so
+// searching for "500" narrows the rows and the timeline above them still shows
+// when the traffic actually happened. A chart that followed the filter would
+// redraw itself into whatever the search selected, which is a different and
+// much less useful picture.
+func (d *DeployLogsData) pageHTTP(r *http.Request, app string, deploy uuid.UUID) {
+	d.HTTPBuckets = d.HTTP.Buckets()
+
+	query, number := pageRequest(r)
+	base := "/apps/" + app + "/deployments/" + deploy.String() + "/logs"
+	extra := url.Values{"view": {viewHTTP}}
+
+	d.HTTP.Lines, d.HTTPPage = paginate(
+		d.HTTP.Lines, query, number, base, extra, requestMatches)
+}
+
+// requestMatches is what a search over requests looks at.
+//
+// Every column on the row, including the status as text, so "500" finds server
+// errors and "/orders" finds one endpoint. Searching only what is rendered is
+// the rule: anything else answers "no matches" about text on the screen.
+func requestMatches(l orchestrator.HTTPLogLine, needle string) bool {
+	return strings.Contains(strings.ToLower(l.Path), needle) ||
+		strings.Contains(strings.ToLower(l.Method), needle) ||
+		strings.Contains(strings.ToLower(l.Host), needle) ||
+		strings.Contains(l.Client, needle) ||
+		strings.Contains(strconv.Itoa(l.Status), needle)
 }
