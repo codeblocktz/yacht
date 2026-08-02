@@ -568,6 +568,15 @@
   .canvas-sheet-tabs { @apply shrink-0 border-b border-border px-5; }
   .canvas-sheet-body { @apply min-h-0 flex-1 overflow-y-auto px-5 py-4 text-[12.5px]; }
 
+  /* A log fills the sheet, and scrolls in one place.
+
+     .logs caps itself at 540px, which is right for a panel on a page that
+     scrolls and wrong inside a sheet that is already the height of the window:
+     it drew a short block with its own scrollbar inside a body with another,
+     and left the rest of the panel empty however much output there was. */
+  .canvas-sheet-log { @apply flex min-h-0 flex-1 flex-col overflow-hidden; }
+  .canvas-sheet-log .logs { @apply min-h-0 max-h-none flex-1 px-5; }
+
 /* The sheet's width, and why it is here rather than three rules up with the
    rest of the canvas.
    
@@ -580,7 +589,11 @@
    is the only arrangement that actually wins. */
 @layer utilities {
   @media (min-width: 40rem) {
-    .canvas-sheet { max-width: 560px !important; }
+    /* Wide enough that a log line, a variables row and a deployment's revision
+       all fit without wrapping, and still narrow enough to leave the canvas
+       behind it readable. The vw term is what keeps it off the left edge on a
+       laptop rather than a desktop. */
+    .canvas-sheet { max-width: min(760px, 88vw) !important; }
   }
 }
 

@@ -106,19 +106,50 @@ templ DeployLogPanel(d DeployLogsData) {
 			<span class="mono truncate">{ d.Deploy.Deployment.Image }</span>
 		}
 	}
-	// The app's own tabs, in the panel that covers them. An open sheet makes
-	// the document behind it inert, so a tab left back there is not just out of
-	// sight — clicking where it is hits this panel instead. Deployments reads
-	// as current because that is where this log was opened from, and following
-	// it is the way back to the list.
-	@appTabs(d.App, "")
+	@deployLogTabs(d)
 	if d.Error != "" {
 		<div class="canvas-sheet-body">
 			<div class="callout callout-err">
 				<div class="min-w-0">{ d.Error }</div>
 			</div>
 		</div>
-	} else if !d.Deploy.Live {
+	} else {
+		switch d.View {
+			case viewBuild:
+				@buildLogView()
+			case viewHTTP:
+				@httpLogView()
+			default:
+				@deployLogView(d)
+		}
+	}
+}
+
+// deployLogTabs picks which log is showing.
+//
+// Named for what wrote the output, because that is the question behind opening
+// them: a deploy that never served traffic failed either to build or to start,
+// and those are different logs in different places.
+templ deployLogTabs(d DeployLogsData) {
+	<nav class="tabs canvas-sheet-tabs">
+		@deployLogTab(d, viewDeploy, "Deploy logs")
+		@deployLogTab(d, viewBuild, "Build logs")
+		@deployLogTab(d, viewHTTP, "HTTP logs")
+	</nav>
+}
+
+templ deployLogTab(d DeployLogsData, view, label string) {
+	<a
+		class={ "tab", templ.KV("tab-active", d.View == view) }
+		href="#"
+		hx-get={ deployViewHref(d, view) }
+		hx-target="#deploy-log-panel"
+		hx-swap="innerHTML"
+	>{ label }</a>
+}
+
+templ deployLogView(d DeployLogsData) {
+	if !d.Deploy.Live {
 		// Said rather than filled with the live log under an old revision's
 		// heading. That would look like history and be the current output.
 		<div class="canvas-sheet-body">
@@ -147,15 +178,20 @@ templ DeployLogPanel(d DeployLogsData) {
 				{ plural(len(d.Deploy.Logs.Lines), "line") }
 			</span>
 		</div>
-		<div class="canvas-sheet-body !p-0">
-			if len(d.Deploy.Logs.Lines) == 0 {
+		if len(d.Deploy.Logs.Lines) == 0 {
+			<div class="canvas-sheet-body">
 				<div class="empty">
 					<p class="font-medium text-foreground">Nothing to show</p>
 					if d.Deploy.Logs.Note != "" {
 						<p>{ d.Deploy.Logs.Note }</p>
 					}
 				</div>
-			} else {
+			</div>
+		} else {
+			// Its own scrolling region, filling what the header and tabs leave.
+			// The .logs cap that suits a panel on a page would put a short block
+			// with its own scrollbar inside a sheet that scrolls as well.
+			<div class="canvas-sheet-log">
 				<div class="logs">
 					for _, l := range d.Deploy.Logs.Lines {
 						<div class="log-line">
@@ -166,7 +202,45 @@ templ DeployLogPanel(d DeployLogsData) {
 						</div>
 					}
 				</div>
-			}
-		</div>
+			</div>
+		}
 	}
+}
+
+// buildLogView explains an empty pane rather than leaving one.
+//
+// Yacht does not build images: an app is deployed from one that already
+// exists, so there is no build to have a log. This tab is here because the
+// question it answers — did this fail before it ever ran — is a real one, and
+// the answer today is that nothing here built anything.
+templ buildLogView() {
+	<div class="canvas-sheet-body">
+		<div class="empty">
+			<p class="font-medium text-foreground">Nothing was built</p>
+			<p>
+				This app runs an image that already existed, so this deploy pulled it
+				and started it. Building from source is what would write a log here,
+				and Yacht does not do that yet.
+			</p>
+		</div>
+	</div>
+}
+
+// httpLogView explains an empty pane rather than leaving one.
+templ httpLogView() {
+	<div class="canvas-sheet-body">
+		<div class="empty">
+			<p class="font-medium text-foreground">Requests are not recorded</p>
+			<p>
+				Requests reach this app through the cluster's ingress controller, which
+				is not configured to write an access log — and its log would hold every
+				tenant's traffic, so it is not somewhere one app's requests can be read
+				from as it stands.
+			</p>
+			<p>
+				The app's own output is under Deploy logs, and a server that logs its
+				requests writes them there.
+			</p>
+		</div>
+	</div>
 }

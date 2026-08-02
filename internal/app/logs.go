@@ -24,6 +24,46 @@ type LogRequest struct {
 	Tail int64
 }
 
+// Deployment returns one of an app's deployments.
+//
+// Separate from DeploymentLogs because the sheet has views that show no
+// container output at all and still need the deployment's own detail for their
+// heading. Reading the cluster to fill a pane that discards the result would
+// cost an API call per tab and, worse, make a log fetch happen where the page
+// says none did.
+func (s *Service) Deployment(
+	ctx context.Context, ownerID, appName string, deployID uuid.UUID,
+) (Deployment, error) {
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
+		return Deployment{}, err
+	}
+
+	row, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{OwnerID: ownerID, ID: deployID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Deployment{}, ErrNotFound
+		}
+		return Deployment{}, fmt.Errorf("app: read deployment: %w", err)
+	}
+	// The deployment has to belong to the app in the URL, or a deployment id is
+	// a way to read across apps within a team.
+	if row.AppID != a.ID {
+		return Deployment{}, ErrNotFound
+	}
+
+	d := Deployment{
+		ID: row.ID, AppID: row.AppID, Image: row.Image,
+		Revision: row.Revision, Status: row.Status,
+		Message: row.Message, StartedAt: row.StartedAt,
+	}
+	if row.FinishedAt.Valid {
+		finished := row.FinishedAt.Time
+		d.FinishedAt = &finished
+	}
+	return d, nil
+}
+
 // DeployLogs is what one deployment's log view can honestly show.
 type DeployLogs struct {
 	Deployment Deployment
@@ -48,32 +88,9 @@ type DeployLogs struct {
 func (s *Service) DeploymentLogs(
 	ctx context.Context, ownerID, appName string, deployID uuid.UUID, req LogRequest,
 ) (DeployLogs, error) {
-	a, err := s.Get(ctx, ownerID, appName)
+	d, err := s.Deployment(ctx, ownerID, appName, deployID)
 	if err != nil {
 		return DeployLogs{}, err
-	}
-
-	row, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{OwnerID: ownerID, ID: deployID})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return DeployLogs{}, ErrNotFound
-		}
-		return DeployLogs{}, fmt.Errorf("app: read deployment: %w", err)
-	}
-	// The deployment has to belong to the app in the URL, or a deployment id is
-	// a way to read across apps within a team.
-	if row.AppID != a.ID {
-		return DeployLogs{}, ErrNotFound
-	}
-
-	d := Deployment{
-		ID: row.ID, AppID: row.AppID, Image: row.Image,
-		Revision: row.Revision, Status: row.Status,
-		Message: row.Message, StartedAt: row.StartedAt,
-	}
-	if row.FinishedAt.Valid {
-		finished := row.FinishedAt.Time
-		d.FinishedAt = &finished
 	}
 
 	out := DeployLogs{Deployment: d}
