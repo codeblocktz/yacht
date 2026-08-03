@@ -386,9 +386,9 @@ func (rt *roleTeam) postClaiming(
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("Origin", "https://yacht.test")
 	if c != nil {
 		req.AddCookie(c)
-		req.Header.Set("Origin", "https://yacht.test")
 	}
 	rec := httptest.NewRecorder()
 	rt.handler.ServeHTTP(rec, req)
