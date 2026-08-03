@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -49,16 +51,145 @@ func (n NetResolver) resolver() *net.Resolver {
 	return net.DefaultResolver
 }
 
-// Custom is a hostname somebody brought, and whether it is proven.
+// Custom is a hostname somebody brought, and how far it has got.
 type Custom struct {
 	ID       uuid.UUID
 	Host     string
 	Verified bool
 
+	// State is the detail Verified flattens away. Verified is kept because it
+	// is what routing is gated on, and it is generated in the database from
+	// exactly this value — the two cannot disagree.
+	State State
+
 	// Target is what the CNAME has to point at. Carried on the row so a change
 	// to the platform target shows up as a domain needing re-verification
 	// rather than silently invalidating one that was proven against the old.
 	Target string
+
+	// Observed is what the name resolved to when it was last looked at, as a
+	// sentence. Empty when the last check found nothing, or found what it
+	// wanted — a domain that is working has nothing to explain.
+	Observed string
+
+	// LastError is why the last check could not answer. Distinct from Observed:
+	// a resolver timing out says nothing about the domain, and merging the two
+	// would present an outage as a misconfiguration.
+	LastError string
+
+	// LastCheckedAt is zero until something has actually looked.
+	LastCheckedAt time.Time
+	NextCheckAt   time.Time
+
+	// VerifiedAt is when this was first proven, not when it was last checked.
+	VerifiedAt time.Time
+
+	// Attempts is how many consecutive checks have run without it settling.
+	// Drives the backoff, and is reset by asking for a check by hand.
+	Attempts int
+}
+
+// Observation is what one look at DNS actually saw.
+//
+// pointsAt used to answer this question with a bool, which is why the failure
+// message was a black box: the code knew the name resolved to
+// ghs.googlehosted.com and threw that away before anybody could be told.
+type Observation struct {
+	// Resolves reports whether the name answered at all, by any record type.
+	Resolves bool
+
+	// CNAME is the canonical name the host answered with. Empty when there is
+	// no CNAME, including the common case where a resolver answers a plain A
+	// record by echoing the name back.
+	CNAME string
+
+	// Addrs is what the host resolves to; TargetAddrs what the target does.
+	// Both kept so the diagnosis can show the comparison that was actually
+	// made rather than asserting its conclusion.
+	Addrs       []string
+	TargetAddrs []string
+
+	// PointsHere is the verdict the routing gate is built on.
+	PointsHere bool
+
+	// Err is why the lookup could not answer. A non-nil Err means this
+	// observation says nothing about the domain.
+	Err error
+}
+
+// Describe renders what was seen, for somebody who has to fix it.
+//
+// One line, because it sits under a step in a list. The CNAME is preferred over
+// addresses: it is what the person typed into their provider, so it is what they
+// can recognise as wrong.
+func (o Observation) Describe() string {
+	switch {
+	case o.Err != nil:
+		return ""
+	case o.CNAME != "":
+		return "points at " + strings.TrimSuffix(o.CNAME, ".")
+	case len(o.Addrs) > 0:
+		return "resolves to " + strings.Join(o.Addrs, ", ")
+	}
+	return ""
+}
+
+// Probe looks up a host and reports everything it saw.
+//
+// The lookups are the same two pointsAt has always made, in the same order and
+// with the same meaning. What is different is that the detail survives the call.
+func Probe(ctx context.Context, res Resolver, host, target string) Observation {
+	var obs Observation
+
+	if cname, err := res.LookupCNAME(ctx, host); err == nil {
+		// A resolver with no CNAME to report answers with the name it was
+		// asked about. Treating that as a CNAME would tell somebody their
+		// A record is a CNAME pointing at itself.
+		if normalize(cname) != normalize(host) {
+			obs.CNAME = cname
+			obs.Resolves = true
+		}
+		if normalize(cname) == normalize(target) {
+			obs.PointsHere = true
+			return obs
+		}
+	}
+
+	// An apex domain cannot carry a CNAME, so the fallback is that both names
+	// answer with the same addresses. A flattened ALIAS record looks exactly
+	// like this and is the correct way to point an apex at a platform.
+	want, wantErr := res.LookupHost(ctx, target)
+	obs.TargetAddrs = want
+
+	got, gotErr := res.LookupHost(ctx, host)
+	if gotErr == nil && len(got) > 0 {
+		obs.Addrs = got
+		obs.Resolves = true
+	}
+
+	// The target failing to resolve is this install's problem, not the
+	// customer's. Reported as an error rather than as the domain being wrong,
+	// so a broken CNAME target does not mark every domain on the install
+	// misdirected.
+	if wantErr != nil || len(want) == 0 {
+		obs.Err = fmt.Errorf("domain: the configured target %q does not resolve", target)
+		return obs
+	}
+	if gotErr != nil || len(got) == 0 {
+		return obs
+	}
+
+	set := make(map[string]bool, len(want))
+	for _, a := range want {
+		set[a] = true
+	}
+	for _, a := range got {
+		if set[a] {
+			obs.PointsHere = true
+			return obs
+		}
+	}
+	return obs
 }
 
 // AddCustom claims a hostname for an app, unverified.
@@ -107,12 +238,16 @@ func AddCustom(
 	return toCustom(row), nil
 }
 
-// Verify proves a claim by resolving it.
+// Verify proves a claim by resolving it, now.
 //
 // The check is that the name resolves to the target, by CNAME or by resolving
 // to the same addresses. Requiring a literal CNAME record would fail for an
 // apex domain, which cannot have one — and telling somebody their correctly
 // configured apex is wrong is worse than accepting the address match.
+//
+// This and the background checker are the same code: both call Check, which is
+// the only function that decides what state a domain is in. Two paths writing
+// state independently is how they end up disagreeing.
 func Verify(
 	ctx context.Context, q *dbgen.Queries, res Resolver, ownerID string, id uuid.UUID,
 ) error {
@@ -123,54 +258,74 @@ func Verify(
 		}
 		return fmt.Errorf("domain: read claim: %w", err)
 	}
-	if row.VerifyTarget == "" {
-		return ErrNoTarget
-	}
 
-	if !pointsAt(ctx, res, row.Host, row.VerifyTarget) {
-		return ErrNotVerified
-	}
-
-	n, err := q.VerifyCustomDomain(ctx, dbgen.VerifyCustomDomainParams{OwnerID: ownerID, ID: id})
+	state, err := Check(ctx, q, res, row, time.Now())
 	if err != nil {
-		return fmt.Errorf("domain: mark verified: %w", err)
+		return err
 	}
-	if n == 0 {
-		return ErrDomainNotFound
+	if !state.Routable() {
+		return ErrNotVerified
 	}
 	return nil
 }
 
-// pointsAt reports whether host resolves to target.
-func pointsAt(ctx context.Context, res Resolver, host, target string) bool {
-	if cname, err := res.LookupCNAME(ctx, host); err == nil {
-		if normalize(cname) == normalize(target) {
-			return true
-		}
+// Check looks one domain up and records what it found.
+//
+// The single place a domain's state is decided and written. Returns the state it
+// settled on so a caller can act on a transition — applying the Ingress when a
+// domain becomes routable, or withdrawing it when one drifts.
+//
+// now is passed rather than read so the backoff can be tested against a clock
+// the test controls.
+func Check(
+	ctx context.Context, q *dbgen.Queries, res Resolver, row dbgen.Domain, now time.Time,
+) (State, error) {
+	previous := State(row.State)
+
+	// No target configured is not a failed check, it is an install that cannot
+	// verify anything. Recorded as the error it is, leaving the state alone.
+	if row.VerifyTarget == "" {
+		return previous, record(ctx, q, row, previous, Observation{
+			Err: ErrNoTarget,
+		}, now)
 	}
 
-	// An apex domain cannot carry a CNAME, so the fallback is that both names
-	// answer with the same addresses. A flattened ALIAS record looks exactly
-	// like this and is the correct way to point an apex at a platform.
-	want, err := res.LookupHost(ctx, target)
-	if err != nil || len(want) == 0 {
-		return false
-	}
-	got, err := res.LookupHost(ctx, host)
-	if err != nil || len(got) == 0 {
-		return false
+	obs := Probe(ctx, res, row.Host, row.VerifyTarget)
+	state := Classify(obs, previous)
+	return state, record(ctx, q, row, state, obs, now)
+}
+
+// record writes the outcome of one check.
+func record(
+	ctx context.Context, q *dbgen.Queries, row dbgen.Domain,
+	state State, obs Observation, now time.Time,
+) error {
+	// Attempts count consecutive checks that did not change anything. A state
+	// that moved is progress, and progress should be looked at again promptly
+	// rather than at whatever interval the previous state had backed off to.
+	attempts := row.CheckAttempts + 1
+	if state != State(row.State) {
+		attempts = 1
 	}
 
-	set := make(map[string]bool, len(want))
-	for _, a := range want {
-		set[a] = true
+	var lastErr string
+	if obs.Err != nil {
+		lastErr = obs.Err.Error()
 	}
-	for _, a := range got {
-		if set[a] {
-			return true
-		}
+
+	_, err := q.RecordDomainCheck(ctx, dbgen.RecordDomainCheckParams{
+		ID:            row.ID,
+		State:         string(state),
+		Observed:      obs.Describe(),
+		LastError:     lastErr,
+		CheckedAt:     pgtype.Timestamptz{Time: now, Valid: true},
+		NextCheckAt:   now.Add(NextCheck(state, int(attempts))),
+		CheckAttempts: attempts,
+	})
+	if err != nil {
+		return fmt.Errorf("domain: record check for %s: %w", row.Host, err)
 	}
-	return false
+	return nil
 }
 
 // ListCustom returns an app's custom domains.
@@ -221,6 +376,16 @@ func RoutableHosts(
 
 func toCustom(row dbgen.Domain) Custom {
 	return Custom{
-		ID: row.ID, Host: row.Host, Verified: row.Verified, Target: row.VerifyTarget,
+		ID:            row.ID,
+		Host:          row.Host,
+		Verified:      row.Verified,
+		State:         State(row.State),
+		Target:        row.VerifyTarget,
+		Observed:      row.Observed,
+		LastError:     row.LastError,
+		LastCheckedAt: row.LastCheckedAt.Time,
+		NextCheckAt:   row.NextCheckAt,
+		VerifiedAt:    row.VerifiedAt.Time,
+		Attempts:      int(row.CheckAttempts),
 	}
 }

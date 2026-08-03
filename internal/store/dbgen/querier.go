@@ -17,6 +17,13 @@ type Querier interface {
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
+	// Claims the domains whose next check is due.
+	//
+	// FOR UPDATE SKIP LOCKED so the checker can run on every replica without those
+	// replicas agreeing on anything: each takes rows nobody else holds, and a row
+	// already being worked on is skipped rather than waited for. The build
+	// reconciler is safe on several replicas for the same reason.
+	ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsDueForCheckParams) ([]Domain, error)
 	ClearClusterJoin(ctx context.Context) (int64, error)
 	ClearPlatformRegistry(ctx context.Context) error
 	// Forget every saved position in a project, so the next render lays it out
@@ -41,6 +48,10 @@ type Querier interface {
 	// Deliberately not an upsert on host: the global unique index is what makes two
 	// teams claiming one name an error rather than a silent transfer, and papering
 	// over it here is exactly how a domain gets stolen.
+	//
+	// next_check_at defaults to now(), so a claim is picked up by the checker on its
+	// next pass rather than waiting for somebody to press a button. That is the
+	// whole difference between this and what it replaced.
 	CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
@@ -157,6 +168,11 @@ type Querier interface {
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
 	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
+	// Every custom domain on the install, worst first.
+	//
+	// Nothing answered "which domains are stuck" before this. A domain that is not
+	// routed is the only kind anybody needs to find, so it sorts to the top.
+	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
@@ -180,9 +196,30 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	// Moves a proven domain to routed, once the Ingress actually carries it.
+	//
+	// Guarded on the state it is coming from, so a check that has since found drift
+	// is not overwritten by an apply that started before it.
+	MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error)
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
+	// Records what a check saw.
+	//
+	// Not scoped by owner, and deliberately: the background checker works through
+	// every install's rows by id, having already claimed them below. Owner scoping
+	// protects a request that names a row; this is not one. Every path that reaches
+	// here from a request goes through GetCustomDomain first, which is scoped.
+	//
+	// The schedule arrives already computed rather than being worked out in SQL, so
+	// the backoff can be tested against an injected clock instead of against now().
+	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
 	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
+	// Brings a domain's next check forward. What the "Check now" button does.
+	//
+	// It resets the attempt count as well, because somebody pressing it is telling
+	// us the situation changed — and a domain that had backed off to a fifteen
+	// minute interval should not go straight back to one.
+	RequestDomainCheck(ctx context.Context, arg RequestDomainCheckParams) (int64, error)
 	// Hostnames that may actually be routed to.
 	//
 	// A managed host is routable because the platform issued it; a custom one only
@@ -226,9 +263,11 @@ type Querier interface {
 	// index is a different conflict and is deliberately left to raise, because two
 	// apps claiming one hostname is a real error, not something to paper over.
 	//
-	// verified is true because a name the platform issued needs no proof of
+	// The state is 'routed' because a name the platform issued needs no proof of
 	// ownership; requiring proof would mean inventing a verification step for a
-	// name we already control.
+	// name we already control. verified follows from it and is not written here —
+	// it is generated from state, so that the routing gate and the state on screen
+	// cannot disagree.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
 	// Users and sessions carry no owner_id: a person exists before they belong to
@@ -241,9 +280,6 @@ type Querier interface {
 	// person means by editing one, and a separate update path would need the
 	// caller to know which case they are in.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
-	// Marks a claim proven. Scoped by owner as well as id: verifying is a write,
-	// and a write on somebody else's row is the thing owner scoping exists for.
-	VerifyCustomDomain(ctx context.Context, arg VerifyCustomDomainParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)
