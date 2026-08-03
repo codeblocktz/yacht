@@ -288,10 +288,15 @@ type AppDetailData struct {
 	Deployments []app.Deployment
 	BaseURL     string
 
-	// Net is the app's routing, shown in the Settings tab. Loaded alongside the
-	// rest rather than on its own page: domains are something you go to
-	// Settings to change, and a panel nothing links to is a panel nobody finds.
-	Net    app.Networking
+	// Net is the app's routing. Loaded alongside the rest rather than on its
+	// own page: a panel nothing links to is a panel nobody finds, which is
+	// exactly what happened the first time.
+	Net app.Networking
+
+	// ResolverName is which resolver answered the last domain check, so the
+	// page can attribute what it reports rather than stating it as fact.
+	ResolverName string
+
 	Notice string
 
 	// Error is a refusal from the action that produced this render, shown with
@@ -313,6 +318,7 @@ templ AppDetail(d AppDetailData) {
 				@appTab(d.App.Name, d.Tab, "variables", "Variables")
 				@appTab(d.App.Name, d.Tab, "metrics", "Metrics")
 				@appTab(d.App.Name, d.Tab, "storage", "Storage")
+				@appTab(d.App.Name, d.Tab, "domains", "Domains")
 				@appTab(d.App.Name, d.Tab, "settings", "Settings")
 			</nav>
 			switch d.Tab {
@@ -322,6 +328,8 @@ templ AppDetail(d AppDetailData) {
 					@appMetrics(d)
 				case "storage":
 					@appStorage(d)
+				case "domains":
+					@appDomains(d)
 				case "settings":
 					@appSettings(d)
 				default:
@@ -430,6 +438,7 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
 		@appTab(name, active, "storage", "Storage")
+		@appTab(name, active, "domains", "Domains")
 		@appTab(name, active, "settings", "Settings")
 	</nav>
 }
@@ -670,6 +679,23 @@ templ appMetrics(d AppDetailData) {
 	</div>
 }
 
+// ---- domains tab
+//
+// Its own tab rather than three panels inside Settings, where these sat between
+// health checks and resource limits. Adding a domain is a task with several
+// steps and a wait in the middle, and a thing you wait on needs somewhere to be
+// watched — which a settings form is not.
+templ appDomains(d AppDetailData) {
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	@publicNetworking(netOf(d))
+	@customDomains(netOf(d))
+	@routingOptions(netOf(d))
+}
+
 // ---- settings tab
 templ appSettings(d AppDetailData) {
 	{{ a := d.App }}
@@ -683,9 +709,6 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
 		</div>
 	}
-	@publicNetworking(netOf(d))
-	@customDomains(netOf(d))
-	@routingOptions(netOf(d))
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">

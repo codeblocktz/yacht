@@ -174,6 +174,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 		} else {
 			s.log.Error("read networking", slog.String("error", err.Error()))
 		}
+		d.ResolverName = s.nets.ResolverName()
 	}
 	if deps, err := s.apps.Deployments(ctx, a.OwnerID, a.ID, 20); err == nil {
 		d.Deployments = deps

@@ -22,6 +22,47 @@ type Nets interface {
 	AddDomain(ctx context.Context, ownerID, name, host string) error
 	VerifyDomain(ctx context.Context, ownerID, name string, id uuid.UUID) error
 	RemoveDomain(ctx context.Context, ownerID, name string, id uuid.UUID) error
+
+	// ResolverName says which resolver answers about custom domains, so the
+	// page can attribute what it reports rather than stating it as fact.
+	ResolverName() string
+}
+
+// domainsFragment is the polled half of the custom domain list.
+//
+// Its own endpoint rather than re-rendering the tab, so a poll every three
+// seconds does not replace the add-domain form under somebody typing into it.
+func (s *Server) domainsFragment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	net, err := s.nets.Networking(ctx, owner.ID, name)
+	if err != nil {
+		if errors.Is(err, app.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.log.Error("read networking", slog.String("error", err.Error()))
+		http.Error(w, "could not read domains", http.StatusInternalServerError)
+		return
+	}
+
+	d := s.networkingData(name, net, app.App{})
+	if err := CustomDomainList(d).Render(ctx, w); err != nil {
+		s.log.Error("render domains fragment", slog.String("error", err.Error()))
+	}
+}
+
+// networkingData assembles what the routing sections render from.
+func (s *Server) networkingData(name string, net app.Networking, a app.App) NetworkingData {
+	return NetworkingData{
+		App:           name,
+		Net:           net,
+		UntrustedCert: a.UntrustedCert(),
+		ResolverName:  s.nets.ResolverName(),
+		Settled:       domainsSettled(net),
+	}
 }
 
 // networkingSet stores the routing toggles.
@@ -33,10 +74,10 @@ func (s *Server) networkingSet(w http.ResponseWriter, r *http.Request) {
 	err := s.nets.SetNetworking(ctx, owner.ID, name,
 		r.FormValue("https_only") == "on", r.FormValue("cname_only") == "on")
 	if err != nil {
-		s.appActionFailed(w, r, name, "settings", err)
+		s.appActionFailed(w, r, name, "domains", err)
 		return
 	}
-	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 }
 
 // domainAdd claims a hostname.
@@ -46,14 +87,14 @@ func (s *Server) domainAdd(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	if err := s.nets.AddDomain(ctx, owner.ID, name, r.FormValue("host")); err != nil {
-		s.appActionFailed(w, r, name, "settings", err)
+		s.appActionFailed(w, r, name, "domains", err)
 		return
 	}
-	// Nothing routes yet and the next step is theirs, so it is said rather than
-	// left for them to discover from the domain sitting there unverified.
-	s.appActionNoticed(w, r, name, "settings",
-		"Domain added. Create the DNS record shown, then verify it — nothing is "+
-			"routed until it resolves here.")
+	// The next step is theirs, so it is said. What is no longer said is "then
+	// verify it" — nothing has to be pressed now, and telling somebody to come
+	// back and click is how the old flow wasted their time.
+	s.flashOK(w, r, "Domain added. Create the record shown and Yacht will pick it up on its own.")
+	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 }
 
 // domainVerify proves a claim.
@@ -70,21 +111,22 @@ func (s *Server) domainVerify(w http.ResponseWriter, r *http.Request) {
 
 	switch err := s.nets.VerifyDomain(ctx, owner.ID, name, id); {
 	case err == nil:
-		s.appActionNoticed(w, r, name, "settings",
-			"Verified. This domain is now routed to the app.")
+		s.flashOK(w, r, "Verified. This domain is now routed to the app.")
 	case errors.Is(err, domain.ErrNotVerified):
-		// The common case, and not really a fault: DNS takes a while to
-		// spread, and an error that reads like a breakage sends somebody
-		// looking for one.
-		s.appActionFailed(w, r, name, "settings", errors.New(
-			"that name does not resolve here yet — DNS changes can take a while "+
-				"to spread, so check the record and try again"))
+		// Not a fault, and no longer a dead end: the check just ran, the row
+		// now records what it saw, and the page the redirect lands on shows
+		// that. A warning rather than an error, because nothing broke — the
+		// record simply is not there yet.
+		s.flashWarn(w, r, "Checked just now — it does not resolve here yet. "+
+			"The steps below show what was found.")
 	case errors.Is(err, domain.ErrDomainNotFound):
 		http.NotFound(w, r)
+		return
 	default:
 		s.log.Error("verify domain", slog.String("error", err.Error()))
-		s.appActionFailed(w, r, name, "settings", err)
+		s.flashErr(w, r, err.Error())
 	}
+	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 }
 
 // domainRemove releases a claim.
@@ -103,10 +145,12 @@ func (s *Server) domainRemove(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		s.appActionFailed(w, r, name, "settings", err)
+		s.flashErr(w, r, err.Error())
+		http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+	s.flashOK(w, r, "Domain removed. It is no longer routed to the app.")
+	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 }
 
 // ---- install-wide DNS
@@ -148,11 +192,15 @@ func (s *Server) dnsSet(w http.ResponseWriter, r *http.Request) {
 
 // netOf adapts the app detail into what the networking sections take.
 //
-// The sections were written for a page of their own and are now part of the
-// Settings tab; keeping them on their own small type means they still say what
-// they need rather than reaching into everything the tab happens to hold.
+// The sections were written for a page of their own and are now the Domains
+// tab; keeping them on their own small type means they still say what they need
+// rather than reaching into everything the tab happens to hold.
 func netOf(d AppDetailData) NetworkingData {
 	return NetworkingData{
-		App: d.App.Name, Net: d.Net, UntrustedCert: d.App.UntrustedCert(),
+		App:           d.App.Name,
+		Net:           d.Net,
+		UntrustedCert: d.App.UntrustedCert(),
+		ResolverName:  d.ResolverName,
+		Settled:       domainsSettled(d.Net),
 	}
 }

@@ -524,6 +524,14 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
+			if s.nets != nil {
+				// Domains get a tab of their own rather than a section inside
+				// Settings, where they sat among health checks and resources.
+				// A domain being added is a task with several steps and a wait
+				// in the middle; it needs somewhere to be watched.
+				r.Get("/apps/{name}/domains", s.appDetail)
+				r.Get("/apps/{name}/domains/fragment", s.domainsFragment)
+			}
 			if s.logs != nil {
 				r.Get("/apps/{name}/logs", s.appLogs)
 				// The fragment stays alongside the stream. It is what the page
@@ -706,6 +714,8 @@ func detailTab(r *http.Request) string {
 		return "storage"
 	case strings.HasSuffix(r.URL.Path, "/settings"):
 		return "settings"
+	case strings.HasSuffix(r.URL.Path, "/domains"):
+		return "domains"
 	}
 	return ""
 }

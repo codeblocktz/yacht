@@ -582,7 +582,7 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		ScratchPaths:  runtimeOf(a).ScratchPaths,
 		HealthPath:    a.HealthPath,
 		Liveness:      a.Liveness,
-		Hosts: hosts,
+		Hosts:         hosts,
 		// Only what the wildcard certificate actually covers. Every host used
 		// to go in, so a custom domain was served from a certificate that could
 		// not match it while the dashboard showed a green "routed" beside it.
@@ -592,7 +592,7 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		// annotation with an empty value would tell ExternalDNS to publish a
 		// CNAME to nothing, which is worse than leaving it to its default.
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
-		Volumes:       volumeSpecs(vols),
+		Volumes:     volumeSpecs(vols),
 	})
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -248,6 +249,39 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
+			// Every state a brought domain can be in, side by side.
+			//
+			// These are the states that rot hardest: reaching "points
+			// elsewhere" by clicking means owning a domain, pointing it at the
+			// wrong place, and waiting for DNS. Nobody does that twice, so
+			// nobody sees these again after the day they were written.
+			file: "states-domains.html", path: "/apps/web/domains",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}, {Label: "Domains"}},
+			page: stack(
+				section("Waiting for DNS", "the record has not appeared yet",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateAwaitingDNS, "")))),
+				section("Points elsewhere", "resolves, but not here — and says where",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateMisdirected,
+						"points at ghs.googlehosted.com")))),
+				section("Proven, not yet routed", "between the check and the Ingress",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateVerified, "")))),
+				section("Live", "serving, and honest about the certificate",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateRouted, "")))),
+				section("Needs attention", "was live and stopped resolving",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateDrifted,
+						"points at ghs.googlehosted.com")))),
+				section("A resolver that will not answer", "not a verdict about the domain",
+					CustomDomainList(domainGallery(func() domain.Custom {
+						c := domainAt(now, domain.StateAwaitingDNS, "")
+						c.LastError = `domain: the configured target "edge.example.com" does not resolve`
+						return c
+					}()))),
+				section("Nothing claimed", "the empty state",
+					CustomDomainList(NetworkingData{App: "web", Settled: true,
+						Net: app.Networking{Target: "edge.example.com"}})),
+			),
+		},
+		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
@@ -391,6 +425,53 @@ func activityFailing() app.DeployActivity {
 	}
 	days[27].Cancelled = 2
 	return activityFrom(days)
+}
+
+// domainAt builds a claim sitting in one state, with the timestamps that state
+// would plausibly carry.
+//
+// The times matter to the picture: a domain that has been waiting eleven
+// minutes reads differently from one checked four seconds ago, and the line
+// under the steps is the part somebody uses to decide whether anything is still
+// happening.
+func domainAt(now time.Time, state domain.State, observed string) domain.Custom {
+	c := domain.Custom{
+		ID:            uuid.New(),
+		Host:          "shop.example.com",
+		Target:        "edge.example.com",
+		State:         state,
+		Observed:      observed,
+		CreatedAt:     now.Add(-11 * time.Minute),
+		LastCheckedAt: now.Add(-4 * time.Second),
+		NextCheckAt:   now.Add(6 * time.Second),
+		Attempts:      3,
+	}
+	if state.Routable() {
+		c.VerifiedAt = now.Add(-9 * time.Minute)
+	}
+	if state == domain.StateRouted {
+		// Settled, so the page stops asking — and the gallery shows the version
+		// without the polling attribute, which is the one most people see.
+		c.NextCheckAt = now.Add(6 * time.Hour)
+	}
+	return c
+}
+
+func domainGallery(c domain.Custom) NetworkingData {
+	return NetworkingData{
+		App:          "web",
+		ResolverName: "1.1.1.1:53",
+		Settled:      c.State.Settled(),
+		Net: app.Networking{
+			Managed: "web.apps.example.com",
+			Target:  "edge.example.com",
+			// HTTPS is enforced, which is what makes the certificate step say
+			// the thing worth reading: no certificate covers a brought domain,
+			// so every visitor gets a warning.
+			HTTPSOnly: true,
+			Custom:    []domain.Custom{c},
+		},
+	}
 }
 
 // panelWrap puts a component inside the standard panel chrome, so gallery

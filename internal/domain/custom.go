@@ -81,6 +81,10 @@ type Custom struct {
 	LastCheckedAt time.Time
 	NextCheckAt   time.Time
 
+	// CreatedAt is when the claim was made. The first step of the progression
+	// the page draws, and the only one that is true the moment a domain exists.
+	CreatedAt time.Time
+
 	// VerifiedAt is when this was first proven, not when it was last checked.
 	VerifiedAt time.Time
 
@@ -385,6 +389,7 @@ func toCustom(row dbgen.Domain) Custom {
 		LastError:     row.LastError,
 		LastCheckedAt: row.LastCheckedAt.Time,
 		NextCheckAt:   row.NextCheckAt,
+		CreatedAt:     row.CreatedAt,
 		VerifiedAt:    row.VerifiedAt.Time,
 		Attempts:      int(row.CheckAttempts),
 	}

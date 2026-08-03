@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/app"
+import (
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/domain"
+)
 
 // NetworkingData is the app's routing panel.
 type NetworkingData struct {
@@ -11,8 +14,32 @@ type NetworkingData struct {
 	// nobody will trust, because the install has no wildcard certificate.
 	UntrustedCert bool
 
+	// ResolverName is which resolver answered the last check.
+	//
+	// Shown because "this name does not resolve" is one resolver's opinion, and
+	// somebody comparing it against their own dig output needs to know whether
+	// the two asked the same server.
+	ResolverName string
+
+	// Settled reports that no domain here is still moving, which is what stops
+	// the polling fragment asking again.
+	Settled bool
+
 	Notice string
 	Error  string
+}
+
+// customDomainURL is where the hostname links to.
+//
+// http unless the app is HTTPS-only, and deliberately not https-by-default: no
+// certificate covers a brought domain, so an https link is one that fails in the
+// browser. Sending somebody to a scheme that works is better than sending them
+// to the one we wish worked.
+func customDomainURL(d NetworkingData, c domain.Custom) string {
+	if d.Net.HTTPSOnly {
+		return "https://" + c.Host
+	}
+	return "http://" + c.Host
 }
 
 templ publicNetworking(d NetworkingData) {
@@ -81,41 +108,8 @@ templ customDomains(d NetworkingData) {
 					</p>
 				</div>
 			} else {
-				if len(d.Net.Custom) > 0 {
-					<div class="rows mb-4 rounded-md border border-border">
-						for _, c := range d.Net.Custom {
-							<div class="row-item">
-								@icon("layers")
-								<span class="min-w-0 flex-1">
-									<span class="mono block truncate">{ c.Host }</span>
-									if !c.Verified {
-										<span class="block text-muted-foreground">
-											CNAME &rarr; <code class="mono">{ c.Target }</code>
-										</span>
-									}
-								</span>
-								if c.Verified {
-									<span class="status status-ok">routed</span>
-								} else {
-									<span class="status status-warn">not verified</span>
-									<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
-										<button class="btn btn-sm" type="submit">Verify</button>
-									</form>
-								}
-								<form
-									method="post"
-									action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
-									data-confirm="Traffic for this domain stops being routed to the app."
-									data-confirm-title="Remove this domain?"
-									data-confirm-label="Remove domain"
-								>
-									<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
-								</form>
-							</div>
-						}
-					</div>
-				}
-				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="flex flex-wrap items-end gap-3">
+				@CustomDomainList(d)
+				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="mt-4 flex flex-wrap items-end gap-3">
 					<div class="field min-w-[260px] flex-1">
 						<label class="label" for="host">Add custom domain</label>
 						<input
@@ -128,18 +122,144 @@ templ customDomains(d NetworkingData) {
 					</div>
 					<button class="btn btn-primary" type="submit">Add</button>
 				</form>
-				<p class="mt-3 text-[12.5px] text-muted-foreground">
-					At your DNS provider, point the name at
-					<code class="mono">{ d.Net.Target }</code> with a CNAME. An apex domain
-					cannot carry one — use whatever your provider calls a flattened ALIAS
-					instead, and verification will accept it.
-				</p>
-				<p class="mt-2 text-[12.5px] text-muted-foreground">
-					Nothing is routed until the record resolves. Until then the domain is a
-					claim, and anyone who proves they control it can take it.
-				</p>
+				// A div rather than a p, because the popover's content is a div
+				// and a div inside a p makes the browser close the paragraph
+				// early — which drops the trigger onto its own line.
+				<div class="mt-3 text-[12.5px] text-muted-foreground">
+					Add the name and Yacht shows you the record to create, then proves it
+					itself — there is nothing to come back and press.
+					@helpNote("how verification works") {
+						<p>
+							Nothing is routed until the record resolves. Until then the
+							domain is a claim, and anyone who proves they control it can
+							take it instead.
+						</p>
+						<p class="mt-2">
+							An apex domain cannot carry a CNAME. Use whatever your provider
+							calls a flattened ALIAS or ANAME — verification compares
+							addresses, so any of them is accepted.
+						</p>
+					}
+				</div>
 			}
 		</div>
+	</div>
+}
+
+// CustomDomainList is the polled half: every claim and how far it has got.
+//
+// It renders the element carrying its own polling trigger, and the fragment
+// endpoint returns this same component with hx-swap="outerHTML". That is what
+// makes the poll self-stopping: once every domain has settled the replacement
+// markup carries no trigger, and htmx has nothing left to fire. Swapping only
+// the inside would leave the trigger on a wrapper it never replaces, asking
+// forever.
+//
+// Polled separately from the tab so a request every three seconds does not
+// re-render the add-domain form under somebody typing a hostname into it.
+templ CustomDomainList(d NetworkingData) {
+	<div
+		id="custom-domains"
+		hx-get={ "/apps/" + d.App + "/domains/fragment" }
+		hx-swap="outerHTML"
+		if !d.Settled {
+			hx-trigger="every 3s"
+		}
+		aria-busy={ boolAttr(!d.Settled) }
+	>
+		if len(d.Net.Custom) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No custom domains</p>
+				<p>Add one below to serve this app on a name you own.</p>
+			</div>
+		} else {
+			<div class="flex flex-col gap-3">
+				for _, c := range d.Net.Custom {
+					@customDomainCard(d, c)
+				}
+			</div>
+		}
+	</div>
+}
+
+templ customDomainCard(d NetworkingData, c domain.Custom) {
+	<div class="rounded-md border border-border">
+		<div class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+			@icon("globe")
+			<span class="min-w-0 flex-1">
+				<a
+					class="mono block truncate hover:underline"
+					href={ templ.URL(customDomainURL(d, c)) }
+					target="_blank"
+					rel="noreferrer"
+				>{ c.Host }</a>
+			</span>
+			{{ label, class := domainStatus(c) }}
+			<span class={ "status", class }>{ label }</span>
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
+				<button class="btn btn-sm" type="submit">Check now</button>
+			</form>
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
+				data-confirm="Traffic for this domain stops being routed to the app."
+				data-confirm-title="Remove this domain?"
+				data-confirm-label="Remove domain"
+			>
+				<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+			</form>
+		</div>
+		<div class="px-4 py-3">
+			@stepList(domainSteps(c, d.Net.HTTPSOnly))
+			// The record stays on screen while it is still the thing to do.
+			// Hiding it the moment a domain goes live is right; hiding it while
+			// somebody is trying to get the record correct is not.
+			if !c.State.Routable() {
+				<div class="mt-4">
+					<div class="micro mb-2">Create this record</div>
+					@recordTable(domainRecord(c.Host, c.Target))
+					<div class="mt-2 text-[11.5px] text-muted-foreground">
+						Name is the part before your own domain, which is what most
+						providers ask for.
+						@helpNote("the record's name field") {
+							<p>
+								Some providers want the full hostname here instead, and a
+								few fill your domain in for you. If pasting
+								<code class="mono">{ c.Host }</code> produces something like
+								<code class="mono">{ c.Host }.{ c.Host }</code> in their list,
+								they wanted just the part shown above.
+							</p>
+						}
+					</div>
+				</div>
+			}
+			@domainCheckLine(c, d.ResolverName)
+		</div>
+	</div>
+}
+
+// domainCheckLine says when this was last looked at and when it will be again.
+//
+// Without it a page that is quietly working is indistinguishable from one that
+// has stopped, and the reader's only recourse is to press the button — which is
+// exactly the behaviour the background checker exists to remove.
+templ domainCheckLine(c domain.Custom, resolver string) {
+	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
+		if c.LastCheckedAt.IsZero() {
+			<span>Not checked yet</span>
+		} else {
+			<span title={ absoluteTime(c.LastCheckedAt) }>
+				Checked { preciseAgo(c.LastCheckedAt) }
+			</span>
+		}
+		if !c.State.Settled() && !c.NextCheckAt.IsZero() {
+			<span class="text-border">&middot;</span>
+			<span title={ absoluteTime(c.NextCheckAt) }>next { untilTime(c.NextCheckAt) }</span>
+		}
+		if resolver != "" {
+			<span class="text-border">&middot;</span>
+			<span>asked { resolver }</span>
+		}
 	</div>
 }
 
