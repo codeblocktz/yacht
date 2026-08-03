@@ -245,13 +245,21 @@ type AppSpec struct {
 	// claim mounts on one node at a time. See VolumeSpec.
 	Volumes []VolumeSpec
 
-	// TLS requests terminated TLS for Hosts.
+	// TLSHosts are the hostnames terminated TLS is requested for.
 	//
-	// It carries no certificate reference. Platform hostnames are served from
-	// the ingress controller's own default certificate, so the workload's
-	// routing never names a Secret — an Ingress's TLS Secret must live in the
-	// Ingress's own namespace, and every app has its own namespace.
-	TLS bool
+	// A subset of Hosts, not all of them, and that is the whole point. The
+	// certificate this relies on is the ingress controller's own default — a
+	// wildcard for the platform domain — so listing a hostname it cannot match
+	// does not produce a certificate, it produces a TLS handshake the browser
+	// refuses. A custom domain is never under the platform domain, so it never
+	// belongs here.
+	//
+	// It carries no certificate reference. An Ingress's TLS Secret must live in
+	// the Ingress's own namespace, and every app has its own namespace, so one
+	// pre-provisioned wildcard cannot be referenced from all of them.
+	//
+	// Empty leaves the TLS block off entirely.
+	TLSHosts []string
 
 	// CNAMETarget, when set, becomes the ExternalDNS target annotation, so that
 	// controller publishes a CNAME rather than the nodes' own addresses as A

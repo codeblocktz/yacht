@@ -582,15 +582,36 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		ScratchPaths:  runtimeOf(a).ScratchPaths,
 		HealthPath:    a.HealthPath,
 		Liveness:      a.Liveness,
-		Hosts:         hosts,
-		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
-		HTTPSOnly:     a.HTTPSOnly && len(hosts) > 0,
+		Hosts: hosts,
+		// Only what the wildcard certificate actually covers. Every host used
+		// to go in, so a custom domain was served from a certificate that could
+		// not match it while the dashboard showed a green "routed" beside it.
+		TLSHosts:  s.tlsHosts(hosts),
+		HTTPSOnly: a.HTTPSOnly && len(hosts) > 0,
 		// Only when the install has a target to point at. Writing the
 		// annotation with an empty value would tell ExternalDNS to publish a
 		// CNAME to nothing, which is worse than leaving it to its default.
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
 		Volumes:       volumeSpecs(vols),
 	})
+}
+
+// tlsHosts narrows a set of hostnames to those the install's certificate covers.
+//
+// The certificate is the ingress controller's default, which an operator
+// configures as a wildcard for the platform domain. Nothing here can inspect it,
+// so coverage is inferred from the one thing that is knowable: a *.<app domain>
+// wildcard matches exactly one label under that domain.
+//
+// A custom domain therefore never qualifies, and cannot — the reserved-name rule
+// refuses any claim under the platform domain. Saying so here rather than
+// listing every host is what stops the platform serving a certificate a browser
+// will reject.
+func (s *Service) tlsHosts(hosts []string) []string {
+	if !s.opts.WildcardTLS {
+		return nil
+	}
+	return domain.WildcardHosts(hosts, s.opts.AppDomain)
 }
 
 // reconcileHosts brings the managed hostname in line with current config and

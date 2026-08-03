@@ -54,6 +54,46 @@ func TestIssueWithoutAppDomainIsDistinguishable(t *testing.T) {
 	}
 }
 
+// A wildcard reaches exactly one label. Getting this wrong in either direction
+// is a certificate error in front of a customer: too narrow and the platform's
+// own hostnames lose TLS, too wide and a name the certificate cannot match is
+// offered one anyway.
+func TestCoveredByWildcard(t *testing.T) {
+	for host, want := range map[string]bool{
+		"web.apps.example.com":  true,
+		"a-b.apps.example.com":  true,
+		"a.b.apps.example.com":  false, // two labels: no wildcard reaches it
+		"apps.example.com":      false, // the apex is not covered by *.itself
+		"shop.customer.test":    false, // a custom domain, never under ours
+		"evilapps.example.com":  false, // suffix without a label boundary
+		"WEB.APPS.EXAMPLE.COM":  true,  // DNS is case-insensitive
+		"web.apps.example.com.": true,  // the root dot is optional
+		"":                      false,
+	} {
+		if got := CoveredByWildcard(host, "apps.example.com"); got != want {
+			t.Errorf("CoveredByWildcard(%q) = %v, want %v", host, got, want)
+		}
+	}
+
+	// With no platform domain there is no wildcard, so nothing is covered.
+	if CoveredByWildcard("web.apps.example.com", "") {
+		t.Error("a host was called covered with no app domain configured")
+	}
+}
+
+// The filter is what the Ingress's TLS block is built from.
+func TestWildcardHostsKeepsOnlyWhatIsCovered(t *testing.T) {
+	got := WildcardHosts([]string{
+		"web.apps.example.com",
+		"shop.customer.test",
+		"a.b.apps.example.com",
+	}, "apps.example.com")
+
+	if len(got) != 1 || got[0] != "web.apps.example.com" {
+		t.Fatalf("WildcardHosts = %v, want only the platform host", got)
+	}
+}
+
 // TestReservedMatchesOnLabelBoundary is the most important test in this
 // package. Suffix matching on raw strings says evilapps.example.com is inside
 // apps.example.com, which would let a tenant claim a host under the platform
