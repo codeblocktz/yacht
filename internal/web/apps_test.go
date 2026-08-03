@@ -23,11 +23,12 @@ import (
 // Scoped by owner like the real one, so a test that leaks across owners fails
 // here rather than passing and failing in production.
 type fakeApps struct {
-	byOwner map[string][]app.App
-	created []app.CreateInput
-	deleted []string
-	scaled  map[string]int32
-	err     error
+	byOwner  map[string][]app.App
+	created  []app.CreateInput
+	deleted  []string
+	scaled   map[string]int32
+	activity app.DeployActivity
+	err      error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -79,6 +80,15 @@ func (f *fakeApps) Scale(_ context.Context, _, name string, replicas int32) (app
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }
+
+// DeployActivity backs the overview chart. Empty by default, so the chart is
+// absent from pages that are not asserting on it; a test that wants it sets
+// activity itself.
+func (f *fakeApps) DeployActivity(
+	_ context.Context, _ string, _ int,
+) (app.DeployActivity, error) {
+	return f.activity, nil
+}
 
 func (f *fakeApps) Deployments(
 	_ context.Context, _ string, appID uuid.UUID, _ int32,

@@ -84,6 +84,15 @@ type Querier interface {
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
+	// Deploys per day and outcome, for the overview chart.
+	//
+	// Counted in the database rather than by reading rows and tallying them in Go:
+	// a busy month is thousands of deployments, and none of them are wanted here
+	// except as a number.
+	//
+	// Days with no deploys are absent from this result. The caller fills them in;
+	// see app.DeployActivity for why that cannot be skipped.
+	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)

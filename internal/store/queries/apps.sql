@@ -92,6 +92,23 @@ WHERE d.owner_id = $1
 ORDER BY d.started_at DESC
 LIMIT $2;
 
+-- name: DeployActivity :many
+-- Deploys per day and outcome, for the overview chart.
+--
+-- Counted in the database rather than by reading rows and tallying them in Go:
+-- a busy month is thousands of deployments, and none of them are wanted here
+-- except as a number.
+--
+-- Days with no deploys are absent from this result. The caller fills them in;
+-- see app.DeployActivity for why that cannot be skipped.
+SELECT date_trunc('day', started_at)::timestamptz AS day,
+       status,
+       count(*)::bigint AS total
+FROM deployments
+WHERE owner_id = $1 AND started_at >= $2
+GROUP BY 1, 2
+ORDER BY 1;
+
 -- name: SetAppHealth :one
 UPDATE apps
 SET health_path     = @health_path,

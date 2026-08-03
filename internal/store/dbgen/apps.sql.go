@@ -191,6 +191,55 @@ func (q *Queries) DeleteApp(ctx context.Context, arg DeleteAppParams) error {
 	return err
 }
 
+const deployActivity = `-- name: DeployActivity :many
+SELECT date_trunc('day', started_at)::timestamptz AS day,
+       status,
+       count(*)::bigint AS total
+FROM deployments
+WHERE owner_id = $1 AND started_at >= $2
+GROUP BY 1, 2
+ORDER BY 1
+`
+
+type DeployActivityParams struct {
+	OwnerID   string
+	StartedAt time.Time
+}
+
+type DeployActivityRow struct {
+	Day    time.Time
+	Status string
+	Total  int64
+}
+
+// Deploys per day and outcome, for the overview chart.
+//
+// Counted in the database rather than by reading rows and tallying them in Go:
+// a busy month is thousands of deployments, and none of them are wanted here
+// except as a number.
+//
+// Days with no deploys are absent from this result. The caller fills them in;
+// see app.DeployActivity for why that cannot be skipped.
+func (q *Queries) DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error) {
+	rows, err := q.db.Query(ctx, deployActivity, arg.OwnerID, arg.StartedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeployActivityRow{}
+	for rows.Next() {
+		var i DeployActivityRow
+		if err := rows.Scan(&i.Day, &i.Status, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const finishDeployment = `-- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()

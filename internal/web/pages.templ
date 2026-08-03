@@ -86,6 +86,11 @@ type OverviewData struct {
 	AppCount     int64
 	Summary      orchestrator.ClusterSummary
 	Apps         []app.App
+
+	// Activity is deploys per day. Zero days means the chart is not shown at
+	// all, which is the state an install has before it can read its own
+	// history — not the same as a window that genuinely had no deploys.
+	Activity app.DeployActivity
 }
 
 templ Overview(d OverviewData) {
@@ -103,6 +108,9 @@ templ Overview(d OverviewData) {
 		@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
 			clusterMemDetail(d.Summary))
 	</div>
+	if len(d.Activity.Days) > 0 {
+		@deployActivity(d.Activity)
+	}
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Apps</span>
@@ -116,6 +124,92 @@ templ Overview(d OverviewData) {
 			@appRows(d.Apps)
 		}
 	</div>
+}
+
+// deployActivity is deploys per day, stacked by how they ended.
+//
+// A window with no deploys still draws its axis and says so, rather than
+// disappearing: an empty chart is information on an install that expected to be
+// shipping, and a panel that vanishes is not.
+templ deployActivity(a app.DeployActivity) {
+	<div class="panel mb-6">
+		<div class="panel-header">
+			<span class="panel-title">Deploy activity</span>
+			<span class="text-muted-foreground tabular-nums">
+				{ plural(a.Total(), "deploy") } in { deployWindowLabel(a) }
+			</span>
+		</div>
+		if a.Total() == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing deployed yet</p>
+				<p>Deploys from the last { deployWindowLabel(a) } appear here.</p>
+			</div>
+		} else {
+			<div class="chart">
+				<div class="chart-plot" role="img" aria-label={ deployChartLabel(a) }>
+					for _, day := range a.Days {
+						<div class="chart-day" title={ deployDayTitle(day) }>
+							<div class="chart-col" style={ deployColumnStyle(day, deployMax(a)) }>
+								// Ordered worst-last so failures sit at the top of a
+								// column, where the eye lands, rather than buried
+								// under a stack of successes.
+								<div
+									class="chart-seg chart-seg-ok"
+									style={ deploySegmentStyle(day.Succeeded, day.Total()) }
+								></div>
+								<div
+									class="chart-seg chart-seg-idle"
+									style={ deploySegmentStyle(day.Cancelled, day.Total()) }
+								></div>
+								<div
+									class="chart-seg chart-seg-run"
+									style={ deploySegmentStyle(day.Running, day.Total()) }
+								></div>
+								<div
+									class="chart-seg chart-seg-err"
+									style={ deploySegmentStyle(day.Failed, day.Total()) }
+								></div>
+							</div>
+						</div>
+					}
+				</div>
+				<div class="chart-axis">
+					<span>{ deployAxisLabel(a.Days[0].Day) }</span>
+					<span>{ deployAxisLabel(a.Days[len(a.Days)-1].Day) }</span>
+				</div>
+				@deployLegend(a)
+			</div>
+		}
+	</div>
+}
+
+// deployLegend names only the outcomes present.
+//
+// A key with three entries that are always zero teaches the reader to stop
+// reading the key.
+templ deployLegend(a app.DeployActivity) {
+	<div class="chart-legend">
+		if a.Succeeded > 0 {
+			@legendItem("chart-seg-ok", "Succeeded", a.Succeeded)
+		}
+		if a.Failed > 0 {
+			@legendItem("chart-seg-err", "Failed", a.Failed)
+		}
+		if a.Running > 0 {
+			@legendItem("chart-seg-run", "In flight", a.Running)
+		}
+		if a.Cancelled > 0 {
+			@legendItem("chart-seg-idle", "Cancelled", a.Cancelled)
+		}
+	</div>
+}
+
+templ legendItem(class, label string, n int) {
+	<span class="chart-key">
+		<span class={ "chart-dot", class }></span>
+		{ label }
+		<span class="tabular-nums text-muted-foreground">{ strconv.Itoa(n) }</span>
+	</span>
 }
 
 templ deployButton() {

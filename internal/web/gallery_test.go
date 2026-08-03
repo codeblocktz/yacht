@@ -262,10 +262,96 @@ func galleryPages() []galleryPage {
 			crumbs: []Crumb{{Label: "Overview"}},
 			page: Overview(OverviewData{
 				OwnerName: "Eric", ClusterOK: true, AppCount: 6,
-				Summary: summary, Apps: allApps,
+				Summary: summary, Apps: allApps, Activity: activityBusy(),
 			}),
 		},
+		{
+			file: "states-activity.html", path: "/",
+			crumbs: []Crumb{{Label: "Overview"}, {Label: "Deploy activity"}},
+			page: stack(
+				section("Typical", "a month of ordinary deploys, one column per day",
+					deployActivity(activityBusy())),
+				section("Nothing yet", "a fresh install — the panel stays and says so, "+
+					"rather than vanishing and leaving the reader to wonder",
+					deployActivity(activityEmpty())),
+				section("One busy day", "a spike twenty times the median: the scale "+
+					"follows the data, so the quiet days must stay visible",
+					deployActivity(activitySpike())),
+				section("A bad afternoon", "failures sit at the top of each column, "+
+					"where the eye lands",
+					deployActivity(activityFailing())),
+			),
+		},
 	}
+}
+
+// activityDays builds a window ending today, so the axis labels read as real
+// dates rather than as an epoch.
+func activityDays(n int) []app.DeployDay {
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	days := make([]app.DeployDay, n)
+	for i := range days {
+		days[i].Day = today.AddDate(0, 0, -(n - 1 - i))
+	}
+	return days
+}
+
+// total rolls the per-day counts up, so a gallery fixture cannot state a total
+// that its own columns contradict.
+func activityFrom(days []app.DeployDay) app.DeployActivity {
+	a := app.DeployActivity{Days: days}
+	for _, d := range days {
+		a.Succeeded += d.Succeeded
+		a.Failed += d.Failed
+		a.Cancelled += d.Cancelled
+		a.Running += d.Running
+	}
+	return a
+}
+
+func activityBusy() app.DeployActivity {
+	days := activityDays(30)
+	pattern := []int{0, 2, 1, 0, 4, 3, 1, 0, 0, 5, 2, 1, 3, 0, 2}
+	for i := range days {
+		n := pattern[i%len(pattern)]
+		days[i].Succeeded = n
+		if i%9 == 4 && n > 0 {
+			days[i].Succeeded = n - 1
+			days[i].Failed = 1
+		}
+	}
+	days[len(days)-1].Running = 1
+	return activityFrom(days)
+}
+
+func activityEmpty() app.DeployActivity {
+	return activityFrom(activityDays(30))
+}
+
+func activitySpike() app.DeployActivity {
+	days := activityDays(30)
+	for i := range days {
+		if i%3 == 0 {
+			days[i].Succeeded = 1
+		}
+	}
+	days[20].Succeeded = 20
+	return activityFrom(days)
+}
+
+func activityFailing() app.DeployActivity {
+	days := activityDays(30)
+	for i := range days {
+		switch {
+		case i > 24:
+			days[i].Failed = 3
+			days[i].Succeeded = 1
+		case i%2 == 0:
+			days[i].Succeeded = 2
+		}
+	}
+	days[27].Cancelled = 2
+	return activityFrom(days)
 }
 
 // panelWrap puts a component inside the standard panel chrome, so gallery

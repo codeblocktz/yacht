@@ -741,3 +741,67 @@
     @apply rounded-[2px] bg-warning/25 px-[1px] text-inherit;
   }
 }
+
+@layer components {
+  /* The deploy activity chart.
+     
+     Ordinary elements rather than a canvas or a mounted chart library, so every
+     state of it renders in the gallery test — including the ones worth looking
+     at, like a month of nothing or a single day that dwarfs the rest. */
+  .chart {
+    @apply p-4;
+  }
+  /* Columns grow from a shared baseline, so the row reads as a chart rather
+     than as a set of independent bars. */
+  .chart-plot {
+    @apply flex items-end gap-[2px] h-24 border-b border-border;
+  }
+  .chart-day {
+    @apply flex-1 h-full flex items-end min-w-[3px];
+  }
+  /* column-reverse so segments stack upward in source order, which lets the
+     markup list them worst-last and have failures land on top. */
+  .chart-col {
+    @apply w-full flex flex-col-reverse rounded-t-[2px] overflow-hidden;
+  }
+  /* A day with no deploys still shows a hairline on the baseline. An absent
+     column and a zero column look identical otherwise, and only one of them
+     means the calendar continued. */
+  .chart-day:has(.chart-col[style*="height:0"])::after {
+    content: "";
+    @apply w-full h-px bg-border;
+  }
+  .chart-seg {
+    @apply w-full;
+  }
+  /* Colour carries state and nothing else, which is the rule the rest of the
+     dashboard follows. Success is not the loudest thing here — a failure
+     should be what the eye finds first. */
+  .chart-seg-ok {
+    @apply bg-success/70;
+  }
+  .chart-seg-err {
+    @apply bg-destructive;
+  }
+  .chart-seg-run {
+    @apply bg-warning/80;
+  }
+  .chart-seg-idle {
+    @apply bg-muted-foreground/40;
+  }
+  .chart-day:hover .chart-col {
+    @apply brightness-110;
+  }
+  .chart-axis {
+    @apply flex justify-between pt-1.5 text-[11px] text-muted-foreground tabular-nums;
+  }
+  .chart-legend {
+    @apply flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-3 text-[12px];
+  }
+  .chart-key {
+    @apply inline-flex items-center gap-1.5;
+  }
+  .chart-dot {
+    @apply size-2 rounded-[2px];
+  }
+}

@@ -38,6 +38,10 @@ type Apps interface {
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
 
+	// DeployActivity is deploys per day for the overview chart, with every day
+	// in the window present whether or not it had any.
+	DeployActivity(ctx context.Context, ownerID string, days int) (app.DeployActivity, error)
+
 	// Storage. Attaching holds the app to one replica and makes its deploys
 	// recreate rather than roll; the service refuses what it cannot honour.
 	AttachVolume(ctx context.Context, ownerID, appName string, in app.VolumeInput) (app.Volume, error)
@@ -729,6 +733,15 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			data.AppCount = int64(len(apps))
 		} else {
 			s.log.Error("list apps", slog.String("error", err.Error()))
+		}
+
+		// A chart that cannot be drawn is left out rather than shown empty.
+		// An empty chart says "you have deployed nothing", and saying that
+		// because a query failed is worse than saying nothing at all.
+		if activity, err := s.apps.DeployActivity(ctx, owner.ID, deployWindowDays); err == nil {
+			data.Activity = activity
+		} else {
+			s.log.Error("deploy activity", slog.String("error", err.Error()))
 		}
 	}
 
