@@ -4,9 +4,10 @@
 /bin/
 /dist/
 /yacht
+/docs/
 
 # Go
-# Anchored for the same reason: `coverage.*` swallowed docs/coverage.md.
+# Keep coverage output anchored to the repository root.
 *.test
 *.out
 /coverage.*

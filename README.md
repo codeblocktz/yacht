@@ -287,7 +287,8 @@ YACHT_GALLERY_OUT=/tmp/gallery go test ./internal/web -run Gallery
 ```
 
 Those are the states that silently rot, because nobody sees them until a
-customer does. Screenshots in `docs/images/`.
+customer does. The generated gallery can be reviewed directly from its output
+directory.
 
 Tests use the `client-go` fake clientset, so the full orchestration path —
 namespaces, security context, apply idempotency, status — is verified without
