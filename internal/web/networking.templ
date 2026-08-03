@@ -105,7 +105,9 @@ templ customDomains(d NetworkingData) {
 								<form
 									method="post"
 									action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
-									onsubmit="return confirm('Remove this domain? Traffic for it stops being routed to this app.')"
+									data-confirm="Traffic for this domain stops being routed to the app."
+									data-confirm-title="Remove this domain?"
+									data-confirm-label="Remove domain"
 								>
 									<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
 								</form>

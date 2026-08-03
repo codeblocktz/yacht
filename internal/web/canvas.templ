@@ -207,7 +207,9 @@ templ appPanelBody(d AppDetailData) {
 		<form
 			method="post"
 			action={ templ.URL("/apps/" + d.App.Name + "/delete") }
-			onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+			data-confirm="This deletes the app and its namespace. This cannot be undone."
+			data-confirm-title={ "Delete " + d.App.Name + "?" }
+			data-confirm-label="Delete app"
 		>
 			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
 		</form>

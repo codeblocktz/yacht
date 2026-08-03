@@ -217,7 +217,7 @@ func RegistryPage(d RegistryData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.Registry.Configured() {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<button class=\"btn btn-ghost\" type=\"submit\" formaction=\"/cluster/registry/clear\" onclick=\"return confirm('Remove the registry? Building from a repository stops working until another is set.')\">Remove</button>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 27, "<button class=\"btn btn-ghost\" type=\"submit\" formaction=\"/cluster/registry/clear\" data-confirm=\"Building from a repository stops working until another registry is configured.\" data-confirm-title=\"Remove the registry?\" data-confirm-label=\"Remove registry\">Remove</button>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -234,7 +234,7 @@ func RegistryPage(d RegistryData) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(d.Registry.UpdatedAt)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/registry.templ`, Line: 140, Col: 79}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/registry.templ`, Line: 142, Col: 79}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {

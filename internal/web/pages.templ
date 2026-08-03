@@ -305,6 +305,7 @@ type AppDetailData struct {
 templ AppDetail(d AppDetailData) {
 	<div class="flex flex-col gap-6 lg:flex-row">
 		@appRail(d)
+		@appMobileSwitcher(d)
 		<div class="min-w-0 flex-1">
 			@appDetailHeader(d.App)
 			<nav class="tabs mb-5">
@@ -331,7 +332,7 @@ templ AppDetail(d AppDetailData) {
 }
 
 templ appRail(d AppDetailData) {
-	<aside class="w-full shrink-0 lg:w-[212px]">
+	<aside class="hidden w-full shrink-0 lg:block lg:w-[212px]">
 		<div class="panel overflow-hidden">
 			<div class="panel-header">
 				<span class="panel-title">Apps</span>
@@ -355,6 +356,24 @@ templ appRail(d AppDetailData) {
 			</div>
 		</div>
 	</aside>
+}
+
+templ appMobileSwitcher(d AppDetailData) {
+	<details class="panel group relative lg:hidden" data-app-switcher>
+		<summary class="switcher border-0 bg-card px-3 py-2">
+			<span class="min-w-0 flex-1 truncate text-left font-medium">{ d.App.Name }</span>
+			<span class="text-muted-foreground">Switch app</span>
+			<svg class="size-3.5 shrink-0 opacity-60 group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 9l6 6 6-6"></path></svg>
+		</summary>
+		<div class="switcher-menu left-0 right-0 top-full mt-1 max-h-[280px] overflow-y-auto">
+			for _, a := range d.Siblings {
+				<a href={ templ.URL("/apps/" + a.Name) } class={ "switcher-item", templ.KV("font-medium text-foreground", a.Name == d.App.Name) }>
+					<span class="min-w-0 flex-1 truncate">{ a.Name }</span>
+					@appStatus(a)
+				</a>
+			}
+		</div>
+	</details>
 }
 
 templ appDetailHeader(a app.App) {
@@ -389,7 +408,9 @@ templ appDetailHeader(a app.App) {
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/delete") }
-				onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+				data-confirm="This deletes the app and its namespace. This cannot be undone."
+				data-confirm-title={ "Delete " + a.Name + "?" }
+				data-confirm-label="Delete app"
 			>
 				<button class="btn btn-danger" type="submit">Delete</button>
 			</form>
@@ -546,7 +567,8 @@ templ appVariables(d AppDetailData) {
 				<p>No environment variables set.</p>
 			</div>
 		} else {
-			<table class="dtable">
+			<div class="table-scroll">
+			<table class="dtable min-w-[520px]">
 				<thead>
 					<tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr>
 				</thead>
@@ -577,6 +599,7 @@ templ appVariables(d AppDetailData) {
 					}
 				</tbody>
 			</table>
+			</div>
 		}
 	</div>
 	<div class="panel">
@@ -591,7 +614,7 @@ templ appVariables(d AppDetailData) {
 					<label class="label" for="var-value">Value</label>
 					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
 				</div>
-				<label class="flex items-center gap-2 pb-2 text-[12.5px]">
+				<label class="check-field">
 					<input type="checkbox" name="secret" value="1"/>
 					Secret
 				</label>
@@ -749,7 +772,9 @@ templ appSettings(d AppDetailData) {
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/delete") }
-				onsubmit="return confirm('Delete this app and its namespace? This cannot be undone.')"
+				data-confirm="This deletes the app and its namespace. This cannot be undone."
+				data-confirm-title={ "Delete " + a.Name + "?" }
+				data-confirm-label="Delete app"
 			>
 				<button class="btn btn-danger" type="submit">Delete app</button>
 			</form>
@@ -1498,7 +1523,8 @@ templ appStorage(d AppDetailData) {
 				<p>Anything this app writes is lost when its pod restarts.</p>
 			</div>
 		} else {
-			<table class="dtable">
+			<div class="table-scroll">
+			<table class="dtable min-w-[760px]">
 				<thead>
 					<tr><th>Name</th><th>Mounted at</th><th>Size</th><th class="text-right">Actions</th></tr>
 				</thead>
@@ -1524,6 +1550,7 @@ templ appStorage(d AppDetailData) {
 					}
 				</tbody>
 			</table>
+			</div>
 			<div class="panel-body border-t">
 				<p class="text-muted-foreground">
 					A volume can grow but never shrink — Kubernetes cannot shrink a claim,

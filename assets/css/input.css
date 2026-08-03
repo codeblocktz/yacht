@@ -121,6 +121,13 @@
     @apply bg-background text-foreground text-[13px] leading-relaxed antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+
+  .skip-link {
+    @apply fixed left-4 top-3 z-[60] -translate-y-20 rounded-md border border-border
+           bg-background px-3 py-2 text-[12.5px] font-medium shadow-lg
+           transition-transform focus:translate-y-0 focus:outline-none focus:ring-2
+           focus:ring-ring/50;
+  }
   /* Tabular figures everywhere numbers are compared down a column. Proportional
      digits make a table of replica counts or byte sizes impossible to scan. */
   table, .tabular {
@@ -236,6 +243,35 @@
     @apply text-[11.5px] text-muted-foreground mt-px;
   }
 
+  /* On a phone, wrapping a five-item flex strip produces a 3+2 layout with
+     unequal card widths and dividers in the wrong places. Make the compact
+     layout explicit: two equal columns and an odd final metric spanning the
+     full strip. The desktop flex strip remains unchanged. */
+  @media (max-width: 639px) {
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .metrics > .metric {
+      min-width: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    :where(.metrics > :not(:last-child)) {
+      border-right-width: 0;
+    }
+    .metrics > .metric:nth-child(even) {
+      border-left: 1px solid var(--border);
+    }
+    .metrics > .metric:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+      border-bottom-width: 0;
+      border-left-width: 0;
+    }
+    .metrics:has(> .metric:last-child:nth-child(even)) > .metric:nth-last-child(-n + 2) {
+      border-bottom-width: 0;
+    }
+  }
+
   /* ---- meters ------------------------------------------------------ */
 
   .meter {
@@ -271,6 +307,13 @@
   }
   .btn-icon {
     @apply size-8 p-0 shrink-0;
+  }
+
+  @media (max-width: 639px) {
+    .btn { @apply min-h-10; }
+    .btn-sm { @apply min-h-9; }
+    .btn-icon { @apply size-10; }
+    .control { @apply h-10; }
   }
 
   /* ---- tabs -------------------------------------------------------- */
@@ -373,7 +416,7 @@
 
     .nav-backdrop {
       @apply fixed inset-0 z-40 bg-black/50 opacity-0 pointer-events-none
-             transition-opacity;
+             border-0 p-0 transition-opacity;
     }
     :root[data-nav="open"] .nav-backdrop { @apply opacity-100 pointer-events-auto; }
 
@@ -413,6 +456,33 @@
     @apply w-full h-8 rounded-md border border-input bg-background px-2.5
            text-[13px] transition-shadow placeholder:text-muted-foreground/60
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+
+  .table-scroll {
+    @apply w-full overflow-x-auto;
+  }
+  .check-field {
+    @apply flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px];
+  }
+  .check-field input {
+    @apply size-4 cursor-pointer appearance-none rounded-sm border border-input
+           bg-background checked:border-primary checked:bg-primary
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .check-field input:checked::after {
+    content: "";
+    display: block;
+    width: 5px;
+    height: 9px;
+    margin: 1px 0 0 5px;
+    border: solid var(--primary-foreground);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .confirm-dialog {
+    @apply fixed left-1/2 top-1/2 z-50 m-0 w-[calc(100%-2rem)] max-w-md
+           -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border
+           bg-background p-5 text-foreground shadow-lg backdrop:bg-black/50;
   }
   textarea.control {
     @apply h-auto py-2 leading-relaxed font-mono text-[12.5px];
