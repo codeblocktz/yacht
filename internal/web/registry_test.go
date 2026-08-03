@@ -122,6 +122,7 @@ func TestSavingWithAnEmptyPasswordDoesNotWipeIt(t *testing.T) {
 	rec := httptest.NewRecorder()
 	form := strings.NewReader("host=ghcr.io&repository=other&username=bot&password=")
 	req := httptest.NewRequest(http.MethodPost, "/cluster/registry", form)
+	req.Header.Set("Origin", "http://example.com")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	h.ServeHTTP(rec, req)
 
@@ -144,6 +145,7 @@ func TestAFirstRegistryIsStored(t *testing.T) {
 	rec := httptest.NewRecorder()
 	form := strings.NewReader("host=ghcr.io&repository=acme&username=bot&password=hunter2")
 	req := httptest.NewRequest(http.MethodPost, "/cluster/registry", form)
+	req.Header.Set("Origin", "http://example.com")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	h.ServeHTTP(rec, req)
 

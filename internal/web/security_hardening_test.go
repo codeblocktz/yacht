@@ -67,23 +67,59 @@ func TestCSRFRejectsForeignBrowserOrigins(t *testing.T) {
 	}
 }
 
-func TestCSRFAcceptsSameOriginAndNonBrowserRequests(t *testing.T) {
-	for _, origin := range []string{"https://yacht.example.com", ""} {
-		t.Run(origin, func(t *testing.T) {
-			s := &Server{baseURL: "https://yacht.example.com"}
-			called := false
+func TestCSRFAcceptsSameOrigin(t *testing.T) {
+	s := &Server{baseURL: "https://yacht.example.com"}
+	called := false
+	h := s.csrfProtect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://yacht.example.com/apps/web/redeploy", nil)
+	req.Header.Set("Origin", "https://yacht.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !called || rec.Code != http.StatusNoContent {
+		t.Fatalf("called=%v status=%d, want true/204", called, rec.Code)
+	}
+}
+
+func TestCSRFAcceptsOriginlessCookieFreeSignIn(t *testing.T) {
+	s := &Server{baseURL: "https://yacht.example.com"}
+	called := false
+	h := s.csrfProtect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://yacht.example.com/sign-in", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !called || rec.Code != http.StatusNoContent {
+		t.Fatalf("called=%v status=%d, want true/204", called, rec.Code)
+	}
+}
+
+func TestCSRFUsesRequestOriginWithoutConfiguredBaseURL(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		origin string
+		want   int
+	}{
+		{name: "same origin", origin: "http://yacht.test", want: http.StatusNoContent},
+		{name: "foreign origin", origin: "https://hostile.example.com", want: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{}
 			h := s.csrfProtect(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				called = true
 				w.WriteHeader(http.StatusNoContent)
 			}))
-			req := httptest.NewRequest(http.MethodPost, "https://yacht.example.com/apps/web/redeploy", nil)
-			if origin != "" {
-				req.Header.Set("Origin", origin)
-			}
+			req := httptest.NewRequest(http.MethodPost, "http://yacht.test/apps/web/delete", nil)
+			req.Header.Set("Origin", tc.origin)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
-			if !called || rec.Code != http.StatusNoContent {
-				t.Fatalf("called=%v status=%d, want true/204", called, rec.Code)
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
 	}
@@ -105,6 +141,24 @@ func TestCSRFRejectsSessionCookieWithoutOriginMetadata(t *testing.T) {
 	}
 	if called {
 		t.Fatal("originless cookie request reached the mutating handler")
+	}
+}
+
+func TestCSRFRejectsOriginlessCookieFreeMutationOutsideSignIn(t *testing.T) {
+	s := &Server{baseURL: "https://yacht.example.com"}
+	called := false
+	h := s.csrfProtect(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://yacht.example.com/apps/web/delete", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if called {
+		t.Fatal("originless cookie-free request reached a non-sign-in mutation")
 	}
 }
 

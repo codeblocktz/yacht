@@ -38,15 +38,18 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 // csrfProtect rejects browser mutation requests originating outside the
 // configured dashboard origin. SameSite cookies alone are insufficient when a
 // user-controlled app and the dashboard share a registrable parent domain.
-// Requests without browser origin metadata remain valid only when they carry no
-// session cookie, preserving CLI sign-in while refusing ambiguous authenticated
-// mutations.
+// Only the cookie-free sign-in endpoint accepts missing browser origin metadata,
+// preserving CLI sign-in without exempting unrelated mutations.
 func (s *Server) csrfProtect(next http.Handler) http.Handler {
-	want := originOf(s.baseURL)
+	configuredOrigin := originOf(s.baseURL)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if safeMethod(r.Method) || want == "" {
+		if safeMethod(r.Method) {
 			next.ServeHTTP(w, r)
 			return
+		}
+		want := configuredOrigin
+		if want == "" {
+			want = requestOrigin(r)
 		}
 
 		got := strings.TrimSpace(r.Header.Get("Origin"))
@@ -54,12 +57,24 @@ func (s *Server) csrfProtect(next http.Handler) http.Handler {
 			got = strings.TrimSpace(r.Header.Get("Referer"))
 		}
 		_, sessionErr := r.Cookie(SessionCookie)
-		if (got == "" && sessionErr == nil) || (got != "" && originOf(got) != want) {
+		originlessSignIn := got == "" && sessionErr != nil && r.URL.Path == "/sign-in"
+		if !originlessSignIn && (got == "" || want == "" || originOf(got) != want) {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func requestOrigin(r *http.Request) string {
+	scheme := r.URL.Scheme
+	if scheme == "" {
+		scheme = "http"
+		if requestIsTLS(r) {
+			scheme = "https"
+		}
+	}
+	return originOf(scheme + "://" + r.Host)
 }
 
 func safeMethod(method string) bool {
