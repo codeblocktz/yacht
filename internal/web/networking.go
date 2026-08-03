@@ -140,8 +140,7 @@ func (s *Server) dnsSet(w http.ResponseWriter, r *http.Request) {
 	err := s.joiner.SetDNS(r.Context(), r.FormValue("cname_target"), r.FormValue("txt_prefix"))
 	if err != nil {
 		d := s.dnsData(r, "", err.Error())
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, PlatformDNS(d))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, PlatformDNS(d))
 		return
 	}
 	http.Redirect(w, r, "/cluster/dns", http.StatusSeeOther)

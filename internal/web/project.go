@@ -48,8 +48,7 @@ func (s *Server) projectCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		// Re-rendered rather than redirected, so the message arrives with the
 		// form that caused it instead of as a detail on another page.
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, ProjectList(ProjectListData{Projects: projects, Error: err.Error()}))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, ProjectList(ProjectListData{Projects: projects, Error: err.Error()}))
 		return
 	}
 	http.Redirect(w, r, "/projects/"+p.Slug, http.StatusSeeOther)

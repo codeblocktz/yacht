@@ -84,6 +84,9 @@ func joinServer(t *testing.T, j Joiner, role account.Role) http.Handler {
 func signedIn(method, path string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "probe-session"})
+	if !safeMethod(method) {
+		req.Header.Set("Origin", "https://yacht.test")
+	}
 	return req
 }
 

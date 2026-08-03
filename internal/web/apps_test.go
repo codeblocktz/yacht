@@ -148,6 +148,7 @@ func post(t *testing.T, h http.Handler, path string, form url.Values) *httptest.
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec

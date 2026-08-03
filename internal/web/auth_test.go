@@ -746,6 +746,7 @@ func (h *liveHarness) postAs(
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req.Header.Set("Origin", "https://yacht.test")
 	if c != nil {
 		req.AddCookie(c)
 	}

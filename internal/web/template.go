@@ -52,8 +52,7 @@ func (s *Server) templateDeploy(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, TemplateList(data))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, TemplateList(data))
 		return
 	}
 

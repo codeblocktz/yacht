@@ -128,8 +128,7 @@ func (s *Server) storageFailed(
 		return
 	}
 
-	w.WriteHeader(status)
-	s.render(w, r, AppDetail(AppDetailData{
+	s.renderStatus(w, r, status, AppDetail(AppDetailData{
 		App: a, Tab: "storage", Error: cause.Error(),
 	}))
 }
@@ -184,8 +183,7 @@ func (s *Server) variableFailed(
 		return
 	}
 
-	w.WriteHeader(status)
-	s.render(w, r, AppDetail(AppDetailData{
+	s.renderStatus(w, r, status, AppDetail(AppDetailData{
 		App: a, Tab: "variables", Error: cause.Error(),
 	}))
 }
@@ -220,8 +218,7 @@ func (s *Server) appActionFailed(
 		return
 	}
 
-	w.WriteHeader(status)
-	s.render(w, r, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
+	s.renderStatus(w, r, status, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
 }
 
 // appActionNoticed re-renders a tab with something worth saying.

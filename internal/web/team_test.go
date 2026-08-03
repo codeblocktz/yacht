@@ -30,6 +30,7 @@ func (h *liveHarness) postFormAs(
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://yacht.test")
 	if c != nil {
 		req.AddCookie(c)
 	}

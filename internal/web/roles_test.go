@@ -96,6 +96,7 @@ func TestEveryMutatingRouteHasARoleGate(t *testing.T) {
 		path := pathParam.ReplaceAllString(route, "probe")
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "probe-session"})
+		req.Header.Set("Origin", "https://yacht.test")
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec
@@ -164,6 +165,7 @@ func TestTheGateLetsAnOwnerThrough(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/apps/probe/redeploy", nil)
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "probe-session"})
+	req.Header.Set("Origin", "https://yacht.test")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -384,6 +386,7 @@ func (rt *roleTeam) postClaiming(
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	req.Header.Set("Origin", "https://yacht.test")
 	if c != nil {
 		req.AddCookie(c)
 	}

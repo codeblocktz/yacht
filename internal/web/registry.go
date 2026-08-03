@@ -72,8 +72,7 @@ func (s *Server) registrySet(w http.ResponseWriter, r *http.Request) {
 		if err == nil && current.Configured() {
 			d := s.registryData(r, "", "Enter the password again to change any of these — "+
 				"it is stored sealed and cannot be read back to keep unchanged.")
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			s.render(w, r, RegistryPage(d))
+			s.renderStatus(w, r, http.StatusUnprocessableEntity, RegistryPage(d))
 			return
 		}
 	}
@@ -83,8 +82,7 @@ func (s *Server) registrySet(w http.ResponseWriter, r *http.Request) {
 		r.FormValue("insecure") == "on")
 	if err != nil {
 		d := s.registryData(r, "", err.Error())
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, RegistryPage(d))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, RegistryPage(d))
 		return
 	}
 	http.Redirect(w, r, "/cluster/registry", http.StatusSeeOther)
@@ -93,8 +91,7 @@ func (s *Server) registrySet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) registryClear(w http.ResponseWriter, r *http.Request) {
 	if err := s.registries.Clear(r.Context()); err != nil {
 		d := s.registryData(r, "", err.Error())
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		s.render(w, r, RegistryPage(d))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, RegistryPage(d))
 		return
 	}
 	http.Redirect(w, r, "/cluster/registry", http.StatusSeeOther)
