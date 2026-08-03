@@ -6,9 +6,19 @@ plane you can read in an afternoon.
 
 Runs on K3s, so a $5 VPS is enough to start.
 
-> **Status: early, but usable.** You can deploy from a container image or from
-> a Git repository, give it a domain, attach storage, and watch it from the
-> dashboard. See [What works today](#what-works-today).
+> [!WARNING]
+> **Not ready for production.** Yacht is under active development. Interfaces,
+> the database schema, and behaviour all still change without notice, there has
+> been no tagged release yet, and none of it has run anywhere long enough to
+> have earned your trust.
+>
+> Run it on something you can afford to lose, and keep backups you have actually
+> restored from. Do not put it in front of anything whose downtime or data loss
+> would matter.
+
+**What it does today.** You can deploy from a container image or from a Git
+repository, give it a domain, attach storage, and watch it from the dashboard.
+See [What works today](#what-works-today).
 
 ## Why
 
