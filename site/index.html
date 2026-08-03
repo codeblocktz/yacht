@@ -9,11 +9,17 @@
   :root {
     --bg: #ffffff; --fg: #18181b; --muted: #71717a;
     --line: #e4e4e7; --code-bg: #fafafa;
+    --warn-line: #b8860b; --warn-bg: #fdf6e7; --warn-fg: #8a5a00;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #09090b; --fg: #fafafa; --muted: #a1a1aa;
       --line: #27272a; --code-bg: #18181b;
+      /* The border, not the fill, is what makes this read as a callout on a
+         near-black page: a tint dark enough to sit behind body text cannot
+         also separate itself from the background. Kept at or above 3:1
+         against the page for that reason. */
+      --warn-line: #a3761d; --warn-bg: #1c1608; --warn-fg: #e8b44a;
     }
   }
   * { box-sizing: border-box; }
@@ -38,6 +44,14 @@
     font: 12.5px/1.6 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   }
   .note { color: var(--muted); font-size: 12px; }
+  /* Above the install command, not below it. A warning somebody reaches after
+     they have already pasted the line is decoration. */
+  .warn {
+    border: 1px solid var(--warn-line); border-left-width: 3px; border-radius: 6px;
+    background: var(--warn-bg); padding: .85rem 1rem; margin: 0 0 2rem;
+    max-width: none; font-size: 13px;
+  }
+  .warn strong { color: var(--warn-fg); }
   a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
   footer {
     margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line);
@@ -52,6 +66,14 @@
     A self-hosted PaaS for Kubernetes. Deploy your app to your own server, with
     real Kubernetes underneath rather than a Docker wrapper. Runs on K3s, so a
     $5 VPS is enough to start.
+  </p>
+
+  <p class="warn">
+    <strong>Not ready for production.</strong> Yacht is under active
+    development. Interfaces, the database schema, and behaviour all still change
+    without notice, there has been no tagged release yet, and none of it has run
+    anywhere long enough to have earned your trust. Run it on something you can
+    afford to lose, and keep backups you have actually restored from.
   </p>
 
   <h2>Install</h2>
