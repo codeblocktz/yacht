@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest something Yacht should do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Yacht is deliberately small. The most useful thing you can describe is
+        the problem you hit, not the feature you designed to solve it — the
+        problem usually survives review even when the design does not.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you running into
+      description: What you were trying to do, and where Yacht got in the way.
+      placeholder: |
+        I run two apps that need the same database, and I have no way to see
+        which apps depend on it before deleting it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do
+      description: Optional. A rough shape is fine; it does not need a design.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you are doing instead today
+      description: >
+        Workarounds are useful evidence. Something a `kubectl` command already
+        solves cleanly may not need to be in the dashboard.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      description: >
+        Yacht is the engine, and must stay useful standalone at a single owner.
+        Multi-tenancy, billing, and quotas belong to a layer that wraps it.
+      options:
+        - label: >
+            This is engine-shaped — it is not billing, quotas, or multi-tenancy
+          required: false
