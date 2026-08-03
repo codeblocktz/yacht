@@ -356,7 +356,9 @@ templ httpLogView(d DeployLogsData) {
 					method="post"
 					action={ templ.URL("/apps/" + d.App + "/logs/http/enable") }
 					class="mt-4"
-					onsubmit="return confirm('Turn on request logging? The ingress controller restarts, so every app in this cluster drops connections for a few seconds.')"
+					data-confirm="The ingress controller restarts, so every app in this cluster drops connections for a few seconds."
+					data-confirm-title="Turn on request logging?"
+					data-confirm-label="Turn on logging"
 				>
 					<button class="btn btn-primary" type="submit">Turn on request logging</button>
 					<p class="mt-2 text-[12.5px] text-muted-foreground">

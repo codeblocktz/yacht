@@ -90,7 +90,9 @@ templ nodeActions(d NodeDetailData) {
 				<form
 					method="post"
 					action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/drain") }
-					onsubmit="return confirm('Evict everything running on this node? Each pod restarts elsewhere. A pod whose storage lives on this machine cannot move and will stay pending until the node is back.')"
+					data-confirm="Each pod restarts elsewhere. A pod whose storage lives on this machine cannot move and will stay pending until the node is back."
+					data-confirm-title="Drain this node?"
+					data-confirm-label="Drain node"
 				>
 					<button class="btn" type="submit">Drain</button>
 				</form>
@@ -98,7 +100,9 @@ templ nodeActions(d NodeDetailData) {
 					<form
 						method="post"
 						action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/remove") }
-						onsubmit="return confirm('Remove this node from the cluster? The machine itself keeps running and must be shut down separately.')"
+						data-confirm="The machine itself keeps running and must be shut down separately."
+						data-confirm-title="Remove this node?"
+						data-confirm-label="Remove node"
 					>
 						<button class="btn btn-danger" type="submit">Remove from cluster</button>
 					</form>

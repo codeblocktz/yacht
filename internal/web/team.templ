@@ -20,7 +20,8 @@ templ TeamPage(d TeamPageData) {
 	}
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Members</span></div>
-		<table class="dtable">
+		<div class="table-scroll">
+		<table class="dtable min-w-[620px]">
 			<thead>
 				<tr><th>Person</th><th>Role</th><th class="text-right">Actions</th></tr>
 			</thead>
@@ -70,6 +71,7 @@ templ TeamPage(d TeamPageData) {
 				}
 			</tbody>
 		</table>
+		</div>
 	</div>
 	if d.Viewer.CanAdminister() {
 		<div class="panel mb-5">
@@ -77,7 +79,8 @@ templ TeamPage(d TeamPageData) {
 			if len(d.Invitations) == 0 {
 				<div class="panel-body"><p class="text-muted-foreground">Nobody is waiting to join.</p></div>
 			} else {
-				<table class="dtable">
+				<div class="table-scroll">
+				<table class="dtable min-w-[480px]">
 					<thead>
 						<tr><th>Address</th><th>Role</th><th class="text-right">Actions</th></tr>
 					</thead>
@@ -97,12 +100,13 @@ templ TeamPage(d TeamPageData) {
 						}
 					</tbody>
 				</table>
+				</div>
 			}
 		</div>
 		<div class="panel mb-5">
 			<div class="panel-header"><span class="panel-title">Invite someone</span></div>
 			<div class="panel-body">
-				<form method="post" action="/team/invite" class="flex gap-4 items-end">
+				<form method="post" action="/team/invite" class="flex flex-col gap-4 sm:flex-row sm:items-end">
 					<div class="field grow">
 						<label class="label" for="email">Email</label>
 						<input class="control" id="email" name="email" type="email" required placeholder="colleague@example.com"/>

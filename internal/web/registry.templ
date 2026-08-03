@@ -129,7 +129,9 @@ templ RegistryPage(d RegistryData) {
 							class="btn btn-ghost"
 							type="submit"
 							formaction="/cluster/registry/clear"
-							onclick="return confirm('Remove the registry? Building from a repository stops working until another is set.')"
+							data-confirm="Building from a repository stops working until another registry is configured."
+							data-confirm-title="Remove the registry?"
+							data-confirm-label="Remove registry"
 						>Remove</button>
 					}
 				</div>

@@ -233,7 +233,7 @@ func customDomains(d NetworkingData) templ.Component {
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" onsubmit=\"return confirm('Remove this domain? Traffic for it stops being routed to this app.')\"><button class=\"btn btn-ghost btn-sm\" type=\"submit\">Remove</button></form></div>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 23, "\" data-confirm=\"Traffic for this domain stops being routed to the app.\" data-confirm-title=\"Remove this domain?\" data-confirm-label=\"Remove domain\"><button class=\"btn btn-ghost btn-sm\" type=\"submit\">Remove</button></form></div>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -250,7 +250,7 @@ func customDomains(d NetworkingData) templ.Component {
 			var templ_7745c5c3_Var9 templ.SafeURL
 			templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/apps/" + d.App + "/domains"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 116, Col: 73}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 118, Col: 73}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 			if templ_7745c5c3_Err != nil {
@@ -263,7 +263,7 @@ func customDomains(d NetworkingData) templ.Component {
 			var templ_7745c5c3_Var10 string
 			templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(d.Net.Target)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 131, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 133, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 			if templ_7745c5c3_Err != nil {
@@ -310,7 +310,7 @@ func routingOptions(d NetworkingData) templ.Component {
 		var templ_7745c5c3_Var12 templ.SafeURL
 		templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/apps/" + d.App + "/networking"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 150, Col: 75}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 152, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 		if templ_7745c5c3_Err != nil {
@@ -348,7 +348,7 @@ func routingOptions(d NetworkingData) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(d.Net.Target)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 179, Col: 41}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 181, Col: 41}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -407,7 +407,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 			var templ_7745c5c3_Var15 string
 			templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(d.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 205, Col: 53}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 207, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 			if templ_7745c5c3_Err != nil {
@@ -425,7 +425,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 		var templ_7745c5c3_Var16 string
 		templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.DNS.CNAMETarget)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 218, Col: 31}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 220, Col: 31}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 		if templ_7745c5c3_Err != nil {
@@ -438,7 +438,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 		var templ_7745c5c3_Var17 string
 		templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.DNS.TXTPrefix)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 234, Col: 29}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 236, Col: 29}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var17)
 		if templ_7745c5c3_Err != nil {
@@ -456,7 +456,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 			var templ_7745c5c3_Var18 string
 			templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(d.DNS.UpdatedAt)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 256, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/networking.templ`, Line: 258, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 			if templ_7745c5c3_Err != nil {
