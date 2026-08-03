@@ -162,6 +162,7 @@ func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/sign-in",
 		strings.NewReader(url.Values{"email": {"fixation-iso@web.test"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://yacht.test")
 	req.AddCookie(planted)
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
