@@ -1,0 +1,10 @@
+# Blank issues stay on, because "none of your forms fit this" is a real case and
+# a reporter who cannot file at all just does not file.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/codeblocktz/yacht/security/advisories/new
+    about: Report privately. Please do not open a public issue.
+  - name: Contributing guide
+    url: https://github.com/codeblocktz/yacht/blob/main/CONTRIBUTING.md
+    about: Setting up, what CI enforces, and how this codebase is written.

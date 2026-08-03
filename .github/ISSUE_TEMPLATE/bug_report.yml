@@ -1,0 +1,86 @@
+name: Bug report
+description: Something behaves differently from how it is documented or intended
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Everything below is here because it is what
+        would otherwise be asked in the first reply.
+
+        **Found a security problem?** Do not file it here — see
+        [SECURITY.md](https://github.com/codeblocktz/yacht/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        I deployed an image with a persistent volume attached. The deploy
+        reported success, but the pod never started.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The shortest path from a working install to the problem.
+      placeholder: |
+        1. Deploy nginx:alpine with one replica
+        2. Attach a 1Gi volume at /data
+        3. Redeploy
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >
+        The version shown at /healthz, or the commit you built from.
+        `dev` is a perfectly good answer.
+      placeholder: "dev (commit 72db828)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How is it installed
+      options:
+        - install.sh on a VPS
+        - Built from source
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: cluster
+    attributes:
+      label: Cluster
+      description: K3s or something else, and the Kubernetes version.
+      placeholder: "K3s v1.36.2+k3s1, single node, arm64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        From `journalctl -u yacht` for a service install, or the terminal
+        otherwise. The app's own log and the cluster events page often say more
+        than the dashboard does.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: >
+            I am running a build that contains the change I expect — a stale
+            binary is the most common cause of "this feature is missing"
+          required: true

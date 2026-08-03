@@ -26,6 +26,7 @@ kubeconfig
 .DS_Store
 .idea/
 .vscode/
+.claude/
 *.swp
 
 # Authoring-time only. The built bundle in internal/web/assets/js is committed,

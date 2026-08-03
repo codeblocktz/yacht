@@ -298,6 +298,15 @@ a cluster.
 Issues and pull requests are welcome. There is no CLA; contributions are
 licensed under MIT, the same as the project.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) covers getting set up, what CI enforces, and
+the conventions this codebase holds to. One thing worth knowing before your
+first test run: **tests that need a database skip themselves when it is absent,
+and a skip reads as a pass** — set `YACHT_TEST_DATABASE_URL`.
+
+Found a vulnerability? Please do not open an issue — see
+[SECURITY.md](SECURITY.md). Participation is covered by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
