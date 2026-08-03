@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -38,6 +39,8 @@ func TestGallery(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	writeGalleryAssets(t, out)
+
 	for _, g := range galleryPages() {
 		path := filepath.Join(out, g.file)
 		f, err := os.Create(path)
@@ -54,6 +57,42 @@ func TestGallery(t *testing.T) {
 		f.Close()
 		t.Logf("wrote %s", path)
 	}
+}
+
+// writeGalleryAssets copies the embedded assets next to the rendered HTML.
+//
+// The pages ask for /assets/css/app.css, and nothing answers that when the
+// output is opened on its own. Without this the gallery renders unstyled, which
+// is worse than not rendering at all: an unstyled page still looks like a page,
+// so the states this exists to check are missing without anything saying so.
+//
+// Written from the same embedded FS the server serves, so what is reviewed here
+// is what ships rather than whatever happens to be in the working tree.
+func writeGalleryAssets(t *testing.T, out string) {
+	t.Helper()
+
+	count := 0
+	err := fs.WalkDir(assetsFS, "assets", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := assetsFS.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		// p is already "assets/...", so joining it onto out reproduces the
+		// layout the /assets URLs expect when out is the document root.
+		dst := filepath.Join(out, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		count++
+		return os.WriteFile(dst, b, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("write gallery assets: %v", err)
+	}
+	t.Logf("wrote %d assets", count)
 }
 
 type galleryPage struct {

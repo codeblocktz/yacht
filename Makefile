@@ -49,6 +49,9 @@ assets: generate css ## Regenerate templates and stylesheet
 .PHONY: gallery
 gallery: assets ## Render every visual state to HTML
 	YACHT_GALLERY_OUT=$(or $(OUT),/tmp/yacht-gallery) $(GO) test ./internal/web -run Gallery -count=1
+	@echo
+	@echo "  Serve it — the pages ask for /assets, so file:// renders unstyled:"
+	@echo "    cd $(or $(OUT),/tmp/yacht-gallery) && python3 -m http.server 8123"
 
 .PHONY: build
 build: assets ## Build the yacht binary
