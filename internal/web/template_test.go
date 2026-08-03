@@ -140,5 +140,6 @@ func signedInForm(method, path, body string) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "probe-session"})
+	req.Header.Set("Origin", "https://yacht.test")
 	return req
 }

@@ -748,6 +748,7 @@ func (h *liveHarness) postAs(
 	req := httptest.NewRequest(http.MethodPost, path, nil)
 	if c != nil {
 		req.AddCookie(c)
+		req.Header.Set("Origin", "https://yacht.test")
 	}
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)

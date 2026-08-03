@@ -393,7 +393,7 @@ func New(opts Options) (*Server, error) {
 // forget, and the forgotten one is the security bug.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer)
+	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, s.securityHeaders, s.csrfProtect)
 
 	// A trailing slash is the same page. /apps used to answer it because it was
 	// a mounted subtree; the groups below are flat, so it is stated here instead
@@ -866,13 +866,11 @@ func (s *Server) renderErrFor(
 	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b
 	}
-	w.WriteHeader(http.StatusUnprocessableEntity)
-	s.render(w, r, NewApp(data))
+	s.renderStatus(w, r, http.StatusUnprocessableEntity, NewApp(data))
 }
 
 func (s *Server) renderErr(w http.ResponseWriter, r *http.Request, form NewAppForm, msg string) {
-	w.WriteHeader(http.StatusUnprocessableEntity)
-	s.render(w, r, NewApp(NewAppData{Error: msg, Form: form}))
+	s.renderStatus(w, r, http.StatusUnprocessableEntity, NewApp(NewAppData{Error: msg, Form: form}))
 }
 
 func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
@@ -1096,12 +1094,7 @@ func (s *Server) renderSignedOut(
 
 	// Content-Type before the status line: set afterwards it is dropped, and a
 	// rejected address would come back as a page the browser renders as text.
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(status)
-	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
-		s.log.Error("render failed",
-			slog.String("path", r.URL.Path), slog.String("error", err.Error()))
-	}
+	s.renderWithSlotsStatus(w, r, slots, status, page)
 }
 
 // render wraps a page in the layout, filling the chrome from the injected
@@ -1110,10 +1103,25 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page templ.Compo
 	s.renderWithSlots(w, r, s.slots.Slots(r.Context(), r), page)
 }
 
+// renderStatus renders an ordinary authenticated page with a non-200 status,
+// setting its content type before the status commits the response headers.
+func (s *Server) renderStatus(
+	w http.ResponseWriter, r *http.Request, status int, page templ.Component,
+) {
+	s.renderWithSlotsStatus(w, r, s.slots.Slots(r.Context(), r), status, page)
+}
+
 func (s *Server) renderWithSlots(
 	w http.ResponseWriter, r *http.Request, slots Slots, page templ.Component,
 ) {
+	s.renderWithSlotsStatus(w, r, slots, http.StatusOK, page)
+}
+
+func (s *Server) renderWithSlotsStatus(
+	w http.ResponseWriter, r *http.Request, slots Slots, status int, page templ.Component,
+) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
 	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
 		// The response is already partly written by this point, so there is
 		// nothing useful to send the client. Log and move on.
