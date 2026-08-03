@@ -100,6 +100,20 @@ type Config struct {
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
 
+	// DNSResolver is a nameserver to ask about custom domains, as host or
+	// host:port — "1.1.1.1" or "1.1.1.1:53".
+	//
+	// Empty uses this machine's resolver, and that is the default on purpose:
+	// an air-gapped install must not silently start depending on a public
+	// resolver because a default said so.
+	//
+	// Worth setting anyway on an install that serves customer domains. The host
+	// resolver caches negative answers, and the check made moments before a
+	// record is created is exactly what poisons it — so a correctly created
+	// record reads as missing for the negative TTL, commonly five to fifteen
+	// minutes, and looks identical to one typed wrong.
+	DNSResolver string
+
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://yacht.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
@@ -145,6 +159,7 @@ func Load() (Config, error) {
 		SecretKey:       strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		AppDomain:       env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
+		DNSResolver:     env("YACHT_DNS_RESOLVER", ""),
 		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
 		BaseURL:         strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
 		SMTPAddr:        env("YACHT_SMTP_ADDR", ""),

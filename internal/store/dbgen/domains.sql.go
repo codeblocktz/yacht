@@ -14,26 +14,41 @@ import (
 )
 
 const claimDomainsDueForCheck = `-- name: ClaimDomainsDueForCheck :many
-SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
-WHERE NOT managed AND next_check_at <= $1
-ORDER BY next_check_at
-LIMIT $2
-FOR UPDATE SKIP LOCKED
+UPDATE domains SET next_check_at = $1
+WHERE id IN (
+    SELECT due.id FROM domains due
+    WHERE NOT due.managed AND due.next_check_at <= $2
+    ORDER BY due.next_check_at
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
 `
 
 type ClaimDomainsDueForCheckParams struct {
-	Due time.Time
-	Lim int32
+	LeaseUntil time.Time
+	DueBefore  time.Time
+	Lim        int32
 }
 
-// Claims the domains whose next check is due.
+// Claims the domains whose next check is due, and leases them.
 //
-// FOR UPDATE SKIP LOCKED so the checker can run on every replica without those
-// replicas agreeing on anything: each takes rows nobody else holds, and a row
-// already being worked on is skipped rather than waited for. The build
+// Two things at once, and both matter.
+//
+// FOR UPDATE SKIP LOCKED is what lets the checker run on every replica without
+// those replicas agreeing on anything: each takes rows nobody else holds, and a
+// row already being worked on is skipped rather than waited for. The build
 // reconciler is safe on several replicas for the same reason.
+//
+// Pushing next_check_at forward in the same statement is what keeps the lock
+// short. The alternative — holding the transaction open while the lookups run —
+// would hold row locks for as long as DNS takes to answer, which is unbounded
+// and occasionally seconds. Leasing instead means the claim is committed
+// immediately and the network happens outside any transaction; a checker that
+// dies mid-pass simply lets the lease expire, and the next pass picks the row
+// up again.
 func (q *Queries) ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsDueForCheckParams) ([]Domain, error) {
-	rows, err := q.db.Query(ctx, claimDomainsDueForCheck, arg.Due, arg.Lim)
+	rows, err := q.db.Query(ctx, claimDomainsDueForCheck, arg.LeaseUntil, arg.DueBefore, arg.Lim)
 	if err != nil {
 		return nil, err
 	}

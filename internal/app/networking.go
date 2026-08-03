@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -90,7 +92,37 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 	return nil
 }
 
-// VerifyDomain proves a claim and, if it holds, routes to it.
+// ApplyRouting rebuilds one app's routing from the hostnames it now has.
+//
+// This is what the background domain checker calls when a claim becomes
+// provable, or when a live one stops resolving. It takes an owner and an app id
+// rather than a name because the checker works from domain rows, which carry
+// both — and every table carrying owner_id is precisely so that scoping stays a
+// cheap predicate rather than something a background job gets to skip.
+func (s *Service) ApplyRouting(ctx context.Context, ownerID string, appID uuid.UUID) error {
+	row, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{OwnerID: ownerID, ID: appID})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("app: read app for routing: %w", err)
+	}
+
+	a := toApp(row)
+	if err := s.apply(ctx, s.q, a); err != nil {
+		return err
+	}
+	s.log.Info("routing reapplied", slog.String("app", a.Name))
+	return nil
+}
+
+// VerifyDomain proves a claim now, rather than waiting for the checker.
+//
+// The background checker will reach this domain on its own, so this exists for
+// the person standing in front of the page who has just created the record and
+// does not want to wait out the backoff. It runs the same Check the checker
+// runs — one code path decides state — and then applies, because a domain
+// proven by this call should be serving before the response comes back.
 func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uuid.UUID) error {
 	if s.resolver == nil {
 		return errors.New("app: this install cannot resolve DNS, so a domain cannot be verified here")
@@ -108,7 +140,36 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 	if err := s.apply(ctx, s.q, a); err != nil {
 		return err
 	}
+	if _, err := s.q.MarkDomainRouted(ctx, id); err != nil {
+		return fmt.Errorf("app: mark domain routed: %w", err)
+	}
 	s.log.Info("custom domain verified", slog.String("app", name))
+	return nil
+}
+
+// ResolverName says which resolver answers questions about custom domains.
+//
+// Surfaced because "this name does not resolve" is one resolver's opinion, and
+// somebody comparing it against their own dig output needs to know whether the
+// two asked the same server.
+func (s *Service) ResolverName() string {
+	if s.resolver == nil {
+		return ""
+	}
+	return domain.ResolverName(s.resolver)
+}
+
+// RequestDomainCheck brings a domain's next background check forward.
+func (s *Service) RequestDomainCheck(ctx context.Context, ownerID string, id uuid.UUID) error {
+	n, err := s.q.RequestDomainCheck(ctx, dbgen.RequestDomainCheckParams{
+		OwnerID: ownerID, ID: id, Due: time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("app: request domain check: %w", err)
+	}
+	if n == 0 {
+		return domain.ErrDomainNotFound
+	}
 	return nil
 }
 
