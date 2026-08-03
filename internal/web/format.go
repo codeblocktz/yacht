@@ -168,6 +168,63 @@ func relativeTime(t time.Time) string {
 	return plural(int(d.Hours()/(24*365)), "year") + " ago"
 }
 
+// preciseAgo renders "how long ago" down to the second.
+//
+// relativeTime deliberately stops at "just now" below a minute, which is right
+// for a deployment list nobody is watching tick. It is wrong for anything polled
+// every few seconds: a line that reads "just now" for a full minute cannot be
+// told from one that has silently stopped updating, and "is this still checking"
+// is the exact question the domain panel exists to answer.
+func preciseAgo(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return strconv.Itoa(int(d.Seconds())) + "s ago"
+	}
+	return relativeTime(t)
+}
+
+// untilTime renders how long until something is due.
+//
+// Shown next to preciseAgo so a person waiting on a background check can see
+// that one is coming and roughly when, rather than deciding nothing is happening
+// and reaching for the manual button.
+func untilTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Until(t)
+	switch {
+	case d <= 0:
+		return "due now"
+	case d < time.Minute:
+		return "in " + strconv.Itoa(int(d.Seconds())+1) + "s"
+	case d < time.Hour:
+		return "in " + plural(int(d.Minutes())+1, "minute")
+	case d < 24*time.Hour:
+		return "in " + plural(int(d.Hours())+1, "hour")
+	}
+	return "in " + plural(int(d.Hours()/24), "day")
+}
+
+// absoluteTime is what goes in a title attribute beside a relative one.
+//
+// Every "4 minutes ago" on a page is a number somebody eventually needs to
+// correlate with a log line or an incident, and re-deriving it from the clock in
+// their head is where the mistake gets made. Local rather than UTC: the reader
+// is looking at their own machine's other timestamps.
+func absoluteTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Local().Format("2006-01-02 15:04:05 MST")
+}
+
 // sourceHref is where the picker sends each source.
 //
 // A template makes several apps and a project to hold them, so it cannot use

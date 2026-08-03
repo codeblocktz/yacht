@@ -95,6 +95,14 @@ type Slots struct {
 	// Banner renders above the page content, full width. Intended for
 	// account-level notices such as a low balance or a pending suspension.
 	Banner templ.Component
+
+	// Flash is the outcome of whatever the last request did, shown once.
+	//
+	// Filled by the server immediately before rendering rather than by a
+	// SlotProvider: reading it also clears it, and a provider is handed the
+	// request without the response it would need to do that. A wrapping
+	// application therefore inherits toasts without implementing anything.
+	Flash *Flash
 }
 
 // SlotProvider builds the chrome for a request.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -311,6 +312,10 @@ type Server struct {
 	// can say. "log" means nothing is actually sent.
 	mailTransport string
 	signInLimit   *attemptLimiter
+
+	// flashKey authenticates the one-shot message a redirect carries. See
+	// newFlashKey for why it is minted here rather than configured.
+	flashKey []byte
 }
 
 // New validates options and returns a server.
@@ -357,6 +362,10 @@ func New(opts Options) (*Server, error) {
 			opts.SessionTTL = defaultSessionTTL
 		}
 	}
+	flashKey, err := newFlashKey()
+	if err != nil {
+		return nil, fmt.Errorf("web: flash key: %w", err)
+	}
 	return &Server{
 		orch:      opts.Orchestrator,
 		ident:     opts.Identity,
@@ -383,6 +392,7 @@ func New(opts Options) (*Server, error) {
 		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		signInLimit:    newAttemptLimiter(signInWindow),
+		flashKey:       flashKey,
 	}, nil
 }
 
@@ -1120,6 +1130,13 @@ func (s *Server) renderWithSlots(
 func (s *Server) renderWithSlotsStatus(
 	w http.ResponseWriter, r *http.Request, slots Slots, status int, page templ.Component,
 ) {
+	// Read here rather than in the SlotProvider, which is handed a request and
+	// no way to clear a cookie. This is also the one funnel every full page
+	// render passes through, so a message cannot be dropped by a handler that
+	// forgot to look for one — and fragments, which do not come through here,
+	// cannot swallow a message meant for the page around them.
+	slots.Flash = s.takeFlash(w, r)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
