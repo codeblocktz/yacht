@@ -256,3 +256,60 @@ func TestSessionDoesNotOutliveMembershipRemovedDirectly(t *testing.T) {
 		t.Fatalf("session outlived the membership it depends on: %v", err)
 	}
 }
+
+// An expired session must not be able to switch team.
+//
+// SwitchTeam reads its session with GetSession, which for a long time had no
+// expiry filter — unlike GetSessionByHash, whose comment says expiry is
+// filtered in SQL precisely so that no caller can forget. SwitchTeam was that
+// caller. It was not reachable with a dead cookie, because the route gate
+// resolves a live session first, but that is a fact about today's routing and
+// not about the query.
+func TestExpiredSessionCannotSwitchTeam(t *testing.T) {
+	s := testService(t)
+	ctx := context.Background()
+
+	u, _ := s.EnsureUser(ctx, "switch-expiry@example.test", "S")
+	if _, err := s.CreateTeam(ctx, "team-switch-a", "A", u.ID); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+	if _, err := s.CreateTeam(ctx, "team-switch-b", "B", u.ID); err != nil {
+		t.Fatalf("CreateTeam: %v", err)
+	}
+
+	raw, err := s.CreateSession(ctx, u.ID, "team-switch-a", "", "", time.Hour)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sess, err := s.ResolveSession(ctx, raw)
+	if err != nil {
+		t.Fatalf("ResolveSession: %v", err)
+	}
+
+	// It works while the session is alive, so the refusal below is about expiry
+	// and not about something else being wrong with the setup.
+	if err := s.SwitchTeam(ctx, sess.ID, "team-switch-b"); err != nil {
+		t.Fatalf("SwitchTeam on a live session: %v", err)
+	}
+
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE sessions SET expires_at = now() - interval '1 minute' WHERE id = $1`,
+		sess.ID); err != nil {
+		t.Fatalf("expire session: %v", err)
+	}
+
+	if err := s.SwitchTeam(ctx, sess.ID, "team-switch-a"); !errors.Is(err, ErrSessionInvalid) {
+		t.Fatalf("SwitchTeam on an expired session = %v, want ErrSessionInvalid", err)
+	}
+
+	// And it did not write. An expired session that still moved the active team
+	// would be steering a session somebody else may later be handed.
+	var team string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT active_team_id FROM sessions WHERE id = $1`, sess.ID).Scan(&team); err != nil {
+		t.Fatalf("read active team: %v", err)
+	}
+	if team != "team-switch-b" {
+		t.Errorf("active team = %q, want it left at team-switch-b", team)
+	}
+}

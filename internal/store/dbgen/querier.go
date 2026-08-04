@@ -188,6 +188,12 @@ type Querier interface {
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
+	// Expiry is filtered here for the reason GetSessionByHash gives: so that an
+	// expired row can never be treated as valid by a caller that forgets to check.
+	// This one used to be the caller that forgot. It was not reachable with a dead
+	// session — the route gate resolves a live one first — but "not reachable"
+	// is a property of today's routing rather than of this query, and the whole
+	// point of putting the condition in SQL is that it does not depend on that.
 	GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 	// The team is joined in because the request that carries this cookie needs the
 	// owner it resolves to, and a second round trip per request buys nothing. The

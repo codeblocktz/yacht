@@ -93,8 +93,14 @@ JOIN teams t ON t.id = s.active_team_id
 JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
 WHERE s.token_hash = @token_hash AND s.expires_at > now();
 
+-- Expiry is filtered here for the reason GetSessionByHash gives: so that an
+-- expired row can never be treated as valid by a caller that forgets to check.
+-- This one used to be the caller that forgot. It was not reachable with a dead
+-- session — the route gate resolves a live one first — but "not reachable"
+-- is a property of today's routing rather than of this query, and the whole
+-- point of putting the condition in SQL is that it does not depend on that.
 -- name: GetSession :one
-SELECT * FROM sessions WHERE id = @id;
+SELECT * FROM sessions WHERE id = @id AND expires_at > now();
 
 -- name: SetSessionTeam :exec
 UPDATE sessions SET active_team_id = @active_team_id WHERE id = @id;

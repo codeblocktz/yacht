@@ -452,9 +452,15 @@ func (q *Queries) GetPasswordByEmail(ctx context.Context, email string) (GetPass
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at FROM sessions WHERE id = $1
+SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at FROM sessions WHERE id = $1 AND expires_at > now()
 `
 
+// Expiry is filtered here for the reason GetSessionByHash gives: so that an
+// expired row can never be treated as valid by a caller that forgets to check.
+// This one used to be the caller that forgot. It was not reachable with a dead
+// session — the route gate resolves a live one first — but "not reachable"
+// is a property of today's routing rather than of this query, and the whole
+// point of putting the condition in SQL is that it does not depend on that.
 func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
 	row := q.db.QueryRow(ctx, getSession, id)
 	var i Session
