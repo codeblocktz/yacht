@@ -524,6 +524,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
+			// Polled while a deploy or a build is in flight, and not otherwise.
+			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
 				// Settings, where they sat among health checks and resources.
@@ -785,6 +787,13 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 	data := NewAppData{Sources: s.sources(r.Context())}
 
+	// Only somebody the registry page would actually admit is offered a link
+	// to it. A control that leads to a 403 tells the viewer they have a
+	// permission they do not.
+	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+		data.CanConfigureRegistry = s.registries != nil
+	}
+
 	src := app.Source(r.URL.Query().Get("source"))
 	if src == "" {
 		// No source chosen: show the picker rather than defaulting to one.
@@ -919,11 +928,19 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 			// Surfaced, not merely logged. A redirect after a failure shows the
 			// page somebody expected, with the workload unchanged and nothing
 			// on screen to say so — which is how a broken deploy goes unnoticed.
+			//
+			// A flash rather than re-rendering the page. appActionFailed draws
+			// the standalone app view, and this button is pressed from the
+			// canvas sheet — so a failure used to answer by moving somebody
+			// somewhere else, which reads as the click having navigated rather
+			// than failed.
 			s.log.Error("redeploy", slog.String("app", name), slog.String("error", err.Error()))
-			s.appActionFailed(w, r, name, "", err)
+			s.flashErr(w, r, err.Error())
+			http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 			return
 		}
 	}
+	s.flashOK(w, r, "Redeploying "+name+".")
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
 

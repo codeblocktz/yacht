@@ -249,7 +249,7 @@ templ appRows(apps []app.App) {
 				</span>
 				<span class="min-w-0 flex-1">
 					<span class="block truncate font-medium">{ a.Name }</span>
-					<span class="mono block truncate text-muted-foreground">{ a.Image }</span>
+					<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</span>
 				</span>
 				// Plain text rather than an anchor: the whole row is already a
 				// link, and an anchor inside an anchor is markup a browser is
@@ -407,7 +407,7 @@ templ appDetailHeader(a app.App) {
 					</span>
 				</a>
 			}
-			<p class="mono mt-1 truncate text-muted-foreground">{ a.Image }</p>
+			<p class={ "mono mt-1 truncate text-muted-foreground", templ.KV("italic", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
@@ -453,7 +453,29 @@ templ appTab(name, active, slug, label string) {
 }
 
 // ---- deployments tab
+//
+// Polled while anything is in flight, and not otherwise. Before this the panel
+// rendered once: a git deploy sat at "running" on screen until somebody
+// reloaded, which for a build is potentially half an hour of a page that looks
+// stuck rather than busy.
+//
+// The wrapper carries its own trigger and is replaced whole, so the render that
+// finds nothing running comes back without one and the polling stops.
 templ appDeployments(d AppDetailData) {
+	<div
+		id="app-deployments"
+		if deploymentsInFlight(d) {
+			hx-get={ "/apps/" + d.App.Name + "/deployments/fragment" }
+			hx-trigger="every 3s"
+			hx-swap="outerHTML"
+		}
+		aria-busy={ boolAttr(deploymentsInFlight(d)) }
+	>
+		@AppDeploymentsBody(d)
+	</div>
+}
+
+templ AppDeploymentsBody(d AppDetailData) {
 	if len(d.Deployments) == 0 {
 		<div class="panel">
 			<div class="empty">
@@ -528,7 +550,7 @@ templ deploymentRow(appName string, dep app.Deployment) {
 			@deploymentStatus(dep)
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class="mono block truncate text-muted-foreground">{ dep.Image }</span>
+			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ imageLabel(dep.Image) }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { dep.Source() }
@@ -775,7 +797,7 @@ templ appSettings(d AppDetailData) {
 				<dt>Namespace</dt>
 				<dd class="mono break-all">{ a.Namespace }</dd>
 				<dt>Image</dt>
-				<dd class="mono break-all">{ a.Image }</dd>
+				<dd class={ "mono break-all", templ.KV("italic text-muted-foreground", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</dd>
 				<dt>Created</dt>
 				<dd>{ a.CreatedAt.Format("2 Jan 2006, 15:04") }</dd>
 				<dt>Updated</dt>
@@ -821,6 +843,11 @@ type NewAppData struct {
 	Blueprint app.Blueprint
 
 	Sources []app.Blueprint
+
+	// CanConfigureRegistry decides whether an unavailable Git source offers a
+	// way out or only names who has one. The registry page is owner-only, so
+	// linking a member to it would replace a dead end with a locked door.
+	CanConfigureRegistry bool
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -868,14 +895,26 @@ templ sourcePicker(d NewAppData) {
 						<span class="text-muted-foreground">&rsaquo;</span>
 					</a>
 				} else {
-					<div class="row-link cursor-not-allowed opacity-50">
-						<span class="text-muted-foreground">
+					// Greyed, and no longer a dead end. Saying "no image
+					// registry is configured" without saying where one is
+					// configured leaves the reader to search for a page they
+					// have not seen — and on a member's account, to search for
+					// one they cannot open at all.
+					<div class="row-item cursor-not-allowed">
+						<span class="text-muted-foreground opacity-50">
 							@icon(sourceIcon(b.Source))
 						</span>
-						<span class="min-w-0 flex-1">
+						<span class="min-w-0 flex-1 opacity-50">
 							<span class="block font-medium">{ b.Label }</span>
 							<span class="block text-muted-foreground">Not yet — { b.Because }.</span>
 						</span>
+						if b.Source == app.SourceGit && d.CanConfigureRegistry {
+							<a class="btn btn-sm" href="/cluster/registry">Configure</a>
+						} else if b.Source == app.SourceGit {
+							<span class="text-[11.5px] text-muted-foreground">
+								An owner can set one up.
+							</span>
+						}
 					</div>
 				}
 			}

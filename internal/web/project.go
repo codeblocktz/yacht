@@ -184,6 +184,32 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	return d
 }
 
+// deploymentsFragment is the polled half of the deployments tab.
+//
+// Its own endpoint rather than re-rendering the tab, so a request every three
+// seconds does not replace the pods table and the log buttons under whoever is
+// reading them.
+func (s *Server) deploymentsFragment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	a, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		if errors.Is(err, app.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.log.Error("read app", slog.String("error", err.Error()))
+		http.Error(w, "could not read the app", http.StatusInternalServerError)
+		return
+	}
+
+	if err := appDeployments(*s.appPanel(ctx, a, "")).Render(ctx, w); err != nil {
+		s.log.Error("render deployments fragment", slog.String("error", err.Error()))
+	}
+}
+
 // canvasPosition records where a card was dragged to.
 //
 // A small write on its own endpoint rather than part of a form: dragging is not

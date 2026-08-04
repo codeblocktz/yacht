@@ -190,6 +190,20 @@ func domainsSettled(n app.Networking) bool {
 	return true
 }
 
+// deploymentsInFlight reports whether anything on this page can still change.
+//
+// What stops the deployments panel polling. A build is the long case — the
+// deployment stays running until its Job ends — so this is also what keeps the
+// page alive across the half hour that a slow build takes.
+func deploymentsInFlight(d AppDetailData) bool {
+	for _, dep := range d.Deployments {
+		if dep.Status == app.DeployRunning || dep.Status == "pending" {
+			return true
+		}
+	}
+	return false
+}
+
 // domainNeedsAttention marks the states worth finding in a long list.
 func domainNeedsAttention(c domain.Custom) bool {
 	return c.State == domain.StateMisdirected || c.State == domain.StateDrifted

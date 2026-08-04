@@ -225,6 +225,23 @@ func absoluteTime(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04:05 MST")
 }
 
+// imageLabel is what to show where an app's image goes.
+//
+// A git app has no image until its first build finishes, and until then the
+// column held the literal string yacht.invalid/not-built-yet:pending. That
+// constant exists so the cluster has something syntactically valid to reject;
+// its own comment anticipates it reaching a cluster, not a person's screen.
+func imageLabel(image string) string {
+	if image == app.PendingImage {
+		return "building…"
+	}
+	return image
+}
+
+// imageIsPending reports whether an app has no built image yet, so a template
+// can style the placeholder as the absence it is rather than as a value.
+func imageIsPending(image string) bool { return image == app.PendingImage }
+
 // sourceHref is where the picker sends each source.
 //
 // A template makes several apps and a project to hold them, so it cannot use
