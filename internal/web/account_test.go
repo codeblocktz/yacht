@@ -351,6 +351,62 @@ func TestRemovingAPasswordFromAnOldSessionNeedsTheCurrentOne(t *testing.T) {
 	}
 }
 
+// Forgetting a password is recovered by asking for a link, and that is the
+// whole recovery flow.
+//
+// This is the test that stands in for a password_resets table, a
+// /forgot-password route, a second mail body and a TTL knob. A magic link
+// already grants everything a reset token would — same mailbox, same relay,
+// strictly more access — so the session it opens is proof enough to set a new
+// password, and the current-password box may be left empty.
+//
+// If this ever stops passing, the argument for having no reset token stops
+// holding, and the missing subsystem has to come back.
+func TestAForgottenPasswordIsReplacedByAskingForALink(t *testing.T) {
+	h := newLiveHarness(t, "web-pw-forgot")
+	const email = "forgot@web.test"
+	h.user(t, email)
+
+	// Somebody sets a password, then forgets it.
+	setup := sessionCookie(h.signIn(t, email))
+	if code := h.postFormAs(t, "/account/password", setup, url.Values{
+		"password": {"the forgotten passphrase"},
+		"confirm":  {"the forgotten passphrase"},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("setting the first password = %d", code)
+	}
+
+	// The sign-in page tells them what to do about it, without a route of its
+	// own and without ever asking whether the address has a password.
+	if !strings.Contains(get(t, h.handler, "/sign-in").Body.String(), "forgotten it") {
+		t.Error("the sign-in page does not say how to get back in without the password")
+	}
+
+	// They ask for a link and follow it. The session that opens is fresh.
+	c := sessionCookie(h.signIn(t, email))
+
+	// The account page says the current password may be left blank.
+	if !strings.Contains(h.getAs(t, "/account", c).Body.String(), "forgotten it") {
+		t.Error("the account page does not say the current password can be left blank")
+	}
+
+	// And it can be.
+	if code := h.postFormAs(t, "/account/password", c, url.Values{
+		"current_password": {""},
+		"password":         {"the replacement passphrase"},
+		"confirm":          {"the replacement passphrase"},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("replacing a forgotten password from a fresh session = %d, want 303", code)
+	}
+
+	if got := postPassword(h.handler, email, "the replacement passphrase", "198.51.100.20:1").Code; got != http.StatusSeeOther {
+		t.Errorf("the replacement password does not sign in: %d", got)
+	}
+	if got := postPassword(h.handler, email, "the forgotten passphrase", "198.51.100.21:1").Code; got != http.StatusUnauthorized {
+		t.Errorf("the forgotten password still signs in: %d", got)
+	}
+}
+
 // A page carrying somebody's address must not be cached.
 //
 // securityHeaders sets no-store for everything, and the only handler that
