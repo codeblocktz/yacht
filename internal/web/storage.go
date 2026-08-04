@@ -142,7 +142,7 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 
 	err := s.apps.SetVariable(ctx, owner.ID, name, app.VariableInput{
 		Key: r.FormValue("key"), Value: r.FormValue("value"),
-		Secret: r.FormValue("secret") != "",
+		Secret: formChecked(r, "secret"),
 	})
 	if err != nil {
 		s.variableFailed(w, r, name, err)
@@ -196,7 +196,7 @@ func (s *Server) healthSet(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	err := s.apps.SetHealth(ctx, owner.ID, name,
-		r.FormValue("health_path"), r.FormValue("liveness") != "")
+		r.FormValue("health_path"), formChecked(r, "liveness"))
 	if err != nil {
 		s.appActionFailed(w, r, name, "settings", err)
 		return
@@ -220,6 +220,20 @@ func (s *Server) appActionFailed(
 	}
 
 	s.renderStatus(w, r, status, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
+}
+
+// formChecked reads a checkbox without caring what it is worth.
+//
+// A browser submits a checked box and omits an unchecked one, so presence is
+// the whole signal — the value is whatever the markup happened to say, and
+// nothing should depend on which. Two handlers did: they compared against "on",
+// the value a native checkbox submits when the markup gives it none, and both
+// silently started reading false the moment the control began sending
+// something else.
+//
+// Presence, then, in one place, so there is no second way to get this wrong.
+func formChecked(r *http.Request, name string) bool {
+	return strings.TrimSpace(r.FormValue(name)) != ""
 }
 
 // formNumber reads a slider's value.
@@ -375,7 +389,7 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		CPULimit:      FormatCPU(formNumber(r, "cpu_limit")),
 		MemoryRequest: FormatMemory(formNumber(r, "memory_request")),
 		MemoryLimit:   FormatMemory(formNumber(r, "memory_limit")),
-		Internal:      r.FormValue("internal") == "1",
+		Internal:      formChecked(r, "internal"),
 		Repo: app.Repo{
 			URL:    strings.TrimSpace(r.FormValue("repo_url")),
 			Branch: strings.TrimSpace(r.FormValue("repo_branch")),

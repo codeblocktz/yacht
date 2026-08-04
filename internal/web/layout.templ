@@ -2,6 +2,7 @@ package web
 
 import (
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/web/ui/checkbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/dialog"
 	"github.com/codeblocktz/yacht/internal/web/ui/popover"
 	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
@@ -50,6 +51,7 @@ templ Layout(s Slots, page templ.Component) {
 			// less than every future page remembering to ask for it.
 			@dialog.Script()
 			@popover.Script()
+			@checkbox.Script()
 			if s.FullBleed {
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>

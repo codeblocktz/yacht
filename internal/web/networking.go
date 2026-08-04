@@ -79,7 +79,7 @@ func (s *Server) networkingSet(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	err := s.nets.SetNetworking(ctx, owner.ID, name,
-		r.FormValue("https_only") == "on", r.FormValue("cname_only") == "on")
+		formChecked(r, "https_only"), formChecked(r, "cname_only"))
 	if err != nil {
 		s.appActionFailed(w, r, name, "domains", err)
 		return

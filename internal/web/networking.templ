@@ -270,51 +270,29 @@ templ routingOptions(d NetworkingData) {
 		</div>
 		<div class="panel-body">
 			<form method="post" action={ templ.URL("/apps/" + d.App + "/networking") } class="flex flex-col gap-4">
-				<label class="flex items-start gap-2.5">
-					<input
-						type="checkbox"
-						name="https_only"
-						class="mt-0.5"
-						checked?={ d.Net.HTTPSOnly }
-					/>
-					<span class="min-w-0">
-						<span class="block font-medium">Enforce HTTPS</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Routes through the ingress controller's secure entrypoint only, so
-							a request arriving on plain HTTP is not served rather than served
-							and redirected.
-						</span>
+				@checkOption("https_only", "1", "Enforce HTTPS", d.Net.HTTPSOnly, false) {
+					Routes through the ingress controller's secure entrypoint only, so
+					a request arriving on plain HTTP is not served rather than served
+					and redirected.
+				}
+				@checkOption("cname_only", "1", "Publish a CNAME, never node addresses", d.Net.CNAMEOnly, false) {
+					Tells ExternalDNS to target
+					if d.Net.Target != "" {
+						<code class="mono">{ d.Net.Target }</code>
+					} else {
+						the platform
+					}
+					rather than publishing this cluster's node addresses as A records.
+					// Said plainly rather than hedged. "If none is installed this
+					// changes nothing" left the reader to work out whether one is,
+					// and Yacht has no way to tell them — so it says that instead
+					// of implying they should already know.
+					<span class="mt-1 block">
+						Yacht does not run ExternalDNS and cannot see whether anything
+						does, so it cannot confirm this takes effect. The target itself is
+						set under <a class="underline hover:text-foreground" href="/cluster/dns">Infrastructure &rsaquo; DNS</a>.
 					</span>
-				</label>
-				<label class="flex items-start gap-2.5">
-					<input
-						type="checkbox"
-						name="cname_only"
-						class="mt-0.5"
-						checked?={ d.Net.CNAMEOnly }
-					/>
-					<span class="min-w-0">
-						<span class="block font-medium">Publish a CNAME, never node addresses</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Tells ExternalDNS to target
-							if d.Net.Target != "" {
-								<code class="mono">{ d.Net.Target }</code>
-							} else {
-								the platform
-							}
-							rather than publishing this cluster's node addresses as A records.
-						</span>
-						// Said plainly rather than hedged. "If none is installed this
-						// changes nothing" left the reader to work out whether one is,
-						// and Yacht has no way to tell them — so it says that instead
-						// of implying they should already know.
-						<span class="block text-[12.5px] text-muted-foreground">
-							Yacht does not run ExternalDNS and cannot see whether anything
-							does, so it cannot confirm this takes effect. The target itself is
-							set under <a class="underline hover:text-foreground" href="/cluster/dns">Infrastructure &rsaquo; DNS</a>.
-						</span>
-					</span>
-				</label>
+				}
 				<div>
 					<button class="btn btn-primary" type="submit">Save</button>
 				</div>

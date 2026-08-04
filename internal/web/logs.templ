@@ -46,10 +46,7 @@ templ AppLogs(d LogsData) {
 						<span class="mono text-[12.5px] text-muted-foreground">{ d.Logs.Pod }</span>
 					</div>
 				}
-				<label class="flex items-center gap-2 text-[12.5px]">
-					<input type="checkbox" name="previous" value="1" checked?={ d.Previous }/>
-					Previous run
-				</label>
+				@checkField("previous", "1", "Previous run", d.Previous)
 				<button class="btn" type="submit">Apply</button>
 			</form>
 			<p class="mt-2 text-[12.5px] text-muted-foreground">

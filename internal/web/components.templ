@@ -4,7 +4,11 @@ import (
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/checkbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/popover"
+
+	// switch is a keyword, so the package needs a name that is not one.
+	switchui "github.com/codeblocktz/yacht/internal/web/ui/switch"
 )
 
 // stepList renders a progression through stages that arrive over time.
@@ -114,6 +118,11 @@ templ resourceSlider(s ResourceSlider, unit string) {
 //
 // A switch rather than a checkbox: a checkbox reads as one field among many in
 // a form, and these read as a thing being in a state — which is what they are.
+//
+// templUI's Switch rather than a hand-rolled one. This was a native checkbox
+// styled into a switch with :has() rules of its own, which is a second
+// implementation of a component the design system already ships — and the one
+// that does not inherit its focus, disabled and dark-mode treatment.
 templ toggle(name, label, note string, on bool) {
 	<div class="toggle-row">
 		<span class="min-w-0">
@@ -122,10 +131,46 @@ templ toggle(name, label, note string, on bool) {
 				<span class="field-note block">{ note }</span>
 			}
 		</span>
-		<span class="toggle">
-			<input type="checkbox" id={ name } name={ name } value="1" checked?={ on }/>
-		</span>
+		@switchui.Switch(switchui.Props{ID: name, Name: name, Value: "1", Checked: on})
 	</div>
+}
+
+// checkOption is a checkbox with a title and the paragraph that explains it.
+//
+// The shape every routing and registry setting uses. Its own component because
+// the alignment of a box against two lines of text is the part that goes wrong
+// by hand, and it went wrong differently in each of the three places that did
+// it by hand.
+templ checkOption(name, value, title string, checked, disabled bool) {
+	<label class="flex items-start gap-2.5" for={ name }>
+		<span class="mt-0.5">
+			@checkbox.Checkbox(checkbox.Props{
+				ID: name, Name: name, Value: value,
+				Checked: checked, Disabled: disabled,
+			})
+		</span>
+		<span class="min-w-0">
+			<span class="block font-medium">{ title }</span>
+			<span class="block text-[12.5px] text-muted-foreground">
+				{ children... }
+			</span>
+		</span>
+	</label>
+}
+
+// checkField is a checkbox with its label, which is how every one of them is
+// used here.
+//
+// The component on its own is the input and nothing else. Pairing it with a
+// label in one place means the two cannot drift apart across eight call sites,
+// and the label stays clickable because it names the input's id.
+templ checkField(name, value, label string, checked bool) {
+	<label class="flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px]" for={ name }>
+		@checkbox.Checkbox(checkbox.Props{
+			ID: name, Name: name, Value: value, Checked: checked,
+		})
+		<span>{ label }</span>
+	</label>
 }
 
 // sourceCard is a repository drawn as a connection rather than a text field.

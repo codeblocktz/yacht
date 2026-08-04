@@ -675,10 +675,7 @@ templ appVariables(d AppDetailData) {
 					<label class="label" for="var-value">Value</label>
 					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
 				</div>
-				<label class="check-field">
-					<input type="checkbox" name="secret" value="1"/>
-					Secret
-				</label>
+				@checkField("secret", "1", "Secret", false)
 				<button class="btn btn-primary" type="submit">Save</button>
 			</form>
 			<p class="mt-3 text-[12px] text-muted-foreground">
@@ -912,14 +909,9 @@ templ appLegacySettings(d AppDetailData) {
 						An HTTP GET on this app's own port. Empty means no probe.
 					</span>
 				</div>
-				<label class="flex items-center gap-2 pb-6 text-[12.5px]">
-					if a.Liveness {
-						<input type="checkbox" name="liveness" value="1" checked/>
-					} else {
-						<input type="checkbox" name="liveness" value="1"/>
-					}
-					Also restart when it fails
-				</label>
+				<span class="pb-6">
+					@checkField("liveness", "1", "Also restart when it fails", a.Liveness)
+				</span>
 				<button class="btn btn-primary mb-6" type="submit">Save</button>
 			</form>
 			<p class="text-[12px] text-muted-foreground">

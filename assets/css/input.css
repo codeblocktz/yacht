@@ -461,24 +461,6 @@
   .table-scroll {
     @apply w-full overflow-x-auto;
   }
-  .check-field {
-    @apply flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px];
-  }
-  .check-field input {
-    @apply size-4 cursor-pointer appearance-none rounded-sm border border-input
-           bg-background checked:border-primary checked:bg-primary
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
-  }
-  .check-field input:checked::after {
-    content: "";
-    display: block;
-    width: 5px;
-    height: 9px;
-    margin: 1px 0 0 5px;
-    border: solid var(--primary-foreground);
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-  }
   .confirm-dialog {
     @apply fixed left-1/2 top-1/2 z-50 m-0 w-[calc(100%-2rem)] max-w-md
            -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border
@@ -932,36 +914,10 @@
     @apply font-normal text-muted-foreground;
   }
 
-  /* ---- toggle ------------------------------------------------------ */
-
-  /* A switch, for a setting that takes effect rather than one that is
-     submitted. A checkbox reads as "part of a form"; these read as a thing
-     being on or off, which is what they are. */
-  .toggle {
-    @apply relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center
-           rounded-full border border-border bg-muted transition-colors;
-  }
-  .toggle::after {
-    @apply absolute left-0.5 size-3.5 rounded-full bg-muted-foreground
-           transition-transform content-[''];
-  }
-  .toggle:has(input:checked) {
-    @apply border-transparent bg-foreground;
-  }
-  .toggle:has(input:checked)::after {
-    @apply translate-x-4 bg-background;
-  }
-  .toggle:has(input:focus-visible) {
-    @apply ring-2 ring-ring/50;
-  }
-  .toggle input {
-    @apply absolute inset-0 m-0 cursor-pointer appearance-none opacity-0;
-  }
+  /* The row a switch sits in. The switch itself is templUI's — this is only
+     the layout that puts a label on the left and the control on the right. */
   .toggle-row {
     @apply flex items-start justify-between gap-4 rounded-md border border-border px-4 py-3;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .toggle, .toggle::after { transition: none; }
   }
 
   /* ---- a connected source ------------------------------------------ */
