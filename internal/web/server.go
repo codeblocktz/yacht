@@ -1194,6 +1194,13 @@ func (s *Server) renderSignedOut(
 ) {
 	slots := s.slots.Slots(r.Context(), r)
 	slots.Title = title
+	// Bare drops the sidebar and the top bar outright. Emptying the slots below
+	// is not enough on its own — it removes the navigation but leaves the rail
+	// and the header standing, so the form sits beside an empty column and under
+	// an empty bar, wearing the chrome of an application nobody has been let
+	// into. They are still cleared, so that a wrapping application's own layout
+	// is handed the same "nothing here needs a session" state.
+	slots.Bare = true
 	slots.Nav = nil
 	slots.Breadcrumb = nil
 	slots.HeaderTools = nil

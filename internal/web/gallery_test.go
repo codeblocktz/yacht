@@ -53,6 +53,12 @@ func TestGallery(t *testing.T) {
 		slots := DefaultSlots{}.Slots(context.Background(),
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
+		slots.Bare = g.bare
+		if g.bare {
+			slots.Nav = nil
+			slots.SidebarTop = nil
+			slots.SidebarFooter = nil
+		}
 		if err := Layout(slots, g.page).Render(context.Background(), f); err != nil {
 			f.Close()
 			t.Fatalf("render %s: %v", g.file, err)
@@ -103,6 +109,11 @@ type galleryPage struct {
 	path   string
 	crumbs []Crumb
 	page   templ.Component
+
+	// bare renders the page the way renderSignedOut does: no sidebar, no top
+	// bar. Without it the signed-out pages are reviewed wearing chrome they do
+	// not ship with, which is the opposite of what a gallery is for.
+	bare bool
 }
 
 // section renders a labelled band so several states can share one image.
@@ -453,7 +464,7 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
-			file: "states-sign-in.html", path: "/sign-in",
+			file: "states-sign-in.html", path: "/sign-in", bare: true,
 			page: stack(
 				section("Sign in", "both ways in, offered to everybody before anything is known about them",
 					SignIn(SignInData{})),

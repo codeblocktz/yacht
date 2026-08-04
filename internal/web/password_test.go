@@ -230,3 +230,48 @@ func TestCSRFRefusesAPasswordSignInWithoutOriginMetadata(t *testing.T) {
 		t.Error("an origin-less password post set a session cookie")
 	}
 }
+
+// The pages somebody meets before they are let in carry no dashboard chrome.
+//
+// renderSignedOut has always emptied the individual slots, but emptying them is
+// not the same as removing the shell: the navigation went and the sidebar column
+// and the top bar stayed, so the sign-in form sat beside an empty rail and under
+// an empty header — chrome for an application the visitor has no access to. The
+// slots being nil is exactly why nobody noticed.
+func TestSignedOutPagesHaveNoDashboardChrome(t *testing.T) {
+	h := signInServer(t, &fakeAccounts{}, &fakeMailer{})
+
+	for _, path := range []string{"/sign-in"} {
+		body := get(t, h, path).Body.String()
+		for _, chrome := range []string{
+			`<aside`,          // the sidebar column
+			`class="sidebar"`, // and its styling
+			`<header`,         // the top bar
+			`data-nav-backdrop`,
+			`skip-link`, // nothing to skip past when there is no navigation
+		} {
+			if strings.Contains(body, chrome) {
+				t.Errorf("%s renders %s — a signed-out page is wearing the dashboard's chrome",
+					path, chrome)
+			}
+		}
+	}
+}
+
+// And the pages behind a session still have it.
+//
+// The other half of the claim above: a Bare flag that leaked into the ordinary
+// layout would take the navigation off every page in the product, which is a
+// much louder failure but exactly as easy to introduce.
+func TestSignedInPagesKeepTheirChrome(t *testing.T) {
+	h := newLiveHarness(t, "web-chrome")
+	h.user(t, "chrome@web.test")
+	c := sessionCookie(h.signIn(t, "chrome@web.test"))
+
+	body := h.getAs(t, "/account", c).Body.String()
+	for _, chrome := range []string{`<aside`, `class="sidebar"`, `<header`, `skip-link`} {
+		if !strings.Contains(body, chrome) {
+			t.Errorf("an authenticated page is missing %s", chrome)
+		}
+	}
+}
