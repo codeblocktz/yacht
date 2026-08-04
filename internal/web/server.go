@@ -39,6 +39,10 @@ type Apps interface {
 	// Update changes what the app runs and how much it may use. Everything
 	// here was decided at create and then frozen until this existed.
 	Update(ctx context.Context, ownerID, name string, in app.UpdateInput) (app.App, error)
+
+	// Branches lists a repository's branches, filtered by a query. Read with
+	// ls-remote, so it costs one HTTPS request and no clone.
+	Branches(ctx context.Context, repoURL, query string) ([]string, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
@@ -530,6 +534,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/settings", s.appDetail)
 			// Polled while a deploy or a build is in flight, and not otherwise.
 			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
+			// Reads the remote with ls-remote while somebody types a branch.
+			r.Get("/apps/{name}/branches", s.appBranches)
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
 				// Settings, where they sat among health checks and resources.
@@ -595,6 +601,7 @@ func (s *Server) Handler() http.Handler {
 			// Image, port, resources, reachability, repository — the fields
 			// that had no way to be changed after create.
 			r.Post("/apps/{name}/runtime", s.appRuntime)
+			r.Post("/apps/{name}/source/disconnect", s.appSourceDisconnect)
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 

@@ -297,6 +297,17 @@ type AppDetailData struct {
 	// page can attribute what it reports rather than stating it as fact.
 	ResolverName string
 
+	// The resource tracks, with ceilings taken from the cluster's largest
+	// node — what a single pod can actually be scheduled onto.
+	CPULimit      ResourceSlider
+	MemoryLimit   ResourceSlider
+	CPURequest    ResourceSlider
+	MemoryRequest ResourceSlider
+
+	// RepoError is why the connected repository could not be read, shown on
+	// the source card. A private repo, a typo and an outage all land here.
+	RepoError string
+
 	Notice string
 
 	// Error is a refusal from the action that produced this render, shown with
@@ -713,111 +724,114 @@ templ appMetrics(d AppDetailData) {
 // to, and what still works with no JavaScript at all.
 templ appRuntimeForm(d AppDetailData) {
 	{{ a := d.App }}
-	<div class="panel mb-5">
-		<div class="panel-header">
-			<span class="panel-title">Runtime</span>
-			<span class="text-[12px] text-muted-foreground">
-				Saving rolls the app out again
+	<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") }>
+		<section id="source" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("box")</span>
+				<h2 class="settings-section-title">Source</h2>
+			</div>
+			if a.Source == app.SourceGit {
+				<div class="field-group">
+					<div class="field-label mb-1.5">Source repo</div>
+					@sourceCard(d)
+				</div>
+				<div class="field-group">
+					<label class="field-label" for="repo_url">Repository URL</label>
+					<p class="field-note">Where a deploy builds from.</p>
+					<input class="control mono mt-1.5" id="repo_url" name="repo_url" value={ a.Repo.URL } placeholder="https://github.com/owner/repo"/>
+				</div>
+				@branchPicker(a.Name, a.Repo.Branch)
+				<div class="field-group">
+					<label class="field-label" for="repo_subdir">Root directory</label>
+					<p class="field-note">
+						Where in the repository the code is. Empty means the repository root.
+						@helpNote("the root directory") {
+							<p>
+								Yacht cannot list the directories in your repository yet —
+								that needs a credential it has nowhere to keep. Type the path
+								as it appears in the repository, without a leading slash, for
+								example <code class="mono">server</code>.
+							</p>
+						}
+					</p>
+					<input class="control mono mt-1.5" id="repo_subdir" name="repo_subdir" value={ a.Repo.Subdir } placeholder="server"/>
+				</div>
+				<p class="field-note">Changing any of these does not rebuild. The next deploy reads them.</p>
+			} else {
+				<div class="field-group">
+					<label class="field-label" for="image">Image</label>
+					<p class="field-note">A new tag here is how this app is upgraded.</p>
+					<input class="control mono mt-1.5" id="image" name="image" value={ a.Image } required/>
+				</div>
+			}
+			if a.Source == app.SourceGit {
+				<div class="field-group">
+					<div class="field-label">Current image</div>
+					<p class="field-note">
+						What the last build produced. Not editable — the next build replaces it.
+					</p>
+					<input class="control mono mt-1.5" value={ imageLabel(a.Image) } disabled/>
+				</div>
+			}
+		</section>
+		<section id="networking" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("globe")</span>
+				<h2 class="settings-section-title">Networking</h2>
+			</div>
+			<div class="field-group">
+				<label class="field-label" for="port">Port</label>
+				<p class="field-note">The port your app listens on. 0 for an app that serves nothing.</p>
+				<input
+					class="control mt-1.5 w-32"
+					id="port"
+					type="number"
+					name="port"
+					min="0"
+					max="65535"
+					value={ strconv.Itoa(int(a.Port)) }
+				/>
+			</div>
+			@toggle("internal", "Internal only",
+				"Reachable from inside the cluster and nowhere else. Turning this on withdraws the platform hostname rather than hiding it.",
+				a.Internal)
+			<p class="field-note mt-2">
+				Domains and HTTPS are on the
+				<a class="underline hover:text-foreground" href={ templ.URL("/apps/" + a.Name + "/domains") }>Domains</a>
+				tab.
+			</p>
+		</section>
+		<section id="scale" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("cpu")</span>
+				<h2 class="settings-section-title">Scale</h2>
+			</div>
+			<div class="field-group">
+				<div class="field-label">Limits</div>
+				<p class="field-note mb-3">
+					The most one replica may use. The ceiling is this cluster's largest
+					node, because that is what a single pod can be scheduled onto.
+				</p>
+				@resourceSlider(d.CPULimit, "cpu")
+				@resourceSlider(d.MemoryLimit, "mem")
+			</div>
+			<div class="field-group">
+				<div class="field-label">Reserved</div>
+				<p class="field-note mb-3">
+					What the scheduler holds for it. A pod with nothing reserved can land
+					on a node that has nothing left to give it.
+				</p>
+				@resourceSlider(d.CPURequest, "cpu")
+				@resourceSlider(d.MemoryRequest, "mem")
+			</div>
+		</section>
+		<div class="sticky bottom-0 -mx-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+			<button class="btn btn-primary" type="submit">Save and roll out</button>
+			<span class="ml-3 text-[12px] text-muted-foreground">
+				Saving applies these to the cluster and records a deployment.
 			</span>
 		</div>
-		<div class="panel-body">
-			<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") } class="flex flex-col gap-4">
-				<div class="flex flex-wrap gap-4">
-					<div class="field min-w-[240px] flex-1">
-						<label class="label" for="image">Image</label>
-						if a.Source == app.SourceGit {
-							// Shown and locked rather than hidden. The value is real
-							// and worth reading; it is just not this form's to set,
-							// because the next build replaces whatever is typed here.
-							<input class="control mono" id="image" value={ imageLabel(a.Image) } disabled/>
-							<span class="hint">
-								Built from the repository below. Change the repository, or
-								deploy again, rather than setting this by hand.
-							</span>
-						} else {
-							<input class="control mono" id="image" name="image" value={ a.Image } required/>
-							<span class="hint">
-								A new tag here is how this app is upgraded.
-							</span>
-						}
-					</div>
-					<div class="field w-32">
-						<label class="label" for="port">Port</label>
-						<input
-							class="control"
-							id="port"
-							type="number"
-							name="port"
-							min="0"
-							max="65535"
-							value={ strconv.Itoa(int(a.Port)) }
-						/>
-						<span class="hint">0 for no port.</span>
-					</div>
-				</div>
-				<div class="flex flex-wrap gap-4">
-					@resourceField("cpu_request", "CPU request", a.CPURequest, "250m")
-					@resourceField("cpu_limit", "CPU limit", a.CPULimit, "1")
-					@resourceField("memory_request", "Memory request", a.MemoryRequest, "128Mi")
-					@resourceField("memory_limit", "Memory limit", a.MemoryLimit, "512Mi")
-				</div>
-				<div class="text-[12px] text-muted-foreground">
-					Requests are what the scheduler reserves; limits are what the
-					container is stopped from exceeding.
-					@helpNote("requests and limits") {
-						<p>
-							A pod with no request can be scheduled onto a node that has
-							nothing left to give it. One that exceeds a memory limit is
-							killed outright, which looks like a crash rather than a limit.
-						</p>
-						<p class="mt-2">
-							Leave them empty to let the namespace's own defaults apply.
-						</p>
-					}
-				</div>
-				if a.Source == app.SourceGit {
-					<div class="flex flex-wrap gap-4">
-						<div class="field min-w-[260px] flex-1">
-							<label class="label" for="repo_url">Repository</label>
-							<input class="control mono" id="repo_url" name="repo_url" value={ a.Repo.URL }/>
-						</div>
-						<div class="field w-40">
-							<label class="label" for="repo_branch">Branch</label>
-							<input class="control mono" id="repo_branch" name="repo_branch" value={ a.Repo.Branch }/>
-						</div>
-						<div class="field w-40">
-							<label class="label" for="repo_subdir">Subdirectory</label>
-							<input class="control mono" id="repo_subdir" name="repo_subdir" value={ a.Repo.Subdir }/>
-						</div>
-					</div>
-					<p class="text-[12px] text-muted-foreground">
-						Changing these does not rebuild. The next deploy reads them.
-					</p>
-				}
-				<label class="flex items-start gap-2.5">
-					<input type="checkbox" name="internal" value="1" class="mt-0.5" checked?={ a.Internal }/>
-					<span class="min-w-0">
-						<span class="block font-medium">Internal only</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Reachable from inside the cluster and nowhere else. Turning this
-							on withdraws the platform hostname rather than hiding it; turning
-							it off issues one again.
-						</span>
-					</span>
-				</label>
-				<div>
-					<button class="btn btn-primary" type="submit">Save and roll out</button>
-				</div>
-			</form>
-		</div>
-	</div>
-}
-
-templ resourceField(name, label, value, placeholder string) {
-	<div class="field w-36">
-		<label class="label" for={ name }>{ label }</label>
-		<input class="control mono" id={ name } name={ name } value={ value } placeholder={ placeholder }/>
-	</div>
+	</form>
 }
 
 // ---- domains tab
@@ -839,7 +853,6 @@ templ appDomains(d AppDetailData) {
 
 // ---- settings tab
 templ appSettings(d AppDetailData) {
-	{{ a := d.App }}
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">{ d.Error }</div>
@@ -850,7 +863,39 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
 		</div>
 	}
-	@appRuntimeForm(d)
+	<div class="settings-shell">
+		// The nav is beside the page rather than above it, and every section is
+		// on that page. Tabs hide what they are not showing, so finding a
+		// setting means guessing which tab owns it; anchors keep it all
+		// findable with the browser's own search.
+		<nav class="settings-nav" aria-label="Settings sections">
+			<a href="#source">Source</a>
+			<a href="#networking">Networking</a>
+			<a href="#scale">Scale</a>
+			<a href="#health">Health</a>
+			<a href="#replicas">Replicas</a>
+			<a href="#danger">Danger</a>
+		</nav>
+		<div class="settings-main">
+			@appRuntimeForm(d)
+			@appLegacySettings(d)
+		</div>
+	</div>
+}
+
+// appLegacySettings is the part of the tab that has not been restructured yet.
+//
+// Health, replicas and deletion keep the forms they had. They are correct and
+// they work; leaving them as panels inside the new shell is honest about what
+// has been reworked and what has not, and is cheaper than moving markup around
+// for its own sake.
+templ appLegacySettings(d AppDetailData) {
+	{{ a := d.App }}
+	<section id="health" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("activity")</span>
+			<h2 class="settings-section-title">Health</h2>
+		</div>
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">
@@ -881,6 +926,12 @@ templ appSettings(d AppDetailData) {
 			</p>
 		</div>
 	</div>
+	</section>
+	<section id="replicas" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Replicas</h2>
+		</div>
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Scale</span>
@@ -925,7 +976,13 @@ templ appSettings(d AppDetailData) {
 			</dl>
 		</div>
 	</div>
-	<div class="panel mt-4 border-l-2 border-l-destructive">
+	</section>
+	<section id="danger" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("minus")</span>
+			<h2 class="settings-section-title">Danger</h2>
+		</div>
+	<div class="panel border-l-2 border-l-destructive">
 		<div class="panel-header">
 			<span class="panel-title">Danger zone</span>
 		</div>
@@ -945,6 +1002,7 @@ templ appSettings(d AppDetailData) {
 			</form>
 		</div>
 	</div>
+	</section>
 }
 
 // ---------------------------------------------------------------- new app

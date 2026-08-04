@@ -91,7 +91,9 @@ func TestAnImageTagCanBeChanged(t *testing.T) {
 // Service routing to nothing.
 func TestChangingThePortReachesTheCluster(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com"})
+	// A domain of its own. The host index is globally unique, so two tests
+	// issuing web.apps.example.com collide when their packages run together.
+	s, orch, pool := testService(t, Options{AppDomain: "apps.update-port.test"})
 	id := owner(t, s, pool, "svc-update-port")
 
 	if _, err := s.Create(ctx, id, CreateInput{
@@ -212,7 +214,7 @@ func TestARepositoryChangeAloneIsNotARollout(t *testing.T) {
 // turning it back issues one again.
 func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	ctx := context.Background()
-	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com"})
+	s, orch, pool := testService(t, Options{AppDomain: "apps.update-internal.test"})
 	id := owner(t, s, pool, "svc-update-internal")
 
 	if _, err := s.Create(ctx, id, CreateInput{

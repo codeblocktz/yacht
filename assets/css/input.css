@@ -877,6 +877,161 @@
 }
 
 @layer components {
+  /* A number chosen by dragging rather than typed.
+
+     A CPU limit is not a number people know — "how much of a core" is a
+     judgement, and a text field asking for "500m" makes somebody learn
+     Kubernetes' unit grammar before they can make it. A track with a ceiling
+     turns it into a comparison: this much, out of what the cluster has.
+
+     The ceiling is real. It is the largest node's capacity, because that is
+     what a single pod can actually be scheduled onto — a limit above it is a
+     workload that stays Pending forever, and a slider that let somebody choose
+     one would be a control that produces a broken app. */
+  .slider-head {
+    @apply flex items-baseline justify-between gap-3 text-[12.5px];
+  }
+  .slider-value {
+    @apply font-medium tabular-nums;
+  }
+  .slider-max {
+    @apply text-[11.5px] text-muted-foreground tabular-nums;
+  }
+  /* The control is 16px tall and the bar inside it is 4px.
+
+     Sizing the input to the bar is the obvious thing and it is wrong: the hit
+     area is the input's box, so a 4px track is a 4px target, which is most of a
+     pixel-hunt on a mouse and unusable on a phone. The bar is painted at 4px
+     inside a full-height control instead, so it looks the same and can actually
+     be grabbed.
+
+     background-size rather than a pseudo-element, because the fill is a
+     gradient set inline by the server and by the script, and a pseudo-element
+     cannot be reached from either. */
+  .slider {
+    @apply mt-2 h-4 w-full cursor-pointer appearance-none bg-transparent;
+    background-repeat: no-repeat;
+    background-size: 100% 4px;
+    background-position: 0 center;
+    border-radius: 9999px;
+  }
+  /* The filled part of the track is painted by the script as a gradient, so
+     the two halves cannot disagree about where the handle is. */
+  .slider::-webkit-slider-thumb {
+    @apply size-4 appearance-none rounded-full border-2 border-background bg-foreground shadow;
+  }
+  .slider::-moz-range-thumb {
+    @apply size-4 appearance-none rounded-full border-2 border-background bg-foreground shadow;
+  }
+  .slider:focus-visible {
+    @apply outline-none ring-2 ring-ring/50 ring-offset-2 ring-offset-background;
+  }
+  /* Zero is not a small amount, it is no limit at all — a different kind of
+     answer, and worth reading differently. */
+  .slider-none .slider-value {
+    @apply font-normal text-muted-foreground;
+  }
+
+  /* ---- toggle ------------------------------------------------------ */
+
+  /* A switch, for a setting that takes effect rather than one that is
+     submitted. A checkbox reads as "part of a form"; these read as a thing
+     being on or off, which is what they are. */
+  .toggle {
+    @apply relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center
+           rounded-full border border-border bg-muted transition-colors;
+  }
+  .toggle::after {
+    @apply absolute left-0.5 size-3.5 rounded-full bg-muted-foreground
+           transition-transform content-[''];
+  }
+  .toggle:has(input:checked) {
+    @apply border-transparent bg-foreground;
+  }
+  .toggle:has(input:checked)::after {
+    @apply translate-x-4 bg-background;
+  }
+  .toggle:has(input:focus-visible) {
+    @apply ring-2 ring-ring/50;
+  }
+  .toggle input {
+    @apply absolute inset-0 m-0 cursor-pointer appearance-none opacity-0;
+  }
+  .toggle-row {
+    @apply flex items-start justify-between gap-4 rounded-md border border-border px-4 py-3;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toggle, .toggle::after { transition: none; }
+  }
+
+  /* ---- a connected source ------------------------------------------ */
+
+  /* What an app builds from, drawn as a connection rather than a text field.
+
+     A URL in a box says "type here". A repository with its host's mark, and a
+     way to disconnect it, says what it is: something attached, which can be
+     detached and attached again. That difference is most of why the Railway
+     version reads as simpler while holding the same value. */
+  .source-card {
+    @apply flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5;
+  }
+  .source-card-err {
+    @apply border-destructive/60;
+  }
+  .source-name {
+    @apply min-w-0 flex-1 truncate font-mono text-[12.5px];
+  }
+  .source-empty {
+    @apply flex items-center gap-3 rounded-md border border-dashed border-border
+           px-3 py-2.5 text-[12.5px] text-muted-foreground;
+  }
+
+  /* ---- sectioned settings ------------------------------------------ */
+
+  /* One long page with a nav beside it, rather than a row of tabs.
+
+     Tabs hide what they are not showing, so finding a setting means guessing
+     which tab owns it. A single column with anchors keeps every setting on one
+     page and findable with the browser's own search, and the nav answers
+     "where am I" without taking anything away. */
+  .settings-shell {
+    @apply flex flex-col-reverse gap-8 lg:flex-row;
+  }
+  .settings-main {
+    @apply min-w-0 flex-1;
+  }
+  .settings-nav {
+    @apply shrink-0 lg:sticky lg:top-6 lg:w-[168px] lg:self-start;
+  }
+  .settings-nav a {
+    @apply block rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground
+           transition-colors hover:bg-accent hover:text-foreground;
+  }
+  .settings-section {
+    @apply mb-10 scroll-mt-6;
+  }
+  .settings-section-head {
+    @apply mb-4 flex items-center gap-3;
+  }
+  .settings-section-mark {
+    @apply grid size-8 shrink-0 place-items-center rounded-full border border-border
+           text-muted-foreground;
+  }
+  .settings-section-title {
+    @apply text-[16px] font-semibold tracking-tight;
+  }
+  .field-group {
+    @apply mb-5 last:mb-0;
+  }
+  .field-label {
+    @apply text-[12.5px] font-medium;
+  }
+  .field-note {
+    @apply mt-0.5 text-[12px] text-muted-foreground;
+  }
+}
+
+@layer components {
   /* A progression through states that arrive over time.
 
      A list rather than a progress bar. A bar claims to know how far along

@@ -181,7 +181,28 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	} else {
 		s.log.Error("list deployments", slog.String("error", err.Error()))
 	}
+	s.attachSliders(ctx, d)
 	return d
+}
+
+// attachSliders builds the resource tracks from the cluster's own shape.
+//
+// The ceiling is the largest node rather than the cluster total: a pod runs on
+// one node, so the sum is a number no workload can reach, and a slider that
+// offered it would be offering a limit that guarantees the app never schedules.
+//
+// A cluster that will not answer leaves the defaults in place rather than
+// failing the page — the settings still work, they just lose the comparison.
+func (s *Server) attachSliders(ctx context.Context, d *AppDetailData) {
+	var cpuMax, memMax int64
+	if nodes, err := s.orch.Nodes(ctx); err == nil {
+		cpuMax, memMax = schedulableCPU(nodes), schedulableMemory(nodes)
+	}
+
+	d.CPULimit = cpuSlider("cpu_limit", "CPU", d.App.CPULimit, cpuMax)
+	d.MemoryLimit = memSlider("memory_limit", "Memory", d.App.MemoryLimit, memMax)
+	d.CPURequest = cpuSlider("cpu_request", "CPU", d.App.CPURequest, cpuMax)
+	d.MemoryRequest = memSlider("memory_request", "Memory", d.App.MemoryRequest, memMax)
 }
 
 // deploymentsFragment is the polled half of the deployments tab.

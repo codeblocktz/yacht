@@ -222,6 +222,93 @@ func (s *Server) appActionFailed(
 	s.renderStatus(w, r, status, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
 }
 
+// formNumber reads a slider's value.
+//
+// Absent or unparseable is zero, which is "no limit" — the same answer an empty
+// text field used to give, and the right one for a form posted by a browser
+// that never rendered the control.
+func formNumber(r *http.Request, name string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(r.FormValue(name)), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// appBranches lists a repository's branches, filtered by what has been typed.
+//
+// Reads the remote with ls-remote rather than cloning. It runs while somebody
+// is typing, so it fails quietly: a private repository, a typo and an outage
+// all come back as a sentence under the field, and the field stays usable as
+// free text either way.
+func (s *Server) appBranches(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	a, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// The URL being typed in the same form wins over the stored one, so the
+	// picker follows a repository that has been changed and not yet saved.
+	repoURL := strings.TrimSpace(r.URL.Query().Get("repo_url"))
+	if repoURL == "" {
+		repoURL = a.Repo.URL
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("repo_branch"))
+
+	d := BranchData{Searched: query != ""}
+	switch branches, err := s.apps.Branches(ctx, repoURL, query); {
+	case err == nil:
+		d.Branches = branches
+	case errors.Is(err, app.ErrRepoUnreachable):
+		d.Error = "Could not read that repository"
+	default:
+		d.Error = err.Error()
+	}
+
+	if err := BranchOptions(d).Render(ctx, w); err != nil {
+		s.log.Error("render branches", slog.String("error", err.Error()))
+	}
+}
+
+// appSourceDisconnect detaches an app from its repository.
+//
+// The app keeps running: it is serving whatever image its last build produced,
+// and detaching a source does not stop a container. What stops is anything new
+// being built, which is what the confirmation says.
+func (s *Server) appSourceDisconnect(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	a, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := s.apps.Update(ctx, owner.ID, name, app.UpdateInput{
+		Port:          a.Port,
+		CPURequest:    a.CPURequest,
+		CPULimit:      a.CPULimit,
+		MemoryRequest: a.MemoryRequest,
+		MemoryLimit:   a.MemoryLimit,
+		Internal:      a.Internal,
+		Repo:          app.Repo{},
+	}); err != nil {
+		s.flashErr(w, r, err.Error())
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+		return
+	}
+
+	s.flashOK(w, r, "Repository disconnected. "+name+" keeps running on its last built image.")
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+}
+
 // appRuntime changes what an app runs and how much it may use.
 //
 // One endpoint for the whole runtime rather than one per field. The fields roll
@@ -239,13 +326,16 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The sliders post plain numbers — millicores and mebibytes — rather than
+	// Kubernetes' string grammar, so nothing here has to parse "500m". The
+	// formatting back into that grammar happens in one place.
 	in := app.UpdateInput{
 		Image:         strings.TrimSpace(r.FormValue("image")),
 		Port:          int32(port),
-		CPURequest:    strings.TrimSpace(r.FormValue("cpu_request")),
-		CPULimit:      strings.TrimSpace(r.FormValue("cpu_limit")),
-		MemoryRequest: strings.TrimSpace(r.FormValue("memory_request")),
-		MemoryLimit:   strings.TrimSpace(r.FormValue("memory_limit")),
+		CPURequest:    FormatCPU(formNumber(r, "cpu_request")),
+		CPULimit:      FormatCPU(formNumber(r, "cpu_limit")),
+		MemoryRequest: FormatMemory(formNumber(r, "memory_request")),
+		MemoryLimit:   FormatMemory(formNumber(r, "memory_limit")),
 		Internal:      r.FormValue("internal") == "1",
 		Repo: app.Repo{
 			URL:    strings.TrimSpace(r.FormValue("repo_url")),

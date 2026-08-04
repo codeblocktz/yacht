@@ -23,13 +23,15 @@ import (
 // Scoped by owner like the real one, so a test that leaks across owners fails
 // here rather than passing and failing in production.
 type fakeApps struct {
-	byOwner  map[string][]app.App
-	created  []app.CreateInput
-	deleted  []string
-	scaled   map[string]int32
-	updated  []app.UpdateInput
-	activity app.DeployActivity
-	err      error
+	byOwner   map[string][]app.App
+	created   []app.CreateInput
+	deleted   []string
+	scaled    map[string]int32
+	updated   []app.UpdateInput
+	branches  []string
+	branchErr error
+	activity  app.DeployActivity
+	err       error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -88,6 +90,19 @@ func (f *fakeApps) Update(
 	}
 	f.updated = append(f.updated, in)
 	return app.App{Name: name, Image: in.Image, Port: in.Port}, nil
+}
+
+func (f *fakeApps) Branches(_ context.Context, repoURL, query string) ([]string, error) {
+	if f.branchErr != nil {
+		return nil, f.branchErr
+	}
+	var out []string
+	for _, b := range f.branches {
+		if query == "" || strings.Contains(b, query) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }
