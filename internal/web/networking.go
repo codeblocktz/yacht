@@ -26,6 +26,13 @@ type Nets interface {
 	// ResolverName says which resolver answers about custom domains, so the
 	// page can attribute what it reports rather than stating it as fact.
 	ResolverName() string
+
+	// AllDomains is every custom domain on the install, unsettled first.
+	AllDomains(ctx context.Context, ownerID string) ([]app.InstallDomain, error)
+
+	// TargetStatus reports whether the configured CNAME target resolves,
+	// as a sentence. Empty when there was nothing to check.
+	TargetStatus(ctx context.Context, target string) string
 }
 
 // domainsFragment is the polled half of the custom domain list.
@@ -155,20 +162,33 @@ func (s *Server) domainRemove(w http.ResponseWriter, r *http.Request) {
 
 // ---- install-wide DNS
 
-// PlatformDNSData is the install's DNS settings.
+// PlatformDNSData is the install's DNS settings, and every domain that depends
+// on them.
 type PlatformDNSData struct {
-	DNS    cluster.DNS
-	Error  string
-	Notice string
+	DNS   cluster.DNS
+	Error string
+
+	// Domains is every custom domain on the install, unsettled first. This is
+	// where the background checker's work becomes visible: one app's page shows
+	// one app's domains, and nothing answered "which are stuck".
+	Domains []app.InstallDomain
+
+	// TargetResolves reports whether the configured CNAME target itself
+	// resolves. Empty means nothing was checked — no target, or no resolver.
+	TargetResolves string
+
+	ResolverName string
 }
 
 func (s *Server) dnsSettings(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, PlatformDNS(s.dnsData(r, "", "")))
+	s.render(w, r, PlatformDNS(s.dnsData(r, "")))
 }
 
-func (s *Server) dnsData(r *http.Request, note, fail string) PlatformDNSData {
-	d := PlatformDNSData{Notice: note, Error: fail}
-	dns, err := s.joiner.DNS(r.Context())
+func (s *Server) dnsData(r *http.Request, fail string) PlatformDNSData {
+	ctx := r.Context()
+	d := PlatformDNSData{Error: fail}
+
+	dns, err := s.joiner.DNS(ctx)
 	if err != nil {
 		s.log.Error("read dns settings", slog.String("error", err.Error()))
 		if d.Error == "" {
@@ -177,16 +197,31 @@ func (s *Server) dnsData(r *http.Request, note, fail string) PlatformDNSData {
 		return d
 	}
 	d.DNS = dns
+
+	if s.nets != nil {
+		d.ResolverName = s.nets.ResolverName()
+		owner := identity.MustFromContext(ctx)
+		if domains, err := s.nets.AllDomains(ctx, owner.ID); err == nil {
+			d.Domains = domains
+		} else {
+			s.log.Error("list install domains", slog.String("error", err.Error()))
+		}
+		// Whether the target itself resolves. A typo here is accepted by the
+		// syntax check and then silently fails every verification downstream,
+		// with the failure reported against the customer's domain rather than
+		// against the setting that caused it.
+		d.TargetResolves = s.nets.TargetStatus(ctx, dns.CNAMETarget)
+	}
 	return d
 }
 
 func (s *Server) dnsSet(w http.ResponseWriter, r *http.Request) {
 	err := s.joiner.SetDNS(r.Context(), r.FormValue("cname_target"), r.FormValue("txt_prefix"))
 	if err != nil {
-		d := s.dnsData(r, "", err.Error())
-		s.renderStatus(w, r, http.StatusUnprocessableEntity, PlatformDNS(d))
+		s.renderStatus(w, r, http.StatusUnprocessableEntity, PlatformDNS(s.dnsData(r, err.Error())))
 		return
 	}
+	s.flashOK(w, r, "DNS settings saved.")
 	http.Redirect(w, r, "/cluster/dns", http.StatusSeeOther)
 }
 

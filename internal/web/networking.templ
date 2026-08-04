@@ -303,8 +303,15 @@ templ routingOptions(d NetworkingData) {
 								the platform
 							}
 							rather than publishing this cluster's node addresses as A records.
-							Yacht does not run ExternalDNS; if none is installed this changes
-							nothing.
+						</span>
+						// Said plainly rather than hedged. "If none is installed this
+						// changes nothing" left the reader to work out whether one is,
+						// and Yacht has no way to tell them — so it says that instead
+						// of implying they should already know.
+						<span class="block text-[12.5px] text-muted-foreground">
+							Yacht does not run ExternalDNS and cannot see whether anything
+							does, so it cannot confirm this takes effect. The target itself is
+							set under <a class="underline hover:text-foreground" href="/cluster/dns">Infrastructure &rsaquo; DNS</a>.
 						</span>
 					</span>
 				</label>
@@ -316,7 +323,8 @@ templ routingOptions(d NetworkingData) {
 	</div>
 }
 
-// PlatformDNS is the install-wide DNS configuration.
+// PlatformDNS is the install-wide DNS configuration, and every domain that
+// depends on it.
 templ PlatformDNS(d PlatformDNSData) {
 	@pageHead("DNS",
 		"How this install publishes hostnames. One controller, one setting — not per app.", nil)
@@ -329,6 +337,12 @@ templ PlatformDNS(d PlatformDNSData) {
 		</div>
 	}
 	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Settings</span>
+			if d.DNS.UpdatedAt != "" {
+				<span class="text-[12px] text-muted-foreground">Updated { d.DNS.UpdatedAt }</span>
+			}
+		</div>
 		<div class="panel-body">
 			<form method="post" action="/cluster/dns" class="flex flex-col gap-4">
 				<div class="field">
@@ -340,13 +354,52 @@ templ PlatformDNS(d PlatformDNSData) {
 						value={ d.DNS.CNAMETarget }
 						placeholder="edge.yourplatform.com"
 					/>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						What a customer points their CNAME at, and what ExternalDNS is told
-						to target so it publishes a CNAME instead of this cluster's node
-						addresses. Leave it empty to switch custom domains off: without a
-						target there is nothing a claim could be verified against.
-					</p>
+					// Whether the target itself answers. Checked because a
+					// well-formed name that does not exist is accepted by
+					// validation and then fails every customer's domain, with the
+					// failure reported against their name rather than this field.
+					if d.TargetResolves != "" {
+						<div class="mt-1 flex items-center gap-2 text-[12px]">
+							if d.TargetResolves == "does not resolve" {
+								<span class="status status-warn">does not resolve</span>
+								<span class="text-muted-foreground">
+									Saved anyway — it may not exist yet. Until it does, no custom
+									domain on this install can be verified.
+								</span>
+							} else {
+								<span class="status status-ok">{ d.TargetResolves }</span>
+							}
+							if d.ResolverName != "" {
+								<span class="text-muted-foreground">· asked { d.ResolverName }</span>
+							}
+						</div>
+					}
+					<div class="mt-1 text-[12.5px] text-muted-foreground">
+						What a customer points their CNAME at. Leave it empty to switch
+						custom domains off.
+						@helpNote("what the CNAME target is for") {
+							<p>
+								It is two things at once: the name a customer's record has to
+								point at, and what ExternalDNS is told to target so it
+								publishes a CNAME rather than this cluster's node addresses.
+							</p>
+							<p class="mt-2">
+								Without a target there is nothing a claim could be verified
+								against, so the domain form is not offered at all.
+							</p>
+						}
+					</div>
 				</div>
+				if d.DNS.CNAMETarget != "" {
+					<div>
+						<div class="micro mb-2">What a customer creates</div>
+						@recordTable(DNSRecord{
+							Type:  "CNAME",
+							Name:  "the name they are bringing",
+							Value: d.DNS.CNAMETarget,
+						})
+					</div>
+				}
 				<div class="field">
 					<label class="label" for="txt_prefix">DNS ownership prefix</label>
 					<input
@@ -356,17 +409,29 @@ templ PlatformDNS(d PlatformDNSData) {
 						value={ d.DNS.TXTPrefix }
 						placeholder="extdns-"
 					/>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						Keeps the ownership record off the name it owns, which is what lets
-						an apex domain work at all. It must match
-						<code class="mono">--txt-prefix</code> on your ExternalDNS
+					<div class="mt-1 text-[12.5px] text-muted-foreground">
+						Must match <code class="mono">--txt-prefix</code> on your ExternalDNS
 						controller.
-					</p>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						Recorded here, not applied. Yacht does not deploy that controller and
-						cannot set a flag on it — this is so the two can be kept in step, and
-						so the value is written down somewhere other than a shell history.
-					</p>
+						@helpNote("the ownership prefix") {
+							<p>
+								It keeps the ownership record off the name it owns, which is
+								what lets an apex domain work at all.
+							</p>
+						}
+					</div>
+					// A callout rather than a third paragraph. Buried in prose this
+					// read as a setting that takes effect from here, which is the
+					// one thing it does not do.
+					<div class="callout callout-warn mt-2">
+						<div class="min-w-0">
+							<div class="font-medium">Recorded here, not applied</div>
+							<p class="mt-0.5 text-muted-foreground">
+								Yacht does not deploy ExternalDNS and cannot set a flag on it.
+								This is written down so the two can be kept in step — changing
+								it here changes nothing in the cluster.
+							</p>
+						</div>
+					</div>
 				</div>
 				<div>
 					<button class="btn btn-primary" type="submit">Save</button>
@@ -374,7 +439,74 @@ templ PlatformDNS(d PlatformDNSData) {
 			</form>
 		</div>
 	</div>
-	if d.DNS.UpdatedAt != "" {
-		<p class="text-[12.5px] text-muted-foreground">Updated { d.DNS.UpdatedAt }.</p>
-	}
+	@installDomains(d)
+}
+
+// installDomains is every custom domain on the install, worst first.
+//
+// The counterpart to the per-app panel. A domain lives on one app's page, so an
+// operator watching several had to visit each in turn and remember what they
+// saw — which is how one that quietly drifted stayed unnoticed until somebody
+// complained.
+templ installDomains(d PlatformDNSData) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Custom domains</span>
+			<span class="text-[12px] text-muted-foreground">
+				{ plural(len(d.Domains), "domain") }
+			</span>
+		</div>
+		if len(d.Domains) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No custom domains</p>
+				<p>Domains people bring appear here, whichever app they belong to.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>Domain</th>
+							<th>App</th>
+							<th>State</th>
+							<th>What it resolves to</th>
+							<th>Checked</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, c := range d.Domains {
+							<tr class={ templ.KV("bg-warning/[0.06]", domainNeedsAttention(c.Custom)) }>
+								<td class="mono">{ c.Host }</td>
+								<td>
+									<a class="hover:underline" href={ templ.URL("/apps/" + c.App + "/domains") }>
+										{ c.App }
+									</a>
+								</td>
+								<td>
+									{{ label, class := domainStatus(c.Custom) }}
+									<span class={ "status", class }>{ label }</span>
+								</td>
+								<td class="text-muted-foreground">
+									if c.Observed != "" {
+										{ c.Observed }
+									} else if c.LastError != "" {
+										{ c.LastError }
+									} else {
+										—
+									}
+								</td>
+								<td class="text-muted-foreground" title={ absoluteTime(c.LastCheckedAt) }>
+									if c.LastCheckedAt.IsZero() {
+										never
+									} else {
+										{ preciseAgo(c.LastCheckedAt) }
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
 }

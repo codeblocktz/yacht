@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,6 +146,53 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 	}
 	s.log.Info("custom domain verified", slog.String("app", name))
 	return nil
+}
+
+// InstallDomain is one custom domain, with the app it belongs to.
+type InstallDomain struct {
+	domain.Custom
+	App string
+}
+
+// AllDomains lists every custom domain on the install, unsettled first.
+//
+// Nothing answered "which domains are stuck" before this. A domain lives on one
+// app's page, so an operator watching several had to visit each in turn and
+// remember what they saw — which is how a domain that quietly drifted stayed
+// unnoticed until somebody complained.
+func (s *Service) AllDomains(ctx context.Context, ownerID string) ([]InstallDomain, error) {
+	rows, err := s.q.ListCustomDomainsForOwner(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("app: list custom domains: %w", err)
+	}
+	out := make([]InstallDomain, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, InstallDomain{
+			Custom: domain.ToCustom(r.Domain),
+			App:    r.AppName,
+		})
+	}
+	return out, nil
+}
+
+// TargetStatus reports whether the install's CNAME target itself resolves.
+//
+// ValidateCNAMETarget checks the shape of the string and nothing else, so a
+// hostname that is well-formed and does not exist is accepted — and then every
+// custom domain on the install fails to verify, reporting the failure against
+// the customer's name rather than against the setting that caused it.
+//
+// A sentence rather than a bool because the answer is shown, and "could not be
+// checked" is a third state that must not read as "broken".
+func (s *Service) TargetStatus(ctx context.Context, target string) string {
+	if target == "" || s.resolver == nil {
+		return ""
+	}
+	addrs, err := s.resolver.LookupHost(ctx, target)
+	if err != nil || len(addrs) == 0 {
+		return "does not resolve"
+	}
+	return "resolves to " + strings.Join(addrs, ", ")
 }
 
 // ResolverName says which resolver answers questions about custom domains.

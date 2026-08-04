@@ -18,10 +18,11 @@ import (
 )
 
 type fakeNets struct {
-	net     app.Networking
-	added   []string
-	removed []uuid.UUID
-	err     error
+	net          app.Networking
+	added        []string
+	removed      []uuid.UUID
+	err          error
+	targetBroken bool
 }
 
 func (f *fakeNets) Networking(context.Context, string, string) (app.Networking, error) {
@@ -49,6 +50,24 @@ func (f *fakeNets) RemoveDomain(_ context.Context, _, _ string, id uuid.UUID) er
 }
 
 func (f *fakeNets) ResolverName() string { return "this machine's resolver" }
+
+func (f *fakeNets) AllDomains(context.Context, string) ([]app.InstallDomain, error) {
+	out := make([]app.InstallDomain, 0, len(f.net.Custom))
+	for _, c := range f.net.Custom {
+		out = append(out, app.InstallDomain{Custom: c, App: "web"})
+	}
+	return out, nil
+}
+
+func (f *fakeNets) TargetStatus(_ context.Context, target string) string {
+	if target == "" {
+		return ""
+	}
+	if f.targetBroken {
+		return "does not resolve"
+	}
+	return "resolves to 198.51.100.1"
+}
 
 func netServer(t *testing.T, n Nets) http.Handler {
 	t.Helper()
@@ -278,6 +297,84 @@ func TestTheRecordToCreateIsShownAsARecord(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the record is missing %q", want)
 		}
+	}
+}
+
+// dnsServer builds a server with the DNS page mounted, which needs a joiner
+// and an owner — that page is owner-only.
+func dnsServer(t *testing.T, n Nets) http.Handler {
+	t.Helper()
+	const team = "net-team"
+	s, err := New(Options{
+		Orchestrator:    orchestrator.NewNoop(),
+		Apps:            newFakeApps(sampleApp(team, "web")),
+		Identity:        identity.NewSingleOwner(identity.Owner{ID: team}),
+		Accounts:        &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleOwner},
+		Mailer:          &fakeMailer{},
+		BaseURL:         "https://yacht.test",
+		BootstrapTeamID: team,
+		Nets:            n,
+		// fakeJoiner already answers with edge.yacht.test / extdns-.
+		Joiner: &fakeJoiner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s.Handler()
+}
+
+// The install-wide view is where the background checker's work becomes
+// visible. Without it a domain lives on one app's page, and an operator
+// watching several has to visit each in turn.
+func TestTheDNSPageListsEveryDomainOnTheInstall(t *testing.T) {
+	h := dnsServer(t, &fakeNets{net: app.Networking{
+		Target: "edge.yacht.test",
+		Custom: []domain.Custom{
+			{ID: uuid.New(), Host: "shop.example.com", State: domain.StateDrifted,
+				Observed: "points at ghs.googlehosted.com"},
+		},
+	}})
+
+	body := do(h, signedIn(http.MethodGet, "/cluster/dns")).Body.String()
+	for _, want := range []string{
+		"shop.example.com",
+		"needs attention",
+		"points at ghs.googlehosted.com",
+		`href="/apps/web/domains"`, // and it links back to where it can be fixed
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the DNS page does not show %q", want)
+		}
+	}
+}
+
+// A well-formed target that does not exist is accepted by validation and then
+// fails every customer's domain, reporting the failure against their name
+// rather than against the setting that caused it.
+func TestTheDNSPageSaysWhenTheTargetDoesNotResolve(t *testing.T) {
+	h := dnsServer(t, &fakeNets{targetBroken: true, net: app.Networking{Target: "edge.yacht.test"}})
+
+	body := do(h, signedIn(http.MethodGet, "/cluster/dns")).Body.String()
+	if !strings.Contains(body, "does not resolve") {
+		t.Error("a target that does not resolve is not flagged")
+	}
+	if !strings.Contains(body, "no custom domain on this install can be verified") {
+		t.Error("nothing says what the consequence is")
+	}
+}
+
+// The prefix is recorded and never applied. Buried in prose that read as a
+// setting which takes effect from here.
+func TestTheOwnershipPrefixSaysItIsNotApplied(t *testing.T) {
+	h := dnsServer(t, &fakeNets{net: app.Networking{Target: "edge.yacht.test"}})
+
+	body := do(h, signedIn(http.MethodGet, "/cluster/dns")).Body.String()
+	if !strings.Contains(body, "Recorded here, not applied") {
+		t.Error("the page does not say the prefix is never applied")
+	}
+	if !strings.Contains(body, "callout-warn") {
+		t.Error("that fact is not called out — it reads as another paragraph of prose")
 	}
 }
 

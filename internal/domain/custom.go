@@ -378,6 +378,13 @@ func RoutableHosts(
 	return hosts, nil
 }
 
+// ToCustom converts a stored row into the shape the rest of the system reads.
+//
+// Exported because the install-wide list joins domains to apps and so cannot go
+// through ListCustom, which is scoped to one app. Everything about how a row
+// becomes a Custom still lives here rather than being reimplemented at the join.
+func ToCustom(row dbgen.Domain) Custom { return toCustom(row) }
+
 func toCustom(row dbgen.Domain) Custom {
 	return Custom{
 		ID:            row.ID,

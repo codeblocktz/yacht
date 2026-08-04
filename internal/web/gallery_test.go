@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -282,6 +283,34 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			// The install's DNS surface, with a target that does not resolve and
+			// a domain that has drifted. Both are states an operator has to find
+			// quickly and neither is reachable by clicking without owning a
+			// domain and breaking it on purpose.
+			file: "states-dns.html", path: "/cluster/dns",
+			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "DNS"}},
+			page: PlatformDNS(PlatformDNSData{
+				DNS: cluster.DNS{
+					CNAMETarget: "edge.example.com",
+					TXTPrefix:   "extdns-",
+					UpdatedAt:   "2026-08-01 12:00",
+				},
+				TargetResolves: "does not resolve",
+				ResolverName:   "1.1.1.1:53",
+				// Distinct hostnames. Three rows reading shop.example.com under
+				// three different apps looks like a rendering fault rather than
+				// three domains, which is the opposite of what a gallery is for.
+				Domains: []app.InstallDomain{
+					{App: "web", Custom: namedDomain(now, "shop.example.com",
+						domain.StateDrifted, "points at ghs.googlehosted.com")},
+					{App: "api", Custom: namedDomain(now, "api.customer.test",
+						domain.StateAwaitingDNS, "")},
+					{App: "shop", Custom: namedDomain(now, "store.othercustomer.test",
+						domain.StateRouted, "")},
+				},
+			}),
+		},
+		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
@@ -454,6 +483,14 @@ func domainAt(now time.Time, state domain.State, observed string) domain.Custom 
 		// without the polling attribute, which is the one most people see.
 		c.NextCheckAt = now.Add(6 * time.Hour)
 	}
+	return c
+}
+
+// namedDomain is domainAt with a hostname of its own, for the install-wide
+// table where several domains are shown side by side.
+func namedDomain(now time.Time, host string, state domain.State, observed string) domain.Custom {
+	c := domainAt(now, state, observed)
+	c.Host = host
 	return c
 }
 
