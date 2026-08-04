@@ -46,10 +46,7 @@ templ AppLogs(d LogsData) {
 						<span class="mono text-[12.5px] text-muted-foreground">{ d.Logs.Pod }</span>
 					</div>
 				}
-				<label class="flex items-center gap-2 text-[12.5px]">
-					<input type="checkbox" name="previous" value="1" checked?={ d.Previous }/>
-					Previous run
-				</label>
+				@checkField("previous", "1", "Previous run", d.Previous)
 				<button class="btn" type="submit">Apply</button>
 			</form>
 			<p class="mt-2 text-[12.5px] text-muted-foreground">
@@ -129,7 +126,7 @@ templ DeployLogPanel(d DeployLogsData) {
 			</span>
 		}
 		@sheet.Description() {
-			<span class="mono truncate">{ d.Deploy.Deployment.Image }</span>
+			<span class={ "mono truncate", templ.KV("italic", imageIsPending(d.Deploy.Deployment.Image)) }>{ imageLabel(d.Deploy.Deployment.Image) }</span>
 		}
 	}
 	@deployLogTabs(d)
@@ -243,7 +240,32 @@ templ deployLogView(d DeployLogsData) {
 // This is the one log Yacht keeps. A build is bounded and there is exactly one
 // per deploy, so it is stored — which is why this tab still answers for a
 // deployment replaced weeks ago, and the deploy log cannot.
+// buildLogView wraps the build pane in a poll that stops when the build does.
+//
+// The pane used to render once and say "Output appears here as it arrives",
+// which was true of Postgres and false of the screen: the server streams each
+// container's output into the builds.log column as it happens, and nothing ever
+// fetched it again. A build could run for half an hour behind a pane showing
+// the first two lines.
+//
+// Polled rather than streamed. The output is already being accumulated in a
+// column, so re-reading the column is the whole job — a second SSE endpoint
+// would mean following three containers again to deliver what one query has.
 templ buildLogView(d DeployLogsData) {
+	<div
+		if d.Build.Running() {
+			hx-get={ buildFragmentHref(d) }
+			hx-trigger="every 2s"
+			hx-swap="outerHTML"
+		}
+		class="flex min-h-0 flex-1 flex-col"
+		aria-busy={ boolAttr(d.Build.Running()) }
+	>
+		@buildLogBody(d)
+	</div>
+}
+
+templ buildLogBody(d DeployLogsData) {
 	if !d.HasBuild {
 		<div class="canvas-sheet-body">
 			<div class="empty">
@@ -278,6 +300,8 @@ templ buildLogView(d DeployLogsData) {
 				<div class="empty">
 					if d.Build.Running() {
 						<p class="font-medium text-foreground">Starting the build…</p>
+						// True now. The wrapper above re-fetches this pane every
+						// two seconds for as long as the build is running.
 						<p>Output appears here as it arrives.</p>
 					} else {
 						<p class="font-medium text-foreground">The build wrote nothing</p>

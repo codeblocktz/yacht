@@ -68,7 +68,7 @@ func TestIngressTLSCarriesNoSecretName(t *testing.T) {
 
 	spec := testSpec()
 	spec.Hosts = []string{"web.apps.example.com"}
-	spec.TLS = true
+	spec.TLSHosts = []string{"web.apps.example.com"}
 
 	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
@@ -97,7 +97,7 @@ func TestApplyAppWithoutTLSEmitsNoTLSBlock(t *testing.T) {
 
 	spec := testSpec()
 	spec.Hosts = []string{"web.apps.example.com"}
-	spec.TLS = false
+	spec.TLSHosts = nil
 
 	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
@@ -110,6 +110,44 @@ func TestApplyAppWithoutTLSEmitsNoTLSBlock(t *testing.T) {
 	}
 	if len(ing.Spec.TLS) != 0 {
 		t.Fatalf("tls = %+v, want none", ing.Spec.TLS)
+	}
+}
+
+// A host the certificate cannot serve must not appear in the TLS block.
+//
+// The bug this pins: every host on the Ingress used to be listed whenever
+// wildcard TLS was on. The certificate is a wildcard for the platform domain,
+// and a custom domain can never be under it, so a customer's name was offered a
+// certificate that could not match it — a handshake the browser refuses, beside
+// a green "routed" in the dashboard. Plain HTTP is the honest answer until
+// somebody configures a certificate that covers the name.
+func TestIngressTLSOmitsHostsTheCertificateCannotServe(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	spec := testSpec()
+	spec.Hosts = []string{"web.apps.example.com", "shop.customer.test"}
+	spec.TLSHosts = []string{"web.apps.example.com"}
+
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+
+	ing, err := client.NetworkingV1().Ingresses(spec.Namespace).
+		Get(ctx, spec.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ingress: %v", err)
+	}
+
+	// Both names are still routed. Only one is claimed as TLS-terminated.
+	if len(ing.Spec.Rules) != 2 {
+		t.Fatalf("rules = %d, want both hosts routed", len(ing.Spec.Rules))
+	}
+	if len(ing.Spec.TLS) != 1 {
+		t.Fatalf("tls = %+v, want one entry", ing.Spec.TLS)
+	}
+	if len(ing.Spec.TLS[0].Hosts) != 1 || ing.Spec.TLS[0].Hosts[0] != "web.apps.example.com" {
+		t.Fatalf("tls hosts = %v, want only the host the wildcard covers", ing.Spec.TLS[0].Hosts)
 	}
 }
 

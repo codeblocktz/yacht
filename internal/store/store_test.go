@@ -399,15 +399,14 @@ func TestPartialIndexLeavesCustomDomainsUnconstrained(t *testing.T) {
 		t.Fatalf("managed domain: %v", err)
 	}
 
-	// Inserted directly: there is deliberately no production query for custom
-	// domains yet, and adding one purely to satisfy a test would ship an
-	// unused code path.
+	// Through the production query rather than raw SQL. It used to be raw
+	// because no query existed; now one does, and verified is generated from
+	// state, so an insert naming it is refused outright.
 	for _, host := range []string{"www.customer.test", "shop.customer.test"} {
-		if _, err := pool.Exec(ctx,
-			`INSERT INTO domains (owner_id, app_id, host, tls, verified, managed)
-			 VALUES ($1, $2, $3, true, false, false)`,
-			ownerID, appRow.ID, host,
-		); err != nil {
+		if _, err := q.CreateCustomDomain(ctx, dbgen.CreateCustomDomainParams{
+			OwnerID: ownerID, AppID: appRow.ID, Host: host,
+			VerifyTarget: "edge.example.com",
+		}); err != nil {
 			t.Fatalf("insert custom domain %s: %v", host, err)
 		}
 	}

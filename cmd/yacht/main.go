@@ -122,6 +122,23 @@ func run() error {
 		}
 	}
 
+	// Which resolver answers questions about custom domains.
+	//
+	// The domain's own nameservers, by default. Every recursive resolver caches
+	// negative answers, and the check made moments before somebody creates a
+	// record is exactly what puts one there — so a correct record reads as
+	// missing for the zone's negative TTL. Naming a public resolver instead
+	// would not remove a cache from the path, only swap one for another.
+	//
+	// The system resolver stays as the fallback, for an install whose egress
+	// does not allow arbitrary port 53.
+	var resolver domain.Resolver = domain.AuthoritativeResolver{Fallback: domain.NetResolver{}}
+	if cfg.DNSResolver != "" {
+		resolver = domain.NewDirectResolver(cfg.DNSResolver)
+		log.Info("custom domains are resolved by one configured server",
+			slog.String("resolver", domain.ResolverName(resolver)))
+	}
+
 	apps := app.NewService(pool, orch, log, app.Options{
 		Builder:         builder,
 		Images:          images,
@@ -129,10 +146,10 @@ func run() error {
 		WildcardTLS:     cfg.WildcardTLS,
 		Keeper:          keeper,
 		ReservedDomains: cfg.ReservedDomains,
-		// The standard resolver. Verifying a custom domain is a DNS lookup,
-		// and an install that cannot make one says so rather than failing in a
-		// way that looks like the domain being wrong.
-		Resolver: domain.NetResolver{},
+		// Verifying a custom domain is a DNS lookup, and an install that cannot
+		// make one says so rather than failing in a way that looks like the
+		// domain being wrong.
+		Resolver: resolver,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -217,6 +234,12 @@ func run() error {
 	// by anything this process remembers, so it is correct after a restart and
 	// correct when several replicas run it at once.
 	go apps.RunReconciler(ctx)
+
+	// Proves claimed custom domains without anybody pressing anything. Same
+	// shape as the reconciler above and safe for the same reasons: what a name
+	// resolves to is a fact any replica can look up, so nothing here depends on
+	// this process having been the one that took the claim.
+	go domain.NewChecker(pool, resolver, apps, log).Run(ctx)
 
 	return serve(ctx, cfg, srv.Handler(), log)
 }

@@ -461,6 +461,81 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 	return items, nil
 }
 
+const listAppsWithLastDeploy = `-- name: ListAppsWithLastDeploy :many
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, d.status AS last_deploy_status
+FROM apps a
+LEFT JOIN LATERAL (
+    SELECT status FROM deployments
+    WHERE app_id = a.id
+    ORDER BY started_at DESC
+    LIMIT 1
+) d ON true
+WHERE a.owner_id = $1
+ORDER BY a.name
+`
+
+type ListAppsWithLastDeployRow struct {
+	App              App
+	LastDeployStatus string
+}
+
+// Every app, with how its most recent deployment ended.
+//
+// A failed deploy leaves the previous workload running, so the app's live
+// status stays green and nothing in a list of apps says the last attempt to
+// change it did not take. That is exactly the deploy somebody needs to find,
+// and until this query existed the only way to find it was to open each app.
+//
+// LATERAL rather than a window function or a join on max(started_at): one index
+// lookup per app, and it reads as what it is — the latest row for this app.
+func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([]ListAppsWithLastDeployRow, error) {
+	rows, err := q.db.Query(ctx, listAppsWithLastDeploy, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAppsWithLastDeployRow{}
+	for rows.Next() {
+		var i ListAppsWithLastDeployRow
+		if err := rows.Scan(
+			&i.App.ID,
+			&i.App.OwnerID,
+			&i.App.Name,
+			&i.App.Namespace,
+			&i.App.Image,
+			&i.App.Replicas,
+			&i.App.Port,
+			&i.App.CpuRequest,
+			&i.App.CpuLimit,
+			&i.App.MemoryRequest,
+			&i.App.MemoryLimit,
+			&i.App.CreatedAt,
+			&i.App.UpdatedAt,
+			&i.App.HealthPath,
+			&i.App.HealthLiveness,
+			&i.App.Source,
+			&i.App.Internal,
+			&i.App.ProjectID,
+			&i.App.CanvasX,
+			&i.App.CanvasY,
+			&i.App.HttpsOnly,
+			&i.App.CnameOnly,
+			&i.App.RepoUrl,
+			&i.App.RepoBranch,
+			&i.App.RepoSubdir,
+			&i.App.RunAsUser,
+			&i.LastDeployStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeployments = `-- name: ListDeployments :many
 SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
 WHERE owner_id = $1 AND app_id = $2
@@ -789,41 +864,59 @@ func (q *Queries) SupersedeDeployments(ctx context.Context, arg SupersedeDeploym
 
 const updateApp = `-- name: UpdateApp :one
 UPDATE apps
-SET image          = $3,
-    replicas       = $4,
-    port           = $5,
-    cpu_request    = $6,
-    cpu_limit      = $7,
-    memory_request = $8,
-    memory_limit   = $9,
+SET image          = $1,
+    port           = $2,
+    cpu_request    = $3,
+    cpu_limit      = $4,
+    memory_request = $5,
+    memory_limit   = $6,
+    internal       = $7,
+    repo_url       = $8,
+    repo_branch    = $9,
+    repo_subdir    = $10,
     updated_at     = now()
-WHERE owner_id = $1 AND id = $2
+WHERE owner_id = $11 AND id = $12
 RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
 `
 
 type UpdateAppParams struct {
-	OwnerID       string
-	ID            uuid.UUID
 	Image         string
-	Replicas      int32
 	Port          int32
 	CpuRequest    string
 	CpuLimit      string
 	MemoryRequest string
 	MemoryLimit   string
+	Internal      bool
+	RepoUrl       string
+	RepoBranch    string
+	RepoSubdir    string
+	OwnerID       string
+	ID            uuid.UUID
 }
 
+// Everything about an app a person is allowed to change after creating it.
+//
+// Deliberately not replicas: scaling has its own query because it has its own
+// rule about storage, and folding it in here would make every settings save a
+// chance to silently reset a scale somebody had chosen.
+//
+// Nor the health probe, the networking toggles or run_as_user — each of those
+// already has a query shaped to what it means, and this one exists for the
+// fields that had no way to be changed at all.
 func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error) {
 	row := q.db.QueryRow(ctx, updateApp,
-		arg.OwnerID,
-		arg.ID,
 		arg.Image,
-		arg.Replicas,
 		arg.Port,
 		arg.CpuRequest,
 		arg.CpuLimit,
 		arg.MemoryRequest,
 		arg.MemoryLimit,
+		arg.Internal,
+		arg.RepoUrl,
+		arg.RepoBranch,
+		arg.RepoSubdir,
+		arg.OwnerID,
+		arg.ID,
 	)
 	var i App
 	err := row.Scan(

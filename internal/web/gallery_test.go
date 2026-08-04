@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/cluster"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -166,6 +168,17 @@ func galleryPages() []galleryPage {
 
 	allApps := []app.App{running, degraded, pending, stopped, unknown, failing}
 
+	// An app built from a repository, with limits set. The settings tab reads
+	// quite differently for one of these — the image is not its own to change.
+	gitApp := mk("api", "yacht-reg:5000/owner-local-api:d0ed801", 1, 1,
+		orchestrator.PhaseRunning, true, "")
+	gitApp.Source = app.SourceGit
+	gitApp.Repo = app.Repo{
+		URL: "https://github.com/codeblocktz/example-api", Branch: "main", Subdir: "server",
+	}
+	gitApp.CPULimit, gitApp.MemoryLimit = "1", "1Gi"
+	gitApp.CPURequest, gitApp.MemoryRequest = "250m", "256Mi"
+
 	pods := []orchestrator.PodInfo{
 		{Name: "web-7d9f4b6c85-2xk9p", Namespace: "yacht-a1b2", Phase: "Running",
 			Node: "yacht-cp", Ready: 1, Total: 1, CreatedAt: now.Add(-4 * time.Hour)},
@@ -246,6 +259,120 @@ func galleryPages() []galleryPage {
 				App: degraded, Siblings: allApps, Tab: "metrics", Pods: pods[1:3],
 				Deployments: deployments[2:],
 			}),
+		},
+		{
+			// Every state a brought domain can be in, side by side.
+			//
+			// These are the states that rot hardest: reaching "points
+			// elsewhere" by clicking means owning a domain, pointing it at the
+			// wrong place, and waiting for DNS. Nobody does that twice, so
+			// nobody sees these again after the day they were written.
+			file: "states-domains.html", path: "/apps/web/domains",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}, {Label: "Domains"}},
+			page: stack(
+				section("Waiting for DNS", "the record has not appeared yet",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateAwaitingDNS, "")))),
+				section("Points elsewhere", "resolves, but not here — and says where",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateMisdirected,
+						"points at ghs.googlehosted.com")))),
+				section("Proven, not yet routed", "between the check and the Ingress",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateVerified, "")))),
+				section("Live", "serving, and honest about the certificate",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateRouted, "")))),
+				section("Needs attention", "was live and stopped resolving",
+					CustomDomainList(domainGallery(domainAt(now, domain.StateDrifted,
+						"points at ghs.googlehosted.com")))),
+				section("A resolver that will not answer", "not a verdict about the domain",
+					CustomDomainList(domainGallery(func() domain.Custom {
+						c := domainAt(now, domain.StateAwaitingDNS, "")
+						c.LastError = `domain: the configured target "edge.example.com" does not resolve`
+						return c
+					}()))),
+				section("Nothing claimed", "the empty state",
+					CustomDomainList(NetworkingData{App: "web", Settled: true,
+						Net: app.Networking{Target: "edge.example.com"}})),
+			),
+		},
+		{
+			// The install's DNS surface, with a target that does not resolve and
+			// a domain that has drifted. Both are states an operator has to find
+			// quickly and neither is reachable by clicking without owning a
+			// domain and breaking it on purpose.
+			file: "states-dns.html", path: "/cluster/dns",
+			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "DNS"}},
+			page: PlatformDNS(PlatformDNSData{
+				DNS: cluster.DNS{
+					CNAMETarget: "edge.example.com",
+					TXTPrefix:   "extdns-",
+					UpdatedAt:   "2026-08-01 12:00",
+				},
+				TargetResolves: "does not resolve",
+				ResolverName:   "1.1.1.1:53",
+				// Distinct hostnames. Three rows reading shop.example.com under
+				// three different apps looks like a rendering fault rather than
+				// three domains, which is the opposite of what a gallery is for.
+				Domains: []app.InstallDomain{
+					{App: "web", Custom: namedDomain(now, "shop.example.com",
+						domain.StateDrifted, "points at ghs.googlehosted.com")},
+					{App: "api", Custom: namedDomain(now, "api.customer.test",
+						domain.StateAwaitingDNS, "")},
+					{App: "shop", Custom: namedDomain(now, "store.othercustomer.test",
+						domain.StateRouted, "")},
+				},
+			}),
+		},
+		{
+			// Joining and draining, which are the two things on this page
+			// somebody starts and then watches. Reaching any of these by
+			// clicking means having a spare machine and the patience to break
+			// it, which is why they rot.
+			file: "states-nodes.html", path: "/cluster/nodes/yacht-w1",
+			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
+			page: stack(
+				section("Joining", "twenty seconds in, in the kubelet's own words",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w3", CreatedAt: now.Add(-20 * time.Second),
+						Reason:  "KubeletNotReady",
+						Message: "container runtime network not ready: cni plugin not initialized",
+					}, 0))))),
+				section("Joined and taking work", "the finished progression",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w1", Ready: true, CreatedAt: now.Add(-3 * time.Hour),
+					}, 31))))),
+				section("Not coming up", "past the point where waiting is the answer",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w4", CreatedAt: now.Add(-2 * time.Hour),
+						Reason: "KubeletNotReady",
+					}, 0))))),
+				section("Draining", "counting down, with one that will not move",
+					panelWrap(bodyPad(stepList(nodeDrainSteps(NodeDetailData{
+						Node: orchestrator.NodeInfo{Name: "yacht-w2", Unschedulable: true},
+						Pods: []orchestrator.PodInfo{
+							{Name: "web-1", DrainMoves: true},
+							{Name: "api-1", DrainMoves: true},
+							{Name: "postgres-0", DrainMoves: false},
+						},
+					}))))),
+				section("Blocked", "only local storage left, so it will not empty on its own",
+					panelWrap(bodyPad(stepList(nodeDrainSteps(NodeDetailData{
+						Node: orchestrator.NodeInfo{Name: "yacht-w2", Unschedulable: true},
+						Pods: []orchestrator.PodInfo{{Name: "postgres-0", DrainMoves: false}},
+					}))))),
+			),
+		},
+		{
+			// The reworked settings, for both kinds of app. A Git app shows a
+			// connected repository and a locked image; an image app shows the
+			// image and no repository at all — two different pages from one
+			// template, and the pair is what a change here has to keep working.
+			file: "states-settings-app.html", path: "/apps/api/settings",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "api"}, {Label: "Settings"}},
+			page: stack(
+				section("From a repository", "a connection, a branch, and an image it does not own",
+					appSettings(settingsGallery(gitApp, 2000, 2<<30))),
+				section("From an image", "no repository, and the image is the thing to change",
+					appSettings(settingsGallery(running, 8000, 16<<30))),
+			),
 		},
 		{
 			file: "states-cluster.html", path: "/cluster/nodes",
@@ -391,6 +518,93 @@ func activityFailing() app.DeployActivity {
 	}
 	days[27].Cancelled = 2
 	return activityFrom(days)
+}
+
+// domainAt builds a claim sitting in one state, with the timestamps that state
+// would plausibly carry.
+//
+// The times matter to the picture: a domain that has been waiting eleven
+// minutes reads differently from one checked four seconds ago, and the line
+// under the steps is the part somebody uses to decide whether anything is still
+// happening.
+func domainAt(now time.Time, state domain.State, observed string) domain.Custom {
+	c := domain.Custom{
+		ID:            uuid.New(),
+		Host:          "shop.example.com",
+		Target:        "edge.example.com",
+		State:         state,
+		Observed:      observed,
+		CreatedAt:     now.Add(-11 * time.Minute),
+		LastCheckedAt: now.Add(-4 * time.Second),
+		NextCheckAt:   now.Add(6 * time.Second),
+		Attempts:      3,
+	}
+	if state.Routable() {
+		c.VerifiedAt = now.Add(-9 * time.Minute)
+	}
+	if state == domain.StateRouted {
+		// Settled, so the page stops asking — and the gallery shows the version
+		// without the polling attribute, which is the one most people see.
+		c.NextCheckAt = now.Add(6 * time.Hour)
+	}
+	return c
+}
+
+// settingsGallery builds the settings tab with its sliders already sized.
+//
+// The ceilings are passed in rather than read from a cluster, so the gallery
+// can show both a small install and a large one — a track whose maximum is two
+// cores and one whose maximum is eight look quite different, and only one of
+// them is what most people will see.
+func settingsGallery(a app.App, cpuMax, memMax int64) AppDetailData {
+	return AppDetailData{
+		App:           a,
+		Tab:           "settings",
+		CPULimit:      cpuSlider("cpu_limit", "CPU", a.CPULimit, cpuMax),
+		MemoryLimit:   memSlider("memory_limit", "Memory", a.MemoryLimit, memMax),
+		CPURequest:    cpuSlider("cpu_request", "CPU", a.CPURequest, cpuMax),
+		MemoryRequest: memSlider("memory_request", "Memory", a.MemoryRequest, memMax),
+	}
+}
+
+// namedDomain is domainAt with a hostname of its own, for the install-wide
+// table where several domains are shown side by side.
+func namedDomain(now time.Time, host string, state domain.State, observed string) domain.Custom {
+	c := domainAt(now, state, observed)
+	c.Host = host
+	return c
+}
+
+func domainGallery(c domain.Custom) NetworkingData {
+	return NetworkingData{
+		App:          "web",
+		ResolverName: "1.1.1.1:53",
+		Settled:      c.State.Settled(),
+		Net: app.Networking{
+			Managed: "web.apps.example.com",
+			Target:  "edge.example.com",
+			// HTTPS is enforced, which is what makes the certificate step say
+			// the thing worth reading: no certificate covers a brought domain,
+			// so every visitor gets a warning.
+			HTTPSOnly: true,
+			Custom:    []domain.Custom{c},
+		},
+	}
+}
+
+// bodyPad puts a component inside a panel body, for components that are
+// normally rendered into one rather than being a whole panel themselves.
+func bodyPad(inner templ.Component) templ.Component {
+	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		if _, err := w.Write([]byte(`<div class="panel-body">`)); err != nil {
+			return err
+		}
+		if err := inner.Render(ctx, w); err != nil {
+			return err
+		}
+		_, err := w.Write([]byte(`</div>`))
+		return err
+	})
 }
 
 // panelWrap puts a component inside the standard panel chrome, so gallery

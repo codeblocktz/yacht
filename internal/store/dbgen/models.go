@@ -86,16 +86,22 @@ type Deployment struct {
 }
 
 type Domain struct {
-	ID           uuid.UUID
-	OwnerID      string
-	AppID        uuid.UUID
-	Host         string
-	Tls          bool
-	Verified     bool
-	CreatedAt    time.Time
-	Managed      bool
-	VerifiedAt   pgtype.Timestamptz
-	VerifyTarget string
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Host          string
+	Tls           bool
+	CreatedAt     time.Time
+	Managed       bool
+	VerifiedAt    pgtype.Timestamptz
+	VerifyTarget  string
+	State         string
+	Observed      string
+	LastError     string
+	LastCheckedAt pgtype.Timestamptz
+	NextCheckAt   time.Time
+	CheckAttempts int32
+	Verified      bool
 }
 
 type Invitation struct {

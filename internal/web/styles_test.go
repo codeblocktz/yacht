@@ -107,7 +107,7 @@ func prefixed(name string) bool {
 		"m-", "mx-", "my-", "mt-", "mb-", "ml-", "mr-",
 		"w-", "h-", "min-", "max-", "gap-", "space-",
 		"text-", "font-", "bg-", "border-", "rounded-", "shadow-",
-		"flex-", "grid-", "col-", "row-", "items-", "justify-", "self-",
+		"flex-", "grid-", "col-", "row-", "items-", "justify-", "self-", "place-",
 		"opacity-", "cursor-", "overflow-", "whitespace-", "break-",
 		"top-", "bottom-", "left-", "right-", "z-", "order-", "leading-",
 		"tracking-", "align-", "object-", "list-", "divide-", "ring-",

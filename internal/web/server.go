@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -34,6 +35,18 @@ type Apps interface {
 	Get(ctx context.Context, ownerID, name string) (app.App, error)
 	Create(ctx context.Context, ownerID string, in app.CreateInput) (app.App, error)
 	Scale(ctx context.Context, ownerID, name string, replicas int32) (app.App, error)
+
+	// Update changes what the app runs and how much it may use. Everything
+	// here was decided at create and then frozen until this existed.
+	Update(ctx context.Context, ownerID, name string, in app.UpdateInput) (app.App, error)
+
+	// Branches lists a repository's branches, filtered by a query. Read with
+	// ls-remote, so it costs one HTTPS request and no clone.
+	Branches(ctx context.Context, repoURL, query string) ([]string, error)
+
+	// Directories lists what is inside a repository at a path. GitHub only —
+	// git cannot read a tree without fetching objects, so this asks the host.
+	Directories(ctx context.Context, repoURL, path string) ([]string, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
@@ -311,6 +324,10 @@ type Server struct {
 	// can say. "log" means nothing is actually sent.
 	mailTransport string
 	signInLimit   *attemptLimiter
+
+	// flashKey authenticates the one-shot message a redirect carries. See
+	// newFlashKey for why it is minted here rather than configured.
+	flashKey []byte
 }
 
 // New validates options and returns a server.
@@ -357,6 +374,10 @@ func New(opts Options) (*Server, error) {
 			opts.SessionTTL = defaultSessionTTL
 		}
 	}
+	flashKey, err := newFlashKey()
+	if err != nil {
+		return nil, fmt.Errorf("web: flash key: %w", err)
+	}
 	return &Server{
 		orch:      opts.Orchestrator,
 		ident:     opts.Identity,
@@ -383,6 +404,7 @@ func New(opts Options) (*Server, error) {
 		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		signInLimit:    newAttemptLimiter(signInWindow),
+		flashKey:       flashKey,
 	}, nil
 }
 
@@ -514,6 +536,19 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
+			// Polled while a deploy or a build is in flight, and not otherwise.
+			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
+			// Reads the remote with ls-remote while somebody types a branch.
+			r.Get("/apps/{name}/branches", s.appBranches)
+			r.Get("/apps/{name}/directories", s.appDirectories)
+			if s.nets != nil {
+				// Domains get a tab of their own rather than a section inside
+				// Settings, where they sat among health checks and resources.
+				// A domain being added is a task with several steps and a wait
+				// in the middle; it needs somewhere to be watched.
+				r.Get("/apps/{name}/domains", s.appDetail)
+				r.Get("/apps/{name}/domains/fragment", s.domainsFragment)
+			}
 			if s.logs != nil {
 				r.Get("/apps/{name}/logs", s.appLogs)
 				// The fragment stays alongside the stream. It is what the page
@@ -568,6 +603,10 @@ func (s *Server) Handler() http.Handler {
 			// credential the app runs as, and setting one is not undone by a
 			// redeploy.
 			r.Post("/apps/{name}/health", s.healthSet)
+			// Image, port, resources, reachability, repository — the fields
+			// that had no way to be changed after create.
+			r.Post("/apps/{name}/runtime", s.appRuntime)
+			r.Post("/apps/{name}/source/disconnect", s.appSourceDisconnect)
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
@@ -696,6 +735,8 @@ func detailTab(r *http.Request) string {
 		return "storage"
 	case strings.HasSuffix(r.URL.Path, "/settings"):
 		return "settings"
+	case strings.HasSuffix(r.URL.Path, "/domains"):
+		return "domains"
 	}
 	return ""
 }
@@ -764,6 +805,13 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 	data := NewAppData{Sources: s.sources(r.Context())}
+
+	// Only somebody the registry page would actually admit is offered a link
+	// to it. A control that leads to a 403 tells the viewer they have a
+	// permission they do not.
+	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+		data.CanConfigureRegistry = s.registries != nil
+	}
 
 	src := app.Source(r.URL.Query().Get("source"))
 	if src == "" {
@@ -899,17 +947,37 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 			// Surfaced, not merely logged. A redirect after a failure shows the
 			// page somebody expected, with the workload unchanged and nothing
 			// on screen to say so — which is how a broken deploy goes unnoticed.
+			//
+			// A flash rather than re-rendering the page. appActionFailed draws
+			// the standalone app view, and this button is pressed from the
+			// canvas sheet — so a failure used to answer by moving somebody
+			// somewhere else, which reads as the click having navigated rather
+			// than failed.
 			s.log.Error("redeploy", slog.String("app", name), slog.String("error", err.Error()))
-			s.appActionFailed(w, r, name, "", err)
+			s.flashErr(w, r, err.Error())
+			http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 			return
 		}
 	}
+	s.flashOK(w, r, "Redeploying "+name+".")
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
 
 func (s *Server) appDelete(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(r.Context())
 	name := chi.URLParam(r, "name")
+
+	// Checked here rather than only in the dialog. The dialog is JavaScript,
+	// and without it the form posts straight through — so the guard on the
+	// most destructive action in the product would be one somebody could skip
+	// by having scripts off. Deleting a volume has always been checked this
+	// way; this brings the app in line with it.
+	if strings.TrimSpace(r.FormValue("confirm")) != name {
+		s.appActionFailed(w, r, name, "settings", errors.New(
+			"type the app's name to confirm — deleting it removes its namespace, "+
+				"its domains and its storage"))
+		return
+	}
 
 	if s.apps != nil {
 		if err := s.apps.Delete(r.Context(), owner.ID, name); err != nil {
@@ -918,6 +986,7 @@ func (s *Server) appDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.flashOK(w, r, name+" deleted.")
 	http.Redirect(w, r, "/apps", http.StatusSeeOther)
 }
 
@@ -1120,6 +1189,13 @@ func (s *Server) renderWithSlots(
 func (s *Server) renderWithSlotsStatus(
 	w http.ResponseWriter, r *http.Request, slots Slots, status int, page templ.Component,
 ) {
+	// Read here rather than in the SlotProvider, which is handed a request and
+	// no way to clear a cookie. This is also the one funnel every full page
+	// render passes through, so a message cannot be dropped by a handler that
+	// forgot to look for one — and fragments, which do not come through here,
+	// cannot swallow a message meant for the page around them.
+	slots.Flash = s.takeFlash(w, r)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := Layout(slots, page).Render(r.Context(), w); err != nil {

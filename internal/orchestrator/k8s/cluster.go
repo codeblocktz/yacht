@@ -87,6 +87,7 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			CreatedAt:         n.CreationTimestamp.Time,
 			Unschedulable:     n.Spec.Unschedulable,
 		}
+		info.Reason, info.Message = nodeNotReadyBecause(n)
 		if u, ok := usage[n.Name]; ok {
 			info.CPUUsedMillis = u.cpuMillis
 			info.MemUsedBytes = u.memBytes
@@ -194,6 +195,31 @@ func (o *Orchestrator) Pods(
 		return strings.Compare(a.Name, b.Name)
 	})
 	return out, nil
+}
+
+// nodeNotReadyBecause is why a node is not serving, in its own words.
+//
+// Kubelet fills the Ready condition's reason and message with something usable
+// while a node is coming up — "KubeletNotReady" with "container runtime network
+// not ready: cni plugin not initialized" is the ordinary state of a machine
+// thirty seconds into joining, and it is exactly what somebody watching the
+// join wants to see instead of a bare "not ready".
+//
+// Empty for a Ready node, so a caller can treat a non-empty reason as something
+// to show rather than having to ask whether it is stale.
+func nodeNotReadyBecause(n corev1.Node) (reason, message string) {
+	for _, c := range n.Status.Conditions {
+		if c.Type != corev1.NodeReady {
+			continue
+		}
+		if c.Status == corev1.ConditionTrue {
+			return "", ""
+		}
+		return c.Reason, c.Message
+	}
+	// No Ready condition at all. A node object exists and the kubelet has not
+	// reported yet, which is the first moment of a join and worth saying.
+	return "NotReported", "The machine has registered and its kubelet has not reported in yet."
 }
 
 func nodeReady(n corev1.Node) bool {

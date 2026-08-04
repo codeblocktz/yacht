@@ -74,9 +74,13 @@ func (o *Orchestrator) applyIngress(ctx context.Context, spec orchestrator.AppSp
 
 	ingSpec := networkingv1ac.IngressSpec().WithRules(rules...)
 
-	if spec.TLS {
+	// Only the hosts the default certificate can actually serve. Listing one it
+	// cannot match does not conjure a certificate for it — it produces a
+	// handshake the browser refuses, which is worse than plain HTTP because it
+	// looks like the platform is broken rather than unconfigured.
+	if len(spec.TLSHosts) > 0 {
 		ingSpec = ingSpec.WithTLS(networkingv1ac.IngressTLS().
-			WithHosts(spec.Hosts...))
+			WithHosts(spec.TLSHosts...))
 	}
 
 	ing := networkingv1ac.Ingress(spec.Name, spec.Namespace).

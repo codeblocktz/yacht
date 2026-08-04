@@ -356,8 +356,8 @@ func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	if len(spec.Hosts) != 1 || spec.Hosts[0] != "web.apps.example.com" {
 		t.Fatalf("spec.Hosts = %v, want [web.apps.example.com]", spec.Hosts)
 	}
-	if !spec.TLS {
-		t.Fatal("spec.TLS = false, want true when wildcard TLS is on")
+	if len(spec.TLSHosts) != 1 || spec.TLSHosts[0] != "web.apps.example.com" {
+		t.Fatalf("spec.TLSHosts = %v, want the platform host when wildcard TLS is on", spec.TLSHosts)
 	}
 }
 

@@ -461,24 +461,6 @@
   .table-scroll {
     @apply w-full overflow-x-auto;
   }
-  .check-field {
-    @apply flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px];
-  }
-  .check-field input {
-    @apply size-4 cursor-pointer appearance-none rounded-sm border border-input
-           bg-background checked:border-primary checked:bg-primary
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
-  }
-  .check-field input:checked::after {
-    content: "";
-    display: block;
-    width: 5px;
-    height: 9px;
-    margin: 1px 0 0 5px;
-    border: solid var(--primary-foreground);
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-  }
   .confirm-dialog {
     @apply fixed left-1/2 top-1/2 z-50 m-0 w-[calc(100%-2rem)] max-w-md
            -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border
@@ -873,5 +855,302 @@
   }
   .chart-dot {
     @apply size-2 rounded-[2px];
+  }
+}
+
+@layer components {
+  /* A number chosen by dragging rather than typed.
+
+     A CPU limit is not a number people know — "how much of a core" is a
+     judgement, and a text field asking for "500m" makes somebody learn
+     Kubernetes' unit grammar before they can make it. A track with a ceiling
+     turns it into a comparison: this much, out of what the cluster has.
+
+     The ceiling is real. It is the largest node's capacity, because that is
+     what a single pod can actually be scheduled onto — a limit above it is a
+     workload that stays Pending forever, and a slider that let somebody choose
+     one would be a control that produces a broken app. */
+  .slider-head {
+    @apply flex items-baseline justify-between gap-3 text-[12.5px];
+  }
+  .slider-value {
+    @apply font-medium tabular-nums;
+  }
+  .slider-max {
+    @apply text-[11.5px] text-muted-foreground tabular-nums;
+  }
+  /* The control is 16px tall and the bar inside it is 4px.
+
+     Sizing the input to the bar is the obvious thing and it is wrong: the hit
+     area is the input's box, so a 4px track is a 4px target, which is most of a
+     pixel-hunt on a mouse and unusable on a phone. The bar is painted at 4px
+     inside a full-height control instead, so it looks the same and can actually
+     be grabbed.
+
+     background-size rather than a pseudo-element, because the fill is a
+     gradient set inline by the server and by the script, and a pseudo-element
+     cannot be reached from either. */
+  .slider {
+    @apply mt-2 h-4 w-full cursor-pointer appearance-none bg-transparent;
+    background-repeat: no-repeat;
+    background-size: 100% 4px;
+    background-position: 0 center;
+    border-radius: 9999px;
+  }
+  /* The filled part of the track is painted by the script as a gradient, so
+     the two halves cannot disagree about where the handle is. */
+  .slider::-webkit-slider-thumb {
+    @apply size-4 appearance-none rounded-full border-2 border-background bg-foreground shadow;
+  }
+  .slider::-moz-range-thumb {
+    @apply size-4 appearance-none rounded-full border-2 border-background bg-foreground shadow;
+  }
+  .slider:focus-visible {
+    @apply outline-none ring-2 ring-ring/50 ring-offset-2 ring-offset-background;
+  }
+  /* Zero is not a small amount, it is no limit at all — a different kind of
+     answer, and worth reading differently. */
+  .slider-none .slider-value {
+    @apply font-normal text-muted-foreground;
+  }
+
+  /* The row a switch sits in. The switch itself is templUI's — this is only
+     the layout that puts a label on the left and the control on the right. */
+  .toggle-row {
+    @apply flex items-start justify-between gap-4 rounded-md border border-border px-4 py-3;
+  }
+
+  /* ---- a connected source ------------------------------------------ */
+
+  /* What an app builds from, drawn as a connection rather than a text field.
+
+     A URL in a box says "type here". A repository with its host's mark, and a
+     way to disconnect it, says what it is: something attached, which can be
+     detached and attached again. That difference is most of why the Railway
+     version reads as simpler while holding the same value. */
+  .source-card {
+    @apply flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2.5;
+  }
+  .source-card-err {
+    @apply border-destructive/60;
+  }
+  .source-name {
+    @apply min-w-0 flex-1 truncate font-mono text-[12.5px];
+  }
+  .source-empty {
+    @apply flex items-center gap-3 rounded-md border border-dashed border-border
+           px-3 py-2.5 text-[12.5px] text-muted-foreground;
+  }
+
+  /* ---- sectioned settings ------------------------------------------ */
+
+  /* One long page with a nav beside it, rather than a row of tabs.
+
+     Tabs hide what they are not showing, so finding a setting means guessing
+     which tab owns it. A single column with anchors keeps every setting on one
+     page and findable with the browser's own search, and the nav answers
+     "where am I" without taking anything away. */
+  .settings-shell {
+    @apply flex flex-col-reverse gap-8 lg:flex-row;
+  }
+  .settings-main {
+    @apply min-w-0 flex-1;
+  }
+  .settings-nav {
+    @apply shrink-0 lg:sticky lg:top-6 lg:w-[168px] lg:self-start;
+  }
+  .settings-nav a {
+    @apply block rounded-md px-2 py-1.5 text-[12.5px] text-muted-foreground
+           transition-colors hover:bg-accent hover:text-foreground;
+  }
+  .settings-section {
+    @apply mb-10 scroll-mt-6;
+  }
+  .settings-section-head {
+    @apply mb-4 flex items-center gap-3;
+  }
+  .settings-section-mark {
+    @apply grid size-8 shrink-0 place-items-center rounded-full border border-border
+           text-muted-foreground;
+  }
+  .settings-section-title {
+    @apply text-[16px] font-semibold tracking-tight;
+  }
+  .field-group {
+    @apply mb-5 last:mb-0;
+  }
+  .field-label {
+    @apply text-[12.5px] font-medium;
+  }
+  .field-note {
+    @apply mt-0.5 text-[12px] text-muted-foreground;
+  }
+}
+
+@layer components {
+  /* A progression through states that arrive over time.
+
+     A list rather than a progress bar. A bar claims to know how far along
+     something is, and none of these do: a domain waiting for DNS may wait ten
+     seconds or a day, and a bar that sits at 60% forever is a lie told
+     confidently. What a list can say is which step is current and what the last
+     check actually found, which is the part somebody stuck needs.
+
+     The connector is drawn by the step rather than the container so the last one
+     can simply not draw it, and so a step that failed can colour its own
+     segment without the container knowing which step that was. */
+  .steps {
+    @apply flex flex-col;
+  }
+  .step {
+    @apply relative flex gap-3 pb-4 last:pb-0;
+  }
+  .step:not(:last-child)::before {
+    content: "";
+    @apply absolute bottom-0 left-[5px] top-[15px] w-px bg-border;
+  }
+  .step-dot {
+    @apply relative z-10 mt-[5px] size-[11px] shrink-0 rounded-full border-2
+           border-border bg-background;
+  }
+  .step-body {
+    @apply min-w-0 flex-1;
+  }
+  .step-label {
+    @apply text-[12.5px] font-medium leading-tight;
+  }
+  /* What the check actually saw. This is the reason the component exists rather
+     than a status word: "points elsewhere" is not usable without the elsewhere. */
+  .step-detail {
+    @apply mt-1 text-[11.5px] leading-relaxed text-muted-foreground;
+  }
+  .step-time {
+    @apply mt-1 text-[11px] tabular-nums text-muted-foreground/70;
+  }
+
+  .step-done .step-dot  { @apply border-success bg-success; }
+  .step-active .step-dot { @apply border-info bg-info; }
+  .step-err .step-dot   { @apply border-destructive bg-destructive; }
+  .step-err .step-label { @apply text-destructive; }
+  /* A step nobody has reached is drawn but not filled: the shape of what is
+     coming, without claiming anything about it yet. */
+  .step-wait .step-dot  { @apply border-border bg-background; }
+  .step-wait .step-label { @apply text-muted-foreground; }
+}
+
+@layer components {
+  /* In-flight, as motion.
+
+     The dashboard says status with a dot and a word, and the dot is static — so
+     a deploy that is running right now and one that finished half an hour ago
+     draw identically. The halo animates rather than the dot itself, because a
+     dot that changes size shifts the word beside it on every frame. */
+  @keyframes yacht-pulse {
+    0%   { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+    70%  { box-shadow: 0 0 0 4px transparent; opacity: 0.6; }
+    100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+  }
+  .status-live::before {
+    animation: yacht-pulse 1.8s ease-out infinite;
+  }
+
+  @keyframes yacht-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* A control that has been pressed and is waiting on the server.
+
+     Every mutation here is a form POST that blocks until the cluster answers,
+     which for a create is seconds. Without this the only feedback is the
+     browser's own tab spinner, and a button that still looks pressable invites
+     the second click that submits the form twice. */
+  .btn[aria-busy="true"] {
+    @apply pointer-events-none opacity-70;
+  }
+  .btn[aria-busy="true"]::before {
+    content: "";
+    @apply size-3.5 shrink-0 rounded-full border-2 border-current border-r-transparent;
+    animation: yacht-spin 0.6s linear infinite;
+  }
+
+  /* Reduced motion does not mean no motion here. A spinner that does not spin
+     says nothing at all, and the thing it is saying — "still working" — is the
+     whole point. Slowed rather than stopped. */
+  @media (prefers-reduced-motion: reduce) {
+    .status-live::before { animation: none; }
+    .btn[aria-busy="true"]::before { animation-duration: 2.4s; }
+  }
+}
+
+@layer components {
+  /* The result of something that redirected.
+
+     Before this, an outcome could only be shown by re-rendering a page with a
+     notice on it — which is why a failed action used to render a different page
+     than the one it was started from. A toast survives the redirect, so a
+     handler can send somebody back to where they actually were.
+
+     Bottom-right rather than top: the top of every page here is a breadcrumb and
+     a heading somebody is about to read, and a panel landing on it moves the
+     thing being read. */
+  @keyframes yacht-toast-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .toast-host {
+    @apply pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[calc(100%-2rem)]
+           max-w-sm flex-col gap-2;
+  }
+  .toast {
+    @apply pointer-events-auto flex items-start gap-3 rounded-md border border-border
+           border-l-2 bg-popover px-4 py-3 text-[12.5px] shadow-lg;
+    animation: yacht-toast-in 0.18s ease-out;
+  }
+  .toast-ok   { @apply border-l-success; }
+  .toast-err  { @apply border-l-destructive; }
+  .toast-warn { @apply border-l-warning; }
+  .toast-body { @apply min-w-0 flex-1; }
+  .toast-close {
+    @apply -mr-1 -mt-0.5 shrink-0 rounded p-1 text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; }
+  }
+}
+
+@layer components {
+  /* A DNS record, drawn as a record.
+
+     This was two paragraphs telling somebody to "point the name at X with a
+     CNAME". Prose is the wrong shape for a value that gets retyped into another
+     system's form: every provider asks for Type, Name and Value, so show those
+     three and let each be copied. The prose that explained why still exists —
+     it moved into a popover, where it is available without being in the way. */
+  .record {
+    @apply overflow-hidden rounded-md border border-border;
+  }
+  .record-row {
+    @apply flex items-center gap-3 border-b border-border px-3 py-2 last:border-b-0;
+  }
+  .record-k {
+    @apply w-[52px] shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.07em]
+           text-muted-foreground;
+  }
+  /* Not @apply .mono — Tailwind v4 resolves only real utilities inside @apply,
+     not other custom classes. The same trap the .row-link comment records. */
+  .record-v {
+    @apply min-w-0 flex-1 break-all font-mono text-[12px];
+  }
+  .copy-btn {
+    @apply shrink-0 rounded p-1 text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  /* Confirmation lives on the button rather than in a toast: the action is
+     trivial, and a toast for every copied field would bury the ones that
+     matter. */
+  .copy-btn[data-copied="true"] {
+    @apply text-success;
   }
 }

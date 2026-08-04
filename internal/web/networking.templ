@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/app"
+import (
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/domain"
+)
 
 // NetworkingData is the app's routing panel.
 type NetworkingData struct {
@@ -11,8 +14,32 @@ type NetworkingData struct {
 	// nobody will trust, because the install has no wildcard certificate.
 	UntrustedCert bool
 
+	// ResolverName is which resolver answered the last check.
+	//
+	// Shown because "this name does not resolve" is one resolver's opinion, and
+	// somebody comparing it against their own dig output needs to know whether
+	// the two asked the same server.
+	ResolverName string
+
+	// Settled reports that no domain here is still moving, which is what stops
+	// the polling fragment asking again.
+	Settled bool
+
 	Notice string
 	Error  string
+}
+
+// customDomainURL is where the hostname links to.
+//
+// http unless the app is HTTPS-only, and deliberately not https-by-default: no
+// certificate covers a brought domain, so an https link is one that fails in the
+// browser. Sending somebody to a scheme that works is better than sending them
+// to the one we wish worked.
+func customDomainURL(d NetworkingData, c domain.Custom) string {
+	if d.Net.HTTPSOnly {
+		return "https://" + c.Host
+	}
+	return "http://" + c.Host
 }
 
 templ publicNetworking(d NetworkingData) {
@@ -81,41 +108,8 @@ templ customDomains(d NetworkingData) {
 					</p>
 				</div>
 			} else {
-				if len(d.Net.Custom) > 0 {
-					<div class="rows mb-4 rounded-md border border-border">
-						for _, c := range d.Net.Custom {
-							<div class="row-item">
-								@icon("layers")
-								<span class="min-w-0 flex-1">
-									<span class="mono block truncate">{ c.Host }</span>
-									if !c.Verified {
-										<span class="block text-muted-foreground">
-											CNAME &rarr; <code class="mono">{ c.Target }</code>
-										</span>
-									}
-								</span>
-								if c.Verified {
-									<span class="status status-ok">routed</span>
-								} else {
-									<span class="status status-warn">not verified</span>
-									<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
-										<button class="btn btn-sm" type="submit">Verify</button>
-									</form>
-								}
-								<form
-									method="post"
-									action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
-									data-confirm="Traffic for this domain stops being routed to the app."
-									data-confirm-title="Remove this domain?"
-									data-confirm-label="Remove domain"
-								>
-									<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
-								</form>
-							</div>
-						}
-					</div>
-				}
-				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="flex flex-wrap items-end gap-3">
+				@CustomDomainList(d)
+				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="mt-4 flex flex-wrap items-end gap-3">
 					<div class="field min-w-[260px] flex-1">
 						<label class="label" for="host">Add custom domain</label>
 						<input
@@ -128,18 +122,144 @@ templ customDomains(d NetworkingData) {
 					</div>
 					<button class="btn btn-primary" type="submit">Add</button>
 				</form>
-				<p class="mt-3 text-[12.5px] text-muted-foreground">
-					At your DNS provider, point the name at
-					<code class="mono">{ d.Net.Target }</code> with a CNAME. An apex domain
-					cannot carry one — use whatever your provider calls a flattened ALIAS
-					instead, and verification will accept it.
-				</p>
-				<p class="mt-2 text-[12.5px] text-muted-foreground">
-					Nothing is routed until the record resolves. Until then the domain is a
-					claim, and anyone who proves they control it can take it.
-				</p>
+				// A div rather than a p, because the popover's content is a div
+				// and a div inside a p makes the browser close the paragraph
+				// early — which drops the trigger onto its own line.
+				<div class="mt-3 text-[12.5px] text-muted-foreground">
+					Add the name and Yacht shows you the record to create, then proves it
+					itself — there is nothing to come back and press.
+					@helpNote("how verification works") {
+						<p>
+							Nothing is routed until the record resolves. Until then the
+							domain is a claim, and anyone who proves they control it can
+							take it instead.
+						</p>
+						<p class="mt-2">
+							An apex domain cannot carry a CNAME. Use whatever your provider
+							calls a flattened ALIAS or ANAME — verification compares
+							addresses, so any of them is accepted.
+						</p>
+					}
+				</div>
 			}
 		</div>
+	</div>
+}
+
+// CustomDomainList is the polled half: every claim and how far it has got.
+//
+// It renders the element carrying its own polling trigger, and the fragment
+// endpoint returns this same component with hx-swap="outerHTML". That is what
+// makes the poll self-stopping: once every domain has settled the replacement
+// markup carries no trigger, and htmx has nothing left to fire. Swapping only
+// the inside would leave the trigger on a wrapper it never replaces, asking
+// forever.
+//
+// Polled separately from the tab so a request every three seconds does not
+// re-render the add-domain form under somebody typing a hostname into it.
+templ CustomDomainList(d NetworkingData) {
+	<div
+		id="custom-domains"
+		hx-get={ "/apps/" + d.App + "/domains/fragment" }
+		hx-swap="outerHTML"
+		if !d.Settled {
+			hx-trigger="every 3s"
+		}
+		aria-busy={ boolAttr(!d.Settled) }
+	>
+		if len(d.Net.Custom) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No custom domains</p>
+				<p>Add one below to serve this app on a name you own.</p>
+			</div>
+		} else {
+			<div class="flex flex-col gap-3">
+				for _, c := range d.Net.Custom {
+					@customDomainCard(d, c)
+				}
+			</div>
+		}
+	</div>
+}
+
+templ customDomainCard(d NetworkingData, c domain.Custom) {
+	<div class="rounded-md border border-border">
+		<div class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+			@icon("globe")
+			<span class="min-w-0 flex-1">
+				<a
+					class="mono block truncate hover:underline"
+					href={ templ.URL(customDomainURL(d, c)) }
+					target="_blank"
+					rel="noreferrer"
+				>{ c.Host }</a>
+			</span>
+			{{ label, class := domainStatus(c) }}
+			<span class={ "status", class }>{ label }</span>
+			<form method="post" action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/verify") }>
+				<button class="btn btn-sm" type="submit">Check now</button>
+			</form>
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + d.App + "/domains/" + c.ID.String() + "/delete") }
+				data-confirm="Traffic for this domain stops being routed to the app."
+				data-confirm-title="Remove this domain?"
+				data-confirm-label="Remove domain"
+			>
+				<button class="btn btn-ghost btn-sm" type="submit">Remove</button>
+			</form>
+		</div>
+		<div class="px-4 py-3">
+			@stepList(domainSteps(c, d.Net.HTTPSOnly))
+			// The record stays on screen while it is still the thing to do.
+			// Hiding it the moment a domain goes live is right; hiding it while
+			// somebody is trying to get the record correct is not.
+			if !c.State.Routable() {
+				<div class="mt-4">
+					<div class="micro mb-2">Create this record</div>
+					@recordTable(domainRecord(c.Host, c.Target))
+					<div class="mt-2 text-[11.5px] text-muted-foreground">
+						Name is the part before your own domain, which is what most
+						providers ask for.
+						@helpNote("the record's name field") {
+							<p>
+								Some providers want the full hostname here instead, and a
+								few fill your domain in for you. If pasting
+								<code class="mono">{ c.Host }</code> produces something like
+								<code class="mono">{ c.Host }.{ c.Host }</code> in their list,
+								they wanted just the part shown above.
+							</p>
+						}
+					</div>
+				</div>
+			}
+			@domainCheckLine(c, d.ResolverName)
+		</div>
+	</div>
+}
+
+// domainCheckLine says when this was last looked at and when it will be again.
+//
+// Without it a page that is quietly working is indistinguishable from one that
+// has stopped, and the reader's only recourse is to press the button — which is
+// exactly the behaviour the background checker exists to remove.
+templ domainCheckLine(c domain.Custom, resolver string) {
+	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
+		if c.LastCheckedAt.IsZero() {
+			<span>Not checked yet</span>
+		} else {
+			<span title={ absoluteTime(c.LastCheckedAt) }>
+				Checked { preciseAgo(c.LastCheckedAt) }
+			</span>
+		}
+		if !c.State.Settled() && !c.NextCheckAt.IsZero() {
+			<span class="text-border">&middot;</span>
+			<span title={ absoluteTime(c.NextCheckAt) }>next { untilTime(c.NextCheckAt) }</span>
+		}
+		if resolver != "" {
+			<span class="text-border">&middot;</span>
+			<span>asked { resolver }</span>
+		}
 	</div>
 }
 
@@ -150,44 +270,29 @@ templ routingOptions(d NetworkingData) {
 		</div>
 		<div class="panel-body">
 			<form method="post" action={ templ.URL("/apps/" + d.App + "/networking") } class="flex flex-col gap-4">
-				<label class="flex items-start gap-2.5">
-					<input
-						type="checkbox"
-						name="https_only"
-						class="mt-0.5"
-						checked?={ d.Net.HTTPSOnly }
-					/>
-					<span class="min-w-0">
-						<span class="block font-medium">Enforce HTTPS</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Routes through the ingress controller's secure entrypoint only, so
-							a request arriving on plain HTTP is not served rather than served
-							and redirected.
-						</span>
+				@checkOption("https_only", "1", "Enforce HTTPS", d.Net.HTTPSOnly, false) {
+					Routes through the ingress controller's secure entrypoint only, so
+					a request arriving on plain HTTP is not served rather than served
+					and redirected.
+				}
+				@checkOption("cname_only", "1", "Publish a CNAME, never node addresses", d.Net.CNAMEOnly, false) {
+					Tells ExternalDNS to target
+					if d.Net.Target != "" {
+						<code class="mono">{ d.Net.Target }</code>
+					} else {
+						the platform
+					}
+					rather than publishing this cluster's node addresses as A records.
+					// Said plainly rather than hedged. "If none is installed this
+					// changes nothing" left the reader to work out whether one is,
+					// and Yacht has no way to tell them — so it says that instead
+					// of implying they should already know.
+					<span class="mt-1 block">
+						Yacht does not run ExternalDNS and cannot see whether anything
+						does, so it cannot confirm this takes effect. The target itself is
+						set under <a class="underline hover:text-foreground" href="/cluster/dns">Infrastructure &rsaquo; DNS</a>.
 					</span>
-				</label>
-				<label class="flex items-start gap-2.5">
-					<input
-						type="checkbox"
-						name="cname_only"
-						class="mt-0.5"
-						checked?={ d.Net.CNAMEOnly }
-					/>
-					<span class="min-w-0">
-						<span class="block font-medium">Publish a CNAME, never node addresses</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Tells ExternalDNS to target
-							if d.Net.Target != "" {
-								<code class="mono">{ d.Net.Target }</code>
-							} else {
-								the platform
-							}
-							rather than publishing this cluster's node addresses as A records.
-							Yacht does not run ExternalDNS; if none is installed this changes
-							nothing.
-						</span>
-					</span>
-				</label>
+				}
 				<div>
 					<button class="btn btn-primary" type="submit">Save</button>
 				</div>
@@ -196,7 +301,8 @@ templ routingOptions(d NetworkingData) {
 	</div>
 }
 
-// PlatformDNS is the install-wide DNS configuration.
+// PlatformDNS is the install-wide DNS configuration, and every domain that
+// depends on it.
 templ PlatformDNS(d PlatformDNSData) {
 	@pageHead("DNS",
 		"How this install publishes hostnames. One controller, one setting — not per app.", nil)
@@ -209,6 +315,12 @@ templ PlatformDNS(d PlatformDNSData) {
 		</div>
 	}
 	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Settings</span>
+			if d.DNS.UpdatedAt != "" {
+				<span class="text-[12px] text-muted-foreground">Updated { d.DNS.UpdatedAt }</span>
+			}
+		</div>
 		<div class="panel-body">
 			<form method="post" action="/cluster/dns" class="flex flex-col gap-4">
 				<div class="field">
@@ -220,13 +332,52 @@ templ PlatformDNS(d PlatformDNSData) {
 						value={ d.DNS.CNAMETarget }
 						placeholder="edge.yourplatform.com"
 					/>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						What a customer points their CNAME at, and what ExternalDNS is told
-						to target so it publishes a CNAME instead of this cluster's node
-						addresses. Leave it empty to switch custom domains off: without a
-						target there is nothing a claim could be verified against.
-					</p>
+					// Whether the target itself answers. Checked because a
+					// well-formed name that does not exist is accepted by
+					// validation and then fails every customer's domain, with the
+					// failure reported against their name rather than this field.
+					if d.TargetResolves != "" {
+						<div class="mt-1 flex items-center gap-2 text-[12px]">
+							if d.TargetResolves == "does not resolve" {
+								<span class="status status-warn">does not resolve</span>
+								<span class="text-muted-foreground">
+									Saved anyway — it may not exist yet. Until it does, no custom
+									domain on this install can be verified.
+								</span>
+							} else {
+								<span class="status status-ok">{ d.TargetResolves }</span>
+							}
+							if d.ResolverName != "" {
+								<span class="text-muted-foreground">· asked { d.ResolverName }</span>
+							}
+						</div>
+					}
+					<div class="mt-1 text-[12.5px] text-muted-foreground">
+						What a customer points their CNAME at. Leave it empty to switch
+						custom domains off.
+						@helpNote("what the CNAME target is for") {
+							<p>
+								It is two things at once: the name a customer's record has to
+								point at, and what ExternalDNS is told to target so it
+								publishes a CNAME rather than this cluster's node addresses.
+							</p>
+							<p class="mt-2">
+								Without a target there is nothing a claim could be verified
+								against, so the domain form is not offered at all.
+							</p>
+						}
+					</div>
 				</div>
+				if d.DNS.CNAMETarget != "" {
+					<div>
+						<div class="micro mb-2">What a customer creates</div>
+						@recordTable(DNSRecord{
+							Type:  "CNAME",
+							Name:  "the name they are bringing",
+							Value: d.DNS.CNAMETarget,
+						})
+					</div>
+				}
 				<div class="field">
 					<label class="label" for="txt_prefix">DNS ownership prefix</label>
 					<input
@@ -236,17 +387,29 @@ templ PlatformDNS(d PlatformDNSData) {
 						value={ d.DNS.TXTPrefix }
 						placeholder="extdns-"
 					/>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						Keeps the ownership record off the name it owns, which is what lets
-						an apex domain work at all. It must match
-						<code class="mono">--txt-prefix</code> on your ExternalDNS
+					<div class="mt-1 text-[12.5px] text-muted-foreground">
+						Must match <code class="mono">--txt-prefix</code> on your ExternalDNS
 						controller.
-					</p>
-					<p class="mt-1 text-[12.5px] text-muted-foreground">
-						Recorded here, not applied. Yacht does not deploy that controller and
-						cannot set a flag on it — this is so the two can be kept in step, and
-						so the value is written down somewhere other than a shell history.
-					</p>
+						@helpNote("the ownership prefix") {
+							<p>
+								It keeps the ownership record off the name it owns, which is
+								what lets an apex domain work at all.
+							</p>
+						}
+					</div>
+					// A callout rather than a third paragraph. Buried in prose this
+					// read as a setting that takes effect from here, which is the
+					// one thing it does not do.
+					<div class="callout callout-warn mt-2">
+						<div class="min-w-0">
+							<div class="font-medium">Recorded here, not applied</div>
+							<p class="mt-0.5 text-muted-foreground">
+								Yacht does not deploy ExternalDNS and cannot set a flag on it.
+								This is written down so the two can be kept in step — changing
+								it here changes nothing in the cluster.
+							</p>
+						</div>
+					</div>
 				</div>
 				<div>
 					<button class="btn btn-primary" type="submit">Save</button>
@@ -254,7 +417,74 @@ templ PlatformDNS(d PlatformDNSData) {
 			</form>
 		</div>
 	</div>
-	if d.DNS.UpdatedAt != "" {
-		<p class="text-[12.5px] text-muted-foreground">Updated { d.DNS.UpdatedAt }.</p>
-	}
+	@installDomains(d)
+}
+
+// installDomains is every custom domain on the install, worst first.
+//
+// The counterpart to the per-app panel. A domain lives on one app's page, so an
+// operator watching several had to visit each in turn and remember what they
+// saw — which is how one that quietly drifted stayed unnoticed until somebody
+// complained.
+templ installDomains(d PlatformDNSData) {
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Custom domains</span>
+			<span class="text-[12px] text-muted-foreground">
+				{ plural(len(d.Domains), "domain") }
+			</span>
+		</div>
+		if len(d.Domains) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No custom domains</p>
+				<p>Domains people bring appear here, whichever app they belong to.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>Domain</th>
+							<th>App</th>
+							<th>State</th>
+							<th>What it resolves to</th>
+							<th>Checked</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, c := range d.Domains {
+							<tr class={ templ.KV("bg-warning/[0.06]", domainNeedsAttention(c.Custom)) }>
+								<td class="mono">{ c.Host }</td>
+								<td>
+									<a class="hover:underline" href={ templ.URL("/apps/" + c.App + "/domains") }>
+										{ c.App }
+									</a>
+								</td>
+								<td>
+									{{ label, class := domainStatus(c.Custom) }}
+									<span class={ "status", class }>{ label }</span>
+								</td>
+								<td class="text-muted-foreground">
+									if c.Observed != "" {
+										{ c.Observed }
+									} else if c.LastError != "" {
+										{ c.LastError }
+									} else {
+										—
+									}
+								</td>
+								<td class="text-muted-foreground" title={ absoluteTime(c.LastCheckedAt) }>
+									if c.LastCheckedAt.IsZero() {
+										never
+									} else {
+										{ preciseAgo(c.LastCheckedAt) }
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
 }

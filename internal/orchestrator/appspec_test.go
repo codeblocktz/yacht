@@ -14,7 +14,7 @@ func validSpec() AppSpec {
 func TestAppSpecAcceptsHosts(t *testing.T) {
 	s := validSpec()
 	s.Hosts = []string{"web.apps.example.com", "www.customer.test"}
-	s.TLS = true
+	s.TLSHosts = []string{"web.apps.example.com"}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}

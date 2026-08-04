@@ -243,13 +243,18 @@ templ AppList(apps []app.App) {
 templ appRows(apps []app.App) {
 	<div class="rows">
 		for _, a := range apps {
-			<a href={ templ.URL("/apps/" + a.Name) } class="row-link">
+			// The row is a link and the menu is its sibling, not its child.
+			// A form or a second anchor inside an anchor is markup a browser is
+			// free to rearrange — the same reason the hostname below is plain
+			// text rather than a link to itself.
+			<div class="row-item !gap-0 !p-0">
+				<a href={ templ.URL("/apps/" + a.Name) } class="row-link min-w-0 flex-1">
 				<span class="text-muted-foreground">
 					@icon("box")
 				</span>
 				<span class="min-w-0 flex-1">
 					<span class="block truncate font-medium">{ a.Name }</span>
-					<span class="mono block truncate text-muted-foreground">{ a.Image }</span>
+					<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</span>
 				</span>
 				// Plain text rather than an anchor: the whole row is already a
 				// link, and an anchor inside an anchor is markup a browser is
@@ -259,13 +264,27 @@ templ appRows(apps []app.App) {
 						{ a.Host }
 					</span>
 				}
-				<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
+			<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
 					{ replicaLabel(a) }
 				</span>
-				<span class="w-24 shrink-0 text-right">
-					@appStatus(a)
-				</span>
-			</a>
+				// A failed deploy is not the same question as a failed workload,
+				// and the list only ever asked the second. The previous version
+				// keeps running, so the app stays green while the change
+				// somebody made never took — which is exactly the deploy worth
+				// finding, and the only way to find it was to open each app.
+				if a.LastDeploy == app.DeployFailed {
+					<span class="status status-err shrink-0" title="The last deploy failed. The previous version is still running.">
+						deploy failed
+					</span>
+				}
+					<span class="w-24 shrink-0 text-right">
+						@appStatus(a)
+					</span>
+				</a>
+				<div class="shrink-0 pr-2">
+					@rowActions(a)
+				</div>
+			</div>
 		}
 	</div>
 }
@@ -288,10 +307,26 @@ type AppDetailData struct {
 	Deployments []app.Deployment
 	BaseURL     string
 
-	// Net is the app's routing, shown in the Settings tab. Loaded alongside the
-	// rest rather than on its own page: domains are something you go to
-	// Settings to change, and a panel nothing links to is a panel nobody finds.
-	Net    app.Networking
+	// Net is the app's routing. Loaded alongside the rest rather than on its
+	// own page: a panel nothing links to is a panel nobody finds, which is
+	// exactly what happened the first time.
+	Net app.Networking
+
+	// ResolverName is which resolver answered the last domain check, so the
+	// page can attribute what it reports rather than stating it as fact.
+	ResolverName string
+
+	// The resource tracks, with ceilings taken from the cluster's largest
+	// node — what a single pod can actually be scheduled onto.
+	CPULimit      ResourceSlider
+	MemoryLimit   ResourceSlider
+	CPURequest    ResourceSlider
+	MemoryRequest ResourceSlider
+
+	// RepoError is why the connected repository could not be read, shown on
+	// the source card. A private repo, a typo and an outage all land here.
+	RepoError string
+
 	Notice string
 
 	// Error is a refusal from the action that produced this render, shown with
@@ -313,6 +348,7 @@ templ AppDetail(d AppDetailData) {
 				@appTab(d.App.Name, d.Tab, "variables", "Variables")
 				@appTab(d.App.Name, d.Tab, "metrics", "Metrics")
 				@appTab(d.App.Name, d.Tab, "storage", "Storage")
+				@appTab(d.App.Name, d.Tab, "domains", "Domains")
 				@appTab(d.App.Name, d.Tab, "settings", "Settings")
 			</nav>
 			switch d.Tab {
@@ -322,6 +358,8 @@ templ AppDetail(d AppDetailData) {
 					@appMetrics(d)
 				case "storage":
 					@appStorage(d)
+				case "domains":
+					@appDomains(d)
 				case "settings":
 					@appSettings(d)
 				default:
@@ -399,7 +437,7 @@ templ appDetailHeader(a app.App) {
 					</span>
 				</a>
 			}
-			<p class="mono mt-1 truncate text-muted-foreground">{ a.Image }</p>
+			<p class={ "mono mt-1 truncate text-muted-foreground", templ.KV("italic", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
@@ -430,6 +468,7 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
 		@appTab(name, active, "storage", "Storage")
+		@appTab(name, active, "domains", "Domains")
 		@appTab(name, active, "settings", "Settings")
 	</nav>
 }
@@ -444,7 +483,29 @@ templ appTab(name, active, slug, label string) {
 }
 
 // ---- deployments tab
+//
+// Polled while anything is in flight, and not otherwise. Before this the panel
+// rendered once: a git deploy sat at "running" on screen until somebody
+// reloaded, which for a build is potentially half an hour of a page that looks
+// stuck rather than busy.
+//
+// The wrapper carries its own trigger and is replaced whole, so the render that
+// finds nothing running comes back without one and the polling stops.
 templ appDeployments(d AppDetailData) {
+	<div
+		id="app-deployments"
+		if deploymentsInFlight(d) {
+			hx-get={ "/apps/" + d.App.Name + "/deployments/fragment" }
+			hx-trigger="every 3s"
+			hx-swap="outerHTML"
+		}
+		aria-busy={ boolAttr(deploymentsInFlight(d)) }
+	>
+		@AppDeploymentsBody(d)
+	</div>
+}
+
+templ AppDeploymentsBody(d AppDetailData) {
 	if len(d.Deployments) == 0 {
 		<div class="panel">
 			<div class="empty">
@@ -519,7 +580,7 @@ templ deploymentRow(appName string, dep app.Deployment) {
 			@deploymentStatus(dep)
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class="mono block truncate text-muted-foreground">{ dep.Image }</span>
+			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ imageLabel(dep.Image) }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { dep.Source() }
@@ -614,10 +675,7 @@ templ appVariables(d AppDetailData) {
 					<label class="label" for="var-value">Value</label>
 					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
 				</div>
-				<label class="check-field">
-					<input type="checkbox" name="secret" value="1"/>
-					Secret
-				</label>
+				@checkField("secret", "1", "Secret", false)
 				<button class="btn btn-primary" type="submit">Save</button>
 			</form>
 			<p class="mt-3 text-[12px] text-muted-foreground">
@@ -670,9 +728,133 @@ templ appMetrics(d AppDetailData) {
 	</div>
 }
 
+// appRuntimeForm is everything about an app that had no way to be changed.
+//
+// Image, port, what it may consume, whether it is reachable, and where a Git
+// app builds from were all decided at create and then frozen — so changing an
+// image tag meant deleting the app and starting again, taking its domains and
+// its history with it.
+//
+// A plain form, and the only complete way to do this. The dialogs in the app
+// header are shortcuts onto the same endpoint; this is what they are shortcuts
+// to, and what still works with no JavaScript at all.
+templ appRuntimeForm(d AppDetailData) {
+	{{ a := d.App }}
+	<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") }>
+		<section id="source" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("box")</span>
+				<h2 class="settings-section-title">Source</h2>
+			</div>
+			if a.Source == app.SourceGit {
+				<div class="field-group">
+					<div class="field-label mb-1.5">Source repo</div>
+					@sourceCard(d)
+				</div>
+				<div class="field-group">
+					<label class="field-label" for="repo_url">Repository URL</label>
+					<p class="field-note">Where a deploy builds from.</p>
+					<input class="control mono mt-1.5" id="repo_url" name="repo_url" value={ a.Repo.URL } placeholder="https://github.com/owner/repo"/>
+				</div>
+				@branchPicker(a.Name, a.Repo.Branch)
+				@directoryPicker(a.Name, a.Repo.Subdir)
+				<p class="field-note">Changing any of these does not rebuild. The next deploy reads them.</p>
+			} else {
+				<div class="field-group">
+					<label class="field-label" for="image">Image</label>
+					<p class="field-note">A new tag here is how this app is upgraded.</p>
+					<input class="control mono mt-1.5" id="image" name="image" value={ a.Image } required/>
+				</div>
+			}
+			if a.Source == app.SourceGit {
+				<div class="field-group">
+					<div class="field-label">Current image</div>
+					<p class="field-note">
+						What the last build produced. Not editable — the next build replaces it.
+					</p>
+					<input class="control mono mt-1.5" value={ imageLabel(a.Image) } disabled/>
+				</div>
+			}
+		</section>
+		<section id="networking" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("globe")</span>
+				<h2 class="settings-section-title">Networking</h2>
+			</div>
+			<div class="field-group">
+				<label class="field-label" for="port">Port</label>
+				<p class="field-note">The port your app listens on. 0 for an app that serves nothing.</p>
+				<input
+					class="control mt-1.5 w-32"
+					id="port"
+					type="number"
+					name="port"
+					min="0"
+					max="65535"
+					value={ strconv.Itoa(int(a.Port)) }
+				/>
+			</div>
+			@toggle("internal", "Internal only",
+				"Reachable from inside the cluster and nowhere else. Turning this on withdraws the platform hostname rather than hiding it.",
+				a.Internal)
+			<p class="field-note mt-2">
+				Domains and HTTPS are on the
+				<a class="underline hover:text-foreground" href={ templ.URL("/apps/" + a.Name + "/domains") }>Domains</a>
+				tab.
+			</p>
+		</section>
+		<section id="scale" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">@icon("cpu")</span>
+				<h2 class="settings-section-title">Scale</h2>
+			</div>
+			<div class="field-group">
+				<div class="field-label">Limits</div>
+				<p class="field-note mb-3">
+					The most one replica may use. The ceiling is this cluster's largest
+					node, because that is what a single pod can be scheduled onto.
+				</p>
+				@resourceSlider(d.CPULimit, "cpu")
+				@resourceSlider(d.MemoryLimit, "mem")
+			</div>
+			<div class="field-group">
+				<div class="field-label">Reserved</div>
+				<p class="field-note mb-3">
+					What the scheduler holds for it. A pod with nothing reserved can land
+					on a node that has nothing left to give it.
+				</p>
+				@resourceSlider(d.CPURequest, "cpu")
+				@resourceSlider(d.MemoryRequest, "mem")
+			</div>
+		</section>
+		<div class="sticky bottom-0 -mx-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+			<button class="btn btn-primary" type="submit">Save and roll out</button>
+			<span class="ml-3 text-[12px] text-muted-foreground">
+				Saving applies these to the cluster and records a deployment.
+			</span>
+		</div>
+	</form>
+}
+
+// ---- domains tab
+//
+// Its own tab rather than three panels inside Settings, where these sat between
+// health checks and resource limits. Adding a domain is a task with several
+// steps and a wait in the middle, and a thing you wait on needs somewhere to be
+// watched — which a settings form is not.
+templ appDomains(d AppDetailData) {
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	@publicNetworking(netOf(d))
+	@customDomains(netOf(d))
+	@routingOptions(netOf(d))
+}
+
 // ---- settings tab
 templ appSettings(d AppDetailData) {
-	{{ a := d.App }}
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">{ d.Error }</div>
@@ -683,9 +865,39 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
 		</div>
 	}
-	@publicNetworking(netOf(d))
-	@customDomains(netOf(d))
-	@routingOptions(netOf(d))
+	<div class="settings-shell">
+		// The nav is beside the page rather than above it, and every section is
+		// on that page. Tabs hide what they are not showing, so finding a
+		// setting means guessing which tab owns it; anchors keep it all
+		// findable with the browser's own search.
+		<nav class="settings-nav" aria-label="Settings sections">
+			<a href="#source">Source</a>
+			<a href="#networking">Networking</a>
+			<a href="#scale">Scale</a>
+			<a href="#health">Health</a>
+			<a href="#replicas">Replicas</a>
+			<a href="#danger">Danger</a>
+		</nav>
+		<div class="settings-main">
+			@appRuntimeForm(d)
+			@appLegacySettings(d)
+		</div>
+	</div>
+}
+
+// appLegacySettings is the part of the tab that has not been restructured yet.
+//
+// Health, replicas and deletion keep the forms they had. They are correct and
+// they work; leaving them as panels inside the new shell is honest about what
+// has been reworked and what has not, and is cheaper than moving markup around
+// for its own sake.
+templ appLegacySettings(d AppDetailData) {
+	{{ a := d.App }}
+	<section id="health" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("activity")</span>
+			<h2 class="settings-section-title">Health</h2>
+		</div>
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">
@@ -697,14 +909,9 @@ templ appSettings(d AppDetailData) {
 						An HTTP GET on this app's own port. Empty means no probe.
 					</span>
 				</div>
-				<label class="flex items-center gap-2 pb-6 text-[12.5px]">
-					if a.Liveness {
-						<input type="checkbox" name="liveness" value="1" checked/>
-					} else {
-						<input type="checkbox" name="liveness" value="1"/>
-					}
-					Also restart when it fails
-				</label>
+				<span class="pb-6">
+					@checkField("liveness", "1", "Also restart when it fails", a.Liveness)
+				</span>
 				<button class="btn btn-primary mb-6" type="submit">Save</button>
 			</form>
 			<p class="text-[12px] text-muted-foreground">
@@ -716,6 +923,12 @@ templ appSettings(d AppDetailData) {
 			</p>
 		</div>
 	</div>
+	</section>
+	<section id="replicas" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Replicas</h2>
+		</div>
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Scale</span>
@@ -752,7 +965,7 @@ templ appSettings(d AppDetailData) {
 				<dt>Namespace</dt>
 				<dd class="mono break-all">{ a.Namespace }</dd>
 				<dt>Image</dt>
-				<dd class="mono break-all">{ a.Image }</dd>
+				<dd class={ "mono break-all", templ.KV("italic text-muted-foreground", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</dd>
 				<dt>Created</dt>
 				<dd>{ a.CreatedAt.Format("2 Jan 2006, 15:04") }</dd>
 				<dt>Updated</dt>
@@ -760,26 +973,58 @@ templ appSettings(d AppDetailData) {
 			</dl>
 		</div>
 	</div>
-	<div class="panel mt-4 border-l-2 border-l-destructive">
+	</section>
+	<section id="danger" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("minus")</span>
+			<h2 class="settings-section-title">Danger</h2>
+		</div>
+	<div class="panel border-l-2 border-l-destructive">
 		<div class="panel-header">
 			<span class="panel-title">Danger zone</span>
 		</div>
-		<div class="panel-body flex flex-wrap items-center justify-between gap-3">
-			<div>
-				<div class="font-medium">Delete this app</div>
-				<p class="hint mt-0.5">Removes the workload and its namespace. Not reversible.</p>
-			</div>
+	<div class="panel-body">
+			<div class="font-medium">Delete this app</div>
+			<p class="hint mt-0.5">
+				Removes the workload, its namespace, its domains and its storage. Not
+				reversible.
+			</p>
+			// The name is typed back, and the server checks it.
+			//
+			// The dialog alone is not a guard: it is JavaScript, and without it
+			// the form posts straight through. Deleting a volume has always
+			// asked this way for the same reason — the cost of getting it wrong
+			// is something that does not come back, and a button somebody can
+			// reach with one misplaced click is not enough between them.
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/delete") }
-				data-confirm="This deletes the app and its namespace. This cannot be undone."
-				data-confirm-title={ "Delete " + a.Name + "?" }
-				data-confirm-label="Delete app"
+				class="mt-4 flex flex-wrap items-end gap-3"
 			>
-				<button class="btn btn-danger" type="submit">Delete app</button>
+				<div class="field min-w-[220px] flex-1">
+					<label class="label" for="confirm-delete">
+						Type <code class="mono">{ a.Name }</code> to confirm
+					</label>
+					<input
+						class="control mono"
+						id="confirm-delete"
+						name="confirm"
+						placeholder={ a.Name }
+						autocomplete="off"
+						required
+					/>
+				</div>
+				<button
+					class="btn btn-danger"
+					type="submit"
+					data-confirm="This deletes the app, its namespace, its domains and its storage. This cannot be undone."
+					data-confirm-title={ "Delete " + a.Name + "?" }
+					data-confirm-label="Delete app"
+				>Delete app</button>
 			</form>
 		</div>
 	</div>
+	</section>
 }
 
 // ---------------------------------------------------------------- new app
@@ -798,6 +1043,11 @@ type NewAppData struct {
 	Blueprint app.Blueprint
 
 	Sources []app.Blueprint
+
+	// CanConfigureRegistry decides whether an unavailable Git source offers a
+	// way out or only names who has one. The registry page is owner-only, so
+	// linking a member to it would replace a dead end with a locked door.
+	CanConfigureRegistry bool
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -845,14 +1095,26 @@ templ sourcePicker(d NewAppData) {
 						<span class="text-muted-foreground">&rsaquo;</span>
 					</a>
 				} else {
-					<div class="row-link cursor-not-allowed opacity-50">
-						<span class="text-muted-foreground">
+					// Greyed, and no longer a dead end. Saying "no image
+					// registry is configured" without saying where one is
+					// configured leaves the reader to search for a page they
+					// have not seen — and on a member's account, to search for
+					// one they cannot open at all.
+					<div class="row-item cursor-not-allowed">
+						<span class="text-muted-foreground opacity-50">
 							@icon(sourceIcon(b.Source))
 						</span>
-						<span class="min-w-0 flex-1">
+						<span class="min-w-0 flex-1 opacity-50">
 							<span class="block font-medium">{ b.Label }</span>
 							<span class="block text-muted-foreground">Not yet — { b.Because }.</span>
 						</span>
+						if b.Source == app.SourceGit && d.CanConfigureRegistry {
+							<a class="btn btn-sm" href="/cluster/registry">Configure</a>
+						} else if b.Source == app.SourceGit {
+							<span class="text-[11.5px] text-muted-foreground">
+								An owner can set one up.
+							</span>
+						}
 					</div>
 				}
 			}

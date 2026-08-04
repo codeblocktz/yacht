@@ -741,18 +741,18 @@ func (h *liveHarness) getAs(
 	return rec
 }
 
+// postAs sends a bodyless POST, which is what most of these endpoints take.
+//
+// Anything that checks a form value — deleting an app asks for its name to be
+// typed back, and checks it on the server rather than only in the dialog —
+// wants postFormAs instead. A test about who may delete has to send a body that
+// would actually be accepted, or it proves nothing about authorisation and
+// everything about the confirmation it forgot.
 func (h *liveHarness) postAs(
 	t *testing.T, path string, c *http.Cookie,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, nil)
-	req.Header.Set("Origin", "https://yacht.test")
-	if c != nil {
-		req.AddCookie(c)
-	}
-	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, req)
-	return rec
+	return h.postFormAs(t, path, c, nil)
 }
 
 func (h *liveHarness) owners(t *testing.T, teamID string) int {

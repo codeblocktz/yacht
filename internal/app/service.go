@@ -90,6 +90,14 @@ type App struct {
 	Status      orchestrator.AppStatus
 	StatusKnown bool
 
+	// LastDeploy is how the most recent deployment ended.
+	//
+	// A different question from Status, and the one a list of apps could not
+	// answer: a failed deploy leaves the previous workload running, so the app
+	// stays green while the change somebody made never took. Empty on an app
+	// that has never been deployed.
+	LastDeploy string
+
 	// Host is the platform-issued hostname, empty when no app domain is
 	// configured. Read from the domains table rather than stored on the app,
 	// so there is one place a hostname lives.
@@ -276,6 +284,161 @@ type CreateInput struct {
 	CPULimit      string
 	MemoryRequest string
 	MemoryLimit   string
+}
+
+// UpdateInput is what a person may change about an app after creating it.
+//
+// These had no way to be changed at all. An app's image, its port, what it is
+// allowed to consume, whether it is reachable, and where it builds from were
+// all decided once at create and then frozen — so changing an image tag meant
+// deleting the app and starting over, taking its domains and its history with
+// it.
+//
+// Not replicas: scaling has its own path because it has its own rule about
+// storage. Not the health probe or the routing toggles: those already have
+// forms shaped to what they mean.
+type UpdateInput struct {
+	Image string
+	Port  int32
+
+	CPURequest    string
+	CPULimit      string
+	MemoryRequest string
+	MemoryLimit   string
+
+	// Internal withdraws the platform hostname rather than merely hiding it.
+	Internal bool
+
+	// Repo is where a Git app builds from. Changing it does not rebuild —
+	// the next deploy uses it — so it is the one field here that does not
+	// roll the workload.
+	Repo Repo
+}
+
+// Validate checks an update against the same bounds a create is held to.
+//
+// Written against the same limits as CreateInput.Validate rather than sharing
+// one function, because the two disagree on purpose: an update has no name to
+// check, and an empty image on a Git app is not missing — it is the build's to
+// fill in.
+func (in UpdateInput) Validate(source Source) error {
+	switch {
+	case in.Port < 0 || in.Port > 65535:
+		return errors.New("port must be between 0 and 65535")
+	case source != SourceGit && in.Image == "":
+		return errors.New("image is required")
+	}
+	return nil
+}
+
+// Update changes an app and rolls it out.
+//
+// The image of a Git app is refused rather than accepted and overwritten: it is
+// whatever its last build produced, and the next build will replace anything
+// typed here. Silently discarding somebody's input is worse than saying no.
+func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInput) (App, error) {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return App{}, err
+	}
+	if err := in.Validate(a.Source); err != nil {
+		return App{}, err
+	}
+
+	image := in.Image
+	if a.Source == SourceGit {
+		// Held at whatever the build set, including the pending placeholder on
+		// an app that has never built.
+		image = a.Image
+		if in.Image != "" && in.Image != a.Image {
+			return App{}, errors.New(
+				"app: this app's image comes from its build — change the repository " +
+					"or deploy again rather than setting an image by hand")
+		}
+	}
+
+	row, err := s.q.UpdateApp(ctx, dbgen.UpdateAppParams{
+		OwnerID:       ownerID,
+		ID:            a.ID,
+		Image:         image,
+		Port:          in.Port,
+		CpuRequest:    in.CPURequest,
+		CpuLimit:      in.CPULimit,
+		MemoryRequest: in.MemoryRequest,
+		MemoryLimit:   in.MemoryLimit,
+		Internal:      in.Internal,
+		RepoUrl:       in.Repo.URL,
+		RepoBranch:    in.Repo.Branch,
+		RepoSubdir:    in.Repo.Subdir,
+	})
+	if err != nil {
+		return App{}, fmt.Errorf("app: update: %w", err)
+	}
+	updated := toApp(row)
+
+	// Carried across because UpdateApp does not select them and apply reads
+	// them off the App it is handed.
+	updated.Volumes, updated.Variables = a.Volumes, a.Variables
+
+	// A repository change alone reaches no cluster: it decides what the next
+	// build reads. Recording a deployment for it would put a rollout in the
+	// history that never happened.
+	if !rollsOut(a, updated) {
+		s.log.Info("app updated", slog.String("app", name), slog.String("change", "repo"))
+		return updated, nil
+	}
+
+	id := s.beginDeployment(ctx, ownerID, updated, updateReason(a, updated))
+	err = s.apply(ctx, s.q, updated)
+	// Recorded whichever way it went. A deploy that failed and left no trace is
+	// one nobody can find afterwards.
+	s.endDeployment(ctx, ownerID, id, err)
+	if err != nil {
+		return App{}, err
+	}
+	s.log.Info("app updated", slog.String("app", name),
+		slog.String("change", updateReason(a, updated)))
+	return updated, nil
+}
+
+// rollsOut reports whether a change reaches the cluster.
+//
+// The port and the internal flag are here because they change the Service and
+// the Ingress as well as the Deployment — a port change that only rewrote the
+// container's port would leave the Service routing to nothing.
+func rollsOut(before, after App) bool {
+	return before.Image != after.Image ||
+		before.Port != after.Port ||
+		before.Internal != after.Internal ||
+		before.CPURequest != after.CPURequest ||
+		before.CPULimit != after.CPULimit ||
+		before.MemoryRequest != after.MemoryRequest ||
+		before.MemoryLimit != after.MemoryLimit
+}
+
+// updateReason names what changed, for the deployment's own record.
+//
+// A history of rows all saying "update" answers nothing three weeks later; the
+// question somebody actually has is which change broke it.
+func updateReason(before, after App) string {
+	var parts []string
+	if before.Image != after.Image {
+		parts = append(parts, "image:"+after.Image)
+	}
+	if before.Port != after.Port {
+		parts = append(parts, fmt.Sprintf("port:%d", after.Port))
+	}
+	if before.Internal != after.Internal {
+		parts = append(parts, fmt.Sprintf("internal:%t", after.Internal))
+	}
+	if before.CPURequest != after.CPURequest || before.CPULimit != after.CPULimit ||
+		before.MemoryRequest != after.MemoryRequest || before.MemoryLimit != after.MemoryLimit {
+		parts = append(parts, "resources")
+	}
+	if len(parts) == 0 {
+		return "update"
+	}
+	return strings.Join(parts, " ")
 }
 
 var nameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -583,14 +746,35 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		HealthPath:    a.HealthPath,
 		Liveness:      a.Liveness,
 		Hosts:         hosts,
-		TLS:           s.opts.WildcardTLS && len(hosts) > 0,
-		HTTPSOnly:     a.HTTPSOnly && len(hosts) > 0,
+		// Only what the wildcard certificate actually covers. Every host used
+		// to go in, so a custom domain was served from a certificate that could
+		// not match it while the dashboard showed a green "routed" beside it.
+		TLSHosts:  s.tlsHosts(hosts),
+		HTTPSOnly: a.HTTPSOnly && len(hosts) > 0,
 		// Only when the install has a target to point at. Writing the
 		// annotation with an empty value would tell ExternalDNS to publish a
 		// CNAME to nothing, which is worse than leaving it to its default.
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
-		Volumes:       volumeSpecs(vols),
+		Volumes:     volumeSpecs(vols),
 	})
+}
+
+// tlsHosts narrows a set of hostnames to those the install's certificate covers.
+//
+// The certificate is the ingress controller's default, which an operator
+// configures as a wildcard for the platform domain. Nothing here can inspect it,
+// so coverage is inferred from the one thing that is knowable: a *.<app domain>
+// wildcard matches exactly one label under that domain.
+//
+// A custom domain therefore never qualifies, and cannot — the reserved-name rule
+// refuses any claim under the platform domain. Saying so here rather than
+// listing every host is what stops the platform serving a certificate a browser
+// will reject.
+func (s *Service) tlsHosts(hosts []string) []string {
+	if !s.opts.WildcardTLS {
+		return nil
+	}
+	return domain.WildcardHosts(hosts, s.opts.AppDomain)
 }
 
 // reconcileHosts brings the managed hostname in line with current config and
@@ -660,15 +844,21 @@ func (s *Service) reconcileHosts(
 }
 
 // List returns an owner's apps with live status attached.
+//
+// Carries how the last deployment ended as well as how the workload is doing.
+// They are different questions and only one of them was being asked: a failed
+// deploy leaves the previous workload running, so the app stays green while the
+// change somebody made never took.
 func (s *Service) List(ctx context.Context, ownerID string) ([]App, error) {
-	rows, err := s.q.ListApps(ctx, ownerID)
+	rows, err := s.q.ListAppsWithLastDeploy(ctx, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("app: list: %w", err)
 	}
 
 	out := make([]App, 0, len(rows))
 	for _, row := range rows {
-		a := toApp(row)
+		a := toApp(row.App)
+		a.LastDeploy = row.LastDeployStatus
 		s.attachStatus(ctx, &a)
 		s.attachHost(ctx, &a)
 		out = append(out, a)

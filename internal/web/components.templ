@@ -1,0 +1,435 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/checkbox"
+	"github.com/codeblocktz/yacht/internal/web/ui/popover"
+
+	// switch is a keyword, so the package needs a name that is not one.
+	switchui "github.com/codeblocktz/yacht/internal/web/ui/switch"
+)
+
+// stepList renders a progression through stages that arrive over time.
+//
+// Deliberately dumb: it draws what it is handed and decides nothing. Which
+// stage is active, and what the detail line says, is a question about domains or
+// builds or nodes, and answering it here would put three subjects' logic in one
+// template that understands none of them.
+templ stepList(steps []Step) {
+	<div class="steps">
+		for _, st := range steps {
+			<div class={ "step", string(st.State) }>
+				<span class="step-dot" aria-hidden="true"></span>
+				<div class="step-body">
+					<div class="step-label">{ st.Label }</div>
+					if st.Detail != "" {
+						<div class="step-detail">{ st.Detail }</div>
+					}
+					if !st.At.IsZero() {
+						<div class="step-time" title={ absoluteTime(st.At) }>
+							{ preciseAgo(st.At) }
+						</div>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// recordTable renders a DNS record as the three fields a provider asks for.
+templ recordTable(rec DNSRecord) {
+	<div class="record">
+		@recordRow("Type", rec.Type)
+		@recordRow("Name", rec.Name)
+		@recordRow("Value", rec.Value)
+	</div>
+}
+
+templ recordRow(k, v string) {
+	<div class="record-row">
+		<span class="record-k">{ k }</span>
+		<span class="record-v">{ v }</span>
+		@copyButton(v, k)
+	</div>
+}
+
+// copyButton copies one value to the clipboard.
+//
+// The value is carried in a data attribute rather than read out of the sibling
+// element, so a template that renders the text with a suffix — a trailing dot on
+// a fully-qualified name, say — still copies the thing somebody needs to paste
+// rather than what happens to be on screen.
+//
+// Without JavaScript this button does nothing, which is why it is only ever
+// beside text that is already selectable. Copying is a shortcut for a thing that
+// remains possible by hand.
+templ copyButton(value, label string) {
+	<button
+		type="button"
+		class="copy-btn"
+		data-copy={ value }
+		aria-label={ "Copy " + label }
+		title={ "Copy " + label }
+	>
+		<svg class="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+			<rect width="13" height="13" x="9" y="9" rx="2"></rect>
+			<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+		</svg>
+	</button>
+}
+
+// resourceSlider is an amount chosen by dragging, against a real ceiling.
+//
+// The ceiling is the largest node's capacity, so the track answers "out of what
+// this cluster can actually give a pod" rather than out of a number somebody
+// picked. A limit above that is a workload that stays Pending forever.
+//
+// The label is rendered here as well as by the script, so the page is correct
+// before any JavaScript runs — and with none at all, the range input still
+// posts a value.
+templ resourceSlider(s ResourceSlider, unit string) {
+	<div class={ "field-group", templ.KV("slider-none", s.Unset) } data-slider>
+		<div class="slider-head">
+			<label class="field-label" for={ s.Name }>{ s.Label }</label>
+			<span>
+				<span class="slider-value" data-slider-value>{ s.Display }</span>
+				<span class="slider-max">&nbsp;of { s.MaxDisplay }</span>
+			</span>
+		</div>
+		<input
+			class="slider"
+			type="range"
+			id={ s.Name }
+			name={ s.Name }
+			min="0"
+			max={ strconv.FormatInt(s.Max, 10) }
+			step={ strconv.FormatInt(s.Step, 10) }
+			value={ strconv.FormatInt(s.Value, 10) }
+			data-unit={ unit }
+			style={ sliderStyle(s) }
+			aria-valuetext={ s.Display }
+		/>
+	</div>
+}
+
+// toggle is a setting that is on or off.
+//
+// A switch rather than a checkbox: a checkbox reads as one field among many in
+// a form, and these read as a thing being in a state — which is what they are.
+//
+// templUI's Switch rather than a hand-rolled one. This was a native checkbox
+// styled into a switch with :has() rules of its own, which is a second
+// implementation of a component the design system already ships — and the one
+// that does not inherit its focus, disabled and dark-mode treatment.
+templ toggle(name, label, note string, on bool) {
+	<div class="toggle-row">
+		<span class="min-w-0">
+			<label class="field-label cursor-pointer" for={ name }>{ label }</label>
+			if note != "" {
+				<span class="field-note block">{ note }</span>
+			}
+		</span>
+		@switchui.Switch(switchui.Props{ID: name, Name: name, Value: "1", Checked: on})
+	</div>
+}
+
+// checkOption is a checkbox with a title and the paragraph that explains it.
+//
+// The shape every routing and registry setting uses. Its own component because
+// the alignment of a box against two lines of text is the part that goes wrong
+// by hand, and it went wrong differently in each of the three places that did
+// it by hand.
+templ checkOption(name, value, title string, checked, disabled bool) {
+	<label class="flex items-start gap-2.5" for={ name }>
+		<span class="mt-0.5">
+			@checkbox.Checkbox(checkbox.Props{
+				ID: name, Name: name, Value: value,
+				Checked: checked, Disabled: disabled,
+			})
+		</span>
+		<span class="min-w-0">
+			<span class="block font-medium">{ title }</span>
+			<span class="block text-[12.5px] text-muted-foreground">
+				{ children... }
+			</span>
+		</span>
+	</label>
+}
+
+// checkField is a checkbox with its label, which is how every one of them is
+// used here.
+//
+// The component on its own is the input and nothing else. Pairing it with a
+// label in one place means the two cannot drift apart across eight call sites,
+// and the label stays clickable because it names the input's id.
+templ checkField(name, value, label string, checked bool) {
+	<label class="flex min-h-8 cursor-pointer items-center gap-2 text-[12.5px]" for={ name }>
+		@checkbox.Checkbox(checkbox.Props{
+			ID: name, Name: name, Value: value, Checked: checked,
+		})
+		<span>{ label }</span>
+	</label>
+}
+
+// sourceCard is a repository drawn as a connection rather than a text field.
+//
+// A URL in a box says "type here". A repository with its host's mark and a way
+// to disconnect says what it is: something attached, which can be detached and
+// attached again. That difference is most of why this reads as simpler while
+// holding the same value.
+templ sourceCard(d AppDetailData) {
+	{{ repo := d.App.Repo }}
+	if repo.URL == "" {
+		<div class="source-empty">
+			@icon("external")
+			<span class="min-w-0 flex-1">No repository connected.</span>
+		</div>
+	} else {
+		<div class={ "source-card", templ.KV("source-card-err", d.RepoError != "") }>
+			@icon("external")
+			<a
+				class="source-name hover:underline"
+				href={ templ.URL(repo.URL) }
+				target="_blank"
+				rel="noreferrer"
+			>{ repoLabel(repo.URL) }</a>
+			// Disconnect rather than clearing a field. Emptying an input is
+			// not obviously an action, and it is not obviously undoable;
+			// a named control is both.
+			<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/source/disconnect") }>
+				<button
+					class="btn btn-sm"
+					type="submit"
+					data-confirm="The app keeps running on the image its last build produced. Nothing new is built until a repository is connected again."
+					data-confirm-title="Disconnect this repository?"
+					data-confirm-label="Disconnect"
+				>Disconnect</button>
+			</form>
+		</div>
+		if d.RepoError != "" {
+			<p class="mt-1.5 flex items-center gap-1.5 text-[12px] text-destructive">
+				{ d.RepoError }
+			</p>
+		}
+	}
+}
+
+// branchPicker searches a repository's branches as somebody types.
+//
+// The list is what the remote actually has, read with ls-remote — one HTTPS
+// request, no clone. Before this the field was free text, and the first thing
+// that told anybody they had typed a branch that does not exist was a build
+// failing several minutes later.
+//
+// Still an ordinary text input underneath. With no JavaScript, or a remote
+// that will not answer, it is exactly the field it was — which is why the
+// suggestions are a list beside it rather than a control replacing it.
+templ branchPicker(appName, value string) {
+	<div class="field-group">
+		<label class="field-label" for="repo_branch">Branch</label>
+		<p class="field-note">Which branch a deploy builds from.</p>
+		<input
+			class="control mono mt-1.5"
+			id="repo_branch"
+			name="repo_branch"
+			value={ value }
+			placeholder="main"
+			autocomplete="off"
+			hx-get={ "/apps/" + appName + "/branches" }
+			hx-trigger="focus, keyup changed delay:250ms"
+			hx-target="#branch-options"
+			hx-swap="innerHTML"
+			hx-params="*"
+		/>
+		<div id="branch-options" class="mt-1.5"></div>
+	</div>
+}
+
+// BranchOptions is the list the picker swaps in.
+//
+// Buttons rather than a datalist: a datalist cannot be styled, behaves
+// differently in every browser, and gives no way to say why it is empty —
+// which is the case that matters most here, because a private repository and a
+// typo look identical from outside.
+templ BranchOptions(d BranchData) {
+	if d.Error != "" {
+		<p class="text-[12px] text-muted-foreground">
+			{ d.Error } &mdash; type the branch name instead.
+		</p>
+	} else if len(d.Branches) > 0 {
+		<div class="flex flex-wrap gap-1.5">
+			for _, b := range d.Branches {
+				<button
+					class="tag cursor-pointer hover:border-foreground/40 hover:text-foreground"
+					type="button"
+					data-branch={ b }
+					onclick="(function(el){var i=document.getElementById('repo_branch');i.value=el.dataset.branch;i.dispatchEvent(new Event('change',{bubbles:true}));})(this)"
+				>{ b }</button>
+			}
+		</div>
+	} else if d.Searched {
+		<p class="text-[12px] text-muted-foreground">No branch matches that.</p>
+	}
+}
+
+// directoryPicker browses the repository instead of asking somebody to
+// remember a path.
+//
+// Same shape as the branch picker and for the same reason: an ordinary text
+// input, with what the repository actually contains offered beside it. GitHub
+// is the only host whose tree can be read — git has no way to list one without
+// fetching objects — so on anything else this is exactly the field it was, and
+// says why rather than going quiet.
+templ directoryPicker(appName, value string) {
+	<div class="field-group">
+		<label class="field-label" for="repo_subdir">Root directory</label>
+		<p class="field-note">
+			Where in the repository the code is. Empty means the repository root.
+		</p>
+		<input
+			class="control mono mt-1.5"
+			id="repo_subdir"
+			name="repo_subdir"
+			value={ value }
+			placeholder="server"
+			autocomplete="off"
+			hx-get={ "/apps/" + appName + "/directories" }
+			hx-trigger="focus, keyup changed delay:250ms"
+			hx-target="#directory-options"
+			hx-swap="innerHTML"
+			hx-params="*"
+		/>
+		<div id="directory-options" class="mt-1.5"></div>
+	</div>
+}
+
+// DirectoryOptions is the listing the picker swaps in.
+//
+// Each entry is the full path rather than the bare name, because the field
+// holds a path and clicking something that put "cmd" in it while standing in
+// "server" would be a control that lies about what it does.
+templ DirectoryOptions(d DirectoryData) {
+	if d.Error != "" {
+		<p class="text-[12px] text-muted-foreground">
+			{ d.Error } &mdash; type the path instead.
+		</p>
+	} else if len(d.Directories) > 0 {
+		<div class="flex flex-wrap gap-1.5">
+			if d.Parent != "" || d.Path != "" {
+				// Up, so a wrong turn is one click back rather than a retyped
+				// path.
+				<button
+					class="tag cursor-pointer hover:border-foreground/40 hover:text-foreground"
+					type="button"
+					data-dir={ d.Parent }
+					onclick="(function(el){var i=document.getElementById('repo_subdir');i.value=el.dataset.dir;i.dispatchEvent(new Event('keyup',{bubbles:true}));})(this)"
+				>&larr; up</button>
+			}
+			for _, dir := range d.Directories {
+				<button
+					class="tag cursor-pointer hover:border-foreground/40 hover:text-foreground"
+					type="button"
+					data-dir={ joinPath(d.Path, dir) }
+					onclick="(function(el){var i=document.getElementById('repo_subdir');i.value=el.dataset.dir;i.dispatchEvent(new Event('keyup',{bubbles:true}));})(this)"
+				>{ dir }/</button>
+			}
+		</div>
+	} else if d.Searched {
+		<p class="text-[12px] text-muted-foreground">
+			Nothing below this path. It is either the directory you want, or not a
+			directory at all.
+		</p>
+	}
+}
+
+// rowActions is the menu on an app row.
+//
+// A popover rather than four buttons. At the density of this list a row of
+// controls per app is more furniture than content, and the one that matters —
+// the app's own name — stops being what the eye lands on. The actions are the
+// same links and forms they always were; what changed is that they are not all
+// competing for the row at once.
+//
+// Not the only way to reach any of them: everything here is also on the app's
+// own page, which is what makes hiding them behind a click acceptable.
+templ rowActions(a app.App) {
+	@popover.Root() {
+		@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+			<button
+				class="btn btn-ghost btn-sm btn-icon shrink-0"
+				type="button"
+				aria-label={ "Actions for " + a.Name }
+				onclick="event.stopPropagation()"
+			>
+				@icon("grip")
+			</button>
+		}
+		@popover.Content(popover.ContentProps{
+			Placement: popover.PlacementBottomEnd,
+			Exclusive: true,
+		}) {
+			<div class="flex min-w-[180px] flex-col gap-px p-1">
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name) }>
+					@icon("box")
+					<span class="flex-1">Open</span>
+				</a>
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name + "/logs") }>
+					@icon("activity")
+					<span class="flex-1">Logs</span>
+				</a>
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name + "/settings") }>
+					@icon("settings")
+					<span class="flex-1">Settings</span>
+				</a>
+				<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
+					<button class="switcher-item w-full" type="submit">
+						@icon("rocket")
+						<span class="flex-1 text-left">Redeploy</span>
+					</button>
+				</form>
+				<div class="my-1 h-px bg-border"></div>
+				// Deleting is not offered here. It asks for the app's name to be
+				// typed and the server checks it, so a menu item would be a
+				// control that cannot do what it says — the Danger section on
+				// the app's own page is where it belongs.
+				<a class="switcher-item switcher-danger" href={ templ.URL("/apps/" + a.Name + "/settings#danger") }>
+					@icon("minus")
+					<span class="flex-1">Delete…</span>
+				</a>
+			</div>
+		}
+	}
+}
+
+// helpNote is the secondary half of an explanation, out of the way.
+//
+// The pages here carry a lot of prose, and it is good prose — but a form field
+// with three paragraphs under it pushes the next field off the screen, and the
+// sentence somebody actually needs is the first one. The first sentence stays
+// on the page; the reasoning moves in here.
+//
+// Never the primary instruction. A person who cannot open a popover — no
+// JavaScript, or a reader that skips it — must still be able to complete the
+// task from what is on the page.
+templ helpNote(label string) {
+	@popover.Root() {
+		@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+			<button
+				type="button"
+				class="ml-1 inline-grid size-4 shrink-0 place-items-center rounded-full border border-border align-[-1px] text-[9px] font-semibold text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+				aria-label={ "Why: " + label }
+			>?</button>
+		}
+		@popover.Content(popover.ContentProps{
+			Placement: popover.PlacementBottomStart,
+			ShowArrow: true,
+			Exclusive: true,
+		}) {
+			<div class="max-w-[22rem] px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+				{ children... }
+			</div>
+		}
+	}
+}

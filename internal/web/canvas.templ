@@ -196,7 +196,7 @@ templ appPanelBody(d AppDetailData) {
 			}
 		} else {
 			@sheet.Description() {
-				<span class="mono truncate">{ d.App.Image }</span>
+				<span class={ "mono truncate", templ.KV("italic text-muted-foreground", imageIsPending(d.App.Image)) }>{ imageLabel(d.App.Image) }</span>
 			}
 		}
 	}
@@ -223,6 +223,8 @@ templ appPanelBody(d AppDetailData) {
 				@appMetrics(d)
 			case "storage":
 				@appStorage(d)
+			case "domains":
+				@appDomains(d)
 			case "settings":
 				@appSettings(d)
 			default:

@@ -79,7 +79,7 @@ func (s *Server) registrySet(w http.ResponseWriter, r *http.Request) {
 
 	err := s.registries.Set(ctx, by,
 		r.FormValue("host"), r.FormValue("repository"), r.FormValue("username"), password,
-		r.FormValue("insecure") == "on")
+		formChecked(r, "insecure"))
 	if err != nil {
 		d := s.registryData(r, "", err.Error())
 		s.renderStatus(w, r, http.StatusUnprocessableEntity, RegistryPage(d))

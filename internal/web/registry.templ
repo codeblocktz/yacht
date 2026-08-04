@@ -103,25 +103,14 @@ templ RegistryPage(d RegistryData) {
 						</p>
 					</div>
 				</div>
-				<label class="flex items-start gap-2.5">
-					<input
-						type="checkbox"
-						name="insecure"
-						class="mt-0.5"
-						checked?={ d.Registry.Insecure }
-						disabled?={ !d.HasKey }
-					/>
-					<span class="min-w-0">
-						<span class="block font-medium">This registry is served over plain HTTP</span>
-						<span class="block text-[12.5px] text-muted-foreground">
-							Normal for a registry on an internal network. Yacht can only act on
-							half of it: builds will push over HTTP, but the cluster's container
-							runtime has to be configured to pull that way too, and that is node
-							configuration Yacht does not touch. Without it the build succeeds and
-							the deploy fails to pull.
-						</span>
-					</span>
-				</label>
+				@checkOption("insecure", "1", "This registry is served over plain HTTP",
+					d.Registry.Insecure, !d.HasKey) {
+					Normal for a registry on an internal network. Yacht can only act on
+					half of it: builds will push over HTTP, but the cluster's container
+					runtime has to be configured to pull that way too, and that is node
+					configuration Yacht does not touch. Without it the build succeeds and
+					the deploy fails to pull.
+				}
 				<div class="flex items-center gap-2">
 					<button class="btn btn-primary" type="submit" disabled?={ !d.HasKey }>Save</button>
 					if d.Registry.Configured() {

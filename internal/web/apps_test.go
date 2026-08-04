@@ -23,12 +23,16 @@ import (
 // Scoped by owner like the real one, so a test that leaks across owners fails
 // here rather than passing and failing in production.
 type fakeApps struct {
-	byOwner  map[string][]app.App
-	created  []app.CreateInput
-	deleted  []string
-	scaled   map[string]int32
-	activity app.DeployActivity
-	err      error
+	byOwner     map[string][]app.App
+	created     []app.CreateInput
+	deleted     []string
+	scaled      map[string]int32
+	updated     []app.UpdateInput
+	branches    []string
+	directories []string
+	branchErr   error
+	activity    app.DeployActivity
+	err         error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -77,6 +81,29 @@ func (f *fakeApps) Create(_ context.Context, ownerID string, in app.CreateInput)
 func (f *fakeApps) Scale(_ context.Context, _, name string, replicas int32) (app.App, error) {
 	f.scaled[name] = replicas
 	return app.App{Name: name, Replicas: replicas}, nil
+}
+
+func (f *fakeApps) Update(
+	_ context.Context, _, name string, in app.UpdateInput,
+) (app.App, error) {
+	if f.err != nil {
+		return app.App{}, f.err
+	}
+	f.updated = append(f.updated, in)
+	return app.App{Name: name, Image: in.Image, Port: in.Port}, nil
+}
+
+func (f *fakeApps) Branches(_ context.Context, repoURL, query string) ([]string, error) {
+	if f.branchErr != nil {
+		return nil, f.branchErr
+	}
+	var out []string
+	for _, b := range f.branches {
+		if query == "" || strings.Contains(b, query) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }
@@ -489,7 +516,9 @@ func TestScaleAndDelete(t *testing.T) {
 		t.Errorf("scaled to %d, want 5", apps.scaled["web"])
 	}
 
-	if rec := post(t, h, "/apps/web/delete", nil); rec.Code != http.StatusSeeOther {
+	// The name is typed back to confirm, and the server checks it — the
+	// dialog is JavaScript and a form can be posted without it.
+	if rec := post(t, h, "/apps/web/delete", url.Values{"confirm": {"web"}}); rec.Code != http.StatusSeeOther {
 		t.Errorf("delete status = %d, want 303", rec.Code)
 	}
 	if len(apps.deleted) != 1 || apps.deleted[0] != "web" {
@@ -730,4 +759,11 @@ func TestAnUnknownProjectIsNotFound(t *testing.T) {
 	if code := get(t, h, "/projects/someone-elses").Code; code != http.StatusNotFound {
 		t.Fatalf("unknown project returned %d, want 404", code)
 	}
+}
+
+func (f *fakeApps) Directories(_ context.Context, repoURL, path string) ([]string, error) {
+	if f.branchErr != nil {
+		return nil, f.branchErr
+	}
+	return f.directories, nil
 }

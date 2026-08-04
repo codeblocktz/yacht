@@ -119,6 +119,11 @@ func (s *Server) nodeCordon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("node cordon changed", slog.String("node", name), slog.Bool("unschedulable", on))
+	if on {
+		s.flashOK(w, r, "Scheduling stopped on "+name+". Nothing new lands here.")
+	} else {
+		s.flashOK(w, r, "Scheduling allowed on "+name+" again.")
+	}
 	http.Redirect(w, r, "/cluster/nodes/"+name, http.StatusSeeOther)
 }
 
@@ -149,6 +154,13 @@ func (s *Server) nodeDrain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("node drained", slog.String("node", name), slog.Int("evictions", requested))
+	// The count matters: "drained" on its own reads as finished, and an
+	// eviction is a request that completes when the pod actually leaves.
+	if requested == 0 {
+		s.flashOK(w, r, "Nothing on "+name+" needed to move.")
+	} else {
+		s.flashOK(w, r, plural(requested, "pod")+" asked to leave "+name+". Each restarts elsewhere.")
+	}
 	http.Redirect(w, r, "/cluster/nodes/"+name, http.StatusSeeOther)
 }
 
@@ -181,6 +193,7 @@ func (s *Server) nodeRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info("node removed", slog.String("node", name))
+	s.flashOK(w, r, name+" removed from the cluster. The machine itself is still running.")
 	http.Redirect(w, r, "/cluster/nodes", http.StatusSeeOther)
 }
 

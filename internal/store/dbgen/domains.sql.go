@@ -7,15 +7,88 @@ package dbgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const claimDomainsDueForCheck = `-- name: ClaimDomainsDueForCheck :many
+UPDATE domains SET next_check_at = $1
+WHERE id IN (
+    SELECT due.id FROM domains due
+    WHERE NOT due.managed AND due.next_check_at <= $2
+    ORDER BY due.next_check_at
+    LIMIT $3
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
+`
+
+type ClaimDomainsDueForCheckParams struct {
+	LeaseUntil time.Time
+	DueBefore  time.Time
+	Lim        int32
+}
+
+// Claims the domains whose next check is due, and leases them.
+//
+// Two things at once, and both matter.
+//
+// FOR UPDATE SKIP LOCKED is what lets the checker run on every replica without
+// those replicas agreeing on anything: each takes rows nobody else holds, and a
+// row already being worked on is skipped rather than waited for. The build
+// reconciler is safe on several replicas for the same reason.
+//
+// Pushing next_check_at forward in the same statement is what keeps the lock
+// short. The alternative — holding the transaction open while the lookups run —
+// would hold row locks for as long as DNS takes to answer, which is unbounded
+// and occasionally seconds. Leasing instead means the claim is committed
+// immediately and the network happens outside any transaction; a checker that
+// dies mid-pass simply lets the lease expire, and the next pass picks the row
+// up again.
+func (q *Queries) ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsDueForCheckParams) ([]Domain, error) {
+	rows, err := q.db.Query(ctx, claimDomainsDueForCheck, arg.LeaseUntil, arg.DueBefore, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Domain{}
+	for rows.Next() {
+		var i Domain
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.AppID,
+			&i.Host,
+			&i.Tls,
+			&i.CreatedAt,
+			&i.Managed,
+			&i.VerifiedAt,
+			&i.VerifyTarget,
+			&i.State,
+			&i.Observed,
+			&i.LastError,
+			&i.LastCheckedAt,
+			&i.NextCheckAt,
+			&i.CheckAttempts,
+			&i.Verified,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const createCustomDomain = `-- name: CreateCustomDomain :one
 
-INSERT INTO domains (owner_id, app_id, host, tls, verified, managed, verify_target)
-VALUES ($1, $2, lower($3), true, false, false, $4)
-RETURNING id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target
+INSERT INTO domains (owner_id, app_id, host, tls, state, managed, verify_target)
+VALUES ($1, $2, lower($3), true, 'pending', false, $4)
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
 `
 
 type CreateCustomDomainParams struct {
@@ -31,6 +104,10 @@ type CreateCustomDomainParams struct {
 // Deliberately not an upsert on host: the global unique index is what makes two
 // teams claiming one name an error rather than a silent transfer, and papering
 // over it here is exactly how a domain gets stolen.
+//
+// next_check_at defaults to now(), so a claim is picked up by the checker on its
+// next pass rather than waiting for somebody to press a button. That is the
+// whole difference between this and what it replaced.
 func (q *Queries) CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error) {
 	row := q.db.QueryRow(ctx, createCustomDomain,
 		arg.OwnerID,
@@ -45,11 +122,17 @@ func (q *Queries) CreateCustomDomain(ctx context.Context, arg CreateCustomDomain
 		&i.AppID,
 		&i.Host,
 		&i.Tls,
-		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
 		&i.VerifiedAt,
 		&i.VerifyTarget,
+		&i.State,
+		&i.Observed,
+		&i.LastError,
+		&i.LastCheckedAt,
+		&i.NextCheckAt,
+		&i.CheckAttempts,
+		&i.Verified,
 	)
 	return i, err
 }
@@ -88,7 +171,7 @@ func (q *Queries) DeleteManagedDomain(ctx context.Context, appID uuid.UUID) erro
 }
 
 const getCustomDomain = `-- name: GetCustomDomain :one
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
 WHERE owner_id = $1 AND id = $2 AND NOT managed
 `
 
@@ -106,17 +189,23 @@ func (q *Queries) GetCustomDomain(ctx context.Context, arg GetCustomDomainParams
 		&i.AppID,
 		&i.Host,
 		&i.Tls,
-		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
 		&i.VerifiedAt,
 		&i.VerifyTarget,
+		&i.State,
+		&i.Observed,
+		&i.LastError,
+		&i.LastCheckedAt,
+		&i.NextCheckAt,
+		&i.CheckAttempts,
+		&i.Verified,
 	)
 	return i, err
 }
 
 const getManagedDomain = `-- name: GetManagedDomain :one
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
 WHERE app_id = $1 AND managed
 LIMIT 1
 `
@@ -130,17 +219,23 @@ func (q *Queries) GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain
 		&i.AppID,
 		&i.Host,
 		&i.Tls,
-		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
 		&i.VerifiedAt,
 		&i.VerifyTarget,
+		&i.State,
+		&i.Observed,
+		&i.LastError,
+		&i.LastCheckedAt,
+		&i.NextCheckAt,
+		&i.CheckAttempts,
+		&i.Verified,
 	)
 	return i, err
 }
 
 const listCustomDomains = `-- name: ListCustomDomains :many
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
 WHERE owner_id = $1 AND app_id = $2 AND NOT managed
 ORDER BY host
 `
@@ -165,11 +260,72 @@ func (q *Queries) ListCustomDomains(ctx context.Context, arg ListCustomDomainsPa
 			&i.AppID,
 			&i.Host,
 			&i.Tls,
-			&i.Verified,
 			&i.CreatedAt,
 			&i.Managed,
 			&i.VerifiedAt,
 			&i.VerifyTarget,
+			&i.State,
+			&i.Observed,
+			&i.LastError,
+			&i.LastCheckedAt,
+			&i.NextCheckAt,
+			&i.CheckAttempts,
+			&i.Verified,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomDomainsForOwner = `-- name: ListCustomDomainsForOwner :many
+SELECT d.id, d.owner_id, d.app_id, d.host, d.tls, d.created_at, d.managed, d.verified_at, d.verify_target, d.state, d.observed, d.last_error, d.last_checked_at, d.next_check_at, d.check_attempts, d.verified, a.name AS app_name
+FROM domains d
+JOIN apps a ON a.id = d.app_id
+WHERE d.owner_id = $1 AND NOT d.managed
+ORDER BY (d.state = 'routed'), d.host
+`
+
+type ListCustomDomainsForOwnerRow struct {
+	Domain  Domain
+	AppName string
+}
+
+// Every custom domain on the install, worst first.
+//
+// Nothing answered "which domains are stuck" before this. A domain that is not
+// routed is the only kind anybody needs to find, so it sorts to the top.
+func (q *Queries) ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error) {
+	rows, err := q.db.Query(ctx, listCustomDomainsForOwner, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCustomDomainsForOwnerRow{}
+	for rows.Next() {
+		var i ListCustomDomainsForOwnerRow
+		if err := rows.Scan(
+			&i.Domain.ID,
+			&i.Domain.OwnerID,
+			&i.Domain.AppID,
+			&i.Domain.Host,
+			&i.Domain.Tls,
+			&i.Domain.CreatedAt,
+			&i.Domain.Managed,
+			&i.Domain.VerifiedAt,
+			&i.Domain.VerifyTarget,
+			&i.Domain.State,
+			&i.Domain.Observed,
+			&i.Domain.LastError,
+			&i.Domain.LastCheckedAt,
+			&i.Domain.NextCheckAt,
+			&i.Domain.CheckAttempts,
+			&i.Domain.Verified,
+			&i.AppName,
 		); err != nil {
 			return nil, err
 		}
@@ -182,7 +338,7 @@ func (q *Queries) ListCustomDomains(ctx context.Context, arg ListCustomDomainsPa
 }
 
 const listDomainsByApp = `-- name: ListDomainsByApp :many
-SELECT id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
 WHERE app_id = $1
 ORDER BY managed DESC, host
 `
@@ -202,11 +358,17 @@ func (q *Queries) ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Doma
 			&i.AppID,
 			&i.Host,
 			&i.Tls,
-			&i.Verified,
 			&i.CreatedAt,
 			&i.Managed,
 			&i.VerifiedAt,
 			&i.VerifyTarget,
+			&i.State,
+			&i.Observed,
+			&i.LastError,
+			&i.LastCheckedAt,
+			&i.NextCheckAt,
+			&i.CheckAttempts,
+			&i.Verified,
 		); err != nil {
 			return nil, err
 		}
@@ -216,6 +378,102 @@ func (q *Queries) ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Doma
 		return nil, err
 	}
 	return items, nil
+}
+
+const markDomainRouted = `-- name: MarkDomainRouted :execrows
+UPDATE domains
+SET state = 'routed'
+WHERE id = $1 AND state = 'verified'
+`
+
+// Moves a proven domain to routed, once the Ingress actually carries it.
+//
+// Guarded on the state it is coming from, so a check that has since found drift
+// is not overwritten by an apply that started before it.
+func (q *Queries) MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markDomainRouted, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const recordDomainCheck = `-- name: RecordDomainCheck :execrows
+UPDATE domains
+SET state = $1,
+    observed = $2,
+    last_error = $3,
+    last_checked_at = $4,
+    next_check_at = $5,
+    check_attempts = $6,
+    -- First proof only. This is when the domain was first shown to be ours, and
+    -- re-stamping it on every later check would turn it into a duplicate of
+    -- last_checked_at.
+    verified_at = CASE
+        WHEN $1::text IN ('verified', 'routed') AND verified_at IS NULL THEN $4
+        ELSE verified_at
+    END
+WHERE id = $7
+`
+
+type RecordDomainCheckParams struct {
+	State         string
+	Observed      string
+	LastError     string
+	CheckedAt     pgtype.Timestamptz
+	NextCheckAt   time.Time
+	CheckAttempts int32
+	ID            uuid.UUID
+}
+
+// Records what a check saw.
+//
+// Not scoped by owner, and deliberately: the background checker works through
+// every install's rows by id, having already claimed them below. Owner scoping
+// protects a request that names a row; this is not one. Every path that reaches
+// here from a request goes through GetCustomDomain first, which is scoped.
+//
+// The schedule arrives already computed rather than being worked out in SQL, so
+// the backoff can be tested against an injected clock instead of against now().
+func (q *Queries) RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordDomainCheck,
+		arg.State,
+		arg.Observed,
+		arg.LastError,
+		arg.CheckedAt,
+		arg.NextCheckAt,
+		arg.CheckAttempts,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestDomainCheck = `-- name: RequestDomainCheck :execrows
+UPDATE domains
+SET next_check_at = $1, check_attempts = 0
+WHERE owner_id = $2 AND id = $3 AND NOT managed
+`
+
+type RequestDomainCheckParams struct {
+	Due     time.Time
+	OwnerID string
+	ID      uuid.UUID
+}
+
+// Brings a domain's next check forward. What the "Check now" button does.
+//
+// It resets the attempt count as well, because somebody pressing it is telling
+// us the situation changed — and a domain that had backed off to a fifteen
+// minute interval should not go straight back to one.
+func (q *Queries) RequestDomainCheck(ctx context.Context, arg RequestDomainCheckParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestDomainCheck, arg.Due, arg.OwnerID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const routableHostsForApp = `-- name: RoutableHostsForApp :many
@@ -251,11 +509,11 @@ func (q *Queries) RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]s
 
 const upsertManagedDomain = `-- name: UpsertManagedDomain :one
 
-INSERT INTO domains (owner_id, app_id, host, tls, verified, managed)
-VALUES ($1, $2, lower($3), $4, true, true)
+INSERT INTO domains (owner_id, app_id, host, tls, state, managed)
+VALUES ($1, $2, lower($3), $4, 'routed', true)
 ON CONFLICT (app_id) WHERE managed
 DO UPDATE SET host = lower($3), tls = $4
-RETURNING id, owner_id, app_id, host, tls, verified, created_at, managed, verified_at, verify_target
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
 `
 
 type UpsertManagedDomainParams struct {
@@ -275,9 +533,11 @@ type UpsertManagedDomainParams struct {
 // index is a different conflict and is deliberately left to raise, because two
 // apps claiming one hostname is a real error, not something to paper over.
 //
-// verified is true because a name the platform issued needs no proof of
+// The state is 'routed' because a name the platform issued needs no proof of
 // ownership; requiring proof would mean inventing a verification step for a
-// name we already control.
+// name we already control. verified follows from it and is not written here —
+// it is generated from state, so that the routing gate and the state on screen
+// cannot disagree.
 func (q *Queries) UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error) {
 	row := q.db.QueryRow(ctx, upsertManagedDomain,
 		arg.OwnerID,
@@ -292,32 +552,17 @@ func (q *Queries) UpsertManagedDomain(ctx context.Context, arg UpsertManagedDoma
 		&i.AppID,
 		&i.Host,
 		&i.Tls,
-		&i.Verified,
 		&i.CreatedAt,
 		&i.Managed,
 		&i.VerifiedAt,
 		&i.VerifyTarget,
+		&i.State,
+		&i.Observed,
+		&i.LastError,
+		&i.LastCheckedAt,
+		&i.NextCheckAt,
+		&i.CheckAttempts,
+		&i.Verified,
 	)
 	return i, err
-}
-
-const verifyCustomDomain = `-- name: VerifyCustomDomain :execrows
-UPDATE domains
-SET verified = true, verified_at = now()
-WHERE owner_id = $1 AND id = $2 AND NOT managed
-`
-
-type VerifyCustomDomainParams struct {
-	OwnerID string
-	ID      uuid.UUID
-}
-
-// Marks a claim proven. Scoped by owner as well as id: verifying is a write,
-// and a write on somebody else's row is the thing owner scoping exists for.
-func (q *Queries) VerifyCustomDomain(ctx context.Context, arg VerifyCustomDomainParams) (int64, error) {
-	result, err := q.db.Exec(ctx, verifyCustomDomain, arg.OwnerID, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

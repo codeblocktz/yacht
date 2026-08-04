@@ -46,7 +46,12 @@ func TestResponsiveSurfacesUseSharedStructure(t *testing.T) {
 		"pages.templ": {
 			`class="table-scroll"`,
 			`data-app-switcher`,
-			`class="check-field"`,
+			// Was `class="check-field"`, a local class carrying the touch
+			// target. The control is templUI's checkbox now and checkField is
+			// what pairs it with a label and that minimum height — so the thing
+			// worth asserting is still "the shared one, not markup written
+			// here", which is what this names.
+			`@checkField(`,
 		},
 	}
 	for file, wants := range checks {

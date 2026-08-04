@@ -84,6 +84,43 @@ func Reserved(host, appDomain string, extra []string) bool {
 	return false
 }
 
+// CoveredByWildcard reports whether a single *.<appDomain> certificate can
+// serve this hostname.
+//
+// One label, and exactly one. A wildcard matches web.apps.example.com and does
+// not match a.b.apps.example.com — that is the rule in RFC 6125, and browsers
+// enforce it whatever anybody intended.
+//
+// The reason this exists: an Ingress used to be given a TLS block listing every
+// host on it whenever wildcard TLS was on. A custom domain can never be under
+// the platform domain — the reserved-name check guarantees it — so every custom
+// domain was being served from a certificate that could not match it, and the
+// dashboard showed a green "routed" beside it.
+func CoveredByWildcard(host, appDomain string) bool {
+	h, d := normalize(host), normalize(appDomain)
+	if h == "" || d == "" {
+		return false
+	}
+	label, ok := strings.CutSuffix(h, "."+d)
+	if !ok {
+		return false
+	}
+	// A remaining dot means more than one label, which a wildcard does not
+	// reach. An empty label means the apex itself, which it also does not.
+	return label != "" && !strings.Contains(label, ".")
+}
+
+// WildcardHosts keeps only the hosts a *.<appDomain> certificate can serve.
+func WildcardHosts(hosts []string, appDomain string) []string {
+	covered := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if CoveredByWildcard(h, appDomain) {
+			covered = append(covered, h)
+		}
+	}
+	return covered
+}
+
 // normalize lowercases, trims spaces, and drops a trailing root dot, so that
 // "Apps.Example.COM." and "apps.example.com" compare equal. DNS is
 // case-insensitive and the root dot is optional; comparing raw input would

@@ -174,13 +174,61 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 		} else {
 			s.log.Error("read networking", slog.String("error", err.Error()))
 		}
+		d.ResolverName = s.nets.ResolverName()
 	}
 	if deps, err := s.apps.Deployments(ctx, a.OwnerID, a.ID, 20); err == nil {
 		d.Deployments = deps
 	} else {
 		s.log.Error("list deployments", slog.String("error", err.Error()))
 	}
+	s.attachSliders(ctx, d)
 	return d
+}
+
+// attachSliders builds the resource tracks from the cluster's own shape.
+//
+// The ceiling is the largest node rather than the cluster total: a pod runs on
+// one node, so the sum is a number no workload can reach, and a slider that
+// offered it would be offering a limit that guarantees the app never schedules.
+//
+// A cluster that will not answer leaves the defaults in place rather than
+// failing the page — the settings still work, they just lose the comparison.
+func (s *Server) attachSliders(ctx context.Context, d *AppDetailData) {
+	var cpuMax, memMax int64
+	if nodes, err := s.orch.Nodes(ctx); err == nil {
+		cpuMax, memMax = schedulableCPU(nodes), schedulableMemory(nodes)
+	}
+
+	d.CPULimit = cpuSlider("cpu_limit", "CPU", d.App.CPULimit, cpuMax)
+	d.MemoryLimit = memSlider("memory_limit", "Memory", d.App.MemoryLimit, memMax)
+	d.CPURequest = cpuSlider("cpu_request", "CPU", d.App.CPURequest, cpuMax)
+	d.MemoryRequest = memSlider("memory_request", "Memory", d.App.MemoryRequest, memMax)
+}
+
+// deploymentsFragment is the polled half of the deployments tab.
+//
+// Its own endpoint rather than re-rendering the tab, so a request every three
+// seconds does not replace the pods table and the log buttons under whoever is
+// reading them.
+func (s *Server) deploymentsFragment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	a, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		if errors.Is(err, app.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		s.log.Error("read app", slog.String("error", err.Error()))
+		http.Error(w, "could not read the app", http.StatusInternalServerError)
+		return
+	}
+
+	if err := appDeployments(*s.appPanel(ctx, a, "")).Render(ctx, w); err != nil {
+		s.log.Error("render deployments fragment", slog.String("error", err.Error()))
+	}
 }
 
 // canvasPosition records where a card was dragged to.

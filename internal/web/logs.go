@@ -98,6 +98,22 @@ type DeployLogsData struct {
 	View     string
 	Previous bool
 	Error    string
+
+	// DeployID is this deployment, so the build pane can address itself for
+	// the poll that follows a running build.
+	DeployID string
+
+	// Pane asks for one pane rather than the whole sheet.
+	Pane bool
+}
+
+// buildFragmentHref is where the build pane re-fetches itself.
+//
+// pane=1 renders the pane alone rather than the whole sheet, so a poll every
+// two seconds does not replace the tab strip and the search box above it —
+// including the one somebody is typing into while the build runs.
+func buildFragmentHref(d DeployLogsData) string {
+	return "/apps/" + d.App + "/deployments/" + d.DeployID + "/logs?view=build&pane=1"
 }
 
 // deployLogs renders the log sheet for one deployment.
@@ -118,6 +134,8 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 
 	d := DeployLogsData{
 		App:      name,
+		DeployID: id.String(),
+		Pane:     r.URL.Query().Get("pane") == "1",
 		View:     logView(r.URL.Query().Get("view")),
 		Previous: r.URL.Query().Get("previous") == "1",
 		Find:     strings.TrimSpace(r.URL.Query().Get("q")),
@@ -202,7 +220,16 @@ func logView(v string) string {
 }
 
 func (s *Server) renderPanel(ctx context.Context, w http.ResponseWriter, d DeployLogsData) {
-
+	// pane=1 asks for one pane rather than the whole sheet. The build pane
+	// polls itself while a build runs, and swapping the sheet on every tick
+	// would replace the tab strip and the search box above it — including the
+	// one somebody is typing into.
+	if d.Pane {
+		if err := buildLogView(d).Render(ctx, w); err != nil {
+			s.log.Error("render build pane", slog.String("error", err.Error()))
+		}
+		return
+	}
 	if err := DeployLogPanel(d).Render(ctx, w); err != nil {
 		s.log.Error("render deployment logs", slog.String("error", err.Error()))
 	}

@@ -158,22 +158,29 @@ templ AddNodeNodes(d AddNodeData) {
 				<p>Waiting for the first one to arrive.</p>
 			</div>
 		} else {
-			<div class="rows">
+		<div class="rows">
 				for _, n := range d.Nodes {
-					<div class="row-item">
-						<span class="min-w-0 flex-1">
-							<span class="block truncate font-medium">{ n.Name }</span>
-							<span class="mono block truncate text-muted-foreground">
-								{ n.Version } &middot; { n.OS }/{ n.Architecture }
+					<div class="row-item !flex-col !items-stretch !gap-3">
+						<div class="flex items-center gap-4">
+							<span class="min-w-0 flex-1">
+								<span class="block truncate font-medium">{ n.Name }</span>
+								<span class="mono block truncate text-muted-foreground">
+									{ n.Version } &middot; { n.OS }/{ n.Architecture }
+								</span>
 							</span>
-						</span>
-						if d.IsNew(n) {
-							<span class="status status-ok">just joined</span>
-						}
-						if n.Ready {
-							<span class="status status-ok">ready</span>
-						} else {
-							<span class="status status-warn">not ready</span>
+							if d.IsNew(n) {
+								<span class="status status-ok">just joined</span>
+							}
+							{{ label, class := nodeJoinStatus(n) }}
+							<span class={ "status", class }>{ label }</span>
+						</div>
+						// The progression, and only while it is still moving. A
+						// cluster of ready nodes does not need three steps each
+						// saying so — that turns a list into a wall.
+						if n.Joining() {
+							<div class="pl-1">
+								@stepList(nodeJoinSteps(n, 0))
+							</div>
 						}
 					</div>
 				}

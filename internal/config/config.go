@@ -100,6 +100,20 @@ type Config struct {
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
 
+	// DNSResolver pins custom-domain lookups to one nameserver, as host or
+	// host:port — "1.1.1.1" or "10.0.0.53:53".
+	//
+	// Empty is the right answer almost always. By default Yacht asks the
+	// domain's own nameservers, which hold no cache: a record created two
+	// seconds ago verifies two seconds later. Naming a recursive resolver here
+	// gives that up — every recursive resolver caches negative answers, and the
+	// check made just before somebody creates a record is what puts one there.
+	//
+	// Worth setting for a split-horizon install, where the answer that matters
+	// is the one a particular resolver gives rather than the one the public
+	// internet would.
+	DNSResolver string
+
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://yacht.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
@@ -145,6 +159,7 @@ func Load() (Config, error) {
 		SecretKey:       strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		AppDomain:       env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
+		DNSResolver:     env("YACHT_DNS_RESOLVER", ""),
 		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
 		BaseURL:         strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
 		SMTPAddr:        env("YACHT_SMTP_ADDR", ""),
