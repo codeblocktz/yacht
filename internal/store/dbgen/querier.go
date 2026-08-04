@@ -100,6 +100,19 @@ type Querier interface {
 	// against every other app forever.
 	DeleteManagedDomain(ctx context.Context, appID uuid.UUID) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) error
+	// Ends every session but the one asking.
+	//
+	// DeleteSessionsForUser cannot serve here: it takes out the caller's own, so
+	// changing a password from the account page would sign the person out of the
+	// browser they are looking at, and they would read that as the change having
+	// failed rather than having worked.
+	// The surviving session is named `keep` rather than `except`, which is a
+	// reserved word the query parser will not take as an identifier.
+	DeleteOtherSessionsForUser(ctx context.Context, arg DeleteOtherSessionsForUserParams) error
+	// execrows so that "there was nothing to remove" is distinguishable from
+	// success. Reporting a credential withdrawn when none existed is how somebody
+	// stops looking for the one that is still there.
+	DeletePassword(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
@@ -129,8 +142,44 @@ type Querier interface {
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.
 	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
+	// ---------------------------------------------------------------------------
+	// Step-up and session revocation
+	// ---------------------------------------------------------------------------
+	// Reads a session that is still alive, for a caller about to change how the
+	// account it belongs to can be signed in to.
+	//
+	// GetSession has no expiry filter, so an expired row comes back from it looking
+	// valid. GetSessionByHash filters expiry in SQL precisely so that a caller
+	// cannot forget, and this is the caller that would: a session that ended an hour
+	// ago must not be able to set a password. FOR UPDATE serialises two tabs
+	// changing one at the same moment.
+	//
+	// Columns are named because the row exists to answer three questions — whose it
+	// is, how recently it was proved, whether it is still alive — and starring it
+	// would hand the caller a struct that grows every time `sessions` does.
+	GetLiveSession(ctx context.Context, id uuid.UUID) (GetLiveSessionRow, error)
 	GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	// ---------------------------------------------------------------------------
+	// Passwords
+	//
+	// Every query below either names its columns or returns an id. `secret` appears
+	// in two of them — the sign-in lookup and the locking read that a change or a
+	// removal goes through — and both row types are consumed inside the account
+	// package and never returned from it. That is the whole storage rule, and it is
+	// easier to keep by making the leak impossible than by remembering not to write
+	// it. Anything added here that does not need the hash must not select it.
+	// ---------------------------------------------------------------------------
+	// The only query that returns a hash, and the only one that ever should.
+	//
+	// The join is INNER, so an unknown address and a known address with no password
+	// come back as the same pgx.ErrNoRows. There is no branch in Go that could tell
+	// them apart, which is what makes the equal-cost verify in AuthenticatePassword
+	// structural rather than something a caller has to remember to write.
+	//
+	// The user's columns are named rather than starred, so this cannot quietly start
+	// returning whatever is added to `users` next.
+	GetPasswordByEmail(ctx context.Context, email string) (GetPasswordByEmailRow, error)
 	// Install-wide DNS settings. No owner_id, for the reason cluster_join has
 	// none: they configure one controller shared by every team.
 	GetPlatformDNS(ctx context.Context) (PlatformDn, error)
@@ -168,6 +217,7 @@ type Querier interface {
 	// and comparing in Go: a check the caller performs is one a caller can skip,
 	// and Kubernetes cannot shrink a claim afterwards to undo it.
 	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
+	HasPassword(ctx context.Context, userID uuid.UUID) (bool, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
@@ -212,6 +262,20 @@ type Querier interface {
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
+	// Reads and locks the person's password, for a caller inside a transaction that
+	// is about to replace or remove it.
+	//
+	// Returns the secret as well as the id because one row answers two questions the
+	// caller needs at the same moment: whether this is an add or a replace, since
+	// only a replace revokes the person's other sessions, and whether a current
+	// password offered as proof of recent authentication is the right one. Asking
+	// twice would be two round trips and one more chance for the second to read a
+	// different row than the first.
+	//
+	// FOR UPDATE is what serialises two tabs. Read outside the transaction this
+	// would be check-then-act: both see no password, both insert, one upserts over
+	// the other, and neither revokes.
+	LockPassword(ctx context.Context, userID uuid.UUID) (LockPasswordRow, error)
 	// A role change reads the owner count and then writes; taking the team row
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
@@ -268,6 +332,10 @@ type Querier interface {
 	// says what happened to it, and rewriting that would lose the difference
 	// between one that was replaced and one that failed.
 	SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error)
+	// Opens the step-up window. Scoped by expiry so an expired session cannot be
+	// revived into a recently-authenticated one; execrows so the caller can tell
+	// that it was not.
+	TouchSessionAuthentication(ctx context.Context, id uuid.UUID) (int64, error)
 	// Everything about an app a person is allowed to change after creating it.
 	//
 	// Deliberately not replicas: scaling has its own query because it has its own
@@ -278,6 +346,16 @@ type Querier interface {
 	// already has a query shaped to what it means, and this one exists for the
 	// fields that had no way to be changed at all.
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
+	// Rehash-on-login, for a stored hash made at a cost this build has moved past.
+	// Best effort and never on the critical path: the sign-in has already succeeded
+	// by the time this runs.
+	//
+	// Conditional on the old value, which makes it a compare-and-swap. Between the
+	// verify and this update the person may have changed their password in another
+	// tab; without the condition, the rehash of the OLD password would overwrite the
+	// new one and lock them out of an account they had just secured. With it, a
+	// stale rehash matches no rows and nothing happens.
+	UpdatePasswordSecret(ctx context.Context, arg UpdatePasswordSecretParams) (int64, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address
 	// would mean revoking the invitation on screen leaves the other one usable.
@@ -299,9 +377,12 @@ type Querier interface {
 	// cannot disagree.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
-	// Users and sessions carry no owner_id: a person exists before they belong to
-	// any team. Memberships and invitations do, and stay scoped by it like
-	// everything else.
+	// Returns an id and not the row. RETURNING * here would put the hash into a Go
+	// struct for no reason at all, which is the shortest route to it being logged.
+	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
+	// Users, sessions and credentials carry no owner_id: a person exists before they
+	// belong to any team, and what proves who they are is not a fact about a tenant.
+	// Memberships and invitations do, and stay scoped by it like everything else.
 	UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error)
 	// Environment variables, one row each so a secret can be sealed while its
 	// neighbour stays readable.

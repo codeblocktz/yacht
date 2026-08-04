@@ -107,7 +107,7 @@ func (q *Queries) CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (user_id, token_hash, active_team_id, user_agent, ip, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at
+RETURNING id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at
 `
 
 type CreateSessionParams struct {
@@ -138,6 +138,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.Ip,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.AuthenticatedAt,
 	)
 	return i, err
 }
@@ -245,6 +246,43 @@ func (q *Queries) DeleteMembership(ctx context.Context, arg DeleteMembershipPara
 	return err
 }
 
+const deleteOtherSessionsForUser = `-- name: DeleteOtherSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = $1 AND id <> $2::uuid
+`
+
+type DeleteOtherSessionsForUserParams struct {
+	UserID uuid.UUID
+	Keep   uuid.UUID
+}
+
+// Ends every session but the one asking.
+//
+// DeleteSessionsForUser cannot serve here: it takes out the caller's own, so
+// changing a password from the account page would sign the person out of the
+// browser they are looking at, and they would read that as the change having
+// failed rather than having worked.
+// The surviving session is named `keep` rather than `except`, which is a
+// reserved word the query parser will not take as an identifier.
+func (q *Queries) DeleteOtherSessionsForUser(ctx context.Context, arg DeleteOtherSessionsForUserParams) error {
+	_, err := q.db.Exec(ctx, deleteOtherSessionsForUser, arg.UserID, arg.Keep)
+	return err
+}
+
+const deletePassword = `-- name: DeletePassword :execrows
+DELETE FROM user_credentials WHERE user_id = $1 AND kind = 'password'
+`
+
+// execrows so that "there was nothing to remove" is distinguishable from
+// success. Reporting a credential withdrawn when none existed is how somebody
+// stops looking for the one that is still there.
+func (q *Queries) DeletePassword(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePassword, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSessionByHash = `-- name: DeleteSessionByHash :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
@@ -295,6 +333,52 @@ func (q *Queries) GetInvitationByHash(ctx context.Context, tokenHash []byte) (Ge
 	return i, err
 }
 
+const getLiveSession = `-- name: GetLiveSession :one
+
+SELECT id, user_id, active_team_id, authenticated_at, expires_at, created_at
+FROM sessions
+WHERE id = $1 AND expires_at > now()
+FOR UPDATE
+`
+
+type GetLiveSessionRow struct {
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	ActiveTeamID    *string
+	AuthenticatedAt time.Time
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+}
+
+// ---------------------------------------------------------------------------
+// Step-up and session revocation
+// ---------------------------------------------------------------------------
+// Reads a session that is still alive, for a caller about to change how the
+// account it belongs to can be signed in to.
+//
+// GetSession has no expiry filter, so an expired row comes back from it looking
+// valid. GetSessionByHash filters expiry in SQL precisely so that a caller
+// cannot forget, and this is the caller that would: a session that ended an hour
+// ago must not be able to set a password. FOR UPDATE serialises two tabs
+// changing one at the same moment.
+//
+// Columns are named because the row exists to answer three questions — whose it
+// is, how recently it was proved, whether it is still alive — and starring it
+// would hand the caller a struct that grows every time `sessions` does.
+func (q *Queries) GetLiveSession(ctx context.Context, id uuid.UUID) (GetLiveSessionRow, error) {
+	row := q.db.QueryRow(ctx, getLiveSession, id)
+	var i GetLiveSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ActiveTeamID,
+		&i.AuthenticatedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getMembership = `-- name: GetMembership :one
 SELECT user_id, owner_id, role, created_at FROM memberships WHERE user_id = $1 AND owner_id = $2
 `
@@ -316,8 +400,59 @@ func (q *Queries) GetMembership(ctx context.Context, arg GetMembershipParams) (M
 	return i, err
 }
 
+const getPasswordByEmail = `-- name: GetPasswordByEmail :one
+
+SELECT c.secret,
+       u.id, u.email, u.display_name, u.created_at, u.updated_at
+FROM user_credentials c
+JOIN users u ON u.id = c.user_id
+WHERE c.kind = 'password' AND lower(u.email) = lower($1::text)
+`
+
+type GetPasswordByEmailRow struct {
+	Secret      string
+	ID          uuid.UUID
+	Email       string
+	DisplayName string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ---------------------------------------------------------------------------
+// Passwords
+//
+// Every query below either names its columns or returns an id. `secret` appears
+// in two of them — the sign-in lookup and the locking read that a change or a
+// removal goes through — and both row types are consumed inside the account
+// package and never returned from it. That is the whole storage rule, and it is
+// easier to keep by making the leak impossible than by remembering not to write
+// it. Anything added here that does not need the hash must not select it.
+// ---------------------------------------------------------------------------
+// The only query that returns a hash, and the only one that ever should.
+//
+// The join is INNER, so an unknown address and a known address with no password
+// come back as the same pgx.ErrNoRows. There is no branch in Go that could tell
+// them apart, which is what makes the equal-cost verify in AuthenticatePassword
+// structural rather than something a caller has to remember to write.
+//
+// The user's columns are named rather than starred, so this cannot quietly start
+// returning whatever is added to `users` next.
+func (q *Queries) GetPasswordByEmail(ctx context.Context, email string) (GetPasswordByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getPasswordByEmail, email)
+	var i GetPasswordByEmailRow
+	err := row.Scan(
+		&i.Secret,
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSession = `-- name: GetSession :one
-SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at FROM sessions WHERE id = $1
+SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at FROM sessions WHERE id = $1
 `
 
 func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error) {
@@ -332,12 +467,13 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 		&i.Ip,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.AuthenticatedAt,
 	)
 	return i, err
 }
 
 const getSessionByHash = `-- name: GetSessionByHash :one
-SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
+SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, s.authenticated_at, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
 FROM sessions s
 JOIN teams t ON t.id = s.active_team_id
 JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
@@ -345,17 +481,18 @@ WHERE s.token_hash = $1 AND s.expires_at > now()
 `
 
 type GetSessionByHashRow struct {
-	ID           uuid.UUID
-	UserID       uuid.UUID
-	TokenHash    []byte
-	ActiveTeamID *string
-	UserAgent    string
-	Ip           string
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
-	TeamName     string
-	TeamEmail    string
-	MemberRole   string
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	TokenHash       []byte
+	ActiveTeamID    *string
+	UserAgent       string
+	Ip              string
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+	AuthenticatedAt time.Time
+	TeamName        string
+	TeamEmail       string
+	MemberRole      string
 }
 
 // The team is joined in because the request that carries this cookie needs the
@@ -388,6 +525,7 @@ func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSe
 		&i.Ip,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.AuthenticatedAt,
 		&i.TeamName,
 		&i.TeamEmail,
 		&i.MemberRole,
@@ -448,6 +586,20 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const hasPassword = `-- name: HasPassword :one
+SELECT EXISTS (
+    SELECT 1 FROM user_credentials
+    WHERE user_id = $1 AND kind = 'password'
+) AS has_password
+`
+
+func (q *Queries) HasPassword(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasPassword, userID)
+	var has_password bool
+	err := row.Scan(&has_password)
+	return has_password, err
 }
 
 const listMembersOfTeam = `-- name: ListMembersOfTeam :many
@@ -582,6 +734,37 @@ func (q *Queries) ListPendingInvitations(ctx context.Context, ownerID string) ([
 	return items, nil
 }
 
+const lockPassword = `-- name: LockPassword :one
+SELECT id, secret FROM user_credentials
+WHERE user_id = $1 AND kind = 'password'
+FOR UPDATE
+`
+
+type LockPasswordRow struct {
+	ID     uuid.UUID
+	Secret string
+}
+
+// Reads and locks the person's password, for a caller inside a transaction that
+// is about to replace or remove it.
+//
+// Returns the secret as well as the id because one row answers two questions the
+// caller needs at the same moment: whether this is an add or a replace, since
+// only a replace revokes the person's other sessions, and whether a current
+// password offered as proof of recent authentication is the right one. Asking
+// twice would be two round trips and one more chance for the second to read a
+// different row than the first.
+//
+// FOR UPDATE is what serialises two tabs. Read outside the transaction this
+// would be check-then-act: both see no password, both insert, one upserts over
+// the other, and neither revokes.
+func (q *Queries) LockPassword(ctx context.Context, userID uuid.UUID) (LockPasswordRow, error) {
+	row := q.db.QueryRow(ctx, lockPassword, userID)
+	var i LockPasswordRow
+	err := row.Scan(&i.ID, &i.Secret)
+	return i, err
+}
+
 const lockTeam = `-- name: LockTeam :one
 SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1 FOR UPDATE
 `
@@ -614,6 +797,51 @@ type SetSessionTeamParams struct {
 func (q *Queries) SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error {
 	_, err := q.db.Exec(ctx, setSessionTeam, arg.ActiveTeamID, arg.ID)
 	return err
+}
+
+const touchSessionAuthentication = `-- name: TouchSessionAuthentication :execrows
+UPDATE sessions SET authenticated_at = now()
+WHERE id = $1 AND expires_at > now()
+`
+
+// Opens the step-up window. Scoped by expiry so an expired session cannot be
+// revived into a recently-authenticated one; execrows so the caller can tell
+// that it was not.
+func (q *Queries) TouchSessionAuthentication(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, touchSessionAuthentication, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updatePasswordSecret = `-- name: UpdatePasswordSecret :execrows
+UPDATE user_credentials
+SET secret = $1, updated_at = now()
+WHERE user_id = $2 AND kind = 'password' AND secret = $3
+`
+
+type UpdatePasswordSecretParams struct {
+	Secret    string
+	UserID    uuid.UUID
+	OldSecret string
+}
+
+// Rehash-on-login, for a stored hash made at a cost this build has moved past.
+// Best effort and never on the critical path: the sign-in has already succeeded
+// by the time this runs.
+//
+// Conditional on the old value, which makes it a compare-and-swap. Between the
+// verify and this update the person may have changed their password in another
+// tab; without the condition, the rehash of the OLD password would overwrite the
+// new one and lock them out of an account they had just secured. With it, a
+// stale rehash matches no rows and nothing happens.
+func (q *Queries) UpdatePasswordSecret(ctx context.Context, arg UpdatePasswordSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePasswordSecret, arg.Secret, arg.UserID, arg.OldSecret)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertInvitation = `-- name: UpsertInvitation :one
@@ -679,6 +907,28 @@ func (q *Queries) UpsertMembership(ctx context.Context, arg UpsertMembershipPara
 	return i, err
 }
 
+const upsertPassword = `-- name: UpsertPassword :one
+INSERT INTO user_credentials (user_id, kind, secret)
+VALUES ($1, 'password', $2)
+ON CONFLICT (user_id, kind) DO UPDATE
+SET secret = excluded.secret, updated_at = now()
+RETURNING id
+`
+
+type UpsertPasswordParams struct {
+	UserID uuid.UUID
+	Secret string
+}
+
+// Returns an id and not the row. RETURNING * here would put the hash into a Go
+// struct for no reason at all, which is the shortest route to it being logged.
+func (q *Queries) UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertPassword, arg.UserID, arg.Secret)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const upsertUser = `-- name: UpsertUser :one
 
 INSERT INTO users (email, display_name)
@@ -697,9 +947,9 @@ type UpsertUserParams struct {
 	DisplayName string
 }
 
-// Users and sessions carry no owner_id: a person exists before they belong to
-// any team. Memberships and invitations do, and stay scoped by it like
-// everything else.
+// Users, sessions and credentials carry no owner_id: a person exists before they
+// belong to any team, and what proves who they are is not a fact about a tenant.
+// Memberships and invitations do, and stay scoped by it like everything else.
 func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, upsertUser, arg.Email, arg.DisplayName)
 	var i User

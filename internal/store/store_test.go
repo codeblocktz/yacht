@@ -185,6 +185,9 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"users":            "a person exists before belonging to any team",
 		"sessions":         "a session belongs to a person, not to a team",
 		"magic_links":      "a sign-in link proves an address, before any team is chosen",
+		"user_credentials": "a password proves a person rather than a tenant — the " +
+			"session it mints is scoped to a team afterwards, and one human " +
+			"holding a different password per team is not a thing to support",
 		"platform_dns": "one ExternalDNS controller serves every team — a " +
 			"per-team copy would mean whichever team saved last decided for all " +
 			"of them",

@@ -1,6 +1,6 @@
--- Users and sessions carry no owner_id: a person exists before they belong to
--- any team. Memberships and invitations do, and stay scoped by it like
--- everything else.
+-- Users, sessions and credentials carry no owner_id: a person exists before they
+-- belong to any team, and what proves who they are is not a fact about a tenant.
+-- Memberships and invitations do, and stay scoped by it like everything else.
 
 -- name: UpsertUser :one
 INSERT INTO users (email, display_name)
@@ -186,3 +186,123 @@ WHERE token_hash = @token_hash AND accepted_at IS NULL AND expires_at > now();
 -- name: DeleteInvitationsByInviter :exec
 DELETE FROM invitations
 WHERE owner_id = @owner_id AND invited_by = @invited_by::uuid AND accepted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- Passwords
+--
+-- Every query below either names its columns or returns an id. `secret` appears
+-- in two of them — the sign-in lookup and the locking read that a change or a
+-- removal goes through — and both row types are consumed inside the account
+-- package and never returned from it. That is the whole storage rule, and it is
+-- easier to keep by making the leak impossible than by remembering not to write
+-- it. Anything added here that does not need the hash must not select it.
+-- ---------------------------------------------------------------------------
+
+-- The only query that returns a hash, and the only one that ever should.
+--
+-- The join is INNER, so an unknown address and a known address with no password
+-- come back as the same pgx.ErrNoRows. There is no branch in Go that could tell
+-- them apart, which is what makes the equal-cost verify in AuthenticatePassword
+-- structural rather than something a caller has to remember to write.
+--
+-- The user's columns are named rather than starred, so this cannot quietly start
+-- returning whatever is added to `users` next.
+-- name: GetPasswordByEmail :one
+SELECT c.secret,
+       u.id, u.email, u.display_name, u.created_at, u.updated_at
+FROM user_credentials c
+JOIN users u ON u.id = c.user_id
+WHERE c.kind = 'password' AND lower(u.email) = lower(@email::text);
+
+-- name: HasPassword :one
+SELECT EXISTS (
+    SELECT 1 FROM user_credentials
+    WHERE user_id = @user_id AND kind = 'password'
+) AS has_password;
+
+-- Reads and locks the person's password, for a caller inside a transaction that
+-- is about to replace or remove it.
+--
+-- Returns the secret as well as the id because one row answers two questions the
+-- caller needs at the same moment: whether this is an add or a replace, since
+-- only a replace revokes the person's other sessions, and whether a current
+-- password offered as proof of recent authentication is the right one. Asking
+-- twice would be two round trips and one more chance for the second to read a
+-- different row than the first.
+--
+-- FOR UPDATE is what serialises two tabs. Read outside the transaction this
+-- would be check-then-act: both see no password, both insert, one upserts over
+-- the other, and neither revokes.
+-- name: LockPassword :one
+SELECT id, secret FROM user_credentials
+WHERE user_id = @user_id AND kind = 'password'
+FOR UPDATE;
+
+-- Returns an id and not the row. RETURNING * here would put the hash into a Go
+-- struct for no reason at all, which is the shortest route to it being logged.
+-- name: UpsertPassword :one
+INSERT INTO user_credentials (user_id, kind, secret)
+VALUES (@user_id, 'password', @secret)
+ON CONFLICT (user_id, kind) DO UPDATE
+SET secret = excluded.secret, updated_at = now()
+RETURNING id;
+
+-- execrows so that "there was nothing to remove" is distinguishable from
+-- success. Reporting a credential withdrawn when none existed is how somebody
+-- stops looking for the one that is still there.
+-- name: DeletePassword :execrows
+DELETE FROM user_credentials WHERE user_id = @user_id AND kind = 'password';
+
+-- Rehash-on-login, for a stored hash made at a cost this build has moved past.
+-- Best effort and never on the critical path: the sign-in has already succeeded
+-- by the time this runs.
+--
+-- Conditional on the old value, which makes it a compare-and-swap. Between the
+-- verify and this update the person may have changed their password in another
+-- tab; without the condition, the rehash of the OLD password would overwrite the
+-- new one and lock them out of an account they had just secured. With it, a
+-- stale rehash matches no rows and nothing happens.
+-- name: UpdatePasswordSecret :execrows
+UPDATE user_credentials
+SET secret = @secret, updated_at = now()
+WHERE user_id = @user_id AND kind = 'password' AND secret = @old_secret;
+
+-- ---------------------------------------------------------------------------
+-- Step-up and session revocation
+-- ---------------------------------------------------------------------------
+
+-- Reads a session that is still alive, for a caller about to change how the
+-- account it belongs to can be signed in to.
+--
+-- GetSession has no expiry filter, so an expired row comes back from it looking
+-- valid. GetSessionByHash filters expiry in SQL precisely so that a caller
+-- cannot forget, and this is the caller that would: a session that ended an hour
+-- ago must not be able to set a password. FOR UPDATE serialises two tabs
+-- changing one at the same moment.
+--
+-- Columns are named because the row exists to answer three questions — whose it
+-- is, how recently it was proved, whether it is still alive — and starring it
+-- would hand the caller a struct that grows every time `sessions` does.
+-- name: GetLiveSession :one
+SELECT id, user_id, active_team_id, authenticated_at, expires_at, created_at
+FROM sessions
+WHERE id = @id AND expires_at > now()
+FOR UPDATE;
+
+-- Opens the step-up window. Scoped by expiry so an expired session cannot be
+-- revived into a recently-authenticated one; execrows so the caller can tell
+-- that it was not.
+-- name: TouchSessionAuthentication :execrows
+UPDATE sessions SET authenticated_at = now()
+WHERE id = @id AND expires_at > now();
+
+-- Ends every session but the one asking.
+--
+-- DeleteSessionsForUser cannot serve here: it takes out the caller's own, so
+-- changing a password from the account page would sign the person out of the
+-- browser they are looking at, and they would read that as the change having
+-- failed rather than having worked.
+-- The surviving session is named `keep` rather than `except`, which is a
+-- reserved word the query parser will not take as an identifier.
+-- name: DeleteOtherSessionsForUser :exec
+DELETE FROM sessions WHERE user_id = @user_id AND id <> @keep::uuid;

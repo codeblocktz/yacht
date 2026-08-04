@@ -160,14 +160,15 @@ type Project struct {
 }
 
 type Session struct {
-	ID           uuid.UUID
-	UserID       uuid.UUID
-	TokenHash    []byte
-	ActiveTeamID *string
-	UserAgent    string
-	Ip           string
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
+	ID              uuid.UUID
+	UserID          uuid.UUID
+	TokenHash       []byte
+	ActiveTeamID    *string
+	UserAgent       string
+	Ip              string
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+	AuthenticatedAt time.Time
 }
 
 type Team struct {
@@ -186,6 +187,15 @@ type User struct {
 	TotpConfirmed bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+type UserCredential struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Kind      string
+	Secret    string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Variable struct {

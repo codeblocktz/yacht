@@ -45,6 +45,26 @@ type Session struct {
 	IP        string
 	ExpiresAt time.Time
 	CreatedAt time.Time
+
+	// AuthenticatedAt is when whoever holds this session last proved they are
+	// its owner, as opposed to when the session began. Set at creation and
+	// refreshed when a password is re-entered to confirm a change.
+	//
+	// Separate from CreatedAt because a session that re-proves itself is still
+	// the same session. Folding the two together would mean the only way to
+	// refresh the window is to mint a new one, which is a sign-in rather than a
+	// confirmation.
+	AuthenticatedAt time.Time
+}
+
+// RecentlyAuthenticated reports whether this session proved who holds it within
+// d.
+//
+// Read at the moment of a write and never at page render: a form that was
+// rendered inside the window and submitted outside it must not be honoured, and
+// the service checks this itself for exactly that reason.
+func (s Session) RecentlyAuthenticated(d time.Duration) bool {
+	return time.Since(s.AuthenticatedAt) < d
 }
 
 // CreateSession issues a session for a person acting in a team, and returns the
@@ -110,13 +130,14 @@ func (s *Service) ResolveSession(ctx context.Context, raw string) (Session, erro
 		ActiveTeamID: deref(row.ActiveTeamID),
 		// Not nullable any more: the query inner-joins teams and memberships,
 		// so a row only comes back when both still exist.
-		TeamName:  row.TeamName,
-		TeamEmail: row.TeamEmail,
-		Role:      Role(row.MemberRole),
-		UserAgent: row.UserAgent,
-		IP:        row.Ip,
-		ExpiresAt: row.ExpiresAt,
-		CreatedAt: row.CreatedAt,
+		TeamName:        row.TeamName,
+		TeamEmail:       row.TeamEmail,
+		Role:            Role(row.MemberRole),
+		UserAgent:       row.UserAgent,
+		IP:              row.Ip,
+		ExpiresAt:       row.ExpiresAt,
+		CreatedAt:       row.CreatedAt,
+		AuthenticatedAt: row.AuthenticatedAt,
 	}, nil
 }
 
