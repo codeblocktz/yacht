@@ -42,17 +42,29 @@ ORDER BY name;
 -- name: CountApps :one
 SELECT count(*) FROM apps WHERE owner_id = $1;
 
+-- Everything about an app a person is allowed to change after creating it.
+--
+-- Deliberately not replicas: scaling has its own query because it has its own
+-- rule about storage, and folding it in here would make every settings save a
+-- chance to silently reset a scale somebody had chosen.
+--
+-- Nor the health probe, the networking toggles or run_as_user — each of those
+-- already has a query shaped to what it means, and this one exists for the
+-- fields that had no way to be changed at all.
 -- name: UpdateApp :one
 UPDATE apps
-SET image          = $3,
-    replicas       = $4,
-    port           = $5,
-    cpu_request    = $6,
-    cpu_limit      = $7,
-    memory_request = $8,
-    memory_limit   = $9,
+SET image          = @image,
+    port           = @port,
+    cpu_request    = @cpu_request,
+    cpu_limit      = @cpu_limit,
+    memory_request = @memory_request,
+    memory_limit   = @memory_limit,
+    internal       = @internal,
+    repo_url       = @repo_url,
+    repo_branch    = @repo_branch,
+    repo_subdir    = @repo_subdir,
     updated_at     = now()
-WHERE owner_id = $1 AND id = $2
+WHERE owner_id = @owner_id AND id = @id
 RETURNING *;
 
 -- name: SetAppReplicas :one

@@ -701,6 +701,125 @@ templ appMetrics(d AppDetailData) {
 	</div>
 }
 
+// appRuntimeForm is everything about an app that had no way to be changed.
+//
+// Image, port, what it may consume, whether it is reachable, and where a Git
+// app builds from were all decided at create and then frozen — so changing an
+// image tag meant deleting the app and starting again, taking its domains and
+// its history with it.
+//
+// A plain form, and the only complete way to do this. The dialogs in the app
+// header are shortcuts onto the same endpoint; this is what they are shortcuts
+// to, and what still works with no JavaScript at all.
+templ appRuntimeForm(d AppDetailData) {
+	{{ a := d.App }}
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Runtime</span>
+			<span class="text-[12px] text-muted-foreground">
+				Saving rolls the app out again
+			</span>
+		</div>
+		<div class="panel-body">
+			<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") } class="flex flex-col gap-4">
+				<div class="flex flex-wrap gap-4">
+					<div class="field min-w-[240px] flex-1">
+						<label class="label" for="image">Image</label>
+						if a.Source == app.SourceGit {
+							// Shown and locked rather than hidden. The value is real
+							// and worth reading; it is just not this form's to set,
+							// because the next build replaces whatever is typed here.
+							<input class="control mono" id="image" value={ imageLabel(a.Image) } disabled/>
+							<span class="hint">
+								Built from the repository below. Change the repository, or
+								deploy again, rather than setting this by hand.
+							</span>
+						} else {
+							<input class="control mono" id="image" name="image" value={ a.Image } required/>
+							<span class="hint">
+								A new tag here is how this app is upgraded.
+							</span>
+						}
+					</div>
+					<div class="field w-32">
+						<label class="label" for="port">Port</label>
+						<input
+							class="control"
+							id="port"
+							type="number"
+							name="port"
+							min="0"
+							max="65535"
+							value={ strconv.Itoa(int(a.Port)) }
+						/>
+						<span class="hint">0 for no port.</span>
+					</div>
+				</div>
+				<div class="flex flex-wrap gap-4">
+					@resourceField("cpu_request", "CPU request", a.CPURequest, "250m")
+					@resourceField("cpu_limit", "CPU limit", a.CPULimit, "1")
+					@resourceField("memory_request", "Memory request", a.MemoryRequest, "128Mi")
+					@resourceField("memory_limit", "Memory limit", a.MemoryLimit, "512Mi")
+				</div>
+				<div class="text-[12px] text-muted-foreground">
+					Requests are what the scheduler reserves; limits are what the
+					container is stopped from exceeding.
+					@helpNote("requests and limits") {
+						<p>
+							A pod with no request can be scheduled onto a node that has
+							nothing left to give it. One that exceeds a memory limit is
+							killed outright, which looks like a crash rather than a limit.
+						</p>
+						<p class="mt-2">
+							Leave them empty to let the namespace's own defaults apply.
+						</p>
+					}
+				</div>
+				if a.Source == app.SourceGit {
+					<div class="flex flex-wrap gap-4">
+						<div class="field min-w-[260px] flex-1">
+							<label class="label" for="repo_url">Repository</label>
+							<input class="control mono" id="repo_url" name="repo_url" value={ a.Repo.URL }/>
+						</div>
+						<div class="field w-40">
+							<label class="label" for="repo_branch">Branch</label>
+							<input class="control mono" id="repo_branch" name="repo_branch" value={ a.Repo.Branch }/>
+						</div>
+						<div class="field w-40">
+							<label class="label" for="repo_subdir">Subdirectory</label>
+							<input class="control mono" id="repo_subdir" name="repo_subdir" value={ a.Repo.Subdir }/>
+						</div>
+					</div>
+					<p class="text-[12px] text-muted-foreground">
+						Changing these does not rebuild. The next deploy reads them.
+					</p>
+				}
+				<label class="flex items-start gap-2.5">
+					<input type="checkbox" name="internal" value="1" class="mt-0.5" checked?={ a.Internal }/>
+					<span class="min-w-0">
+						<span class="block font-medium">Internal only</span>
+						<span class="block text-[12.5px] text-muted-foreground">
+							Reachable from inside the cluster and nowhere else. Turning this
+							on withdraws the platform hostname rather than hiding it; turning
+							it off issues one again.
+						</span>
+					</span>
+				</label>
+				<div>
+					<button class="btn btn-primary" type="submit">Save and roll out</button>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+templ resourceField(name, label, value, placeholder string) {
+	<div class="field w-36">
+		<label class="label" for={ name }>{ label }</label>
+		<input class="control mono" id={ name } name={ name } value={ value } placeholder={ placeholder }/>
+	</div>
+}
+
 // ---- domains tab
 //
 // Its own tab rather than three panels inside Settings, where these sat between
@@ -731,6 +850,7 @@ templ appSettings(d AppDetailData) {
 			<div class="min-w-0 text-muted-foreground">{ d.Notice }</div>
 		</div>
 	}
+	@appRuntimeForm(d)
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Health check</span></div>
 		<div class="panel-body">

@@ -258,6 +258,15 @@ type Querier interface {
 	// says what happened to it, and rewriting that would lose the difference
 	// between one that was replaced and one that failed.
 	SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error)
+	// Everything about an app a person is allowed to change after creating it.
+	//
+	// Deliberately not replicas: scaling has its own query because it has its own
+	// rule about storage, and folding it in here would make every settings save a
+	// chance to silently reset a scale somebody had chosen.
+	//
+	// Nor the health probe, the networking toggles or run_as_user — each of those
+	// already has a query shaped to what it means, and this one exists for the
+	// fields that had no way to be changed at all.
 	UpdateApp(ctx context.Context, arg UpdateAppParams) (App, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address

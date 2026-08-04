@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -219,6 +220,57 @@ func (s *Server) appActionFailed(
 	}
 
 	s.renderStatus(w, r, status, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
+}
+
+// appRuntime changes what an app runs and how much it may use.
+//
+// One endpoint for the whole runtime rather than one per field. The fields roll
+// the app out together — a port change without the image beside it is still a
+// rollout — and splitting them would mean several rollouts to make one change.
+func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	port, err := strconv.Atoi(strings.TrimSpace(cmp.Or(r.FormValue("port"), "0")))
+	if err != nil {
+		s.flashErr(w, r, "Port must be a number.")
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+		return
+	}
+
+	in := app.UpdateInput{
+		Image:         strings.TrimSpace(r.FormValue("image")),
+		Port:          int32(port),
+		CPURequest:    strings.TrimSpace(r.FormValue("cpu_request")),
+		CPULimit:      strings.TrimSpace(r.FormValue("cpu_limit")),
+		MemoryRequest: strings.TrimSpace(r.FormValue("memory_request")),
+		MemoryLimit:   strings.TrimSpace(r.FormValue("memory_limit")),
+		Internal:      r.FormValue("internal") == "1",
+		Repo: app.Repo{
+			URL:    strings.TrimSpace(r.FormValue("repo_url")),
+			Branch: strings.TrimSpace(r.FormValue("repo_branch")),
+			Subdir: strings.TrimSpace(r.FormValue("repo_subdir")),
+		},
+	}
+
+	if _, err := s.apps.Update(ctx, owner.ID, name, in); err != nil {
+		if errors.Is(err, app.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		// A flash and a redirect rather than a re-render. This form is also
+		// reachable as a dialog over the canvas, and re-rendering the
+		// standalone settings page would answer a failed save by moving
+		// somebody somewhere else.
+		s.log.Error("update runtime", slog.String("app", name), slog.String("error", err.Error()))
+		s.flashErr(w, r, err.Error())
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+		return
+	}
+
+	s.flashOK(w, r, "Saved. "+name+" is rolling out.")
+	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
 
 // appActionNoticed re-renders a tab with something worth saying.

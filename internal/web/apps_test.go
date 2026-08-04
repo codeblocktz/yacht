@@ -27,6 +27,7 @@ type fakeApps struct {
 	created  []app.CreateInput
 	deleted  []string
 	scaled   map[string]int32
+	updated  []app.UpdateInput
 	activity app.DeployActivity
 	err      error
 }
@@ -77,6 +78,16 @@ func (f *fakeApps) Create(_ context.Context, ownerID string, in app.CreateInput)
 func (f *fakeApps) Scale(_ context.Context, _, name string, replicas int32) (app.App, error) {
 	f.scaled[name] = replicas
 	return app.App{Name: name, Replicas: replicas}, nil
+}
+
+func (f *fakeApps) Update(
+	_ context.Context, _, name string, in app.UpdateInput,
+) (app.App, error) {
+	if f.err != nil {
+		return app.App{}, f.err
+	}
+	f.updated = append(f.updated, in)
+	return app.App{Name: name, Image: in.Image, Port: in.Port}, nil
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }

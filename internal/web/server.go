@@ -35,6 +35,10 @@ type Apps interface {
 	Get(ctx context.Context, ownerID, name string) (app.App, error)
 	Create(ctx context.Context, ownerID string, in app.CreateInput) (app.App, error)
 	Scale(ctx context.Context, ownerID, name string, replicas int32) (app.App, error)
+
+	// Update changes what the app runs and how much it may use. Everything
+	// here was decided at create and then frozen until this existed.
+	Update(ctx context.Context, ownerID, name string, in app.UpdateInput) (app.App, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
@@ -588,6 +592,9 @@ func (s *Server) Handler() http.Handler {
 			// credential the app runs as, and setting one is not undone by a
 			// redeploy.
 			r.Post("/apps/{name}/health", s.healthSet)
+			// Image, port, resources, reachability, repository — the fields
+			// that had no way to be changed after create.
+			r.Post("/apps/{name}/runtime", s.appRuntime)
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 
