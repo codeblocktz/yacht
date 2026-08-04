@@ -52,6 +52,23 @@ weaknesses:
   README and the installer's own output both say so.
 - **No `YACHT_AUTH_TOKEN` and no accounts means an unauthenticated dashboard.**
   That is what the configuration table says that combination does.
+- **No account lockout after repeated failed passwords.** Attempts are
+  throttled — five per address and twenty per client every fifteen minutes —
+  but an address is never locked. A lockout on a known address is a denial of
+  service against the person who owns it, and the emailed link stays available
+  regardless, so the password is never the only way in to attack.
+- **Password attempts and sign-in-link requests are counted separately.** That
+  is deliberate: a shared counter would let somebody exhaust a victim's link
+  budget by guessing at their password.
+- **Rate limits are per process and held in memory.** A restart forgives
+  everyone, and two replicas each keep their own count. They are a brake on
+  guessing, not a boundary.
+- **No check against breached-password lists.** An offline list is too large to
+  ship with a self-hosted binary, and an online one makes setting a password
+  depend on an outbound call from a box that may not have one.
+- **A magic link is a full account-recovery path.** Anybody holding the mailbox
+  can sign in and change or remove the password. That is what the link is, and
+  it is why there is no separate reset token.
 - Anything that needs an attacker who already has root on the host or
   cluster-admin on the cluster.
 

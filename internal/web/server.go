@@ -111,8 +111,38 @@ type Accounts interface {
 	// expired and already-spent links all come back as account.ErrTokenInvalid.
 	ConsumeMagicLink(ctx context.Context, raw string) (account.User, error)
 
+	// AuthenticatePassword verifies an address and a password. Every failure —
+	// unknown address, no password set, wrong password — is the single
+	// account.ErrCredentialInvalid, so no caller can tell them apart or report
+	// a difference that is not there to report.
+	AuthenticatePassword(ctx context.Context, email, password string) (account.User, error)
+
+	// HasPassword reports whether the viewer's own account has one, which is
+	// what decides between offering to add and offering to change. By user id,
+	// never by address: the same question asked about an address is the
+	// disclosure the sign-in page is built to withhold.
+	HasPassword(ctx context.Context, userID uuid.UUID) (bool, error)
+
+	// SetPassword adds or replaces one. It takes a session id rather than a
+	// user id so that whose password it is comes from the session row, and it
+	// checks recent authentication itself rather than trusting this package to
+	// have done it.
+	SetPassword(
+		ctx context.Context, sessionID uuid.UUID, password string, proof account.Proof,
+	) error
+
+	// RemovePassword takes one off, leaving the emailed link. Allowed because
+	// the link never stopped working, so this cannot lock anybody out — and
+	// refusing would mean a password added once can never be taken back.
+	RemovePassword(ctx context.Context, sessionID uuid.UUID, proof account.Proof) error
+
 	// TeamsFor lists the teams a person may act as.
 	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
+
+	// User returns the person a session resolved to, so the account page can
+	// name them. By id and never by address: a lookup by address reachable from
+	// a handler would answer whether somebody has an account.
+	User(ctx context.Context, userID uuid.UUID) (account.User, error)
 
 	// BootstrapOwner gives someone with no team one to act as, handing the
 	// first of them the team the install was already running as.
@@ -445,6 +475,13 @@ func (s *Server) Handler() http.Handler {
 	if s.accounts != nil {
 		r.Get("/sign-in", s.signInPage)
 		r.Post("/sign-in", s.signInRequest)
+
+		// Its own path, and it must stay its own path. csrfProtect exempts
+		// origin-less posts on /sign-in by name so that a CLI can ask for a
+		// link; carrying a password on that same path would turn the exemption
+		// into login CSRF. Here the existing check refuses one with no new
+		// logic. See signInWithPassword.
+		r.Post("/sign-in/password", s.signInWithPassword)
 		// The callback is a GET because it is a link in a mail message and
 		// nothing else can be, which is the one exception to every mutating
 		// route being a POST. What makes it tolerable is that the token is
@@ -569,6 +606,14 @@ func (s *Server) Handler() http.Handler {
 			// actually use, and every one of those is gated on its own route.
 			if s.accounts != nil {
 				r.Get("/team", s.teamPage)
+
+				// A person's own account, as opposed to /settings, which is the
+				// install's. Member, because holding a session is the whole
+				// qualification: nothing here is a privilege inside a team, and
+				// gating it higher would lock somebody out of their own account.
+				r.Get("/account", s.accountPage)
+				r.Post("/account/password", s.accountPasswordSet)
+				r.Post("/account/password/remove", s.accountPasswordRemove)
 			}
 
 			r.Get("/cluster", s.clusterNodes)
@@ -1149,6 +1194,13 @@ func (s *Server) renderSignedOut(
 ) {
 	slots := s.slots.Slots(r.Context(), r)
 	slots.Title = title
+	// Bare drops the sidebar and the top bar outright. Emptying the slots below
+	// is not enough on its own — it removes the navigation but leaves the rail
+	// and the header standing, so the form sits beside an empty column and under
+	// an empty bar, wearing the chrome of an application nobody has been let
+	// into. They are still cleared, so that a wrapping application's own layout
+	// is handed the same "nothing here needs a session" state.
+	slots.Bare = true
 	slots.Nav = nil
 	slots.Breadcrumb = nil
 	slots.HeaderTools = nil

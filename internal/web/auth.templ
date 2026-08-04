@@ -1,21 +1,91 @@
 package web
 
 // SignInData is the state of the sign-in form.
+//
 // Error is what the visitor did wrong or what the server refused, never
-// anything about whether the address is registered — that is the one fact this
-// page exists to keep quiet about.
+// anything about whether the address is registered or whether it has a password
+// — those are the two facts this page exists to keep quiet about.
+//
+// There is deliberately no Password field. A submitted password rendered back
+// into the HTML would sit in a page somebody may screenshot, print, or paste
+// into a bug report, and no-store reaches none of those.
 type SignInData struct {
 	Email string
 	Error string
+
+	// Method names which of the two forms was submitted, so that the address is
+	// put back in the one it was typed in and the error is drawn beside it.
+	//
+	// Derived only from the route that was posted to — a fact the submitter
+	// chose — so it says nothing whatever about the account.
+	Method SignInMethod
 }
 
+// SignInMethod is which form a submission came from.
+type SignInMethod string
+
+const (
+	SignInByLink     SignInMethod = "link"
+	SignInByPassword SignInMethod = "password"
+)
+
+// SignIn offers both ways in, to everyone, always.
+//
+// Both forms are rendered unconditionally and with no knowledge of any address.
+// Anything that decided what to show after learning whether an address has a
+// password would be an enumeration oracle, and a worse one than "does this
+// address exist" because it sorts real accounts by how they are configured. It
+// does not matter whether such a probe is a round trip, a fetch or a status
+// code: the only safe design is one where the server is never asked.
 templ SignIn(d SignInData) {
-	@authCard("Sign in", "Enter your address and we will send you a link. There is no password to remember.") {
+	@authCard("Sign in", "Use your password, or have a link emailed to you.") {
 		if d.Error != "" {
 			<div class="callout callout-err mb-4">
 				<div>{ d.Error }</div>
 			</div>
 		}
+		<form method="post" action="/sign-in/password" class="flex flex-col gap-4">
+			// autocomplete is username rather than email, deliberately: it is the
+			// pairing with current-password that lets a password manager save and
+			// offer the two together.
+			<div class="field">
+				<label class="label" for="password-email">Email</label>
+				<input
+					class="control"
+					id="password-email"
+					name="email"
+					type="email"
+					autocomplete="username"
+					required
+					if d.Method == SignInByPassword {
+						autofocus
+						value={ d.Email }
+					}
+					placeholder="you@example.com"
+				/>
+			</div>
+			<div class="field">
+				<label class="label" for="password">Password</label>
+				<input
+					class="control"
+					id="password"
+					name="password"
+					type="password"
+					autocomplete="current-password"
+					required
+				/>
+			</div>
+			<button class="btn btn-primary" type="submit">Sign in</button>
+		</form>
+		<div class="my-5 flex items-center gap-3">
+			<span class="h-px flex-1 bg-border"></span>
+			<span class="text-[11px] uppercase tracking-wide text-muted-foreground">or</span>
+			<span class="h-px flex-1 bg-border"></span>
+		</div>
+		// Its own form rather than a second button on the one above: with one
+		// form, Enter submits through whichever submit button comes first in the
+		// markup, so one of the two audiences always gets the wrong action from
+		// the keyboard.
 		<form method="post" action="/sign-in" class="flex flex-col gap-4">
 			<div class="field">
 				<label class="label" for="email">Email</label>
@@ -25,14 +95,20 @@ templ SignIn(d SignInData) {
 					name="email"
 					type="email"
 					autocomplete="email"
-					autofocus
 					required
-					value={ d.Email }
+					if d.Method != SignInByPassword {
+						autofocus
+						value={ d.Email }
+					}
 					placeholder="you@example.com"
 				/>
 			</div>
-			<button class="btn btn-primary" type="submit">Email me a sign-in link</button>
+			<button class="btn" type="submit">Email me a sign-in link</button>
 		</form>
+		<p class="mt-5 text-[12.5px] text-muted-foreground">
+			No password yet, or forgotten it? Ask for a link, then set one from
+			your account page.
+		</p>
 	}
 }
 

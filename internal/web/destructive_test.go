@@ -32,7 +32,17 @@ func TestEveryDestructiveFormAsksFirst(t *testing.T) {
 	// together — an action on one line and a data-confirm three lines later is
 	// still one form.
 	formRE := regexp.MustCompile(`(?s)<form\b.*?>`)
-	actionRE := regexp.MustCompile(`action=\{?\s*templ\.(?:Safe)?URL\("([^"]*)"`)
+
+	// Actions are written two ways here: a plain string when the path is fixed,
+	// and templ.URL when it is built from a value. Both are read.
+	//
+	// Only the templ.URL form used to be, which meant every form written the way
+	// /sign-out, /team/invite and /cluster/dns are was not examined at all. That
+	// is the worse kind of gap in a test like this one: it does not fail, it
+	// reports that it found nothing wrong with forms it never looked at, and the
+	// next destructive action written in the plainer style inherits a guard that
+	// is only a decoration.
+	actionRE := regexp.MustCompile(`action=(?:"([^"]*)"|\{?\s*templ\.(?:Safe)?URL\("([^"]*)")`)
 
 	files, err := filepath.Glob(filepath.Join(".", "*.templ"))
 	if err != nil || len(files) == 0 {
@@ -50,7 +60,11 @@ func TestEveryDestructiveFormAsksFirst(t *testing.T) {
 			if m == nil {
 				continue
 			}
+			// One group per spelling; whichever matched is the path.
 			action := m[1]
+			if action == "" {
+				action = m[2]
+			}
 			if !destructive.MatchString(action) {
 				continue
 			}

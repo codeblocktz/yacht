@@ -139,12 +139,24 @@ func TestSessionCookieNameMatchesTheProvider(t *testing.T) {
 // Any address beginning "known" is registered. issueDelay stands for the extra
 // INSERT that issuing a link for a registered address costs and an unregistered
 // one does not: it is the difference the timing floor has to hide.
+// Any address beginning "known" is registered. The one that also has a password
+// is "known-pw", and its password is fakePassword.
 type fakeAccounts struct {
 	mu         sync.Mutex
 	issueDelay time.Duration
-	err        error
-	asked      []string
+
+	// verifyDelay stands in for the Argon2id cost the floor has to hide, the way
+	// issueDelay stands in for the extra insert. It is slept on EVERY path
+	// including the unknown-address one — that is the fake standing in for the
+	// dummy verify, and a fake that only slept for addresses it knew would make
+	// the timing test pass by accident.
+	verifyDelay time.Duration
+
+	err   error
+	asked []string
 }
+
+const fakePassword = "the right password"
 
 func (f *fakeAccounts) IssueMagicLink(
 	_ context.Context, email string, _ time.Duration,
@@ -185,6 +197,44 @@ func (f *fakeAccounts) ConsumeMagicLink(context.Context, string) (account.User, 
 
 func (f *fakeAccounts) TeamsFor(context.Context, uuid.UUID) ([]account.Membership, error) {
 	return nil, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) User(context.Context, uuid.UUID) (account.User, error) {
+	return account.User{}, errNoFakeAccountsBackend
+}
+
+// AuthenticatePassword answers the way the real one does: one error for an
+// unknown address, an address with no password, and a wrong password, and the
+// same cost for all three.
+func (f *fakeAccounts) AuthenticatePassword(
+	_ context.Context, email, password string,
+) (account.User, error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, email)
+	delay := f.verifyDelay
+	f.mu.Unlock()
+
+	// Before every return, never only the ones that found something.
+	time.Sleep(delay)
+
+	if !strings.HasPrefix(email, "known-pw") || password != fakePassword {
+		return account.User{}, account.ErrCredentialInvalid
+	}
+	return account.User{Email: email}, nil
+}
+
+func (f *fakeAccounts) HasPassword(context.Context, uuid.UUID) (bool, error) {
+	return false, errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) SetPassword(
+	context.Context, uuid.UUID, string, account.Proof,
+) error {
+	return errNoFakeAccountsBackend
+}
+
+func (f *fakeAccounts) RemovePassword(context.Context, uuid.UUID, account.Proof) error {
+	return errNoFakeAccountsBackend
 }
 
 func (f *fakeAccounts) BootstrapOwner(context.Context, string, string, account.User) error {

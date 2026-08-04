@@ -1,0 +1,308 @@
+package web
+
+// AccountData is what a person can see and change about themselves, as opposed
+// to about the install or about their team.
+//
+// Everything on it is read from the viewer's own resolved session. There is no
+// field here that could be filled in about anybody else, and no route on this
+// page takes an identifier from the request — which is what keeps "does this
+// address have a password" a question the server never answers.
+type AccountData struct {
+	Email string
+	Name  string
+
+	// Team and Role are the ones the session is currently acting as, so that
+	// somebody who belongs to several knows which of them this page was reached
+	// through before they sign out of everything.
+	Team string
+	Role string
+
+	// Since is when this session began, which is the only thing the sessions
+	// section has to say about it that a person would recognise.
+	Since string
+
+	// HasPassword decides whether the password section offers to set a first one
+	// or to replace one. It is the viewer's own fact about their own account,
+	// read from their own session — there is no route here that answers it about
+	// anybody else.
+	HasPassword bool
+
+	// RecentAuth reports that this session proved who holds it recently enough
+	// to change how the account is signed in to.
+	//
+	// It is what makes a forgotten password recoverable without a second kind of
+	// mailed token: a session started from a link in the person's own mail
+	// carries exactly the authority a reset link would have carried, and it
+	// carries it for ten minutes rather than for the life of the cookie.
+	RecentAuth bool
+
+	// MinLength mirrors the service's own floor onto the input, so the browser
+	// says it before a round trip does. The rule is still enforced there.
+	MinLength int
+
+	Error  string
+	Notice string
+}
+
+// Account is the page a person manages themselves from.
+//
+// Separate from /settings, which is the install's facts — the owner, the
+// cluster, the mail transport, the version — and is about the machine rather
+// than about anybody. One prefix meaning two scopes is how a reader stops
+// trusting either.
+templ Account(d AccountData) {
+	<div class="settings-shell">
+		// The same shape as an app's settings: a nav beside the page rather than
+		// above it, and every section on that page. Tabs hide what they are not
+		// showing, so finding something means guessing which tab owns it.
+		<nav class="settings-nav" aria-label="Account sections">
+			<a href="#you">You</a>
+			<a href="#password">Password</a>
+			<a href="#sessions">Sessions</a>
+		</nav>
+		<div class="settings-main">
+			if d.Notice != "" {
+				<div class="callout mb-5"><div>{ d.Notice }</div></div>
+			}
+			@accountIdentity(d)
+			@accountPassword(d)
+			@accountSessions(d)
+		</div>
+	</div>
+}
+
+// accountPassword is the whole of adding, changing and removing one.
+//
+// Three rendered states, and which one appears is decided by two booleans that
+// are both facts about the viewer's own account. Nothing here takes an
+// identifier from the request, so there is no version of this section that could
+// be rendered about somebody else.
+templ accountPassword(d AccountData) {
+	<section id="password" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("key")</span>
+			<h2 class="settings-section-title">Password</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">
+					if d.HasPassword {
+						Change your password
+					} else {
+						Add a password
+					}
+				</span>
+			</div>
+			<div class="panel-body">
+				if d.Error != "" {
+					<div class="callout callout-err mb-4"><div>{ d.Error }</div></div>
+				}
+				if !d.HasPassword && !d.RecentAuth {
+					// Not a disabled form. A control that leads only to a refusal
+					// tells the viewer they have a permission they do not, and the
+					// service refuses this regardless of what is drawn here.
+					<div class="callout">
+						<div>
+							<strong>Sign in again first.</strong>
+							Adding a password needs a sign-in from the last few
+							minutes, so that a browser somebody left open cannot
+							quietly become a permanent way in.
+						</div>
+					</div>
+					<p class="mt-4">
+						<a class="btn" href="/sign-in">Sign in again</a>
+					</p>
+				} else {
+					<p class="hint mb-4">
+						if d.HasPassword {
+							Your emailed sign-in link keeps working either way.
+							Changing your password signs out your other browsers.
+						} else {
+							You sign in with a link emailed to you. A password is
+							optional and works alongside it — the link keeps working
+							either way.
+						}
+					</p>
+					<form method="post" action="/account/password" class="flex flex-col gap-4">
+						if d.HasPassword {
+							<div class="field">
+								<label class="label" for="current-password">Current password</label>
+								<input
+									class="control"
+									id="current-password"
+									name="current_password"
+									type="password"
+									autocomplete="current-password"
+									if !d.RecentAuth {
+										required
+									}
+								/>
+								if d.RecentAuth {
+									<span class="hint">
+										Leave this blank if you have forgotten it. You
+										signed in a few minutes ago, which is proof
+										enough.
+									</span>
+								}
+							</div>
+						}
+						<div class="field">
+							<label class="label" for="new-password">New password</label>
+							<input
+								class="control"
+								id="new-password"
+								name="password"
+								type="password"
+								autocomplete="new-password"
+								minlength={ d.MinLength }
+								required
+							/>
+							<span class="hint">
+								At least { d.MinLength } characters. Longer beats
+								stranger — four ordinary words are harder to guess than
+								anything with a symbol in the middle.
+							</span>
+						</div>
+						<div class="field">
+							<label class="label" for="confirm-password">Confirm new password</label>
+							<input
+								class="control"
+								id="confirm-password"
+								name="confirm"
+								type="password"
+								autocomplete="new-password"
+								minlength={ d.MinLength }
+								required
+							/>
+						</div>
+						<div>
+							<button class="btn btn-primary" type="submit">
+								if d.HasPassword {
+									Change password
+								} else {
+									Set password
+								}
+							</button>
+						</div>
+					</form>
+					if d.HasPassword {
+						// Below a rule rather than in a danger zone. Removing a
+						// password takes nothing away that cannot be put back in
+						// thirty seconds, and the emailed link never stopped
+						// working — so this is not in the same class as deleting an
+						// app, and dressing it that way would dilute what that
+						// styling means everywhere else.
+						<div class="mt-6 border-t border-border pt-5">
+							<p class="hint mb-3">
+								You can remove your password and go back to signing in
+								with an emailed link. Doing so signs out your other
+								browsers.
+							</p>
+							<form
+								method="post"
+								action="/account/password/remove"
+								class="flex flex-wrap items-end gap-3"
+								data-confirm="You will sign in with an emailed link from now on. This also signs you out of every other browser."
+								data-confirm-title="Remove your password?"
+								data-confirm-label="Remove password"
+							>
+								if !d.RecentAuth {
+									<div class="field min-w-[220px]">
+										<label class="label" for="remove-current">Current password</label>
+										<input
+											class="control"
+											id="remove-current"
+											name="current_password"
+											type="password"
+											autocomplete="current-password"
+											required
+										/>
+									</div>
+								}
+								<button class="btn btn-danger" type="submit">Remove password</button>
+							</form>
+						</div>
+					}
+				}
+			</div>
+		</div>
+	</section>
+}
+
+templ accountIdentity(d AccountData) {
+	<section id="you" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("user")</span>
+			<h2 class="settings-section-title">You</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Your account</span></div>
+			<div class="panel-body">
+				<dl class="kv">
+					<dt>Email</dt>
+					<dd class="mono">{ d.Email }</dd>
+					if d.Name != "" {
+						<dt>Name</dt>
+						<dd>{ d.Name }</dd>
+					}
+					<dt>Signing in</dt>
+					<dd>
+						if d.HasPassword {
+							Emailed link, or a password
+						} else {
+							Emailed link
+						}
+					</dd>
+					<dt>Acting as</dt>
+					<dd>
+						{ d.Team }
+						if d.Role != "" {
+							<span class="hint">— { d.Role }</span>
+						}
+					</dd>
+				</dl>
+				<p class="hint mt-3">
+					Your address is how you sign in and where links are sent. It is
+					changed by whoever administers your team, so that nobody can move
+					an account to an address they control on their own.
+				</p>
+			</div>
+		</div>
+	</section>
+}
+
+templ accountSessions(d AccountData) {
+	<section id="sessions" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("monitor")</span>
+			<h2 class="settings-section-title">Sessions</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Signed-in browsers</span></div>
+			<div class="panel-body">
+				<dl class="kv">
+					<dt>This browser since</dt>
+					<dd>{ d.Since }</dd>
+				</dl>
+				// The control exists already, in a details element in the sidebar
+				// footer. It is here as well because the day somebody needs it is
+				// the day they think a cookie was copied off a machine, and that
+				// is not a day to go looking for a menu.
+				<p class="hint mt-3">
+					Signing out everywhere ends every session you hold, on every
+					device, including this one. Use it if you think somebody else has
+					a copy of your session.
+				</p>
+				<form method="post" action="/sign-out-everywhere" class="mt-4">
+					<button
+						class="btn btn-danger"
+						type="submit"
+						data-confirm="This signs you out of every browser and device, including this one. You will need to sign in again."
+						data-confirm-title="Sign out everywhere?"
+						data-confirm-label="Sign out everywhere"
+					>Sign out everywhere</button>
+				</form>
+			</div>
+		</div>
+	</section>
+}

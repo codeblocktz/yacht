@@ -96,6 +96,20 @@ type Slots struct {
 	// account-level notices such as a low balance or a pending suspension.
 	Banner templ.Component
 
+	// Bare drops the sidebar and the top bar, leaving the page the whole
+	// window.
+	//
+	// For the pages somebody meets before they are let in. Emptying the
+	// individual slots is not the same thing: the navigation goes, but the
+	// sidebar column and the top bar stay, so a sign-in form sits beside an
+	// empty rail and under an empty header — chrome for an application the
+	// visitor has no access to yet.
+	//
+	// A chrome decision rather than a page one, which is why it lives here
+	// beside FullBleed. A wrapping application that replaces the layout decides
+	// for itself what its signed-out pages look like.
+	Bare bool
+
 	// Flash is the outcome of whatever the last request did, shown once.
 	//
 	// Filled by the server immediately before rendering rather than by a

@@ -14,6 +14,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/google/uuid"
 
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/domain"
@@ -52,6 +53,12 @@ func TestGallery(t *testing.T) {
 		slots := DefaultSlots{}.Slots(context.Background(),
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
+		slots.Bare = g.bare
+		if g.bare {
+			slots.Nav = nil
+			slots.SidebarTop = nil
+			slots.SidebarFooter = nil
+		}
 		if err := Layout(slots, g.page).Render(context.Background(), f); err != nil {
 			f.Close()
 			t.Fatalf("render %s: %v", g.file, err)
@@ -102,6 +109,11 @@ type galleryPage struct {
 	path   string
 	crumbs []Crumb
 	page   templ.Component
+
+	// bare renders the page the way renderSignedOut does: no sidebar, no top
+	// bar. Without it the signed-out pages are reviewed wearing chrome they do
+	// not ship with, which is the opposite of what a gallery is for.
+	bare bool
 }
 
 // section renders a labelled band so several states can share one image.
@@ -452,18 +464,71 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
-			file: "states-sign-in.html", path: "/sign-in",
+			file: "states-sign-in.html", path: "/sign-in", bare: true,
 			page: stack(
-				section("Sign in", "the form, and the same form after a rejected address",
+				section("Sign in", "both ways in, offered to everybody before anything is known about them",
+					SignIn(SignInData{})),
+				section("Refused",
+					"a rejected address, and the one message every failed password gets — "+
+						"an unknown address, an address with no password and a wrong "+
+						"password all read the same",
 					stack(
-						SignIn(SignInData{}),
 						SignIn(SignInData{
 							Email: "not an address",
 							Error: "That does not look like an email address.",
 						}),
+						SignIn(SignInData{
+							Email:  "person@example.com",
+							Error:  "That email address and password do not match.",
+							Method: SignInByPassword,
+						}),
 					)),
 				section("Check your mail", "the same page whether or not the address is registered",
 					CheckMail()),
+			),
+		},
+		{
+			file: "states-account.html", path: "/account",
+			crumbs: []Crumb{{Label: "Account"}},
+			page: stack(
+				section("No password, signed in a moment ago",
+					"the offer to add one",
+					Account(AccountData{
+						Email: "person@example.com", Name: "Eric",
+						Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+						MinLength: account.MinPasswordLength, RecentAuth: true,
+					})),
+				section("No password, and this session is old",
+					"not a disabled form — a control that leads only to a refusal "+
+						"tells somebody they have a permission they do not",
+					Account(AccountData{
+						Email: "person@example.com", Name: "Eric",
+						Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+						MinLength: account.MinPasswordLength,
+					})),
+				section("Has a password",
+					"the current one is required, because this session is no longer fresh",
+					Account(AccountData{
+						Email: "person@example.com", Name: "Eric",
+						Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+						MinLength: account.MinPasswordLength, HasPassword: true,
+					})),
+				section("Has a password, and has just signed in",
+					"the current one becomes optional — this is what makes a "+
+						"forgotten password recoverable without a second kind of mailed token",
+					Account(AccountData{
+						Email: "person@example.com", Name: "Eric",
+						Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+						MinLength:   account.MinPasswordLength,
+						HasPassword: true, RecentAuth: true,
+					})),
+				section("Refused", "what the page says when the two boxes disagree",
+					Account(AccountData{
+						Email: "person@example.com", Name: "Eric",
+						Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+						MinLength: account.MinPasswordLength, HasPassword: true, RecentAuth: true,
+						Error: "Those two passwords are not the same.",
+					})),
 			),
 		},
 		{

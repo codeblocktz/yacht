@@ -130,6 +130,23 @@ func (s *Service) EnsureUser(ctx context.Context, email, displayName string) (Us
 	return toUser(row), nil
 }
 
+// User returns the person a user id names.
+//
+// Takes an id rather than an address, because every caller already holds one
+// from a session they resolved. A lookup by address reachable from a handler
+// would be a way to ask whether somebody has an account, which is the disclosure
+// the sign-in design exists to withhold.
+func (s *Service) User(ctx context.Context, userID uuid.UUID) (User, error) {
+	row, err := s.q.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, ErrNotAMember
+		}
+		return User{}, fmt.Errorf("account: read user: %w", err)
+	}
+	return toUser(row), nil
+}
+
 // CreateTeam creates a team and makes the creator its owner.
 //
 // Both writes happen in one transaction: a team whose creator is not a member

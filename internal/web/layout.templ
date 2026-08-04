@@ -66,37 +66,64 @@ templ Layout(s Slots, page templ.Component) {
 			<script src={ asset("/assets/js/sliders.js") } defer></script>
 		</head>
 		<body class="h-full">
-			<a class="skip-link" href="#main-content">Skip to content</a>
-			<div class="flex h-full">
-				<button type="button" tabindex="-1" class="nav-backdrop" data-nav-backdrop onclick="yachtSidebarToggle()" aria-label="Close navigation"></button>
-				@sidebar(s)
-				<div class="flex min-w-0 flex-1 flex-col" data-app-shell>
-					@topbar(s)
-					if s.Banner != nil {
-						<div class="border-b border-border px-6 py-3">
-							@slot(s.Banner)
-						</div>
-					}
-					if s.FullBleed {
-						// No wrapper and no scroll here: the page fills what is
-						// left of the window and scrolls its own content, which
-						// is what lets a canvas be the size of the screen.
-						<main id="main-content" tabindex="-1" class="flex min-h-0 flex-1 flex-col overflow-hidden">
-							@page
-						</main>
-					} else {
-						<main id="main-content" tabindex="-1" class="min-h-0 flex-1 overflow-y-auto">
-							<div class="mx-auto w-full max-w-[1240px] px-4 py-6 sm:px-6">
-								@page
-							</div>
-						</main>
-					}
-				</div>
-			</div>
-			@confirmationDialog()
-			@toastHost(s.Flash)
+			if s.Bare {
+				// No sidebar, no top bar, no skip link — there is nothing to
+				// skip past. The page is the window.
+				// min-h-dvh rather than min-h-full: a percentage height only
+				// resolves against a parent that has one, and justify-center
+				// then does nothing at all — the card sits at the top of an
+				// empty screen looking like the page failed to finish loading.
+				// The dynamic viewport unit also survives a mobile browser's
+				// address bar sliding away.
+				<main id="main-content" class="flex min-h-dvh flex-col justify-center overflow-y-auto px-4 py-10">
+					@page
+				</main>
+				@confirmationDialog()
+				@toastHost(s.Flash)
+			} else {
+				@appShell(s, page)
+			}
 		</body>
 	</html>
+}
+
+// appShell is the dashboard's chrome: the sidebar, the top bar, and the content
+// column between them.
+//
+// Split out of Layout so that a bare page is an alternative to the whole shell
+// rather than the shell with every part of it emptied. Nilling the slots leaves
+// the rail and the header behind, which is how a sign-in form ended up sitting
+// beside an empty sidebar.
+templ appShell(s Slots, page templ.Component) {
+	<a class="skip-link" href="#main-content">Skip to content</a>
+	<div class="flex h-full">
+		<button type="button" tabindex="-1" class="nav-backdrop" data-nav-backdrop onclick="yachtSidebarToggle()" aria-label="Close navigation"></button>
+		@sidebar(s)
+		<div class="flex min-w-0 flex-1 flex-col" data-app-shell>
+			@topbar(s)
+			if s.Banner != nil {
+				<div class="border-b border-border px-6 py-3">
+					@slot(s.Banner)
+				</div>
+			}
+			if s.FullBleed {
+				// No wrapper and no scroll here: the page fills what is left of
+				// the window and scrolls its own content, which is what lets a
+				// canvas be the size of the screen.
+				<main id="main-content" tabindex="-1" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+					@page
+				</main>
+			} else {
+				<main id="main-content" tabindex="-1" class="min-h-0 flex-1 overflow-y-auto">
+					<div class="mx-auto w-full max-w-[1240px] px-4 py-6 sm:px-6">
+						@page
+					</div>
+				</main>
+			}
+		</div>
+	</div>
+	@confirmationDialog()
+	@toastHost(s.Flash)
 }
 
 // toastHost renders the outcome of whatever the last request did.
@@ -310,6 +337,16 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 			<span class="nav-tip" aria-hidden="true">{ ownerLabel(owner) }</span>
 		</summary>
 		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
+			// Above Settings, and only when there are accounts to have one.
+			// canSignOut is derived from holding a membership, which is true
+			// exactly when /account is on the router — so the link cannot point
+			// at a route that is not mounted.
+			if canSignOut {
+				<a href="/account" class="switcher-item">
+					@icon("user")
+					<span class="flex-1">Account</span>
+				</a>
+			}
 			<a href="/settings" class="switcher-item">
 				@icon("settings")
 				<span class="flex-1">Settings</span>
@@ -711,6 +748,17 @@ templ icon(name string) {
 			case "settings":
 				<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
 				<circle cx="12" cy="12" r="3"></circle>
+			case "user":
+				<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+				<circle cx="12" cy="7" r="4"></circle>
+			case "key":
+				<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"></path>
+				<path d="m21 2-9.6 9.6"></path>
+				<circle cx="7.5" cy="15.5" r="5.5"></circle>
+			case "monitor":
+				<rect width="20" height="14" x="2" y="3" rx="2"></rect>
+				<line x1="8" x2="16" y1="21" y2="21"></line>
+				<line x1="12" x2="12" y1="17" y2="21"></line>
 		}
 	</svg>
 }
