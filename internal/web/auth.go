@@ -206,34 +206,68 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	team, err := s.activeTeam(ctx, user)
-	if err != nil {
-		s.log.Error("find a team to sign in to",
+	if !s.startSession(w, r, user, account.MethodMagicLink) {
+		return
+	}
+
+	// See other rather than a temporary redirect: the link has been spent, and
+	// a browser that repeated this GET from history would meet a dead token.
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// startSession opens a session for a person who has just been proved, and puts
+// the cookie on this browser.
+//
+// The single place a verified person becomes a signed-in browser. Every way in
+// funnels through here, so the team bootstrap, the cookie attributes and the
+// audit line are written once and cannot drift apart between methods. A second
+// call site would be a second chance to forget the bootstrap, and forgetting it
+// looks like a sign-in that succeeded and landed on a dashboard with nothing
+// on it.
+//
+// It picks the team itself rather than taking one, deliberately. Somebody whose
+// only membership was removed, and the configured owner of an install signing in
+// for the first time, both need BootstrapOwner — and that is a thing only this
+// function knows to ask for.
+//
+// Reports whether it succeeded, having already rendered the failure. The caller
+// redirects on true and returns on false.
+func (s *Server) startSession(
+	w http.ResponseWriter, r *http.Request, user account.User, method account.Method,
+) bool {
+	ctx := r.Context()
+
+	failed := func(what string, err error) bool {
+		s.log.Error(what,
 			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
 		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", SignIn(SignInData{
 			Error: "Something went wrong signing you in. Try again in a moment.",
 		}))
-		return
+		return false
+	}
+
+	team, err := s.activeTeam(ctx, user)
+	if err != nil {
+		return failed("find a team to sign in to", err)
 	}
 
 	raw, err := s.accounts.CreateSession(
 		ctx, user.ID, team, r.UserAgent(), clientIP(r), s.sessionTTL)
 	if err != nil {
-		s.log.Error("create session",
-			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
-		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", SignIn(SignInData{
-			Error: "Something went wrong signing you in. Try again in a moment.",
-		}))
-		return
+		return failed("create session", err)
 	}
 
 	setSessionCookie(w, r, raw, s.sessionTTL)
+	// The method is on the log line and nowhere else. An operator reading an
+	// unexpected sign-in needs to know which door it came through, and that is
+	// the only thing about the method which survives past this point: nothing
+	// downstream is allowed to behave differently by it, because that is how two
+	// ways in stop producing the same session.
 	s.log.Info("signed in",
-		slog.String("user", user.ID.String()), slog.String("team", team))
-
-	// See other rather than a temporary redirect: the link has been spent, and
-	// a browser that repeated this GET from history would meet a dead token.
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+		slog.String("user", user.ID.String()),
+		slog.String("team", team),
+		slog.String("method", string(method)))
+	return true
 }
 
 // signOut ends the session this browser holds.
