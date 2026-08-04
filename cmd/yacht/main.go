@@ -124,15 +124,18 @@ func run() error {
 
 	// Which resolver answers questions about custom domains.
 	//
-	// The host's own by default. An operator who names a server gets that one
-	// asked directly, which is what a self-hosted install serving customer
-	// domains wants: the host resolver caches the negative answer from the check
-	// made just before the record was created, and then repeats it for the
-	// negative TTL.
-	var resolver domain.Resolver = domain.NetResolver{}
+	// The domain's own nameservers, by default. Every recursive resolver caches
+	// negative answers, and the check made moments before somebody creates a
+	// record is exactly what puts one there — so a correct record reads as
+	// missing for the zone's negative TTL. Naming a public resolver instead
+	// would not remove a cache from the path, only swap one for another.
+	//
+	// The system resolver stays as the fallback, for an install whose egress
+	// does not allow arbitrary port 53.
+	var resolver domain.Resolver = domain.AuthoritativeResolver{Fallback: domain.NetResolver{}}
 	if cfg.DNSResolver != "" {
 		resolver = domain.NewDirectResolver(cfg.DNSResolver)
-		log.Info("custom domains are resolved directly",
+		log.Info("custom domains are resolved by one configured server",
 			slog.String("resolver", domain.ResolverName(resolver)))
 	}
 
