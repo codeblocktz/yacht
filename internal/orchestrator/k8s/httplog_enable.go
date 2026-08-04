@@ -26,11 +26,11 @@ var helmChartConfig = schema.GroupVersionResource{
 
 // EnableHTTPLogs switches the ingress controller's access log on.
 //
-// Yacht does not own the ingress controller, which is why this is an action
-// somebody takes rather than something that happens on their behalf: it
-// restarts a controller every workload in the cluster routes through, and a
-// platform that did that unannounced would be causing an outage to turn on a
-// log.
+// Called once at startup, not from a page. It restarts a controller every
+// workload in the cluster routes through, so it is announced in the log rather
+// than offered as a button — a cluster-wide restart is not something to ask one
+// app's owner to accept on everybody else's behalf, and an app whose requests
+// go unrecorded until somebody finds that button is an app nobody can debug.
 //
 // Only where k3s installed Traefik. Elsewhere the controller was installed by
 // something Yacht knows nothing about — a Helm release, an operator, a

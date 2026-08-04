@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"io"
 	"iter"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -10,6 +12,12 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
+
+// testLogger discards. These tests assert on what the cluster was asked to do,
+// not on what was written about it.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // loggingOrchestrator records which pod was asked for, so a test can prove the
 // scoping rather than only that a call happened.
@@ -376,5 +384,90 @@ func TestLogStreamReadsFromTheAppsOwnNamespace(t *testing.T) {
 	}
 	if orch.last.Previous {
 		t.Error("a followed stream asked for the previous container, which can never produce a line")
+	}
+}
+
+// accessLogOrchestrator is a cluster whose ingress access log can be switched.
+//
+// It counts the switch rather than only recording it, because "on by default"
+// and "turned on at every boot" are the same on the first run and different
+// forever after: the second restarts the ingress controller each time the
+// control plane restarts.
+type accessLogOrchestrator struct {
+	*recordingOrchestrator
+	on        bool
+	enables   int
+	supported bool
+}
+
+func (a *accessLogOrchestrator) HTTPLogs(
+	context.Context, orchestrator.HTTPLogOptions,
+) (orchestrator.HTTPLogs, error) {
+	return orchestrator.HTTPLogs{}, nil
+}
+
+func (a *accessLogOrchestrator) HTTPLogHint() string { return "kind: HelmChartConfig" }
+
+func (a *accessLogOrchestrator) HTTPLogsEnabled(context.Context) bool { return a.on }
+
+func (a *accessLogOrchestrator) EnableHTTPLogs(context.Context) error {
+	a.enables++
+	if !a.supported {
+		return orchestrator.ErrNotSupported
+	}
+	a.on = true
+	return nil
+}
+
+// Request logging is on by default rather than something to find and switch on.
+//
+// An app whose traffic is not recorded is an app nobody can debug, and the
+// previous behaviour put that behind a button on one app's page that restarted
+// the whole cluster's ingress controller — a cluster-wide cost presented as a
+// per-app choice.
+func TestRequestLoggingIsTurnedOnWithoutBeingAsked(t *testing.T) {
+	orch := &accessLogOrchestrator{
+		recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()},
+		supported:             true,
+	}
+	s := &Service{orch: orch, log: testLogger()}
+
+	s.EnsureHTTPLogs(context.Background())
+
+	if !orch.on {
+		t.Fatal("request logging is still off after startup")
+	}
+}
+
+// And on again at the next boot, which would restart the ingress controller
+// every time the control plane restarted.
+func TestRequestLoggingIsNotTurnedOnTwice(t *testing.T) {
+	orch := &accessLogOrchestrator{
+		recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()},
+		supported:             true,
+		on:                    true,
+	}
+	s := &Service{orch: orch, log: testLogger()}
+
+	s.EnsureHTTPLogs(context.Background())
+
+	if orch.enables != 0 {
+		t.Errorf("reconfigured an already-logging controller %d times, "+
+			"restarting every app in the cluster for nothing", orch.enables)
+	}
+}
+
+// A cluster whose ingress controller Yacht did not install is not a failure to
+// boot. It keeps running and the HTTP tab hands over the configuration.
+func TestAControllerYachtCannotConfigureIsNotFatal(t *testing.T) {
+	orch := &accessLogOrchestrator{
+		recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()},
+	}
+	s := &Service{orch: orch, log: testLogger()}
+
+	s.EnsureHTTPLogs(context.Background())
+
+	if orch.on {
+		t.Error("reported logging as on where it could not be configured")
 	}
 }

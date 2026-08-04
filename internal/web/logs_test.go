@@ -26,7 +26,6 @@ type recordingLogs struct {
 	stream   []string
 	build    *app.Build
 	http     *app.HTTPLogs
-	enabled  bool
 }
 
 func (l *recordingLogs) Logs(
@@ -66,12 +65,6 @@ func (l *recordingLogs) DeploymentHTTPLogs(
 		return app.HTTPLogs{}, nil
 	}
 	return *l.http, nil
-}
-
-// EnableHTTPLogs records that the cluster-wide switch was thrown.
-func (l *recordingLogs) EnableHTTPLogs(context.Context) error {
-	l.enabled = true
-	return nil
 }
 
 func (l *recordingLogs) Deployment(
@@ -288,28 +281,40 @@ func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
 	}
 }
 
-// The panel offers to turn logging on where Yacht can do it.
-func TestTheHTTPTabOffersToTurnLoggingOn(t *testing.T) {
+// Where Yacht owns the controller there is nothing to press: the access log is
+// on by default, so the panel reports a restart in progress rather than asking
+// somebody to accept one.
+//
+// The note is the service's, and this asserts the page shows it rather than
+// silently dropping the one sentence that explains an empty pane.
+func TestTheHTTPTabOffersNothingToTurnOn(t *testing.T) {
 	logs := &recordingLogs{http: &app.HTTPLogs{
-		Hosts:     []string{"web.apps.example.com"},
-		Note:      "not writing an access log",
-		Hint:      "kind: HelmChartConfig",
-		CanEnable: true,
+		Hosts: []string{"web.apps.example.com"},
+		Note:  "Yacht switches it on at startup and the controller restarts",
 	}}
 	h := testServer(t, Options{Logs: logs})
 
 	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
 		Body.String()
-	if !strings.Contains(body, "Turn on request logging") {
-		t.Fatal("no way to turn it on")
+	if strings.Contains(body, "Turn on request logging") {
+		t.Error("the page still asks somebody to switch on what is now a default")
 	}
-	// The restart is the cost, and it is cluster-wide. Somebody clicking this
-	// from one app's page must not learn that afterwards.
-	if !strings.Contains(body, "restarts the ingress controller") {
-		t.Error("the restart is not mentioned")
+	if strings.Contains(body, "/logs/http/enable") {
+		t.Error("the removed route is still linked")
 	}
-	if !strings.Contains(body, "whole cluster") {
-		t.Error("the blast radius is not mentioned")
+	if !strings.Contains(body, "switches it on at startup") {
+		t.Error("nothing says why the pane is empty")
+	}
+}
+
+// The route that turned it on is gone, not merely unlinked. A POST endpoint
+// left behind is one somebody can still reach with curl.
+func TestTheEnableRouteIsGone(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{}})
+
+	got := post(t, h, "/apps/web/logs/http/enable", nil).Code
+	if got != http.StatusNotFound {
+		t.Errorf("enable route answers %d, want %d", got, http.StatusNotFound)
 	}
 }
 

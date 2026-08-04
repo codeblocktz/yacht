@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -248,19 +249,21 @@ type HTTPLogs struct {
 	Hosts []string
 
 	// Note explains an empty result, and Hint is the configuration that would
-	// fix it when the answer is a setting.
+	// fix it when the answer is a setting somebody else has to apply.
 	Note string
 	Hint string
-
-	// CanEnable means Yacht can apply that configuration itself.
-	CanEnable bool
 }
 
-// canApplyHTTPLogs reports whether enabling would actually do something.
+// canApplyHTTPLogs reports whether Yacht can configure this cluster's ingress
+// controller at all.
 //
 // Asked by attempting nothing: a dry run against the cluster is the only
 // honest answer, and there is no dry run for this, so the question is narrowed
 // to the one thing that decides it — whether k3s installed the controller.
+//
+// It no longer gates an offer, because nothing is offered any more. It decides
+// which of two true things the panel says while the log is off: that Yacht is
+// switching it on, or that this controller is somebody else's to configure.
 func (s *Service) canApplyHTTPLogs(ctx context.Context, l orchestrator.HTTPLogger) bool {
 	type prober interface{ CanConfigureIngress(context.Context) bool }
 	p, ok := l.(prober)
@@ -309,13 +312,20 @@ func (s *Service) DeploymentHTTPLogs(
 
 	switch got.Reason {
 	case orchestrator.HTTPLogNotEnabled:
+		// Two different situations that look identical from here, and only one
+		// of them is anybody's to act on. Where Yacht owns the controller this
+		// is a restart in progress and the answer is to wait; where it does
+		// not, the setting lives wherever the controller was installed from and
+		// nothing Yacht does will change it.
+		if s.canApplyHTTPLogs(ctx, logger) {
+			out.Note = "The ingress controller is not writing an access log yet. " +
+				"Yacht switches it on at startup and the controller restarts to " +
+				"pick that up, so requests should start appearing within a minute."
+			break
+		}
 		out.Note = "The ingress controller is running but is not writing an access " +
 			"log, so no requests are being recorded — for this app or any other."
 		out.Hint = logger.HTTPLogHint()
-		// Whether Yacht can do it, rather than only describe it. False on a
-		// cluster whose controller somebody else installed, where the page
-		// falls back to handing over the configuration.
-		out.CanEnable = s.canApplyHTTPLogs(ctx, logger)
 	case orchestrator.HTTPLogNoController:
 		out.Note = "No ingress controller was found, so nothing in this cluster is " +
 			"recording requests."
@@ -329,24 +339,49 @@ func (s *Service) DeploymentHTTPLogs(
 	return out, nil
 }
 
-// CanEnableHTTPLogs reports whether this install can switch the access log on
-// itself, rather than only telling somebody how to.
-func (s *Service) CanEnableHTTPLogs(ctx context.Context) bool {
-	logger, ok := s.orch.(orchestrator.HTTPLogger)
-	return ok && !logger.HTTPLogsEnabled(ctx)
-}
-
-// EnableHTTPLogs turns on the ingress controller's access log.
+// EnsureHTTPLogs turns the ingress controller's access log on at startup.
 //
-// Cluster-wide, and deliberately not per app: there is one controller and one
-// log. The caller is responsible for having said so — this restarts a
-// controller every workload routes through.
-func (s *Service) EnableHTTPLogs(ctx context.Context) error {
+// Request logging is not a feature somebody switches on. An app whose requests
+// are not being recorded is an app nobody can debug, and a platform that made
+// that the default and then put the fix behind a button was asking every user
+// to discover, understand, and accept a cluster-wide restart before they could
+// see their own traffic. So Yacht does it once, here, on its own.
+//
+// It is still cluster-wide — there is one controller and one log, and Traefik
+// has no per-router or per-host way to switch access logging off — which is
+// exactly why this is not reached from an app's page. Nothing about it is one
+// app's decision, so nothing about it is presented as one.
+//
+// Idempotent, and quiet when there is nothing to do: a controller already
+// writing an access log is left alone, so this costs a restart once per
+// install rather than once per boot.
+func (s *Service) EnsureHTTPLogs(ctx context.Context) {
 	logger, ok := s.orch.(orchestrator.HTTPLogger)
 	if !ok {
-		return orchestrator.ErrNotSupported
+		return
 	}
-	return logger.EnableHTTPLogs(ctx)
+	if logger.HTTPLogsEnabled(ctx) {
+		return
+	}
+
+	if err := logger.EnableHTTPLogs(ctx); err != nil {
+		if errors.Is(err, orchestrator.ErrNotSupported) {
+			// This cluster's controller belongs to whoever installed it. Said
+			// once at startup rather than swallowed, because it is the reason
+			// the HTTP tab will keep handing over a configuration file.
+			s.log.Info("request logging is off and this cluster's ingress controller "+
+				"is not one Yacht can configure — apply its access log setting "+
+				"wherever the controller was installed from",
+				slog.String("reason", err.Error()))
+			return
+		}
+		s.log.Error("could not turn request logging on",
+			slog.String("error", err.Error()))
+		return
+	}
+	s.log.Info("request logging was off and has been turned on — the ingress " +
+		"controller is restarting, so every app in this cluster will drop " +
+		"connections briefly")
 }
 
 // HTTPBucket is one column of the request timeline.
