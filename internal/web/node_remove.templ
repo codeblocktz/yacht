@@ -106,13 +106,32 @@ templ nodeActions(d NodeDetailData) {
 					>
 						<button class="btn btn-danger" type="submit">Remove from cluster</button>
 					</form>
-				} else {
+			} else {
 					// Offered only once the node is empty. A button that would be
 					// refused is worse than one that is not there: it reads as
 					// permission and answers with an error.
-					<button class="btn" type="button" disabled title="Drain the node first">
-						Remove from cluster
-					</button>
+					//
+					// The reason moves from a title attribute into a popover: a
+					// title waits a second, cannot be reached by keyboard, and
+					// reads as a browser artefact rather than part of the page —
+					// the same argument .nav-tip already makes in the sidebar.
+					<span class="inline-flex items-center gap-1">
+						<button class="btn" type="button" disabled>
+							Remove from cluster
+						</button>
+						@helpNote("this cannot be removed yet") {
+							<p>
+								A node is only removed once nothing a drain would move is
+								left on it. Drain it first, and this becomes available when
+								the list below is empty.
+							</p>
+							<p class="mt-2">
+								If something refuses to move, the steps above name it. A pod
+								with storage on this machine cannot go anywhere, and that
+								one needs deciding rather than waiting.
+							</p>
+						}
+					</span>
 				}
 			</div>
 			<p class="mt-3 text-[12.5px] text-muted-foreground">
@@ -130,8 +149,17 @@ templ nodeActions(d NodeDetailData) {
 	</div>
 }
 
-// NodeDetailBody is the polled half: what is still running.
+// NodeDetailBody is the polled half: how far the drain has got, and what is
+// still running.
 templ NodeDetailBody(d NodeDetailData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Taking out of service</span>
+		</div>
+		<div class="panel-body">
+			@stepList(nodeDrainSteps(d))
+		</div>
+	</div>
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Running here</span>

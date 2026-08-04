@@ -30,7 +30,29 @@ type NodeInfo struct {
 	CreatedAt     time.Time
 	UsageKnown    bool // false when no metrics source is available
 	Unschedulable bool
+
+	// Reason and Message are why the node is not Ready, taken from its own
+	// conditions.
+	//
+	// The same argument PodInfo.Reason makes, for the same reason. Ready is one
+	// bit, and a machine that has registered and is starting its container
+	// runtime draws exactly like one that registered an hour ago and never came
+	// up — which are the two situations somebody watching a join has to tell
+	// apart. Kubernetes explains itself in the conditions; this carries that
+	// across without a Kubernetes type crossing the seam.
+	//
+	// Empty while the node is Ready.
+	Reason  string
+	Message string
 }
+
+// Joining reports whether this node has registered and is not serving yet.
+//
+// The interesting half of "not ready": a machine partway through starting is
+// progress, and one that has been not-ready for an hour is a problem, but the
+// boolean says the same thing about both. Callers pair this with how long the
+// node has existed.
+func (n NodeInfo) Joining() bool { return !n.Ready }
 
 // CPUPercent returns CPU utilisation, or 0 when usage is unknown.
 func (n NodeInfo) CPUPercent() int {

@@ -311,6 +311,45 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
+			// Joining and draining, which are the two things on this page
+			// somebody starts and then watches. Reaching any of these by
+			// clicking means having a spare machine and the patience to break
+			// it, which is why they rot.
+			file: "states-nodes.html", path: "/cluster/nodes/yacht-w1",
+			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
+			page: stack(
+				section("Joining", "twenty seconds in, in the kubelet's own words",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w3", CreatedAt: now.Add(-20 * time.Second),
+						Reason:  "KubeletNotReady",
+						Message: "container runtime network not ready: cni plugin not initialized",
+					}, 0))))),
+				section("Joined and taking work", "the finished progression",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w1", Ready: true, CreatedAt: now.Add(-3 * time.Hour),
+					}, 31))))),
+				section("Not coming up", "past the point where waiting is the answer",
+					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
+						Name: "yacht-w4", CreatedAt: now.Add(-2 * time.Hour),
+						Reason: "KubeletNotReady",
+					}, 0))))),
+				section("Draining", "counting down, with one that will not move",
+					panelWrap(bodyPad(stepList(nodeDrainSteps(NodeDetailData{
+						Node: orchestrator.NodeInfo{Name: "yacht-w2", Unschedulable: true},
+						Pods: []orchestrator.PodInfo{
+							{Name: "web-1", DrainMoves: true},
+							{Name: "api-1", DrainMoves: true},
+							{Name: "postgres-0", DrainMoves: false},
+						},
+					}))))),
+				section("Blocked", "only local storage left, so it will not empty on its own",
+					panelWrap(bodyPad(stepList(nodeDrainSteps(NodeDetailData{
+						Node: orchestrator.NodeInfo{Name: "yacht-w2", Unschedulable: true},
+						Pods: []orchestrator.PodInfo{{Name: "postgres-0", DrainMoves: false}},
+					}))))),
+			),
+		},
+		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
@@ -509,6 +548,21 @@ func domainGallery(c domain.Custom) NetworkingData {
 			Custom:    []domain.Custom{c},
 		},
 	}
+}
+
+// bodyPad puts a component inside a panel body, for components that are
+// normally rendered into one rather than being a whole panel themselves.
+func bodyPad(inner templ.Component) templ.Component {
+	return templ.ComponentFunc(func(ctx context.Context, w io.Writer) error {
+		if _, err := w.Write([]byte(`<div class="panel-body">`)); err != nil {
+			return err
+		}
+		if err := inner.Render(ctx, w); err != nil {
+			return err
+		}
+		_, err := w.Write([]byte(`</div>`))
+		return err
+	})
 }
 
 // panelWrap puts a component inside the standard panel chrome, so gallery
