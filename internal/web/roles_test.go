@@ -286,7 +286,10 @@ func TestAdminCanDeleteAppsAndInvite(t *testing.T) {
 	rt := newRoleTeam(t, "web-role-admin", "admin-app")
 
 	del := "/apps/" + rt.appName + "/delete"
-	if code := rt.postAs(t, del, rt.admin).Code; code != http.StatusSeeOther {
+	// With the name typed back — deleting checks it on the server, so a
+	// request without it proves nothing about what an admin may do.
+	confirm := url.Values{"confirm": {rt.appName}}
+	if code := rt.postFormAs(t, del, rt.admin, confirm).Code; code != http.StatusSeeOther {
 		t.Fatalf("POST %s as an admin = %d, want 303", del, code)
 	}
 	if rt.appExists(t, rt.appName) {

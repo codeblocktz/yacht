@@ -515,7 +515,9 @@ func TestScaleAndDelete(t *testing.T) {
 		t.Errorf("scaled to %d, want 5", apps.scaled["web"])
 	}
 
-	if rec := post(t, h, "/apps/web/delete", nil); rec.Code != http.StatusSeeOther {
+	// The name is typed back to confirm, and the server checks it — the
+	// dialog is JavaScript and a form can be posted without it.
+	if rec := post(t, h, "/apps/web/delete", url.Values{"confirm": {"web"}}); rec.Code != http.StatusSeeOther {
 		t.Errorf("delete status = %d, want 303", rec.Code)
 	}
 	if len(apps.deleted) != 1 || apps.deleted[0] != "web" {

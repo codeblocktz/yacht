@@ -962,6 +962,18 @@ func (s *Server) appDelete(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(r.Context())
 	name := chi.URLParam(r, "name")
 
+	// Checked here rather than only in the dialog. The dialog is JavaScript,
+	// and without it the form posts straight through — so the guard on the
+	// most destructive action in the product would be one somebody could skip
+	// by having scripts off. Deleting a volume has always been checked this
+	// way; this brings the app in line with it.
+	if strings.TrimSpace(r.FormValue("confirm")) != name {
+		s.appActionFailed(w, r, name, "settings", errors.New(
+			"type the app's name to confirm — deleting it removes its namespace, "+
+				"its domains and its storage"))
+		return
+	}
+
 	if s.apps != nil {
 		if err := s.apps.Delete(r.Context(), owner.ID, name); err != nil {
 			s.log.Error("delete", slog.String("app", name), slog.String("error", err.Error()))
@@ -969,6 +981,7 @@ func (s *Server) appDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.flashOK(w, r, name+" deleted.")
 	http.Redirect(w, r, "/apps", http.StatusSeeOther)
 }
 

@@ -168,6 +168,17 @@ func galleryPages() []galleryPage {
 
 	allApps := []app.App{running, degraded, pending, stopped, unknown, failing}
 
+	// An app built from a repository, with limits set. The settings tab reads
+	// quite differently for one of these — the image is not its own to change.
+	gitApp := mk("api", "yacht-reg:5000/owner-local-api:d0ed801", 1, 1,
+		orchestrator.PhaseRunning, true, "")
+	gitApp.Source = app.SourceGit
+	gitApp.Repo = app.Repo{
+		URL: "https://github.com/codeblocktz/example-api", Branch: "main", Subdir: "server",
+	}
+	gitApp.CPULimit, gitApp.MemoryLimit = "1", "1Gi"
+	gitApp.CPURequest, gitApp.MemoryRequest = "250m", "256Mi"
+
 	pods := []orchestrator.PodInfo{
 		{Name: "web-7d9f4b6c85-2xk9p", Namespace: "yacht-a1b2", Phase: "Running",
 			Node: "yacht-cp", Ready: 1, Total: 1, CreatedAt: now.Add(-4 * time.Hour)},
@@ -350,6 +361,20 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			// The reworked settings, for both kinds of app. A Git app shows a
+			// connected repository and a locked image; an image app shows the
+			// image and no repository at all — two different pages from one
+			// template, and the pair is what a change here has to keep working.
+			file: "states-settings-app.html", path: "/apps/api/settings",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "api"}, {Label: "Settings"}},
+			page: stack(
+				section("From a repository", "a connection, a branch, and an image it does not own",
+					appSettings(settingsGallery(gitApp, 2000, 2<<30))),
+				section("From an image", "no repository, and the image is the thing to change",
+					appSettings(settingsGallery(running, 8000, 16<<30))),
+			),
+		},
+		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
@@ -523,6 +548,23 @@ func domainAt(now time.Time, state domain.State, observed string) domain.Custom 
 		c.NextCheckAt = now.Add(6 * time.Hour)
 	}
 	return c
+}
+
+// settingsGallery builds the settings tab with its sliders already sized.
+//
+// The ceilings are passed in rather than read from a cluster, so the gallery
+// can show both a small install and a large one — a track whose maximum is two
+// cores and one whose maximum is eight look quite different, and only one of
+// them is what most people will see.
+func settingsGallery(a app.App, cpuMax, memMax int64) AppDetailData {
+	return AppDetailData{
+		App:           a,
+		Tab:           "settings",
+		CPULimit:      cpuSlider("cpu_limit", "CPU", a.CPULimit, cpuMax),
+		MemoryLimit:   memSlider("memory_limit", "Memory", a.MemoryLimit, memMax),
+		CPURequest:    cpuSlider("cpu_request", "CPU", a.CPURequest, cpuMax),
+		MemoryRequest: memSlider("memory_request", "Memory", a.MemoryRequest, memMax),
+	}
 }
 
 // namedDomain is domainAt with a hostname of its own, for the install-wide

@@ -986,19 +986,44 @@ templ appLegacySettings(d AppDetailData) {
 		<div class="panel-header">
 			<span class="panel-title">Danger zone</span>
 		</div>
-		<div class="panel-body flex flex-wrap items-center justify-between gap-3">
-			<div>
-				<div class="font-medium">Delete this app</div>
-				<p class="hint mt-0.5">Removes the workload and its namespace. Not reversible.</p>
-			</div>
+	<div class="panel-body">
+			<div class="font-medium">Delete this app</div>
+			<p class="hint mt-0.5">
+				Removes the workload, its namespace, its domains and its storage. Not
+				reversible.
+			</p>
+			// The name is typed back, and the server checks it.
+			//
+			// The dialog alone is not a guard: it is JavaScript, and without it
+			// the form posts straight through. Deleting a volume has always
+			// asked this way for the same reason — the cost of getting it wrong
+			// is something that does not come back, and a button somebody can
+			// reach with one misplaced click is not enough between them.
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/delete") }
-				data-confirm="This deletes the app and its namespace. This cannot be undone."
-				data-confirm-title={ "Delete " + a.Name + "?" }
-				data-confirm-label="Delete app"
+				class="mt-4 flex flex-wrap items-end gap-3"
 			>
-				<button class="btn btn-danger" type="submit">Delete app</button>
+				<div class="field min-w-[220px] flex-1">
+					<label class="label" for="confirm-delete">
+						Type <code class="mono">{ a.Name }</code> to confirm
+					</label>
+					<input
+						class="control mono"
+						id="confirm-delete"
+						name="confirm"
+						placeholder={ a.Name }
+						autocomplete="off"
+						required
+					/>
+				</div>
+				<button
+					class="btn btn-danger"
+					type="submit"
+					data-confirm="This deletes the app, its namespace, its domains and its storage. This cannot be undone."
+					data-confirm-title={ "Delete " + a.Name + "?" }
+					data-confirm-label="Delete app"
+				>Delete app</button>
 			</form>
 		</div>
 	</div>

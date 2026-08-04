@@ -38,8 +38,11 @@ nothing you build here is locked in.
 | | |
 |---|---|
 | Deploy a container image, with env vars and replicas | ✅ |
+| Change the image, port, limits and repository afterwards | ✅ |
 | Build and deploy from a Git repository, using buildpacks | ✅ |
+| Branches read from the remote as you type | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
+| Build output streamed to the page while it runs | ✅ |
 | A built-in registry for the images those builds produce | ✅ |
 | Scale, redeploy, delete | ✅ |
 | Liveness and readiness probes | ✅ |
@@ -55,8 +58,15 @@ nothing you build here is locked in.
 | | |
 |---|---|
 | A hostname per app, served the moment it starts | ✅ |
-| Custom domains people bring, with verification | ✅ |
-| TLS from one shared wildcard certificate | ✅ |
+| Custom domains people bring, proven continuously in the background | ✅ |
+| A domain that stops resolving is noticed and withdrawn | ✅ |
+| TLS from one shared wildcard certificate, for platform hostnames | ✅ |
+
+A brought domain is **not** covered by that certificate — a wildcard for the
+platform domain cannot match a name outside it, and there is no ACME here. Such
+a domain is served over plain HTTP unless you put a certificate for it in front
+of the cluster yourself, and the dashboard says so on the domain rather than
+leaving the browser to.
 
 **Running the cluster**
 

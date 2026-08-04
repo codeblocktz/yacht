@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,14 +24,24 @@ import (
 // scoped by — so what has to be proved is that the session moved, or did not,
 // and no fake can say that.
 
-// postFormAs sends a form the way the switcher's own markup does.
+// postFormAs sends a form the way the page's own markup does.
+//
+// A nil form means no body at all, which is what postAs is: several of these
+// endpoints take nothing, and sending an empty urlencoded body to one that
+// checks a value would look like the value being blank rather than absent.
 func (h *liveHarness) postFormAs(
 	t *testing.T, path string, c *http.Cookie, form url.Values,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	var body io.Reader
+	if form != nil {
+		body = strings.NewReader(form.Encode())
+	}
+	req := httptest.NewRequest(http.MethodPost, path, body)
 	req.Header.Set("Origin", "https://yacht.test")
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	if c != nil {
 		req.AddCookie(c)
 	}
