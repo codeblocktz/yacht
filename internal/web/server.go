@@ -131,6 +131,11 @@ type Accounts interface {
 		ctx context.Context, sessionID uuid.UUID, password string, proof account.Proof,
 	) error
 
+	// RemovePassword takes one off, leaving the emailed link. Allowed because
+	// the link never stopped working, so this cannot lock anybody out — and
+	// refusing would mean a password added once can never be taken back.
+	RemovePassword(ctx context.Context, sessionID uuid.UUID, proof account.Proof) error
+
 	// TeamsFor lists the teams a person may act as.
 	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
 
@@ -608,6 +613,7 @@ func (s *Server) Handler() http.Handler {
 				// gating it higher would lock somebody out of their own account.
 				r.Get("/account", s.accountPage)
 				r.Post("/account/password", s.accountPasswordSet)
+				r.Post("/account/password/remove", s.accountPasswordRemove)
 			}
 
 			r.Get("/cluster", s.clusterNodes)

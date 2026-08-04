@@ -185,6 +185,44 @@ templ accountPassword(d AccountData) {
 							</button>
 						</div>
 					</form>
+					if d.HasPassword {
+						// Below a rule rather than in a danger zone. Removing a
+						// password takes nothing away that cannot be put back in
+						// thirty seconds, and the emailed link never stopped
+						// working — so this is not in the same class as deleting an
+						// app, and dressing it that way would dilute what that
+						// styling means everywhere else.
+						<div class="mt-6 border-t border-border pt-5">
+							<p class="hint mb-3">
+								You can remove your password and go back to signing in
+								with an emailed link. Doing so signs out your other
+								browsers.
+							</p>
+							<form
+								method="post"
+								action="/account/password/remove"
+								class="flex flex-wrap items-end gap-3"
+								data-confirm="You will sign in with an emailed link from now on. This also signs you out of every other browser."
+								data-confirm-title="Remove your password?"
+								data-confirm-label="Remove password"
+							>
+								if !d.RecentAuth {
+									<div class="field min-w-[220px]">
+										<label class="label" for="remove-current">Current password</label>
+										<input
+											class="control"
+											id="remove-current"
+											name="current_password"
+											type="password"
+											autocomplete="current-password"
+											required
+										/>
+									</div>
+								}
+								<button class="btn btn-danger" type="submit">Remove password</button>
+							</form>
+						</div>
+					}
 				}
 			</div>
 		</div>

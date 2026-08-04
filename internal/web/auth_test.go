@@ -233,6 +233,10 @@ func (f *fakeAccounts) SetPassword(
 	return errNoFakeAccountsBackend
 }
 
+func (f *fakeAccounts) RemovePassword(context.Context, uuid.UUID, account.Proof) error {
+	return errNoFakeAccountsBackend
+}
+
 func (f *fakeAccounts) BootstrapOwner(context.Context, string, string, account.User) error {
 	return errNoFakeAccountsBackend
 }

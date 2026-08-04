@@ -226,6 +226,131 @@ func TestTheAccountPageExplainsARefusedPassword(t *testing.T) {
 	}
 }
 
+// Changing a password ends the person's other browsers and keeps this one.
+//
+// Both halves matter, and the second is the one that gets broken. Revoking
+// nothing leaves a stolen session running after the person has done the one
+// thing they know to do about it; revoking everything signs them out of the
+// browser they are looking at, which reads as the change having failed rather
+// than having worked.
+func TestChangingAPasswordSignsOutOtherBrowsersButNotThisOne(t *testing.T) {
+	h := newLiveHarness(t, "web-pw-revoke")
+	const email = "revoke@web.test"
+	h.user(t, email)
+
+	first := sessionCookie(h.signIn(t, email))
+	if code := h.postFormAs(t, "/account/password", first, url.Values{
+		"password": {"the first passphrase"}, "confirm": {"the first passphrase"},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("setting the first password = %d", code)
+	}
+
+	other := sessionCookie(h.signIn(t, email))
+
+	if code := h.postFormAs(t, "/account/password", first, url.Values{
+		"current_password": {"the first passphrase"},
+		"password":         {"the second passphrase"},
+		"confirm":          {"the second passphrase"},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("changing the password = %d, want 303", code)
+	}
+
+	if got := h.getAs(t, "/apps", other).Code; got == http.StatusOK {
+		t.Error("another browser still works after the password was changed")
+	}
+	if got := h.getAs(t, "/apps", first).Code; got != http.StatusOK {
+		t.Errorf("the browser that made the change answered %d, want 200 — "+
+			"it signed the person out of the page they were standing on", got)
+	}
+}
+
+// Removing a password puts the account back to links, ends other sessions, and
+// leaves the person able to get in.
+//
+// The last part is why removal is allowed at all: it is only safe because the
+// emailed link never stopped working. If it did, this would be a way to lock
+// yourself out with one click.
+func TestRemovingAPasswordGoesBackToLinksAndStillLetsYouIn(t *testing.T) {
+	h := newLiveHarness(t, "web-pw-remove")
+	const email = "remove@web.test"
+	const password = "a perfectly good passphrase"
+	h.user(t, email)
+
+	c := sessionCookie(h.signIn(t, email))
+	if code := h.postFormAs(t, "/account/password", c, url.Values{
+		"password": {password}, "confirm": {password},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("setting a password = %d", code)
+	}
+	other := sessionCookie(h.signIn(t, email))
+
+	// This session is fresh, so no current password is asked for.
+	if code := h.postFormAs(t, "/account/password/remove", c, url.Values{}).Code; code != http.StatusSeeOther {
+		t.Fatalf("removing the password = %d, want 303", code)
+	}
+
+	if got := h.getAs(t, "/apps", other).Code; got == http.StatusOK {
+		t.Error("another browser still works after the password was removed")
+	}
+	if got := postPassword(h.handler, email, password, "198.51.100.8:1").Code; got != http.StatusUnauthorized {
+		t.Errorf("the removed password still signs in: %d", got)
+	}
+
+	// And the link still works, end to end through the mail.
+	linkCookie := sessionCookie(h.signIn(t, email))
+	if got := h.getAs(t, "/apps", linkCookie).Code; got != http.StatusOK {
+		t.Errorf("the emailed link stopped working after a password was removed: %d", got)
+	}
+
+	body := h.getAs(t, "/account", linkCookie).Body.String()
+	if !strings.Contains(body, "Add a password") {
+		t.Error("after removal the page does not offer to add one again")
+	}
+	if strings.Contains(body, `action="/account/password/remove"`) {
+		t.Error("the page still offers to remove a password that is gone")
+	}
+}
+
+// An old session must produce the current password to remove one.
+func TestRemovingAPasswordFromAnOldSessionNeedsTheCurrentOne(t *testing.T) {
+	h := newLiveHarness(t, "web-pw-rm-stale")
+	const email = "rmstale@web.test"
+	const password = "a perfectly good passphrase"
+	u := h.user(t, email)
+
+	c := sessionCookie(h.signIn(t, email))
+	if code := h.postFormAs(t, "/account/password", c, url.Values{
+		"password": {password}, "confirm": {password},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("setting a password = %d", code)
+	}
+	if _, err := h.pool.Exec(context.Background(),
+		`UPDATE sessions SET authenticated_at = now() - interval '1 hour' WHERE user_id = $1`,
+		u.ID); err != nil {
+		t.Fatalf("age the session: %v", err)
+	}
+
+	if code := h.postFormAs(t, "/account/password/remove", c, url.Values{
+		"current_password": {"not the password"},
+	}).Code; code != http.StatusUnprocessableEntity {
+		t.Errorf("removing with a wrong current password = %d, want 422", code)
+	}
+	var n int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM user_credentials WHERE user_id = $1`, u.ID).Scan(&n); err != nil {
+		t.Fatalf("count credentials: %v", err)
+	}
+	if n != 1 {
+		t.Fatal("the password was removed despite the refusal")
+	}
+
+	if code := h.postFormAs(t, "/account/password/remove", c, url.Values{
+		"current_password": {password},
+	}).Code; code != http.StatusSeeOther {
+		t.Errorf("removing with the correct current password = %d, want 303", code)
+	}
+}
+
 // A page carrying somebody's address must not be cached.
 //
 // securityHeaders sets no-store for everything, and the only handler that

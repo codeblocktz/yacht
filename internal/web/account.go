@@ -143,6 +143,62 @@ func (s *Server) accountPasswordSet(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/account#password", http.StatusSeeOther)
 }
 
+// accountPasswordRemove takes the password off, leaving the emailed link.
+//
+// Allowed on purpose. The link never stopped working, so this cannot lock
+// anybody out, and refusing would mean a password added once can never be taken
+// back. Every other session goes with it, because removing a password is what
+// somebody does when they think it is known.
+func (s *Server) accountPasswordRemove(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	sess, err := s.accounts.ResolveSession(ctx, sessionToken(r))
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// The same counter the change route uses. Both are a way to spend guesses at
+	// the current password from a stolen cookie, so they share a budget.
+	if !s.signInLimit.allow("current:"+sess.UserID.String(), passwordChangeAttempts) {
+		s.refuseAccount(w, r, http.StatusTooManyRequests,
+			"Too many attempts. Try again in a few minutes.")
+		return
+	}
+
+	err = s.accounts.RemovePassword(ctx, sess.ID,
+		account.Proof{CurrentPassword: r.FormValue("current_password")})
+	switch {
+	case err == nil:
+	case errors.Is(err, account.ErrNeedsReauthentication):
+		s.refuseAccount(w, r, http.StatusUnprocessableEntity,
+			"Sign in again before changing this. It has been a while since "+
+				"this browser proved who is using it.")
+		return
+	case errors.Is(err, account.ErrCredentialInvalid):
+		s.refuseAccount(w, r, http.StatusUnprocessableEntity,
+			"That is not your current password.")
+		return
+	case errors.Is(err, account.ErrNoPassword):
+		// Distinct from success, so nobody is told a credential was withdrawn
+		// when there was none — which is how somebody stops looking for the one
+		// that is still there.
+		s.refuseAccount(w, r, http.StatusUnprocessableEntity,
+			"You do not have a password to remove.")
+		return
+	default:
+		s.log.Error("remove password",
+			slog.String("user", sess.UserID.String()), slog.String("error", err.Error()))
+		s.refuseAccount(w, r, http.StatusInternalServerError,
+			"Something went wrong removing that. Try again in a moment.")
+		return
+	}
+
+	s.log.Info("password removed", slog.String("user", sess.UserID.String()))
+	s.flashOK(w, r, "Password removed. Sign in with an emailed link from now on.")
+	http.Redirect(w, r, "/account#password", http.StatusSeeOther)
+}
+
 // refuseAccount re-renders the account page carrying a message.
 //
 // Nothing the person typed is carried back. A password put into the HTML would
