@@ -35,6 +35,43 @@ type BranchData struct {
 	Searched bool
 }
 
+// DirectoryData is what the directory picker swaps in.
+type DirectoryData struct {
+	// Path is where the listing is standing, so an entry can be offered as the
+	// full path a build would use rather than a bare name.
+	Path string
+
+	// Parent is one level up, or empty at the root.
+	Parent string
+
+	Directories []string
+
+	// Error is why the tree could not be read, already short enough to sit
+	// under a field. A non-GitHub host lands here too — that is a limit worth
+	// stating rather than a field that quietly stops helping.
+	Error string
+
+	Searched bool
+}
+
+// joinPath puts a directory under the path being browsed.
+func joinPath(base, name string) string {
+	base = strings.Trim(base, "/")
+	if base == "" {
+		return name
+	}
+	return base + "/" + name
+}
+
+// parentPath is one level up from a path, empty at the root.
+func parentPath(path string) string {
+	path = strings.Trim(path, "/")
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[:i]
+	}
+	return ""
+}
+
 // repoLabel is the owner and name, which is how people say a repository.
 //
 // https://github.com/codeblocktz/yacht.git is the machine's version of a name

@@ -243,7 +243,12 @@ templ AppList(apps []app.App) {
 templ appRows(apps []app.App) {
 	<div class="rows">
 		for _, a := range apps {
-			<a href={ templ.URL("/apps/" + a.Name) } class="row-link">
+			// The row is a link and the menu is its sibling, not its child.
+			// A form or a second anchor inside an anchor is markup a browser is
+			// free to rearrange — the same reason the hostname below is plain
+			// text rather than a link to itself.
+			<div class="row-item !gap-0 !p-0">
+				<a href={ templ.URL("/apps/" + a.Name) } class="row-link min-w-0 flex-1">
 				<span class="text-muted-foreground">
 					@icon("box")
 				</span>
@@ -259,13 +264,27 @@ templ appRows(apps []app.App) {
 						{ a.Host }
 					</span>
 				}
-				<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
+			<span class="hidden w-24 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums sm:block">
 					{ replicaLabel(a) }
 				</span>
-				<span class="w-24 shrink-0 text-right">
-					@appStatus(a)
-				</span>
-			</a>
+				// A failed deploy is not the same question as a failed workload,
+				// and the list only ever asked the second. The previous version
+				// keeps running, so the app stays green while the change
+				// somebody made never took — which is exactly the deploy worth
+				// finding, and the only way to find it was to open each app.
+				if a.LastDeploy == app.DeployFailed {
+					<span class="status status-err shrink-0" title="The last deploy failed. The previous version is still running.">
+						deploy failed
+					</span>
+				}
+					<span class="w-24 shrink-0 text-right">
+						@appStatus(a)
+					</span>
+				</a>
+				<div class="shrink-0 pr-2">
+					@rowActions(a)
+				</div>
+			</div>
 		}
 	</div>
 }
@@ -741,21 +760,7 @@ templ appRuntimeForm(d AppDetailData) {
 					<input class="control mono mt-1.5" id="repo_url" name="repo_url" value={ a.Repo.URL } placeholder="https://github.com/owner/repo"/>
 				</div>
 				@branchPicker(a.Name, a.Repo.Branch)
-				<div class="field-group">
-					<label class="field-label" for="repo_subdir">Root directory</label>
-					<p class="field-note">
-						Where in the repository the code is. Empty means the repository root.
-						@helpNote("the root directory") {
-							<p>
-								Yacht cannot list the directories in your repository yet —
-								that needs a credential it has nowhere to keep. Type the path
-								as it appears in the repository, without a leading slash, for
-								example <code class="mono">server</code>.
-							</p>
-						}
-					</p>
-					<input class="control mono mt-1.5" id="repo_subdir" name="repo_subdir" value={ a.Repo.Subdir } placeholder="server"/>
-				</div>
+				@directoryPicker(a.Name, a.Repo.Subdir)
 				<p class="field-note">Changing any of these does not rebuild. The next deploy reads them.</p>
 			} else {
 				<div class="field-group">

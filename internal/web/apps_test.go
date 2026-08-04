@@ -23,15 +23,16 @@ import (
 // Scoped by owner like the real one, so a test that leaks across owners fails
 // here rather than passing and failing in production.
 type fakeApps struct {
-	byOwner   map[string][]app.App
-	created   []app.CreateInput
-	deleted   []string
-	scaled    map[string]int32
-	updated   []app.UpdateInput
-	branches  []string
-	branchErr error
-	activity  app.DeployActivity
-	err       error
+	byOwner     map[string][]app.App
+	created     []app.CreateInput
+	deleted     []string
+	scaled      map[string]int32
+	updated     []app.UpdateInput
+	branches    []string
+	directories []string
+	branchErr   error
+	activity    app.DeployActivity
+	err         error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -758,4 +759,11 @@ func TestAnUnknownProjectIsNotFound(t *testing.T) {
 	if code := get(t, h, "/projects/someone-elses").Code; code != http.StatusNotFound {
 		t.Fatalf("unknown project returned %d, want 404", code)
 	}
+}
+
+func (f *fakeApps) Directories(_ context.Context, repoURL, path string) ([]string, error) {
+	if f.branchErr != nil {
+		return nil, f.branchErr
+	}
+	return f.directories, nil
 }

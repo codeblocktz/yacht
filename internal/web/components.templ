@@ -3,6 +3,7 @@ package web
 import (
 	"strconv"
 
+	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/web/ui/popover"
 )
 
@@ -225,6 +226,135 @@ templ BranchOptions(d BranchData) {
 		</div>
 	} else if d.Searched {
 		<p class="text-[12px] text-muted-foreground">No branch matches that.</p>
+	}
+}
+
+// directoryPicker browses the repository instead of asking somebody to
+// remember a path.
+//
+// Same shape as the branch picker and for the same reason: an ordinary text
+// input, with what the repository actually contains offered beside it. GitHub
+// is the only host whose tree can be read — git has no way to list one without
+// fetching objects — so on anything else this is exactly the field it was, and
+// says why rather than going quiet.
+templ directoryPicker(appName, value string) {
+	<div class="field-group">
+		<label class="field-label" for="repo_subdir">Root directory</label>
+		<p class="field-note">
+			Where in the repository the code is. Empty means the repository root.
+		</p>
+		<input
+			class="control mono mt-1.5"
+			id="repo_subdir"
+			name="repo_subdir"
+			value={ value }
+			placeholder="server"
+			autocomplete="off"
+			hx-get={ "/apps/" + appName + "/directories" }
+			hx-trigger="focus, keyup changed delay:250ms"
+			hx-target="#directory-options"
+			hx-swap="innerHTML"
+			hx-params="*"
+		/>
+		<div id="directory-options" class="mt-1.5"></div>
+	</div>
+}
+
+// DirectoryOptions is the listing the picker swaps in.
+//
+// Each entry is the full path rather than the bare name, because the field
+// holds a path and clicking something that put "cmd" in it while standing in
+// "server" would be a control that lies about what it does.
+templ DirectoryOptions(d DirectoryData) {
+	if d.Error != "" {
+		<p class="text-[12px] text-muted-foreground">
+			{ d.Error } &mdash; type the path instead.
+		</p>
+	} else if len(d.Directories) > 0 {
+		<div class="flex flex-wrap gap-1.5">
+			if d.Parent != "" || d.Path != "" {
+				// Up, so a wrong turn is one click back rather than a retyped
+				// path.
+				<button
+					class="tag cursor-pointer hover:border-foreground/40 hover:text-foreground"
+					type="button"
+					data-dir={ d.Parent }
+					onclick="(function(el){var i=document.getElementById('repo_subdir');i.value=el.dataset.dir;i.dispatchEvent(new Event('keyup',{bubbles:true}));})(this)"
+				>&larr; up</button>
+			}
+			for _, dir := range d.Directories {
+				<button
+					class="tag cursor-pointer hover:border-foreground/40 hover:text-foreground"
+					type="button"
+					data-dir={ joinPath(d.Path, dir) }
+					onclick="(function(el){var i=document.getElementById('repo_subdir');i.value=el.dataset.dir;i.dispatchEvent(new Event('keyup',{bubbles:true}));})(this)"
+				>{ dir }/</button>
+			}
+		</div>
+	} else if d.Searched {
+		<p class="text-[12px] text-muted-foreground">
+			Nothing below this path. It is either the directory you want, or not a
+			directory at all.
+		</p>
+	}
+}
+
+// rowActions is the menu on an app row.
+//
+// A popover rather than four buttons. At the density of this list a row of
+// controls per app is more furniture than content, and the one that matters —
+// the app's own name — stops being what the eye lands on. The actions are the
+// same links and forms they always were; what changed is that they are not all
+// competing for the row at once.
+//
+// Not the only way to reach any of them: everything here is also on the app's
+// own page, which is what makes hiding them behind a click acceptable.
+templ rowActions(a app.App) {
+	@popover.Root() {
+		@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+			<button
+				class="btn btn-ghost btn-sm btn-icon shrink-0"
+				type="button"
+				aria-label={ "Actions for " + a.Name }
+				onclick="event.stopPropagation()"
+			>
+				@icon("grip")
+			</button>
+		}
+		@popover.Content(popover.ContentProps{
+			Placement: popover.PlacementBottomEnd,
+			Exclusive: true,
+		}) {
+			<div class="flex min-w-[180px] flex-col gap-px p-1">
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name) }>
+					@icon("box")
+					<span class="flex-1">Open</span>
+				</a>
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name + "/logs") }>
+					@icon("activity")
+					<span class="flex-1">Logs</span>
+				</a>
+				<a class="switcher-item" href={ templ.URL("/apps/" + a.Name + "/settings") }>
+					@icon("settings")
+					<span class="flex-1">Settings</span>
+				</a>
+				<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
+					<button class="switcher-item w-full" type="submit">
+						@icon("rocket")
+						<span class="flex-1 text-left">Redeploy</span>
+					</button>
+				</form>
+				<div class="my-1 h-px bg-border"></div>
+				// Deleting is not offered here. It asks for the app's name to be
+				// typed and the server checks it, so a menu item would be a
+				// control that cannot do what it says — the Danger section on
+				// the app's own page is where it belongs.
+				<a class="switcher-item switcher-danger" href={ templ.URL("/apps/" + a.Name + "/settings#danger") }>
+					@icon("minus")
+					<span class="flex-1">Delete…</span>
+				</a>
+			</div>
+		}
 	}
 }
 

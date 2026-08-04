@@ -90,6 +90,14 @@ type App struct {
 	Status      orchestrator.AppStatus
 	StatusKnown bool
 
+	// LastDeploy is how the most recent deployment ended.
+	//
+	// A different question from Status, and the one a list of apps could not
+	// answer: a failed deploy leaves the previous workload running, so the app
+	// stays green while the change somebody made never took. Empty on an app
+	// that has never been deployed.
+	LastDeploy string
+
 	// Host is the platform-issued hostname, empty when no app domain is
 	// configured. Read from the domains table rather than stored on the app,
 	// so there is one place a hostname lives.
@@ -836,15 +844,21 @@ func (s *Service) reconcileHosts(
 }
 
 // List returns an owner's apps with live status attached.
+//
+// Carries how the last deployment ended as well as how the workload is doing.
+// They are different questions and only one of them was being asked: a failed
+// deploy leaves the previous workload running, so the app stays green while the
+// change somebody made never took.
 func (s *Service) List(ctx context.Context, ownerID string) ([]App, error) {
-	rows, err := s.q.ListApps(ctx, ownerID)
+	rows, err := s.q.ListAppsWithLastDeploy(ctx, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("app: list: %w", err)
 	}
 
 	out := make([]App, 0, len(rows))
 	for _, row := range rows {
-		a := toApp(row)
+		a := toApp(row.App)
+		a.LastDeploy = row.LastDeployStatus
 		s.attachStatus(ctx, &a)
 		s.attachHost(ctx, &a)
 		out = append(out, a)

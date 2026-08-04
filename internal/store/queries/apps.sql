@@ -39,6 +39,27 @@ SELECT * FROM apps
 WHERE owner_id = $1
 ORDER BY name;
 
+-- Every app, with how its most recent deployment ended.
+--
+-- A failed deploy leaves the previous workload running, so the app's live
+-- status stays green and nothing in a list of apps says the last attempt to
+-- change it did not take. That is exactly the deploy somebody needs to find,
+-- and until this query existed the only way to find it was to open each app.
+--
+-- LATERAL rather than a window function or a join on max(started_at): one index
+-- lookup per app, and it reads as what it is — the latest row for this app.
+-- name: ListAppsWithLastDeploy :many
+SELECT sqlc.embed(a), d.status AS last_deploy_status
+FROM apps a
+LEFT JOIN LATERAL (
+    SELECT status FROM deployments
+    WHERE app_id = a.id
+    ORDER BY started_at DESC
+    LIMIT 1
+) d ON true
+WHERE a.owner_id = $1
+ORDER BY a.name;
+
 -- name: CountApps :one
 SELECT count(*) FROM apps WHERE owner_id = $1;
 

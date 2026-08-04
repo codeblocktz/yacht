@@ -461,6 +461,81 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 	return items, nil
 }
 
+const listAppsWithLastDeploy = `-- name: ListAppsWithLastDeploy :many
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, d.status AS last_deploy_status
+FROM apps a
+LEFT JOIN LATERAL (
+    SELECT status FROM deployments
+    WHERE app_id = a.id
+    ORDER BY started_at DESC
+    LIMIT 1
+) d ON true
+WHERE a.owner_id = $1
+ORDER BY a.name
+`
+
+type ListAppsWithLastDeployRow struct {
+	App              App
+	LastDeployStatus string
+}
+
+// Every app, with how its most recent deployment ended.
+//
+// A failed deploy leaves the previous workload running, so the app's live
+// status stays green and nothing in a list of apps says the last attempt to
+// change it did not take. That is exactly the deploy somebody needs to find,
+// and until this query existed the only way to find it was to open each app.
+//
+// LATERAL rather than a window function or a join on max(started_at): one index
+// lookup per app, and it reads as what it is — the latest row for this app.
+func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([]ListAppsWithLastDeployRow, error) {
+	rows, err := q.db.Query(ctx, listAppsWithLastDeploy, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAppsWithLastDeployRow{}
+	for rows.Next() {
+		var i ListAppsWithLastDeployRow
+		if err := rows.Scan(
+			&i.App.ID,
+			&i.App.OwnerID,
+			&i.App.Name,
+			&i.App.Namespace,
+			&i.App.Image,
+			&i.App.Replicas,
+			&i.App.Port,
+			&i.App.CpuRequest,
+			&i.App.CpuLimit,
+			&i.App.MemoryRequest,
+			&i.App.MemoryLimit,
+			&i.App.CreatedAt,
+			&i.App.UpdatedAt,
+			&i.App.HealthPath,
+			&i.App.HealthLiveness,
+			&i.App.Source,
+			&i.App.Internal,
+			&i.App.ProjectID,
+			&i.App.CanvasX,
+			&i.App.CanvasY,
+			&i.App.HttpsOnly,
+			&i.App.CnameOnly,
+			&i.App.RepoUrl,
+			&i.App.RepoBranch,
+			&i.App.RepoSubdir,
+			&i.App.RunAsUser,
+			&i.LastDeployStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeployments = `-- name: ListDeployments :many
 SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
 WHERE owner_id = $1 AND app_id = $2

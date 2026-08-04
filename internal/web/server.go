@@ -43,6 +43,10 @@ type Apps interface {
 	// Branches lists a repository's branches, filtered by a query. Read with
 	// ls-remote, so it costs one HTTPS request and no clone.
 	Branches(ctx context.Context, repoURL, query string) ([]string, error)
+
+	// Directories lists what is inside a repository at a path. GitHub only —
+	// git cannot read a tree without fetching objects, so this asks the host.
+	Directories(ctx context.Context, repoURL, path string) ([]string, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
@@ -536,6 +540,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
 			// Reads the remote with ls-remote while somebody types a branch.
 			r.Get("/apps/{name}/branches", s.appBranches)
+			r.Get("/apps/{name}/directories", s.appDirectories)
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
 				// Settings, where they sat among health checks and resources.

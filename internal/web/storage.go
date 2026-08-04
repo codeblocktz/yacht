@@ -275,6 +275,45 @@ func (s *Server) appBranches(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// appDirectories browses the repository for the root-directory field.
+//
+// Fails as quietly as the branch picker does, and for the same reason: it runs
+// while somebody is typing, and a host whose tree cannot be read is a limit to
+// state rather than a fault to shout about.
+func (s *Server) appDirectories(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+
+	a, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	repoURL := strings.TrimSpace(r.URL.Query().Get("repo_url"))
+	if repoURL == "" {
+		repoURL = a.Repo.URL
+	}
+	path := strings.Trim(strings.TrimSpace(r.URL.Query().Get("repo_subdir")), "/")
+
+	d := DirectoryData{Path: path, Parent: parentPath(path), Searched: true}
+	switch dirs, err := s.apps.Directories(ctx, repoURL, path); {
+	case err == nil:
+		d.Directories = dirs
+	case errors.Is(err, app.ErrTreeUnsupported):
+		d.Error = "Only GitHub repositories can be browsed"
+	case errors.Is(err, app.ErrRepoUnreachable):
+		d.Error = "Could not read that repository"
+	default:
+		d.Error = err.Error()
+	}
+
+	if err := DirectoryOptions(d).Render(ctx, w); err != nil {
+		s.log.Error("render directories", slog.String("error", err.Error()))
+	}
+}
+
 // appSourceDisconnect detaches an app from its repository.
 //
 // The app keeps running: it is serving whatever image its last build produced,

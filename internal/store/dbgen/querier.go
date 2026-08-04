@@ -171,6 +171,16 @@ type Querier interface {
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
+	// Every app, with how its most recent deployment ended.
+	//
+	// A failed deploy leaves the previous workload running, so the app's live
+	// status stays green and nothing in a list of apps says the last attempt to
+	// change it did not take. That is exactly the deploy somebody needs to find,
+	// and until this query existed the only way to find it was to open each app.
+	//
+	// LATERAL rather than a window function or a join on max(started_at): one index
+	// lookup per app, and it reads as what it is — the latest row for this app.
+	ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([]ListAppsWithLastDeployRow, error)
 	// Apps that predate projects, or whose project was deleted.
 	//
 	// Returned separately rather than folded into a default project by the query,

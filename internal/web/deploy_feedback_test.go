@@ -118,3 +118,30 @@ func TestTheBuildPaneStopsPollingWhenTheBuildEnds(t *testing.T) {
 		})
 	}
 }
+
+// A failed deploy leaves the previous workload running, so the app's live
+// status stays green and the list said nothing about the change that never
+// took. That is exactly the deploy somebody needs to find.
+func TestTheAppListMarksAFailedDeploy(t *testing.T) {
+	failed := sampleApp("owner-1", "web")
+	failed.LastDeploy = app.DeployFailed
+	fine := sampleApp("owner-1", "api")
+	fine.LastDeploy = app.DeployActive
+
+	apps := newFakeApps(failed, fine)
+	body := get(t, testServer(t, Options{Apps: apps}), "/apps").Body.String()
+
+	if !strings.Contains(body, "deploy failed") {
+		t.Error("a failed deploy is invisible in the app list")
+	}
+	// The workload itself is still healthy, and the list must keep saying so —
+	// the two are different questions.
+	if !strings.Contains(body, "running") {
+		t.Error("the workload's own status was replaced by the deploy's")
+	}
+	// Counted on the marker rather than the words: they also appear in the
+	// title attribute, so the phrase alone is two matches for one app.
+	if n := strings.Count(body, "status-err shrink-0"); n != 1 {
+		t.Errorf("marked %d apps, want only the one that failed", n)
+	}
+}
