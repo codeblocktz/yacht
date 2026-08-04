@@ -677,8 +677,9 @@ type HTTPLogger interface {
 	HTTPLogHint() string
 
 	// EnableHTTPLogs applies it, where this cluster's controller is one Yacht
-	// can reconfigure. An action somebody takes rather than something done on
-	// their behalf: it restarts a controller every workload routes through.
+	// can reconfigure. Called once at startup rather than from a page: it
+	// restarts a controller every workload routes through, which is a
+	// cluster-wide cost and so never one app's decision to make.
 	EnableHTTPLogs(ctx context.Context) error
 
 	// HTTPLogsEnabled reports whether the running controller is writing one.

@@ -241,6 +241,15 @@ func run() error {
 	// this process having been the one that took the claim.
 	go domain.NewChecker(pool, resolver, apps, log).Run(ctx)
 
+	// Request logging on by default. An app whose traffic is not being recorded
+	// is an app nobody can debug, so this is not left as something to find and
+	// switch on — and because there is one ingress controller and one access
+	// log, it was never a per-app decision to present in the first place.
+	//
+	// In a goroutine like the two above because it talks to the cluster: an
+	// unreachable API server must delay the dashboard coming up, not stop it.
+	go apps.EnsureHTTPLogs(ctx)
+
 	return serve(ctx, cfg, srv.Handler(), log)
 }
 

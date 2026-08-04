@@ -183,10 +183,11 @@ func parseAccessLine(raw []byte) (orchestrator.HTTPLogLine, bool) {
 
 // HTTPLogHint is the configuration that makes this work.
 //
-// Returned as text for the page to show rather than applied. Yacht does not
-// own the ingress controller: it is installed by whoever built the cluster,
-// its access log is their setting, and a platform that quietly rewrote it
-// would be changing something every other workload depends on.
+// For the clusters Yacht cannot configure itself. Where k3s installed Traefik
+// this is applied at startup and nobody ever sees this text; where something
+// else installed the controller there is no object Yacht can write that would
+// take effect, so the honest thing left is to hand over what to apply and say
+// where it goes.
 func (o *Orchestrator) HTTPLogHint() string {
 	return `apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig

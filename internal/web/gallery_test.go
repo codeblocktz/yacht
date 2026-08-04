@@ -261,6 +261,49 @@ func galleryPages() []galleryPage {
 			}),
 		},
 		{
+			// The HTTP logs tab, which since request logging became a default
+			// has three states and no buttons.
+			//
+			// The two empty ones are why this page exists. Reaching them by
+			// clicking means either catching the seconds while the ingress
+			// controller restarts, or building a cluster whose controller k3s
+			// did not install — so they are seen once, on the day they are
+			// written, and never again.
+			file: "states-http-logs.html",
+			path: "/apps/web/deployments/x/logs?view=http",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"},
+				{Label: "HTTP logs"}},
+			page: stack(
+				section("Requests recorded", "the timeline is coloured by status class, and is not paged with the rows",
+					httpLogState(deployments[0], app.HTTPLogs{
+						Hosts: []string{"web.apps.example.com"},
+						Lines: httpRequests(now),
+					})),
+				section("Switching on", "Yacht turns the access log on at startup — this is the restart, not a prompt",
+					httpLogState(deployments[0], app.HTTPLogs{
+						Hosts: []string{"web.apps.example.com"},
+						Note: "The ingress controller is not writing an access log yet. " +
+							"Yacht switches it on at startup and the controller restarts to " +
+							"pick that up, so requests should start appearing within a minute.",
+					})),
+				section("Somebody else's controller", "not installed by k3s, so the configuration is handed over instead",
+					httpLogState(deployments[0], app.HTTPLogs{
+						Hosts: []string{"web.apps.example.com"},
+						Note: "The ingress controller is running but is not writing an access " +
+							"log, so no requests are being recorded — for this app or any other.",
+						Hint: "apiVersion: helm.cattle.io/v1\nkind: HelmChartConfig\n" +
+							"metadata:\n  name: traefik\n  namespace: kube-system\n" +
+							"spec:\n  valuesContent: |-\n    logs:\n      access:\n" +
+							"        enabled: true\n        format: json",
+					})),
+				section("No hostname", "nothing reaches this app through the controller, so there is nothing to record",
+					httpLogState(deployments[0], app.HTTPLogs{
+						Note: "This app has no hostname, so nothing reaches it through the " +
+							"ingress controller and there is nothing to record.",
+					})),
+			),
+		},
+		{
 			// Every state a brought domain can be in, side by side.
 			//
 			// These are the states that rot hardest: reaching "points
@@ -605,6 +648,70 @@ func bodyPad(inner templ.Component) templ.Component {
 		_, err := w.Write([]byte(`</div>`))
 		return err
 	})
+}
+
+// httpLogState builds one state of the HTTP logs tab, through the same paging
+// the server uses.
+//
+// Calling pageHTTP rather than filling the page fields by hand, because the
+// chart, the method picker and the request count are all derived there — a
+// gallery that assembled them itself would be rendering a state the product
+// cannot produce, which is the one thing a gallery must not do.
+func httpLogState(deploy app.Deployment, http app.HTTPLogs) templ.Component {
+	d := DeployLogsData{
+		App:  "web",
+		View: viewHTTP,
+		Deploy: app.DeployLogs{
+			Deployment: deploy,
+			Live:       true,
+		},
+		HTTP: http,
+	}
+	d.pageHTTP(httptest.NewRequest("GET", "/apps/web/deployments/"+
+		deploy.ID.String()+"/logs?view=http", nil), "web", deploy.ID)
+	return panelWrap(DeployLogPanel(d))
+}
+
+// httpRequests is a few minutes of traffic, with enough failures in it that the
+// timeline has something to colour.
+//
+// Timed in UTC, because that is what the product has. Traefik logs StartUTC and
+// parseAccessLine keeps the location it came with, so the rows and the timeline
+// above them are both drawn on a UTC clock. A fixture in local time renders a
+// panel whose chart and rows disagree by the machine's offset — a split the
+// product cannot produce, and the one thing a gallery must never show.
+func httpRequests(now time.Time) []orchestrator.HTTPLogLine {
+	now = now.UTC()
+
+	shape := []struct {
+		ago    time.Duration
+		method string
+		path   string
+		status int
+		ms     int
+	}{
+		{9 * time.Minute, "GET", "/", 200, 12},
+		{8 * time.Minute, "GET", "/assets/app.css", 200, 3},
+		{7 * time.Minute, "POST", "/api/sessions", 201, 88},
+		{6 * time.Minute, "GET", "/api/me", 200, 21},
+		{5 * time.Minute, "GET", "/api/orders?page=2", 200, 143},
+		{4 * time.Minute, "POST", "/api/orders", 500, 1902},
+		{3 * time.Minute, "POST", "/api/orders", 500, 2011},
+		{2 * time.Minute, "GET", "/api/orders/8871", 404, 9},
+		{90 * time.Second, "DELETE", "/api/sessions", 204, 14},
+		{30 * time.Second, "GET", "/healthz", 200, 1},
+	}
+
+	out := make([]orchestrator.HTTPLogLine, 0, len(shape))
+	for _, s := range shape {
+		out = append(out, orchestrator.HTTPLogLine{
+			At: now.Add(-s.ago), Host: "web.apps.example.com",
+			Method: s.method, Path: s.path, Protocol: "HTTP/1.1",
+			Status: s.status, Bytes: 1024, Client: "203.0.113.17",
+			Duration: time.Duration(s.ms) * time.Millisecond,
+		})
+	}
+	return out
 }
 
 // panelWrap puts a component inside the standard panel chrome, so gallery
