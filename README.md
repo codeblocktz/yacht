@@ -83,6 +83,7 @@ leaving the browser to.
 | | |
 |---|---|
 | Magic-link sign-in, sessions, sign-out everywhere | ✅ |
+| Optional password, added and removed from the account page | ✅ |
 | Teams with Owner / Admin / Member and invitations | ✅ |
 | Identity seam — single owner, bearer token, or session | ✅ |
 | Dashboard with pluggable chrome, light and dark | ✅ |
@@ -209,6 +210,39 @@ explicit, visible escape hatch (`WritableRootFilesystem`).
 
 An important consequence: **images that run as root will not start.** That is
 the intended behaviour. Most official images already ship a non-root user.
+
+### Signing in
+
+An emailed link is how everybody gets in first, and it never stops working. A
+password is optional and additive: it is added from **Account**, and from then
+on either one opens the same session.
+
+- Stored only as an Argon2id hash with a per-row random salt, with the cost
+  parameters inside the stored string — so raising them later re-hashes people
+  as they sign in rather than resetting anybody.
+- A minimum of 12 characters and no composition rules. Every such rule is a
+  constraint an attacker subtracts from the search space, and in practice they
+  produce a shorter password with a digit on the end.
+- Sign-in never reveals whether an address is registered or whether it has a
+  password. An unknown address, an address with no password, and a wrong
+  password produce the same message, the same status and the same cost.
+- Five attempts per address and twenty per client every fifteen minutes,
+  counted separately from the link's own budget — so guessing at somebody's
+  password can never lock them out of the link they rely on. There is **no
+  account lockout**: on a known address that is a denial of service, and the
+  most valuable address on any install is the one in the operator's `.env`.
+- Adding, changing or removing a password needs either the current password or
+  a sign-in from the last ten minutes. Changing or removing one signs out every
+  other browser; adding a first one signs out nothing.
+- Removing it is allowed, because the emailed link never stopped working.
+
+**Forgotten it?** Ask for a sign-in link, follow it, and set a new one from
+Account. There is no separate reset link, deliberately: a magic link already
+goes to the same mailbox and grants strictly more, so a second kind of token
+would add a table, four routes and four more expiry rules without adding any
+security.
+
+No password is ever logged, and none is rendered back into a page.
 
 ## Architecture
 
