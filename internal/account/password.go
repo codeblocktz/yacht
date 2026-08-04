@@ -30,10 +30,14 @@ var (
 var ErrPasswordIsEmail = errors.New("account: a password cannot be your email address")
 
 const (
-	// minPasswordRunes is counted in runes rather than bytes so that a
+	// MinPasswordLength is counted in runes rather than bytes so that a
 	// passphrase in a non-Latin script is not held to a shorter limit than the
 	// same number of characters in ASCII.
-	minPasswordRunes = 12
+	//
+	// Exported so that the form can say the number and the browser can enforce
+	// it before a round trip does. The rule itself stays here — a minlength
+	// attribute is a courtesy, not a check.
+	MinPasswordLength = 12
 
 	// maxPasswordBytes bounds the input to the hash. Argon2 has no bcrypt-style
 	// truncation, so without a ceiling the work done per attempt is a number the
@@ -210,7 +214,7 @@ func decodePassword(encoded string) (p passwordParams, salt, key []byte, err err
 // the difference between that and a wrong password. Anybody tempted to tidy
 // this up later should read this paragraph first.
 func checkPasswordPolicy(plain, email string) error {
-	if utf8.RuneCountInString(plain) < minPasswordRunes {
+	if utf8.RuneCountInString(plain) < MinPasswordLength {
 		return ErrPasswordTooShort
 	}
 	if len(plain) > maxPasswordBytes {

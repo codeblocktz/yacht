@@ -84,6 +84,10 @@ func TestEveryMutatingRouteHasARoleGate(t *testing.T) {
 	allowed := map[string]string{
 		"/sign-in": "there is no session to read a role from yet — someone with " +
 			"no session is exactly who needs this form",
+		"/sign-in/password": "the same: this is how a session begins, so there " +
+			"is none to read a role from. It is a separate path from /sign-in " +
+			"because the CSRF origin check exempts that one by name, and a " +
+			"password must not travel under that exemption",
 		"/sign-out": "a browser whose session has already been revoked must still " +
 			"be able to clear its cookie; a gate here would deny it exactly that",
 		"/sign-out-everywhere": "the same, and it acts only on the cookie " +
