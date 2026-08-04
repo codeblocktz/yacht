@@ -310,6 +310,16 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 			<span class="nav-tip" aria-hidden="true">{ ownerLabel(owner) }</span>
 		</summary>
 		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
+			// Above Settings, and only when there are accounts to have one.
+			// canSignOut is derived from holding a membership, which is true
+			// exactly when /account is on the router — so the link cannot point
+			// at a route that is not mounted.
+			if canSignOut {
+				<a href="/account" class="switcher-item">
+					@icon("user")
+					<span class="flex-1">Account</span>
+				</a>
+			}
 			<a href="/settings" class="switcher-item">
 				@icon("settings")
 				<span class="flex-1">Settings</span>
@@ -711,6 +721,17 @@ templ icon(name string) {
 			case "settings":
 				<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
 				<circle cx="12" cy="12" r="3"></circle>
+			case "user":
+				<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+				<circle cx="12" cy="7" r="4"></circle>
+			case "key":
+				<path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"></path>
+				<path d="m21 2-9.6 9.6"></path>
+				<circle cx="7.5" cy="15.5" r="5.5"></circle>
+			case "monitor":
+				<rect width="20" height="14" x="2" y="3" rx="2"></rect>
+				<line x1="8" x2="16" y1="21" y2="21"></line>
+				<line x1="12" x2="12" y1="17" y2="21"></line>
 		}
 	</svg>
 }

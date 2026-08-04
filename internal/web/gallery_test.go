@@ -467,6 +467,14 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			file: "states-account.html", path: "/account",
+			crumbs: []Crumb{{Label: "Account"}},
+			page: Account(AccountData{
+				Email: "person@example.com", Name: "Eric",
+				Team: "Codeblock", Role: "owner", Since: "4 August 2026",
+			}),
+		},
+		{
 			file: "states-overview.html", path: "/",
 			crumbs: []Crumb{{Label: "Overview"}},
 			page: Overview(OverviewData{

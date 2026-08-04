@@ -198,7 +198,7 @@ func TestEveryPageIsReachableByClicking(t *testing.T) {
 	for _, href := range []string{
 		"/", "/apps", "/deployments",
 		"/cluster/nodes", "/cluster/pods", "/cluster/volumes", "/cluster/events",
-		"/team", "/settings",
+		"/team", "/settings", "/account",
 	} {
 		if !strings.Contains(body, `href="`+href+`"`) {
 			t.Errorf("no link to %s — the page exists but nothing points at it", href)

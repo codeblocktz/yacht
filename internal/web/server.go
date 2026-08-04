@@ -114,6 +114,11 @@ type Accounts interface {
 	// TeamsFor lists the teams a person may act as.
 	TeamsFor(ctx context.Context, userID uuid.UUID) ([]account.Membership, error)
 
+	// User returns the person a session resolved to, so the account page can
+	// name them. By id and never by address: a lookup by address reachable from
+	// a handler would answer whether somebody has an account.
+	User(ctx context.Context, userID uuid.UUID) (account.User, error)
+
 	// BootstrapOwner gives someone with no team one to act as, handing the
 	// first of them the team the install was already running as.
 	BootstrapOwner(ctx context.Context, teamID, teamName string, user account.User) error
@@ -569,6 +574,12 @@ func (s *Server) Handler() http.Handler {
 			// actually use, and every one of those is gated on its own route.
 			if s.accounts != nil {
 				r.Get("/team", s.teamPage)
+
+				// A person's own account, as opposed to /settings, which is the
+				// install's. Member, because holding a session is the whole
+				// qualification: nothing here is a privilege inside a team, and
+				// gating it higher would lock somebody out of their own account.
+				r.Get("/account", s.accountPage)
 			}
 
 			r.Get("/cluster", s.clusterNodes)

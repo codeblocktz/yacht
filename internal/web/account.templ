@@ -1,0 +1,117 @@
+package web
+
+// AccountData is what a person can see and change about themselves, as opposed
+// to about the install or about their team.
+//
+// Everything on it is read from the viewer's own resolved session. There is no
+// field here that could be filled in about anybody else, and no route on this
+// page takes an identifier from the request — which is what keeps "does this
+// address have a password" a question the server never answers.
+type AccountData struct {
+	Email string
+	Name  string
+
+	// Team and Role are the ones the session is currently acting as, so that
+	// somebody who belongs to several knows which of them this page was reached
+	// through before they sign out of everything.
+	Team string
+	Role string
+
+	// Since is when this session began, which is the only thing the sessions
+	// section has to say about it that a person would recognise.
+	Since string
+}
+
+// Account is the page a person manages themselves from.
+//
+// Separate from /settings, which is the install's facts — the owner, the
+// cluster, the mail transport, the version — and is about the machine rather
+// than about anybody. One prefix meaning two scopes is how a reader stops
+// trusting either.
+templ Account(d AccountData) {
+	<div class="settings-shell">
+		// The same shape as an app's settings: a nav beside the page rather than
+		// above it, and every section on that page. Tabs hide what they are not
+		// showing, so finding something means guessing which tab owns it.
+		<nav class="settings-nav" aria-label="Account sections">
+			<a href="#you">You</a>
+			<a href="#sessions">Sessions</a>
+		</nav>
+		<div class="settings-main">
+			@accountIdentity(d)
+			@accountSessions(d)
+		</div>
+	</div>
+}
+
+templ accountIdentity(d AccountData) {
+	<section id="you" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("user")</span>
+			<h2 class="settings-section-title">You</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Your account</span></div>
+			<div class="panel-body">
+				<dl class="kv">
+					<dt>Email</dt>
+					<dd class="mono">{ d.Email }</dd>
+					if d.Name != "" {
+						<dt>Name</dt>
+						<dd>{ d.Name }</dd>
+					}
+					<dt>Signing in</dt>
+					<dd>Emailed link</dd>
+					<dt>Acting as</dt>
+					<dd>
+						{ d.Team }
+						if d.Role != "" {
+							<span class="hint">— { d.Role }</span>
+						}
+					</dd>
+				</dl>
+				<p class="hint mt-3">
+					Your address is how you sign in and where links are sent. It is
+					changed by whoever administers your team, so that nobody can move
+					an account to an address they control on their own.
+				</p>
+			</div>
+		</div>
+	</section>
+}
+
+templ accountSessions(d AccountData) {
+	<section id="sessions" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("monitor")</span>
+			<h2 class="settings-section-title">Sessions</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Signed-in browsers</span></div>
+			<div class="panel-body">
+				<dl class="kv">
+					<dt>This browser since</dt>
+					<dd>{ d.Since }</dd>
+				</dl>
+				// The control exists already, in a details element in the sidebar
+				// footer. It is here as well because the day somebody needs it is
+				// the day they think a cookie was copied off a machine, and that
+				// is not a day to go looking for a menu.
+				<p class="hint mt-3">
+					Signing out everywhere ends every session you hold, on every
+					device, including this one. Use it if you think somebody else has
+					a copy of your session.
+				</p>
+				<form method="post" action="/sign-out-everywhere" class="mt-4">
+					<button
+						class="btn btn-danger"
+						type="submit"
+						data-confirm="This signs you out of every browser and device, including this one. You will need to sign in again."
+						data-confirm-title="Sign out everywhere?"
+						data-confirm-label="Sign out everywhere"
+					>Sign out everywhere</button>
+				</form>
+			</div>
+		</div>
+	</section>
+}

@@ -187,6 +187,10 @@ func (f *fakeAccounts) TeamsFor(context.Context, uuid.UUID) ([]account.Membershi
 	return nil, errNoFakeAccountsBackend
 }
 
+func (f *fakeAccounts) User(context.Context, uuid.UUID) (account.User, error) {
+	return account.User{}, errNoFakeAccountsBackend
+}
+
 func (f *fakeAccounts) BootstrapOwner(context.Context, string, string, account.User) error {
 	return errNoFakeAccountsBackend
 }
