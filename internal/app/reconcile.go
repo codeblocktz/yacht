@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -42,15 +43,17 @@ const buildGrace = 2 * time.Minute
 // cluster's answer, so two reconcilers reaching the same conclusion write the
 // same thing.
 func (s *Service) ReconcileBuilds(ctx context.Context) error {
-	if s.builder == nil {
-		return nil
-	}
-
 	// The build grace is longer than the operation lease. Reclaim first so a
 	// finished Job can be attached only to an unowned building checkpoint; a
 	// live worker keeps its token and remains the sole writer.
 	if err := s.reclaimOperations(ctx); err != nil {
 		return err
+	}
+	if err := s.recoverMissingBuildRows(ctx); err != nil {
+		return err
+	}
+	if s.builder == nil {
+		return nil
 	}
 
 	rows, err := s.q.ListRunningBuilds(ctx)
@@ -86,6 +89,124 @@ func (s *Service) ReconcileBuilds(ctx context.Context) error {
 	if settled > 0 {
 		s.log.Info("settled builds that were no longer running",
 			slog.Int("count", settled))
+	}
+	return nil
+}
+
+const missingBuildRecoveryBatch = 100
+
+// recoverMissingBuildRows closes the crash window between entering building
+// and inserting the build row. Queued is proof the original lease expired; a
+// row lock plus a second build-row check decides whether retry is still safe.
+// Safe retries return to the ordinary admission queue so its advisory-locked
+// global build ceiling remains the sole authority for starting build work.
+func (s *Service) recoverMissingBuildRows(ctx context.Context) error {
+	rows, err := s.pool.Query(ctx, `
+		SELECT owner_id, id
+		FROM deployment_operations o
+		WHERE status = 'queued' AND checkpoint = 'building'
+		  AND NOT EXISTS (
+		      SELECT 1 FROM builds b WHERE b.deployment_id = o.deployment_id
+		  )
+		ORDER BY stage_started_at, id
+		LIMIT $1`, missingBuildRecoveryBatch)
+	if err != nil {
+		return fmt.Errorf("app: list missing build rows: %w", err)
+	}
+	type candidate struct {
+		ownerID string
+		id      uuid.UUID
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.ownerID, &c.id); err != nil {
+			rows.Close()
+			return fmt.Errorf("app: scan missing build row: %w", err)
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("app: iterate missing build rows: %w", err)
+	}
+	rows.Close()
+	for _, candidate := range candidates {
+		err := s.resetMissingBuildRow(ctx, candidate.ownerID, candidate.id)
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrOperationRecoveryPending) {
+			continue
+		}
+		if err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, errMissingBuildRecoveryStoreUnavailable) {
+			return err
+		}
+		if err != nil {
+			// A malformed or concurrently changed candidate must not prevent a
+			// healthy row from being normalized, nor stop the independent pass
+			// that settles builds which already have durable build rows.
+			s.log.Warn("could not reset a missing build checkpoint",
+				slog.String("owner_id", candidate.ownerID),
+				slog.String("operation_id", candidate.id.String()),
+				slog.String("error", err.Error()))
+			continue
+		}
+	}
+	return nil
+}
+
+var errMissingBuildRecoveryStoreUnavailable = errors.New(
+	"app: missing build recovery store unavailable",
+)
+
+func (s *Service) resetMissingBuildRow(
+	ctx context.Context, ownerID string, id uuid.UUID,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: begin transaction: %v",
+			errMissingBuildRecoveryStoreUnavailable, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	var status, checkpoint string
+	var deploymentID uuid.UUID
+	if err := tx.QueryRow(ctx, `
+		SELECT status, checkpoint, deployment_id
+		FROM deployment_operations
+		WHERE owner_id = $1 AND id = $2
+		FOR UPDATE`, ownerID, id).Scan(&status, &checkpoint, &deploymentID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("app: lock missing build recovery: %w", err)
+	}
+	if status != OperationQueued || checkpoint != OperationBuilding {
+		return ErrNotFound
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM builds WHERE deployment_id = $1)`, deploymentID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("app: recheck missing build row: %w", err)
+	}
+	if exists {
+		return ErrOperationRecoveryPending
+	}
+	result, err := tx.Exec(ctx, `
+		UPDATE deployment_operations
+		SET status = 'queued', checkpoint = 'claimed', claimed_at = NULL,
+		    stage_started_at = now(), claim_token = NULL, lease_expires_at = NULL
+		WHERE owner_id = $1 AND id = $2
+		  AND status = 'queued' AND checkpoint = 'building'`, ownerID, id)
+	if err != nil {
+		return fmt.Errorf("app: reset missing build checkpoint: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("app: commit missing build recovery: %w", err)
 	}
 	return nil
 }

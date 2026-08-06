@@ -108,7 +108,7 @@ func TestOverlayApplyUsesTheActiveReleaseNotFailedDesiredFields(t *testing.T) {
 	ctx := context.Background()
 	s, orch, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "release-active-authority")
-	created, err := s.Create(ctx, ownerID, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -245,13 +245,13 @@ func TestActivationFailureIsReturnedAndRecordedAsAFailedAttempt(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "release-activation-failure")
-	one, err := s.Create(ctx, ownerID, CreateInput{
+	one, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "one", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
 		t.Fatalf("Create one: %v", err)
 	}
-	two, err := s.Create(ctx, ownerID, CreateInput{
+	two, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "two", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {

@@ -103,7 +103,7 @@ func TestConfigVersionAndReleaseClassification(t *testing.T) {
 	}
 	s, _, pool := testService(t, Options{Keeper: keeper})
 	ownerID := owner(t, s, pool, "release-classification")
-	created, err := s.Create(ctx, ownerID, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -136,9 +136,15 @@ func TestConfigVersionAndReleaseClassification(t *testing.T) {
 	if _, err := s.Scale(ctx, ownerID, created.Name, 0); err != nil {
 		t.Fatalf("Scale: %v", err)
 	}
+	if err := executeLiveOperation(s, ctx, created); err != nil {
+		t.Fatalf("worker scale: %v", err)
+	}
 	assertState(2, 2)
 	if err := s.SetVariable(ctx, ownerID, created.Name, VariableInput{Key: "PLAIN", Value: "one"}); err != nil {
 		t.Fatalf("SetVariable plain: %v", err)
+	}
+	if err := executeLiveOperation(s, ctx, created); err != nil {
+		t.Fatalf("worker variable rollout: %v", err)
 	}
 	assertState(3, 3)
 	if err := s.SetVariable(ctx, ownerID, created.Name, VariableInput{Key: "PLAIN", Value: "one"}); err != nil {
@@ -155,6 +161,9 @@ func TestConfigVersionAndReleaseClassification(t *testing.T) {
 	assertState(4, 3)
 	if _, err := s.Scale(ctx, ownerID, created.Name, 1); err != nil {
 		t.Fatalf("Scale before volume: %v", err)
+	}
+	if err := executeLiveOperation(s, ctx, created); err != nil {
+		t.Fatalf("worker scale before volume: %v", err)
 	}
 	assertState(5, 4)
 	releases, err := s.Releases(ctx, ownerID, created.ID, 1)
@@ -206,7 +215,7 @@ func TestConcurrentVariableWritesDoNotLoseConfigVersions(t *testing.T) {
 	}
 	s, _, pool := testService(t, Options{Keeper: keeper})
 	ownerID := owner(t, s, pool, "release-counter-race")
-	created, err := s.Create(ctx, ownerID, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -266,7 +275,7 @@ func TestAnUnresolvableImageFailsBeforeAClusterCall(t *testing.T) {
 	ctx := context.Background()
 	base, _, pool := testService(t, Options{})
 	ownerID := owner(t, base, pool, "release-resolution-first")
-	created, err := base.Create(ctx, ownerID, CreateInput{
+	created, err := createAndDeploy(t, base, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -300,13 +309,13 @@ func TestReleaseRowsAreImmutableAndCannotBeCrossLinked(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "release-immutability")
-	one, err := s.Create(ctx, ownerID, CreateInput{
+	one, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "one", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
 		t.Fatalf("Create one: %v", err)
 	}
-	two, err := s.Create(ctx, ownerID, CreateInput{
+	two, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "two", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -341,14 +350,14 @@ func TestInstallWideOverlaysVersionOnlyAffectedApps(t *testing.T) {
 		Keeper: keeper, Images: fakeImages{}, Builder: fakeBuilder{},
 	})
 	ownerID := owner(t, s, pool, "release-global-overlays")
-	gitApp, err := s.Create(ctx, ownerID, CreateInput{
+	gitApp, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "git", Source: SourceGit, Replicas: 1, Port: 8080,
 		Repo: Repo{URL: "https://example.test/repo.git", Branch: "main"},
 	})
 	if err != nil {
 		t.Fatalf("Create Git app: %v", err)
 	}
-	imageApp, err := s.Create(ctx, ownerID, CreateInput{
+	imageApp, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "image", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {

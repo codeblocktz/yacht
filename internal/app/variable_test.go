@@ -46,6 +46,9 @@ func TestASecretSealedBeforeTheEnvelopeStillDeploys(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetVariable: %v", err)
 	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker variable rollout: %v", err)
+	}
 
 	spec := orch.lastAppSpec()
 	if spec.Secrets["DATABASE_URL"] != password {
@@ -71,7 +74,7 @@ func TestAnUnopenableSecretStopsTheApplyAndSaysWhy(t *testing.T) {
 	s, _, pool := testService(t, Options{Keeper: sealing})
 	id := owner(t, s, pool, "svc-lost-key")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -91,10 +94,10 @@ func TestAnUnopenableSecretStopsTheApplyAndSaysWhy(t *testing.T) {
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Options{Keeper: replaced, Manifests: staticManifests{}})
 
-	err = after.SetVariable(ctx, id, "web", VariableInput{Key: "LOG_LEVEL", Value: "info"})
-	if err == nil {
-		t.Fatal("the app applied with a secret nobody could open")
+	if err := after.SetVariable(ctx, id, "web", VariableInput{Key: "LOG_LEVEL", Value: "info"}); err != nil {
+		t.Fatalf("admit variable rollout: %v", err)
 	}
+	err = executeNamedOperation(after, ctx, id, "web")
 	if !errors.Is(err, secret.ErrUnknownKey) {
 		t.Errorf("apply failed with %v, want ErrUnknownKey — the operator needs to be told "+
 			"the key is missing rather than that something might be corrupt", err)
@@ -117,7 +120,10 @@ func TestAnUnopenableSecretStopsTheApplyAndSaysWhy(t *testing.T) {
 	if err := rotated.SetVariable(ctx, id, "web", VariableInput{
 		Key: "LOG_LEVEL", Value: "debug",
 	}); err != nil {
-		t.Fatalf("apply with the old key retained: %v", err)
+		t.Fatalf("admit with the old key retained: %v", err)
+	}
+	if err := executeNamedOperation(rotated, ctx, id, "web"); err != nil {
+		t.Fatalf("worker apply with the old key retained: %v", err)
 	}
 	if got := orch.lastAppSpec().Secrets["DATABASE_URL"]; got != "hunter2" {
 		t.Fatalf("the secret came through as %q after rotation, want %q", got, "hunter2")
@@ -132,7 +138,7 @@ func seedLegacySecret(
 	t.Helper()
 	ctx := context.Background()
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)

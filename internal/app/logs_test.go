@@ -58,7 +58,7 @@ func TestAPodNameFromTheRequestIsNotTrusted(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -86,7 +86,7 @@ func TestLogsAreReadFromTheAppsOwnNamespace(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs-ns")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestAnotherTeamCannotReadYourLogs(t *testing.T) {
 	mine := owner(t, s, pool, "owner-logs-mine")
 	theirs := owner(t, s, pool, "owner-logs-theirs")
 
-	if _, err := s.Create(ctx, mine, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, mine, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -141,7 +141,7 @@ func TestNothingToShowSaysWhy(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs-empty")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -168,7 +168,7 @@ func TestDeploymentHistoryKeepsTerminalAttemptsAndOneActivePointer(t *testing.T)
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-deploy-history")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -177,8 +177,14 @@ func TestDeploymentHistoryKeepsTerminalAttemptsAndOneActivePointer(t *testing.T)
 	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
 	}
+	if err := executeLiveOperation(s, ctx, a); err != nil {
+		t.Fatalf("worker redeploy: %v", err)
+	}
 	if _, err := s.Scale(ctx, ownerID, "web", 2); err != nil {
 		t.Fatalf("Scale: %v", err)
+	}
+	if err := executeLiveOperation(s, ctx, a); err != nil {
+		t.Fatalf("worker scale: %v", err)
 	}
 
 	deps, err := s.Deployments(ctx, ownerID, a.ID, 20)
@@ -235,7 +241,7 @@ func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-deploy-logs")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -298,13 +304,13 @@ func TestADeploymentIDFromAnotherAppIsRefused(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-deploy-cross")
 
-	one, err := s.Create(ctx, ownerID, CreateInput{
+	one, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "one", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
 		t.Fatalf("Create one: %v", err)
 	}
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "two", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create two: %v", err)
@@ -339,7 +345,7 @@ func TestAPodNameIsNotTrustedWhenStreamingEither(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-stream")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -366,7 +372,7 @@ func TestLogStreamReadsFromTheAppsOwnNamespace(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-stream-ns")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {

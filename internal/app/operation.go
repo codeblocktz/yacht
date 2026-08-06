@@ -28,6 +28,13 @@ const (
 
 const operationLease = 30 * time.Second
 
+// recoveredRolloutObservationTimeout bounds the one fresh Kubernetes read
+// granted after the original rollout deadline has elapsed. Recovery does not
+// restart the rollout budget: a current healthy snapshot succeeds, a current
+// terminal or still-progressing snapshot fails against the original budget,
+// and an unavailable API leaves the checkpoint retryable.
+const recoveredRolloutObservationTimeout = 30 * time.Second
+
 // ErrOperationInFlight is the durable per-app admission decision. Callers may
 // report it, but must not work around it with an application-level pre-check.
 var ErrOperationInFlight = errors.New("app: a deployment operation is already in flight")
@@ -278,23 +285,36 @@ func (s *Service) CancelOperation(ctx context.Context, ownerID string, id uuid.U
 	}); err != nil {
 		return fmt.Errorf("app: record cancelled deployment: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("app: commit operation cancellation: %w", err)
-	}
+	var cancelledBuild *dbgen.Build
 	if row.RequiresBuild {
-		build, readErr := s.q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
+		build, readErr := q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
 			OwnerID: ownerID, DeploymentID: row.DeploymentID,
 		})
 		if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
 			return fmt.Errorf("app: read cancelled build: %w", readErr)
 		}
-		if readErr == nil && build.JobName != "" {
-			if s.builder == nil {
-				return ErrNoBuilder
+		if readErr == nil {
+			cancelledBuild = &build
+			if build.Status == BuildRunning {
+				finished, finishErr := q.FinishBuild(ctx, dbgen.FinishBuildParams{
+					ID: build.ID, Status: BuildFailed, Message: row.Message,
+				})
+				if finishErr != nil {
+					return fmt.Errorf("app: record cancelled build: %w", finishErr)
+				}
+				cancelledBuild = &finished
 			}
-			if err := s.builder.CancelBuild(ctx, build.JobName); err != nil {
-				return fmt.Errorf("app: cancel build job: %w", err)
-			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("app: commit operation cancellation: %w", err)
+	}
+	if cancelledBuild != nil && cancelledBuild.JobName != "" {
+		if s.builder == nil {
+			return ErrNoBuilder
+		}
+		if err := s.builder.CancelBuild(ctx, cancelledBuild.JobName); err != nil {
+			return fmt.Errorf("app: cancel build job: %w", err)
 		}
 	}
 	return nil
@@ -426,11 +446,166 @@ func (s *Service) recordBuiltRelease(
 	return nil
 }
 
+func fencedBuildingOperation(ctx context.Context, tx pgx.Tx, op Operation) error {
+	if op.ClaimToken == nil {
+		return ErrOperationClaimLost
+	}
+	var status string
+	var token uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT status, claim_token
+		FROM deployment_operations
+		WHERE owner_id = $1 AND id = $2
+		FOR UPDATE`, op.OwnerID, op.ID).Scan(&status, &token)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrOperationClaimLost
+		}
+		return fmt.Errorf("app: lock building operation: %w", err)
+	}
+	if status != OperationBuilding || token != *op.ClaimToken {
+		return ErrOperationClaimLost
+	}
+	return nil
+}
+
+// createFencedBuild linearizes the durable build row with operation ownership.
+// Recovery takes the same operation row lock before deciding that a missing row
+// is safe to retry, so exactly one side can win the crash window.
+func (s *Service) createFencedBuild(
+	ctx context.Context, op Operation, a App,
+) (dbgen.Build, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return dbgen.Build{}, fmt.Errorf("app: begin fenced build row: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fencedBuildingOperation(ctx, tx, op); err != nil {
+		return dbgen.Build{}, err
+	}
+	q := s.q.WithTx(tx)
+	if _, err := q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
+		OwnerID: op.OwnerID, DeploymentID: op.DeploymentID,
+	}); err == nil {
+		return dbgen.Build{}, ErrOperationRecoveryPending
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return dbgen.Build{}, fmt.Errorf("app: inspect fenced build row: %w", err)
+	}
+	row, err := q.CreateBuild(ctx, dbgen.CreateBuildParams{
+		OwnerID: op.OwnerID, AppID: a.ID, DeploymentID: op.DeploymentID,
+		RepoUrl: a.Repo.URL, RepoRef: a.Repo.Ref(),
+	})
+	if err != nil {
+		return dbgen.Build{}, fmt.Errorf("app: record fenced build: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return dbgen.Build{}, fmt.Errorf("app: commit fenced build row: %w", err)
+	}
+	return row, nil
+}
+
+func (s *Service) setFencedBuildJob(
+	ctx context.Context, op Operation, buildID uuid.UUID, jobName string,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("app: begin fenced build job: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fencedBuildingOperation(ctx, tx, op); err != nil {
+		return err
+	}
+	if err := s.q.WithTx(tx).SetBuildJob(ctx, dbgen.SetBuildJobParams{
+		ID: buildID, JobName: jobName,
+	}); err != nil {
+		return fmt.Errorf("app: record fenced build job: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("app: commit fenced build job: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) finishFencedBuild(
+	ctx context.Context, op Operation, buildID uuid.UUID,
+	status, message, image, commit string,
+) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("app: begin fenced build result: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fencedBuildingOperation(ctx, tx, op); err != nil {
+		return err
+	}
+	if _, err := s.q.WithTx(tx).FinishBuild(ctx, dbgen.FinishBuildParams{
+		ID: buildID, Status: status, Message: message, Image: image, CommitSha: commit,
+	}); err != nil {
+		return fmt.Errorf("app: record fenced build result: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("app: commit fenced build result: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App, error) {
-	built, err := s.buildIfNeeded(ctx, op.OwnerID, a, op.DeploymentID)
+	if a.Source != SourceGit {
+		return a, nil
+	}
+	if !s.CanBuild(ctx) {
+		return a, ErrNoBuilder
+	}
+	image, err := s.images.ImageFor(ctx, op.OwnerID, a.Name, revisionFor(op.DeploymentID))
 	if err != nil {
 		return a, err
 	}
+	row, err := s.createFencedBuild(ctx, *op, a)
+	if err != nil {
+		return a, err
+	}
+	auth, err := s.images.DockerConfig(ctx)
+	if err != nil {
+		return a, err
+	}
+	req := orchestrator.BuildRequest{
+		Owner: orchestrator.OwnerID(op.OwnerID), App: a.Name, Image: image,
+		RepoURL: a.Repo.URL, Ref: a.Repo.Ref(), Subdir: a.Repo.Subdir,
+		Insecure: s.images.Insecure(ctx), RegistryAuth: auth,
+		Log: s.buildLogger(ctx, row.ID),
+	}
+	if err := s.setFencedBuildJob(ctx, *op, row.ID, s.builder.BuildJobName(req)); err != nil {
+		return a, err
+	}
+	result, buildErr := s.builder.Build(ctx, req)
+	status, message, pushed := BuildSucceeded, "", image
+	if buildErr != nil {
+		status, message, pushed = BuildFailed, buildErr.Error(), ""
+	}
+	if err := s.finishFencedBuild(ctx, *op, row.ID,
+		status, message, pushed, result.CommitSHA); err != nil {
+		return a, err
+	}
+	if buildErr != nil {
+		return a, buildErr
+	}
+	if result.RunAsUser > 0 {
+		if err := s.q.SetAppRunAsUser(ctx, dbgen.SetAppRunAsUserParams{
+			OwnerID: op.OwnerID, ID: a.ID, RunAsUser: result.RunAsUser,
+		}); err != nil {
+			s.log.Warn("record the image's user", "error", err)
+		}
+	}
+	if _, err := s.q.SetAppImage(ctx, dbgen.SetAppImageParams{
+		OwnerID: op.OwnerID, ID: a.ID, Image: image,
+	}); err != nil {
+		return a, fmt.Errorf("app: record built image: %w", err)
+	}
+	a.Image = image
+	if fresh, readErr := s.Get(ctx, op.OwnerID, a.Name); readErr == nil {
+		a = fresh
+	}
+	built := a
 	sourceRevision := revisionFor(op.DeploymentID)
 	if build, buildErr := s.q.GetBuildForDeployment(ctx,
 		dbgen.GetBuildForDeploymentParams{
@@ -510,6 +685,34 @@ func (s *Service) verifyRollout(
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Service) verifyRecoveredRollout(
+	ctx context.Context, a App, releaseID uuid.UUID, configVersion int64, started time.Time,
+) error {
+	if time.Now().Before(started.Add(s.opts.RolloutTimeout)) {
+		return s.verifyRollout(ctx, a, releaseID, configVersion, started)
+	}
+
+	observe, cancel := context.WithTimeout(ctx, recoveredRolloutObservationTimeout)
+	defer cancel()
+	status, err := s.orch.AppStatus(observe, a.Ref())
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !errors.Is(err, orchestrator.ErrNotFound) {
+			return fmt.Errorf("%w: %v", ErrClusterObservation, err)
+		}
+		return errors.New("app: rollout verification timed out: workload not found")
+	}
+	if convergenceMatches(status, releaseID, configVersion) && rolloutHealthy(status) {
+		return nil
+	}
+	if status.Terminal {
+		return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
+	}
+	return fmt.Errorf("app: rollout verification timed out: %s", rolloutReason(status))
 }
 
 func (s *Service) executeOperation(ctx context.Context, op Operation) error {
@@ -595,13 +798,9 @@ func (s *Service) executeRecoveredBuildOperation(ctx context.Context, op Operati
 	return s.applyAndVerifyOperation(ctx, op, a, nil)
 }
 
-func (s *Service) executeImageOperation(ctx context.Context, op Operation) error {
-	return s.executeOperation(ctx, op)
-}
-
 func (s *Service) startClaimedOperation(ctx context.Context, op Operation) {
 	go func() {
-		work, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeout)
+		work, cancel := context.WithTimeout(ctx, deployTimeout)
 		defer cancel()
 		if err := s.executeOperation(work, op); err != nil &&
 			!errors.Is(err, ErrOperationClaimLost) &&
@@ -613,7 +812,7 @@ func (s *Service) startClaimedOperation(ctx context.Context, op Operation) {
 
 func (s *Service) startRecoveredBuildOperation(ctx context.Context, op Operation) {
 	go func() {
-		work, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeout)
+		work, cancel := context.WithTimeout(ctx, deployTimeout)
 		defer cancel()
 		if err := s.executeRecoveredBuildOperation(work, op); err != nil &&
 			!errors.Is(err, ErrOperationClaimLost) {
@@ -673,7 +872,7 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 		}
 		return err
 	}
-	err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt)
+	err = s.verifyRecoveredRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt)
 	if errors.Is(err, ErrClusterObservation) {
 		if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
 			return releaseErr
@@ -685,7 +884,7 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 
 func (s *Service) startRecoveredAppOperation(ctx context.Context, op Operation) {
 	go func() {
-		work, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeout)
+		work, cancel := context.WithTimeout(ctx, deployTimeout)
 		defer cancel()
 		if err := s.executeRecoveredAppOperation(work, op); err != nil &&
 			!errors.Is(err, ErrOperationClaimLost) &&

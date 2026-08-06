@@ -95,6 +95,27 @@ type rolloutScriptOrchestrator struct {
 	once     sync.Once
 }
 
+type delayedHealthyOperationOrchestrator struct {
+	*recordingOrchestrator
+	delay time.Duration
+}
+
+func (o *delayedHealthyOperationOrchestrator) AppStatus(
+	ctx context.Context, _ orchestrator.Ref,
+) (orchestrator.AppStatus, error) {
+	select {
+	case <-ctx.Done():
+		return orchestrator.AppStatus{}, ctx.Err()
+	case <-time.After(o.delay):
+	}
+	last := o.lastAppSpec()
+	return orchestrator.AppStatus{
+		ReleaseID: last.ReleaseID, ConfigVersion: last.ConfigVersion,
+		Generation: 2, ObservedGeneration: 2, Desired: 1,
+		Updated: 1, Ready: 1, Available: 1, AvailableCondition: true,
+	}, nil
+}
+
 func (o *rolloutScriptOrchestrator) AppStatus(
 	ctx context.Context, _ orchestrator.Ref,
 ) (orchestrator.AppStatus, error) {
@@ -181,7 +202,7 @@ func claimedCandidate(
 ) (App, Release, Operation) {
 	t.Helper()
 	ctx := context.Background()
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: name, Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -204,11 +225,69 @@ func claimedCandidate(
 	return a, release, claimed
 }
 
+func TestImageCreateOnlyAdmitsAndClientCancellationDoesNotCancelTheWorker(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	s, base, pool := testService(t, Options{
+		RolloutTimeout: time.Second, RolloutPollInterval: time.Millisecond,
+	})
+	ownerID := owner(t, s, pool, "operation-request-detached")
+	s.orch = &rolloutScriptOrchestrator{
+		recordingOrchestrator: base,
+		statuses: []orchestrator.AppStatus{{
+			Generation: 1, ObservedGeneration: 1, Desired: 1,
+			Updated: 1, Ready: 1, Available: 1, AvailableCondition: true,
+		}},
+	}
+
+	a, err := s.Create(requestCtx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	cancelRequest()
+
+	op, err := s.liveOperation(context.Background(), a)
+	if err != nil {
+		t.Fatalf("read admitted operation: %v", err)
+	}
+	if op.Status != OperationQueued || op.Checkpoint != OperationClaimed || op.ClaimToken != nil {
+		t.Fatalf("operation before worker = %#v, want durable queued admission", op)
+	}
+	if got := len(base.Apps()); got != 0 {
+		t.Fatalf("request applied %d workloads, want none", got)
+	}
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	go s.RunOperationAdmission(workerCtx)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		row, readErr := s.q.GetDeploymentOperation(context.Background(),
+			dbgen.GetDeploymentOperationParams{OwnerID: ownerID, ID: op.ID})
+		if readErr != nil {
+			t.Fatalf("read worker operation: %v", readErr)
+		}
+		if row.Status == OperationSucceeded {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker operation = %s/%s, want succeeded", row.Status, row.Checkpoint)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, err := s.Get(context.Background(), ownerID, a.Name)
+	if err != nil || got.ActiveReleaseID == nil {
+		t.Fatalf("worker did not activate release after client cancellation: active=%v err=%v",
+			got.ActiveReleaseID, err)
+	}
+}
+
 func TestConcurrentAdmissionIsEnforcedByTheDatabase(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "operation-unique")
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -266,7 +345,7 @@ func TestBuildClaimCeilingLeavesTheThirdAppQueued(t *testing.T) {
 	s, _, pool := testService(t, Options{MaxConcurrentBuilds: 2})
 	ownerID := owner(t, s, pool, "operation-ceiling")
 	for i := range 3 {
-		a, err := s.Create(ctx, ownerID, CreateInput{
+		a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 			Name: fmt.Sprintf("web-%d", i), Image: "nginx:1.27", Replicas: 1, Port: 8080,
 		})
 		if err != nil {
@@ -302,7 +381,7 @@ func TestQueuedOperationSurvivesAServiceRestart(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "operation-restart")
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -376,6 +455,14 @@ func TestConcurrentRedeploysAdmitOneDurableBuild(t *testing.T) {
 
 	select {
 	case <-builder.started:
+		t.Fatal("request path started the admitted build")
+	case <-time.After(100 * time.Millisecond):
+	}
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	go s.RunOperationAdmission(workerCtx)
+	select {
+	case <-builder.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("admitted build did not start")
 	}
@@ -423,6 +510,12 @@ func TestAdmissionDispatcherStartsTwoBuildsAndLeavesTheThirdQueued(t *testing.T)
 			t.Fatalf("Redeploy %d: %v", i, err)
 		}
 	}
+	select {
+	case <-builder.started:
+		t.Fatal("request path started a build before the worker ran")
+	case <-time.After(100 * time.Millisecond):
+	}
+	go s.RunOperationAdmission(ctx)
 	for i := range 2 {
 		select {
 		case <-builder.started:
@@ -436,7 +529,6 @@ func TestAdmissionDispatcherStartsTwoBuildsAndLeavesTheThirdQueued(t *testing.T)
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	go s.RunOperationAdmission(ctx)
 	builder.release <- struct{}{}
 	select {
 	case <-builder.started:
@@ -675,7 +767,7 @@ func TestCancellingARunningBuildCannotBecomeActiveLater(t *testing.T) {
 	}
 	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
 	ownerID := owner(t, s, pool, "operation-live-build-cancel")
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -689,6 +781,14 @@ func TestCancellingARunningBuildCannotBecomeActiveLater(t *testing.T) {
 	if err := s.Redeploy(ctx, ownerID, a.Name); err != nil {
 		t.Fatalf("Redeploy: %v", err)
 	}
+	select {
+	case <-builder.started:
+		t.Fatal("request path started the build before the worker ran")
+	case <-time.After(100 * time.Millisecond):
+	}
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	go s.RunOperationAdmission(workerCtx)
 	select {
 	case <-builder.started:
 	case <-time.After(2 * time.Second):
@@ -825,6 +925,41 @@ func TestSlowRolloutWaitsAndThenSucceeds(t *testing.T) {
 	}
 	if app.ActiveReleaseID == nil || *app.ActiveReleaseID != candidate.ID {
 		t.Fatal("slow healthy rollout did not activate")
+	}
+}
+
+func TestExpiredRecoveredVerificationObservesOnceWithoutRestartingTheRolloutBudget(t *testing.T) {
+	ctx := context.Background()
+	s, base, _ := testService(t, Options{
+		RolloutTimeout: 2 * time.Millisecond, RolloutPollInterval: time.Millisecond,
+	})
+	releaseID := uuid.New()
+	script := &rolloutScriptOrchestrator{
+		recordingOrchestrator: base,
+		statuses: []orchestrator.AppStatus{
+			{
+				ReleaseID: releaseID.String(), ConfigVersion: 1,
+				Generation: 2, ObservedGeneration: 1, Desired: 1,
+			},
+			{
+				ReleaseID: releaseID.String(), ConfigVersion: 1,
+				Generation: 2, ObservedGeneration: 2, Desired: 1,
+				Updated: 1, Ready: 1, Available: 1, AvailableCondition: true,
+			},
+		},
+	}
+	s.orch = script
+	err := s.verifyRecoveredRollout(ctx, App{
+		Name: "web", Namespace: "expired-recovery",
+	}, releaseID, 1, time.Now().Add(-time.Hour))
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expired recovery = %v, want original-budget timeout", err)
+	}
+	script.mu.Lock()
+	remaining := len(script.statuses)
+	script.mu.Unlock()
+	if remaining != 1 {
+		t.Fatalf("recovery consumed %d observations, want exactly one current-state read", 2-remaining)
 	}
 }
 

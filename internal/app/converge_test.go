@@ -39,7 +39,12 @@ func TestRequestMutationFilesCannotBypassTheConvergenceBoundary(t *testing.T) {
 				ident, _ := sel.X.(*ast.Ident)
 				serviceApply := ident != nil && ident.Name == "s" &&
 					(sel.Sel.Name == "apply" || sel.Sel.Name == "applyRelease")
-				if serviceApply || sel.Sel.Name == "ApplyApp" {
+				requestOwnedOperation := name == "service.go" && ident != nil && ident.Name == "s" &&
+					(sel.Sel.Name == "claimOperation" ||
+						sel.Sel.Name == "executeOperation" ||
+						sel.Sel.Name == "executeImageOperation" ||
+						sel.Sel.Name == "startClaimedOperation")
+				if serviceApply || requestOwnedOperation || sel.Sel.Name == "ApplyApp" {
 					t.Errorf("%s: %s bypasses the operation/reconciler boundary",
 						name, fn.Name.Name)
 				}
@@ -90,7 +95,7 @@ func TestLiveOverlayMutationsWaitForTheAppReconciler(t *testing.T) {
 	s, orch, ownerID := convergenceService(t, Options{
 		Keeper: testKeeper(t), AppDomain: "apps.test",
 	})
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -136,7 +141,7 @@ func TestLiveOverlayMutationsWaitForTheAppReconciler(t *testing.T) {
 func TestAppReconcilerRestoresADeletedActiveWorkload(t *testing.T) {
 	ctx := context.Background()
 	s, orch, ownerID := convergenceService(t, Options{})
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -292,10 +297,59 @@ func TestVerifyingRecoveryAdoptsAnAlreadyHealthyCandidate(t *testing.T) {
 	}
 }
 
+func TestVerifyingRecoveryGetsOneBoundedCurrentStateObservationAfterOriginalBudget(t *testing.T) {
+	ctx := context.Background()
+	s, base, pool := testService(t, Options{
+		RolloutTimeout: 2 * time.Millisecond, RolloutPollInterval: time.Millisecond,
+	})
+	ownerID := owner(t, s, pool, "app-convergence-expired-verification")
+	a, candidate, claimed := claimedCandidate(t, s, ownerID, "web")
+	current, err := s.Get(ctx, ownerID, a.Name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := s.applyRelease(ctx, s.q, current, &candidate); err != nil {
+		t.Fatalf("simulate candidate apply: %v", err)
+	}
+	s.orch = &delayedHealthyOperationOrchestrator{
+		recordingOrchestrator: base, delay: 10 * time.Millisecond,
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deployment_operations
+		SET status = 'queued', checkpoint = 'verifying', claimed_at = NULL,
+		    claim_token = NULL, lease_expires_at = NULL,
+		    stage_started_at = now() - interval '1 hour'
+		WHERE id = $1`, claimed.ID); err != nil {
+		t.Fatalf("seed expired verifying recovery: %v", err)
+	}
+
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		row, readErr := s.q.GetDeploymentOperation(ctx,
+			dbgen.GetDeploymentOperationParams{OwnerID: ownerID, ID: claimed.ID})
+		if readErr != nil {
+			t.Fatalf("read recovered operation: %v", readErr)
+		}
+		if row.Status == OperationSucceeded {
+			break
+		}
+		if row.Status == OperationFailed {
+			t.Fatalf("healthy rollout failed after outage: %s", row.Message)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recovered operation = %s/%s, want succeeded", row.Status, row.Checkpoint)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestReconcilerRechecksOperationOwnershipAfterWaitingForTheAppLock(t *testing.T) {
 	ctx := context.Background()
 	s, orch, ownerID := convergenceService(t, Options{})
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -345,7 +399,7 @@ func TestReconcilerRechecksOperationOwnershipAfterWaitingForTheAppLock(t *testin
 func TestClusterObservationFailureDoesNotWriteOrFailHistory(t *testing.T) {
 	ctx := context.Background()
 	s, orch, ownerID := convergenceService(t, Options{})
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	})
 	if err != nil {

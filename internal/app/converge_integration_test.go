@@ -29,7 +29,7 @@ func TestK3sReconcilesADeletedActiveDeployment(t *testing.T) {
 	s.orch = orch
 	s.manifests = registry.New(pool, nil, s.log)
 	ownerID := owner(t, s, pool, "ticket-9-k3s")
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "recover", Image: "nginxinc/nginx-unprivileged:1.27-alpine",
 		Replicas: 1, Port: 8080,
 	})

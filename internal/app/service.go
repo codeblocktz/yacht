@@ -698,7 +698,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if release.ID != uuid.Nil {
 		initialRelease = &release.ID
 	}
-	operation, err := s.enqueueOperation(
+	_, err = s.enqueueOperation(
 		ctx, q, ownerID, created.ID, deploy.ID, initialRelease, created.Source == SourceGit,
 	)
 	if err != nil {
@@ -706,41 +706,6 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit: %w", err)
-	}
-
-	// After the commit, never inside it. Git builds are detached from the HTTP
-	// request but owned by the durable stage worker. Image creates stay
-	// synchronous for the existing create contract while using the same stages.
-	claimed, claimErr := s.claimOperation(ctx, ownerID, operation.ID)
-	if claimErr == nil {
-		if created.Source == SourceGit {
-			s.startClaimedOperation(ctx, claimed)
-		} else if deployErr := s.executeImageOperation(ctx, claimed); deployErr != nil {
-			// Preserve Create's established contract: a synchronously rejected
-			// first workload does not leave a name the form cannot retry. The
-			// durable stages still make a process crash before this cleanup
-			// recoverable by the admission loop.
-			if delErr := s.orch.DeleteNamespace(ctx, created.Namespace); delErr != nil {
-				s.log.Warn("could not clean up failed initial deployment",
-					"app", created.Name, "error", delErr)
-				return created, deployErr
-			}
-			if delErr := s.q.DeleteApp(ctx, dbgen.DeleteAppParams{
-				OwnerID: ownerID, ID: created.ID,
-			}); delErr != nil {
-				return created, fmt.Errorf("app: remove failed initial app: %w", delErr)
-			}
-			return App{}, deployErr
-		}
-	} else if !errors.Is(claimErr, ErrNotFound) {
-		s.log.Warn("initial operation remains queued",
-			slog.String("operation_id", operation.ID.String()),
-			slog.String("error", claimErr.Error()))
-	}
-	if created.Source != SourceGit {
-		if active, readErr := s.Get(ctx, ownerID, created.Name); readErr == nil {
-			created = active
-		}
 	}
 
 	s.log.Info("app created",
@@ -1234,19 +1199,8 @@ func (s *Service) deployCurrentRelease(
 func (s *Service) deployReleaseOperation(
 	ctx context.Context, ownerID string, a App, release Release, trigger string,
 ) error {
-	op, err := s.admitDeployment(ctx, ownerID, a, trigger, release.ID, false)
-	if err != nil {
-		return err
-	}
-	claimed, err := s.claimOperation(ctx, ownerID, op.ID)
-	if errors.Is(err, ErrNotFound) {
-		// The admission loop won the claim. It now owns the existing apply path.
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return s.executeImageOperation(ctx, claimed)
+	_, err := s.admitDeployment(ctx, ownerID, a, trigger, release.ID, false)
+	return err
 }
 
 // Scale changes the replica count and reapplies.
@@ -1293,21 +1247,12 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	if err != nil {
 		return err
 	}
-	// A build takes minutes, so it does not happen on the request. The
-	// deployment is already recorded as running; the goroutine finishes it,
-	// and the page that started it polls the same row.
+	// Both source kinds stop at durable admission. The process worker claims
+	// the row independently, so disconnecting this request cannot cancel the
+	// build or rollout it admitted.
 	if a.Source == SourceGit {
-		op, err := s.admitDeployment(ctx, ownerID, a, "redeploy", uuid.Nil, true)
-		if err != nil {
-			return err
-		}
-		claimed, claimErr := s.claimOperation(ctx, ownerID, op.ID)
-		if claimErr == nil {
-			s.startClaimedOperation(ctx, claimed)
-		} else if !errors.Is(claimErr, ErrNotFound) {
-			return claimErr
-		}
-		return nil
+		_, err := s.admitDeployment(ctx, ownerID, a, "redeploy", uuid.Nil, true)
+		return err
 	}
 
 	return s.deployCurrentRelease(ctx, ownerID, a, "redeploy")
@@ -1368,19 +1313,44 @@ func revisionFor(deployID uuid.UUID) string {
 // Cluster first: if the record went first and the cluster call failed, the
 // workload would keep running with nothing left to describe it.
 func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
-	a, err := s.Get(ctx, ownerID, name)
+	row, err := s.q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: name})
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("app: read delete target: %w", err)
 	}
-
-	if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
+	a := toApp(row)
+	if err := s.withAppConvergenceLock(ctx, a.ID, func() error {
+		current, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
+			OwnerID: ownerID, ID: a.ID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("app: re-read delete target: %w", err)
+		}
+		a = toApp(current)
+		if _, err := s.liveOperation(ctx, a); err == nil {
+			return ErrOperationInFlight
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
+			return err
+		}
+		if err := s.orch.DeleteNamespace(ctx, a.Namespace); err != nil {
+			return err
+		}
+		if err := s.q.DeleteApp(ctx, dbgen.DeleteAppParams{
+			OwnerID: ownerID, ID: a.ID,
+		}); err != nil {
+			return fmt.Errorf("app: delete: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	if err := s.orch.DeleteNamespace(ctx, a.Namespace); err != nil {
-		return err
-	}
-	if err := s.q.DeleteApp(ctx, dbgen.DeleteAppParams{OwnerID: ownerID, ID: a.ID}); err != nil {
-		return fmt.Errorf("app: delete: %w", err)
 	}
 
 	s.log.Info("app deleted",
