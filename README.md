@@ -39,11 +39,11 @@ nothing you build here is locked in.
 |---|---|
 | Deploy a container image, with env vars and replicas | ✅ |
 | Change the image, port, limits and repository afterwards | ✅ |
-| Build and deploy from a Git repository, using buildpacks | ✅ |
+| Build and deploy from a Git repository, using buildpacks and an external registry | ✅ |
 | Branches read from the remote as you type | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | Build output streamed to the page while it runs | ✅ |
-| A built-in registry for the images those builds produce | ✅ |
+| Push build output to an operator-configured OCI registry | ✅ |
 | Scale, redeploy, delete | ✅ |
 | Liveness and readiness probes | ✅ |
 | Deployment history, with a log per deployment | ✅ |
@@ -94,12 +94,11 @@ everything else still works and those figures read `—` rather than zero.
 
 ## Install on a VPS
 
-> **Not live yet.** The scripts below are written and tested, but the URLs do
-> not serve anything while this repository is private: GitHub Pages is not
-> available for private repositories on the free plan, and release assets need
-> a token, so an anonymous `curl` gets a 404 from both. They start working the
-> day the repository goes public and the first tag is pushed — no change to the
-> scripts is needed. Until then, use [Quick start](#quick-start).
+> **Not installable yet.** This repository is public and the Pages workflow is
+> configured to publish only scripts whose exact revision passed CI. However,
+> there is no tagged release yet, so the installer has no release assets to
+> download. Do not pipe the URL below into a shell until a release is announced;
+> until then, use [Quick start](#quick-start).
 
 ```bash
 curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh
@@ -170,6 +169,16 @@ Then open <http://localhost:8080>.
 Migrations run automatically at startup. If the cluster is unreachable Yacht
 still boots and says so on the overview page, so you can fix your kubeconfig
 without digging through logs.
+
+Deploying an existing container image needs no registry configuration. Building
+from a Git repository does: Yacht does **not** run a registry, so first provide
+an external OCI registry and push credential under **Cluster → Registry**. For
+private registries, a token service on an unrelated registrable domain is
+untested and unsupported in this main-based version; current main does not
+proactively reject that topology. The manifest-resolution integration will
+enforce the stricter boundary: token services use the registry authority for
+plain HTTP, or the same registrable domain over TLS. Every K3s node must also be
+configured separately to pull from an insecure registry.
 
 ### Configuration
 
@@ -273,7 +282,7 @@ internal/cluster      how a machine joins this cluster
 internal/config       environment configuration
 internal/domain       hostnames — the one we issue, and the ones people bring
 internal/notify       delivers messages to people
-internal/registry     where images this install builds are pushed
+internal/registry     external image-registry settings and credentials
 internal/secret       values that must survive a database dump
 internal/identity     SEAM 2 — who owns this request
 internal/orchestrator SEAM 1 — the runtime contract
@@ -291,14 +300,20 @@ cached in a column that can go stale.
 
 ```bash
 make assets     # templ codegen + Tailwind
-make check      # vet + tests
+make check      # vet + database-backed race tests
+make verify     # every local CI/release gate, including the gallery
 make build
 make dev        # rebuild and run
 ```
 
+`make check` requires `YACHT_TEST_DATABASE_URL` so owner-scoping and other
+database security tests cannot silently skip. For an intentionally partial run,
+opt out explicitly with `YACHT_ALLOW_DATABASE_TEST_SKIPS=1 make check`.
+
 `templ` and `sqlc` are Go tool dependencies, and `make css` downloads the
-**Tailwind standalone CLI** — a single binary, no Node or npm. So a contributor
-needs nothing installed beyond Go.
+**Tailwind standalone CLI** — a single binary, no Node or npm. A full
+`make verify` also requires PostgreSQL, `YACHT_TEST_DATABASE_URL`, and
+`shellcheck`.
 
 Generated `*_templ.go` files and the compiled `app.css` are both committed,
 which keeps plain `go build` working for anyone who has not run codegen. CI
@@ -345,8 +360,9 @@ licensed under MIT, the same as the project.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers getting set up, what CI enforces, and
 the conventions this codebase holds to. One thing worth knowing before your
-first test run: **tests that need a database skip themselves when it is absent,
-and a skip reads as a pass** — set `YACHT_TEST_DATABASE_URL`.
+first test run: database-backed tests skip themselves without a DSN, so
+`make check` refuses to start until `YACHT_TEST_DATABASE_URL` is set or you
+explicitly opt in to a partial run.
 
 Found a vulnerability? Please do not open an issue — see
 [SECURITY.md](SECURITY.md). Participation is covered by the
