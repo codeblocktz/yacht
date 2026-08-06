@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -74,7 +75,29 @@ func (s *Service) SetVariable(
 		return err
 	}
 
-	params := dbgen.UpsertVariableParams{
+	existing, getErr := s.q.GetVariable(ctx, dbgen.GetVariableParams{
+		OwnerID: ownerID, AppID: a.ID, Key: in.Key,
+	})
+	exists := getErr == nil
+	if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
+		return fmt.Errorf("app: read variable: %w", getErr)
+	}
+	if exists && existing.Secret == in.Secret {
+		if !in.Secret && existing.Value == in.Value {
+			return nil
+		}
+		if in.Secret {
+			value, err := s.keeper.Open(existing.Sealed)
+			if err != nil {
+				return fmt.Errorf("app: opening %s: %w", in.Key, err)
+			}
+			if value == in.Value {
+				return nil
+			}
+		}
+	}
+
+	params := dbgen.UpsertVariableAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Key: in.Key, Secret: in.Secret,
 	}
 	if in.Secret {
@@ -90,15 +113,29 @@ func (s *Service) SetVariable(
 		params.Value = in.Value
 	}
 
-	if _, err := s.q.UpsertVariable(ctx, params); err != nil {
+	row, err := s.q.UpsertVariableAndBump(ctx, params)
+	if err != nil {
 		return fmt.Errorf("app: set variable: %w", err)
 	}
+	a.ConfigVersion = row.ConfigVersion
 	if err := s.recordLinks(ctx, s.q, ownerID, a, in.Key, in.Value); err != nil {
 		return err
 	}
 
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
+	// Plain environment is release-owned. Changing a plain value into a secret
+	// also removes it from the immutable environment, so that transition gets a
+	// release even though its new value lives only in the current overlay.
+	releaseOwned := !in.Secret || (exists && !existing.Secret)
+	if releaseOwned {
+		release, err := s.createRelease(ctx, s.q, a, "")
+		if err != nil {
+			return err
+		}
+		if err := s.deployReleaseOperation(
+			ctx, ownerID, a, release, "variable:"+in.Key,
+		); err != nil {
+			return err
+		}
 	}
 
 	// The key is logged, never the value — including for a variable that is not
@@ -116,24 +153,32 @@ func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key stri
 		return err
 	}
 
-	n, err := s.q.DeleteVariable(ctx, dbgen.DeleteVariableParams{
+	row, err := s.q.DeleteVariableAndBump(ctx, dbgen.DeleteVariableAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Key: key,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVariableNotFound
+		}
 		return fmt.Errorf("app: delete variable: %w", err)
 	}
+	a.ConfigVersion = row.ConfigVersion
 	// The edge goes with the variable that carried it.
 	if err := s.q.ReplaceAppLinks(ctx, dbgen.ReplaceAppLinksParams{
 		FromAppID: a.ID, ViaKey: key,
 	}); err != nil {
 		return fmt.Errorf("app: clear links: %w", err)
 	}
-	if n == 0 {
-		return ErrVariableNotFound
-	}
-
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
+	if !row.Secret {
+		release, err := s.createRelease(ctx, s.q, a, "")
+		if err != nil {
+			return err
+		}
+		if err := s.deployReleaseOperation(
+			ctx, ownerID, a, release, "variable-delete:"+key,
+		); err != nil {
+			return err
+		}
 	}
 
 	s.log.Info("variable deleted",
@@ -188,8 +233,11 @@ func (s *Service) envFor(
 		value, err := s.keeper.Open(row.Sealed)
 		if err != nil {
 			// Naming the key and not the value: which secret cannot be opened
-			// is what an operator needs to fix it, and the reason is almost
-			// always that the key changed.
+			// is what an operator needs to fix it. The reason comes from the
+			// wrapped error, which says whether the key that sealed it is
+			// missing or the bytes no longer authenticate — those have
+			// different answers, and the whole apply stops either way rather
+			// than deploying an app with a variable silently absent.
 			return nil, nil, fmt.Errorf("app: opening %s: %w", row.Key, err)
 		}
 		secrets[row.Key] = value

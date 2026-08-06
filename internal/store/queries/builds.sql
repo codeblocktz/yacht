@@ -32,6 +32,20 @@ WHERE owner_id = @owner_id AND deployment_id = @deployment_id;
 SELECT * FROM builds
 WHERE owner_id = @owner_id AND id = @id;
 
+-- name: GetLatestSuccessfulBuildForApp :one
+SELECT * FROM builds
+WHERE owner_id = @owner_id AND app_id = @app_id
+  AND status = 'succeeded' AND commit_sha <> ''
+ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
+LIMIT 1;
+
+-- name: GetSuccessfulBuildForImage :one
+SELECT * FROM builds
+WHERE owner_id = @owner_id AND app_id = @app_id
+  AND status = 'succeeded' AND commit_sha <> '' AND image = @image
+ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
+LIMIT 1;
+
 -- name: SetBuildJob :exec
 UPDATE builds SET job_name = @job_name WHERE id = @id;
 

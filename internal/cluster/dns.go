@@ -66,11 +66,32 @@ func (j *Joiner) SetDNS(ctx context.Context, target, prefix string) error {
 	if err := ValidateTXTPrefix(prefix); err != nil {
 		return err
 	}
+	current, err := j.DNS(ctx)
+	if err != nil {
+		return err
+	}
+	if current.CNAMETarget == target && current.TXTPrefix == prefix {
+		return nil
+	}
 
-	if _, err := j.q.SetPlatformDNS(ctx, dbgen.SetPlatformDNSParams{
+	tx, err := j.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("cluster: begin dns update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	q := j.q.WithTx(tx)
+	if _, err := q.SetPlatformDNS(ctx, dbgen.SetPlatformDNSParams{
 		CnameTarget: target, TxtPrefix: prefix,
 	}); err != nil {
 		return fmt.Errorf("cluster: store dns settings: %w", err)
+	}
+	if current.CNAMETarget != target {
+		if err := q.IncrementCNAMEAppConfigVersions(ctx); err != nil {
+			return fmt.Errorf("cluster: version affected apps: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("cluster: commit dns settings: %w", err)
 	}
 	j.log.Info("dns settings changed",
 		slog.String("cname_target", target), slog.String("txt_prefix", prefix))

@@ -149,6 +149,12 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("k8s: create build namespace: %w", err)
 	}
+	if err := o.ensureLimitRange(ctx, BuildNamespace, orchestrator.ResourceLimits{
+		DefaultCPU: "1", DefaultMemory: "2Gi",
+		MaxCPU: "4", MaxMemory: "8Gi",
+	}); err != nil {
+		return err
+	}
 
 	// No RoleBinding accompanies this, deliberately and permanently. The
 	// account exists so build pods are not the namespace default, and it is
@@ -492,4 +498,13 @@ func (o *Orchestrator) BuildState(
 		}
 	}
 	return state, nil
+}
+
+// CancelBuild deletes a build Job and its pods. deleteBuildJob already treats
+// an absent Job as success, which is the idempotence cancellation requires.
+func (o *Orchestrator) CancelBuild(ctx context.Context, jobName string) error {
+	if jobName == "" {
+		return nil
+	}
+	return o.deleteBuildJob(ctx, jobName)
 }

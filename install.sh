@@ -125,6 +125,11 @@ parse_flags() {
 # Re-running the installer must never mint a new YACHT_SECRET_KEY: it seals
 # every stored secret, and losing it loses them with no recovery path. Same for
 # the database password, which is the only copy anybody has.
+#
+# The file below is rewritten from scratch on every run, so anything not read
+# back here is dropped. That is why YACHT_SECRET_KEY_PREVIOUS is carried over
+# too: an operator part-way through replacing a key has the old one in there by
+# hand, and dropping it would take every value not yet rewritten with it.
 env_get() {
 	[ -f "$ENV_FILE" ] || return 1
 	v=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -n1)
@@ -261,6 +266,51 @@ install_postgres() {
 
 # ------------------------------------------------------------------ config --
 
+# render_env prints the environment file the service reads.
+#
+# Split out from configure so the half that decides what survives a re-run can
+# be exercised without provisioning a machine — it reads the old file and
+# prints the new one, and touches nothing else. Rendering twice must give the
+# same file: anything written here but not read back through env_get is a value
+# the next run drops, and that is exactly how a retired key goes missing.
+render_env() {
+	secret_key=$(env_get YACHT_SECRET_KEY || rand_b64 32)
+	secret_key_previous=$(env_get YACHT_SECRET_KEY_PREVIOUS || printf '')
+	if [ "$ROTATE_TOKEN" = "yes" ]; then
+		auth_token=$(rand_hex 24)
+	else
+		auth_token=$(env_get YACHT_AUTH_TOKEN || rand_hex 24)
+	fi
+	owner_email=$(env_get YACHT_OWNER_EMAIL || printf '')
+	max_concurrent_builds=$(env_get YACHT_MAX_CONCURRENT_BUILDS || printf '2')
+
+	cat <<-EOF
+		# Written by the Yacht installer. Re-running preserves every value here
+		# except the port and the binary; edit freely and restart the service.
+		#
+		# YACHT_SECRET_KEY seals stored secrets. There is no recovery path if it
+		# is lost, so back this file up before you need it.
+		#
+		# To replace it: put the new key in YACHT_SECRET_KEY, move the old one to
+		# YACHT_SECRET_KEY_PREVIOUS, restart. Both are kept across re-runs. Every
+		# stored value keeps opening, and each moves to the new key the next time
+		# it is written. Empty the previous key only once nothing still needs it.
+		YACHT_DATABASE_URL=${DATABASE_URL}
+		YACHT_KUBECONFIG=${KUBECONFIG_DST}
+		YACHT_ADDR=:${PORT}
+		YACHT_AUTH_TOKEN=${auth_token}
+		YACHT_SECRET_KEY=${secret_key}
+		YACHT_SECRET_KEY_PREVIOUS=${secret_key_previous}
+		YACHT_OWNER_EMAIL=${owner_email}
+		YACHT_MAX_CONCURRENT_BUILDS=${max_concurrent_builds}
+
+		# Set YACHT_BASE_URL to a public https URL to turn magic-link sign-in on,
+		# and YACHT_APP_DOMAIN to the domain apps get a hostname under.
+		#YACHT_BASE_URL=
+		#YACHT_APP_DOMAIN=
+	EOF
+}
+
 configure() {
 	step "Writing ${ENV_FILE}"
 
@@ -276,33 +326,10 @@ configure() {
 	[ -r "$K3S_KUBECONFIG" ] || die "${K3S_KUBECONFIG} is not readable"
 	install -o "$SVC_USER" -g "$SVC_USER" -m 0600 "$K3S_KUBECONFIG" "$KUBECONFIG_DST"
 
-	secret_key=$(env_get YACHT_SECRET_KEY || rand_b64 32)
-	if [ "$ROTATE_TOKEN" = "yes" ]; then
-		auth_token=$(rand_hex 24)
-	else
-		auth_token=$(env_get YACHT_AUTH_TOKEN || rand_hex 24)
-	fi
-	owner_email=$(env_get YACHT_OWNER_EMAIL || printf '')
-
+	# Redirected rather than piped, so the auth_token render_env settled on is
+	# still set for summary() to print.
 	umask 077
-	cat > "${ENV_FILE}.new" <<-EOF
-		# Written by the Yacht installer. Re-running preserves every value here
-		# except the port and the binary; edit freely and restart the service.
-		#
-		# YACHT_SECRET_KEY seals stored secrets. There is no recovery path if it
-		# is lost, so back this file up before you need it.
-		YACHT_DATABASE_URL=${DATABASE_URL}
-		YACHT_KUBECONFIG=${KUBECONFIG_DST}
-		YACHT_ADDR=:${PORT}
-		YACHT_AUTH_TOKEN=${auth_token}
-		YACHT_SECRET_KEY=${secret_key}
-		YACHT_OWNER_EMAIL=${owner_email}
-
-		# Set YACHT_BASE_URL to a public https URL to turn magic-link sign-in on,
-		# and YACHT_APP_DOMAIN to the domain apps get a hostname under.
-		#YACHT_BASE_URL=
-		#YACHT_APP_DOMAIN=
-	EOF
+	render_env > "${ENV_FILE}.new"
 	chown root:"$SVC_USER" "${ENV_FILE}.new"
 	chmod 0640 "${ENV_FILE}.new"
 	mv -f "${ENV_FILE}.new" "$ENV_FILE"

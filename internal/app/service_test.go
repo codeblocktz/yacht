@@ -37,7 +37,16 @@ func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, 
 	t.Cleanup(pool.Close)
 
 	orch := &recordingOrchestrator{Noop: orchestrator.NewNoop()}
+	if opts.Manifests == nil {
+		opts.Manifests = staticManifests{}
+	}
 	return NewService(pool, orch, log, opts), orch, pool
+}
+
+type staticManifests struct{}
+
+func (staticManifests) ResolveDigest(context.Context, string) (string, error) {
+	return "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
 }
 
 // recordingOrchestrator keeps the last spec it was asked to apply, so a test
@@ -523,6 +532,9 @@ func TestAttachVolumeReachesTheOrchestrator(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AttachVolume: %v", err)
 	}
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
+	}
 
 	spec := orch.lastAppSpec()
 	if len(spec.Volumes) != 1 || spec.Volumes[0].MountPath != "/var/lib/data" {
@@ -644,6 +656,9 @@ func TestSecretIsUnreadableInTheDatabase(t *testing.T) {
 		Key: "DATABASE_URL", Value: password, Secret: true,
 	}); err != nil {
 		t.Fatalf("SetVariable: %v", err)
+	}
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
 	}
 
 	// Not in any column of the row that holds it.

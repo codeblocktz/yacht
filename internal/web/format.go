@@ -96,6 +96,9 @@ func deploymentClass(status string) string {
 
 // activeDeploymentBorder tints the live deployment panel by its health.
 func activeDeploymentBorder(d app.Deployment) string {
+	if d.IsActive {
+		return "border-l-success"
+	}
 	switch d.Status {
 	case app.DeployActive, "succeeded":
 		return "border-l-success"
@@ -105,6 +108,15 @@ func activeDeploymentBorder(d app.Deployment) string {
 		return "border-l-info"
 	}
 	return "border-l-border"
+}
+
+func activeDeploymentOf(deployments []app.Deployment) (app.Deployment, bool) {
+	for _, deployment := range deployments {
+		if deployment.IsActive {
+			return deployment, true
+		}
+	}
+	return app.Deployment{}, false
 }
 
 // volumeClass maps a claim's phase to a status style.

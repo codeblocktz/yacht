@@ -35,6 +35,7 @@ func (fakeBuilder) BuildJobName(orchestrator.BuildRequest) string { return "buil
 func (fakeBuilder) BuildState(context.Context, string) (orchestrator.BuildState, error) {
 	return orchestrator.BuildState{}, nil
 }
+func (fakeBuilder) CancelBuild(context.Context, string) error { return nil }
 
 // gitService is a service that can offer the repository source.
 func gitService(t *testing.T, name string) (*Service, *recordingOrchestrator, string) {
@@ -68,8 +69,9 @@ func TestAnImageTagCanBeChanged(t *testing.T) {
 	}
 
 	// And it reached the cluster rather than only the row.
-	if got := orch.lastAppSpec().Image; got != "nginx:1.28" {
-		t.Errorf("applied image = %q, want the new tag", got)
+	wantPinned := "nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if got := orch.lastAppSpec().Image; got != wantPinned {
+		t.Errorf("applied image = %q, want immutable %q", got, wantPinned)
 	}
 
 	// Recorded as a deployment, naming what changed. A history of rows all

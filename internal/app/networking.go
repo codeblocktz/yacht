@@ -51,8 +51,16 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 	return out, nil
 }
 
-// SetNetworking records the routing choices and reapplies the app.
+// SetNetworking records the routing choices. The app reconciler owns the
+// cluster write so request handlers cannot race a candidate deployment.
 func (s *Service) SetNetworking(ctx context.Context, ownerID, name string, httpsOnly, cnameOnly bool) error {
+	current, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return err
+	}
+	if current.HTTPSOnly == httpsOnly && current.CNAMEOnly == cnameOnly {
+		return nil
+	}
 	n, err := s.q.SetAppNetworking(ctx, dbgen.SetAppNetworkingParams{
 		OwnerID: ownerID, Name: name, HttpsOnly: httpsOnly, CnameOnly: cnameOnly,
 	})
@@ -60,16 +68,9 @@ func (s *Service) SetNetworking(ctx context.Context, ownerID, name string, https
 		return fmt.Errorf("app: set networking: %w", err)
 	}
 	if n == 0 {
-		return ErrNotFound
+		return fmt.Errorf("app: networking changed concurrently")
 	}
 
-	a, err := s.Get(ctx, ownerID, name)
-	if err != nil {
-		return err
-	}
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
 	s.log.Info("networking changed", slog.String("app", name),
 		slog.Bool("https_only", httpsOnly), slog.Bool("cname_only", cnameOnly))
 	return nil
@@ -89,11 +90,16 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 		s.cnameTarget(ctx), s.opts.AppDomain, s.opts.ReservedDomains); err != nil {
 		return err
 	}
+	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
+		OwnerID: ownerID, AppID: a.ID,
+	}); err != nil {
+		return fmt.Errorf("app: version domain claim: %w", err)
+	}
 	s.log.Info("custom domain claimed", slog.String("app", name), slog.String("host", host))
 	return nil
 }
 
-// ApplyRouting rebuilds one app's routing from the hostnames it now has.
+// ApplyRouting records that one app's routing projection changed.
 //
 // This is what the background domain checker calls when a claim becomes
 // provable, or when a live one stops resolving. It takes an owner and an app id
@@ -101,19 +107,15 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 // both — and every table carrying owner_id is precisely so that scoping stays a
 // cheap predicate rather than something a background job gets to skip.
 func (s *Service) ApplyRouting(ctx context.Context, ownerID string, appID uuid.UUID) error {
-	row, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{OwnerID: ownerID, ID: appID})
-	if err != nil {
+	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
+		OwnerID: ownerID, AppID: appID,
+	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("app: read app for routing: %w", err)
+		return fmt.Errorf("app: version routing change: %w", err)
 	}
-
-	a := toApp(row)
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
-	s.log.Info("routing reapplied", slog.String("app", a.Name))
+	s.log.Info("routing convergence requested", slog.String("app_id", appID.String()))
 	return nil
 }
 
@@ -122,8 +124,8 @@ func (s *Service) ApplyRouting(ctx context.Context, ownerID string, appID uuid.U
 // The background checker will reach this domain on its own, so this exists for
 // the person standing in front of the page who has just created the record and
 // does not want to wait out the backoff. It runs the same Check the checker
-// runs — one code path decides state — and then applies, because a domain
-// proven by this call should be serving before the response comes back.
+// runs. The app reconciler observes that version and is the only component
+// allowed to write the Ingress.
 func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uuid.UUID) error {
 	if s.resolver == nil {
 		return errors.New("app: this install cannot resolve DNS, so a domain cannot be verified here")
@@ -138,11 +140,10 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 	if err != nil {
 		return err
 	}
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
-	if _, err := s.q.MarkDomainRouted(ctx, id); err != nil {
-		return fmt.Errorf("app: mark domain routed: %w", err)
+	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
+		OwnerID: ownerID, AppID: a.ID,
+	}); err != nil {
+		return fmt.Errorf("app: version verified domain: %w", err)
 	}
 	s.log.Info("custom domain verified", slog.String("app", name))
 	return nil
@@ -230,8 +231,10 @@ func (s *Service) RemoveDomain(ctx context.Context, ownerID, name string, id uui
 	if err != nil {
 		return err
 	}
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
+	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
+		OwnerID: ownerID, AppID: a.ID,
+	}); err != nil {
+		return fmt.Errorf("app: version removed domain: %w", err)
 	}
 	s.log.Info("custom domain removed", slog.String("app", name))
 	return nil

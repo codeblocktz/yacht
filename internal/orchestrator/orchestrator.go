@@ -155,8 +155,10 @@ func (l ResourceLimits) OrDefaults() ResourceLimits {
 type AppSpec struct {
 	Ref
 
-	Image    string
-	Replicas int32
+	ReleaseID     string
+	ConfigVersion int64
+	Image         string
+	Replicas      int32
 
 	// Port the container listens on. Zero means the workload takes no traffic.
 	Port int32
@@ -335,11 +337,19 @@ const (
 
 // AppStatus is the observed state of a workload.
 type AppStatus struct {
-	Phase     Phase
-	Desired   int32
-	Ready     int32
-	Available int32
-	Message   string
+	Phase              Phase
+	ReleaseID          string
+	ConfigVersion      int64
+	Generation         int64
+	ObservedGeneration int64
+	Desired            int32
+	Updated            int32
+	Ready              int32
+	Available          int32
+	AvailableCondition bool
+	Terminal           bool
+	Reason             string
+	Message            string
 }
 
 // Orchestrator applies desired state to a runtime and reports back what it
@@ -525,7 +535,7 @@ func (s AppSpec) validateHealth() error {
 // ErrNotStarted means a container exists but has not run yet.
 //
 // Its own error because it is not a failure to read: there is genuinely no log
-//, and the reason is on the pod rather than in the log. Reported as a failure
+// , and the reason is on the pod rather than in the log. Reported as a failure
 // it reads as "the log is broken" for a container whose problem is that it
 // never started — which is the more useful thing to say and is already on
 // screen a few lines above.
@@ -604,6 +614,10 @@ type Builder interface {
 	// started it does not survive a restart and never existed on the other
 	// replicas, but the Job is there for all of them to read.
 	BuildState(ctx context.Context, jobName string) (BuildState, error)
+
+	// CancelBuild removes a Job by the stable name BuildJobName returned. The
+	// operation is idempotent: a Job already gone is a cancelled build too.
+	CancelBuild(ctx context.Context, jobName string) error
 }
 
 // BuildState is what the cluster knows about a build.

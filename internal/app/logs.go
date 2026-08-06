@@ -56,14 +56,9 @@ func (s *Service) Deployment(
 		return Deployment{}, ErrNotFound
 	}
 
-	d := Deployment{
-		ID: row.ID, AppID: row.AppID, Image: row.Image,
-		Revision: row.Revision, Status: row.Status,
-		Message: row.Message, StartedAt: row.StartedAt,
-	}
-	if row.FinishedAt.Valid {
-		finished := row.FinishedAt.Time
-		d.FinishedAt = &finished
+	d := toDeployment(row)
+	if a.ActiveReleaseID != nil {
+		d.IsActive = sameRelease(d.ReleaseID, pgUUID(*a.ActiveReleaseID))
 	}
 	return d, nil
 }
@@ -98,7 +93,7 @@ func (s *Service) DeploymentLogs(
 	}
 
 	out := DeployLogs{Deployment: d}
-	out.Live = out.Deployment.Status == DeployRunning || out.Deployment.Status == DeployActive
+	out.Live = out.Deployment.IsActive
 	if !out.Live {
 		out.Logs.Note = "This deployment has been replaced. Its containers are gone, and " +
 			"their output went with them — nothing here stores logs off the cluster."

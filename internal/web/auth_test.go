@@ -707,7 +707,8 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 	t.Cleanup(purge)
 
 	accounts := account.NewService(pool, log)
-	apps := app.NewService(pool, orchestrator.NewNoop(), log, app.Options{})
+	apps := app.NewService(pool, orchestrator.NewNoop(), log,
+		app.Options{Manifests: testManifests{}})
 	mailer := &fakeMailer{}
 
 	h := testServer(t, Options{

@@ -29,8 +29,17 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Manifest integration tests seed this registry themselves. Keeping it
+      # local makes media-type and digest verification deterministic and avoids
+      # teaching CI to depend on Docker Hub availability or rate limits.
+      registry:
+        image: registry:2
+        ports: ["5000:5000"]
+
     env:
       YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
+      YACHT_TEST_REGISTRY: localhost:5000
+      YACHT_TEST_REGISTRY_INSECURE: "1"
 
     steps:
       - uses: actions/checkout@v4

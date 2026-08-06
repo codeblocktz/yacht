@@ -70,8 +70,8 @@ func TestAClaimProvesItselfWithoutBeingAsked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCustomDomain: %v", err)
 	}
-	if State(row.State) != StateRouted {
-		t.Fatalf("state = %q, want routed", row.State)
+	if State(row.State) != StateVerified {
+		t.Fatalf("state = %q, want verified until workload convergence", row.State)
 	}
 	if router.calls() != 1 {
 		t.Fatalf("routing applied %d times, want once", router.calls())
@@ -176,15 +176,24 @@ func TestADomainIsNotCalledRoutedUntilTheApplyTakes(t *testing.T) {
 		t.Fatalf("state = %q, want verified — routed would claim an Ingress that was never written", row.State)
 	}
 
-	// And the retry that was missing: the next pass finishes the job.
+	// The next pass can request convergence again, but only observed workload
+	// metadata may promote the domain to routed.
 	working := &fakeRouter{}
 	later := checkerFor(t, res, working, time.Now().Add(time.Hour))
 	if err := later.Pass(ctx); err != nil {
 		t.Fatalf("second Pass: %v", err)
 	}
 	row, _ = q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
+	if State(row.State) != StateVerified {
+		t.Fatalf("state after retry = %q, want verified", row.State)
+	}
+	if _, err := q.MarkVerifiedDomainsRoutedForApp(ctx,
+		dbgen.MarkVerifiedDomainsRoutedForAppParams{OwnerID: a.OwnerID, AppID: a.ID}); err != nil {
+		t.Fatalf("mark observed routing: %v", err)
+	}
+	row, _ = q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
 	if State(row.State) != StateRouted {
-		t.Fatalf("state after retry = %q, want routed", row.State)
+		t.Fatalf("state after observed convergence = %q, want routed", row.State)
 	}
 }
 
@@ -206,6 +215,10 @@ func TestTheCheckerWithdrawsADomainThatDrifts(t *testing.T) {
 	router := &fakeRouter{}
 	if err := checkerFor(t, working, router, time.Now()).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
+	}
+	if _, err := q.MarkVerifiedDomainsRoutedForApp(ctx,
+		dbgen.MarkVerifiedDomainsRoutedForAppParams{OwnerID: a.OwnerID, AppID: a.ID}); err != nil {
+		t.Fatalf("mark observed routing: %v", err)
 	}
 	if !hasHost(mustHosts(t, ctx, q, a.ID), "shop.checkdrift.test") {
 		t.Fatal("the domain never became routed")

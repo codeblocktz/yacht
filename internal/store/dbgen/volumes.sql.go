@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -54,6 +55,71 @@ func (q *Queries) CreateVolume(ctx context.Context, arg CreateVolumeParams) (Vol
 	return i, err
 }
 
+const createVolumeAndBump = `-- name: CreateVolumeAndBump :one
+WITH created AS (
+    INSERT INTO volumes (owner_id, app_id, name, mount_path, size_bytes, class)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING volumes.id, volumes.owner_id, volumes.app_id, volumes.name, volumes.mount_path, volumes.size_bytes, volumes.class, volumes.created_at, volumes.updated_at
+), bumped AS (
+    UPDATE apps
+    SET config_version = config_version + 1, updated_at = now()
+    WHERE apps.owner_id = $1 AND apps.id = $2
+      AND EXISTS (SELECT 1 FROM created)
+    RETURNING config_version
+)
+SELECT created.id, created.owner_id, created.app_id, created.name,
+       created.mount_path, created.size_bytes, created.class,
+       created.created_at, created.updated_at, bumped.config_version
+FROM created CROSS JOIN bumped
+`
+
+type CreateVolumeAndBumpParams struct {
+	OwnerID   string
+	AppID     uuid.UUID
+	Name      string
+	MountPath string
+	SizeBytes int64
+	Class     string
+}
+
+type CreateVolumeAndBumpRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Name          string
+	MountPath     string
+	SizeBytes     int64
+	Class         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
+}
+
+func (q *Queries) CreateVolumeAndBump(ctx context.Context, arg CreateVolumeAndBumpParams) (CreateVolumeAndBumpRow, error) {
+	row := q.db.QueryRow(ctx, createVolumeAndBump,
+		arg.OwnerID,
+		arg.AppID,
+		arg.Name,
+		arg.MountPath,
+		arg.SizeBytes,
+		arg.Class,
+	)
+	var i CreateVolumeAndBumpRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Name,
+		&i.MountPath,
+		&i.SizeBytes,
+		&i.Class,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigVersion,
+	)
+	return i, err
+}
+
 const deleteVolume = `-- name: DeleteVolume :execrows
 DELETE FROM volumes
 WHERE owner_id = $1 AND app_id = $2 AND name = $3
@@ -71,6 +137,62 @@ func (q *Queries) DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteVolumeAndBump = `-- name: DeleteVolumeAndBump :one
+WITH removed AS (
+    DELETE FROM volumes
+    WHERE volumes.owner_id = $1
+      AND volumes.app_id = $2 AND volumes.name = $3
+    RETURNING volumes.id, volumes.owner_id, volumes.app_id, volumes.name, volumes.mount_path, volumes.size_bytes, volumes.class, volumes.created_at, volumes.updated_at
+), bumped AS (
+    UPDATE apps
+    SET config_version = config_version + 1, updated_at = now()
+    WHERE apps.owner_id = $1 AND apps.id = $2
+      AND EXISTS (SELECT 1 FROM removed)
+    RETURNING config_version
+)
+SELECT removed.id, removed.owner_id, removed.app_id, removed.name,
+       removed.mount_path, removed.size_bytes, removed.class,
+       removed.created_at, removed.updated_at, bumped.config_version
+FROM removed CROSS JOIN bumped
+`
+
+type DeleteVolumeAndBumpParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+	Name    string
+}
+
+type DeleteVolumeAndBumpRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Name          string
+	MountPath     string
+	SizeBytes     int64
+	Class         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
+}
+
+func (q *Queries) DeleteVolumeAndBump(ctx context.Context, arg DeleteVolumeAndBumpParams) (DeleteVolumeAndBumpRow, error) {
+	row := q.db.QueryRow(ctx, deleteVolumeAndBump, arg.OwnerID, arg.AppID, arg.Name)
+	var i DeleteVolumeAndBumpRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Name,
+		&i.MountPath,
+		&i.SizeBytes,
+		&i.Class,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigVersion,
+	)
+	return i, err
 }
 
 const getVolume = `-- name: GetVolume :one
@@ -129,6 +251,70 @@ func (q *Queries) GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const growVolumeAndBump = `-- name: GrowVolumeAndBump :one
+WITH grown AS (
+    UPDATE volumes
+    SET size_bytes = $1, updated_at = now()
+    WHERE volumes.owner_id = $2
+      AND volumes.app_id = $3 AND volumes.name = $4
+      AND $1::bigint > size_bytes
+    RETURNING volumes.id, volumes.owner_id, volumes.app_id, volumes.name, volumes.mount_path, volumes.size_bytes, volumes.class, volumes.created_at, volumes.updated_at
+), bumped AS (
+    UPDATE apps
+    SET config_version = config_version + 1, updated_at = now()
+    WHERE apps.owner_id = $2 AND apps.id = $3
+      AND EXISTS (SELECT 1 FROM grown)
+    RETURNING config_version
+)
+SELECT grown.id, grown.owner_id, grown.app_id, grown.name,
+       grown.mount_path, grown.size_bytes, grown.class,
+       grown.created_at, grown.updated_at, bumped.config_version
+FROM grown CROSS JOIN bumped
+`
+
+type GrowVolumeAndBumpParams struct {
+	SizeBytes int64
+	OwnerID   string
+	AppID     uuid.UUID
+	Name      string
+}
+
+type GrowVolumeAndBumpRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Name          string
+	MountPath     string
+	SizeBytes     int64
+	Class         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
+}
+
+func (q *Queries) GrowVolumeAndBump(ctx context.Context, arg GrowVolumeAndBumpParams) (GrowVolumeAndBumpRow, error) {
+	row := q.db.QueryRow(ctx, growVolumeAndBump,
+		arg.SizeBytes,
+		arg.OwnerID,
+		arg.AppID,
+		arg.Name,
+	)
+	var i GrowVolumeAndBumpRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Name,
+		&i.MountPath,
+		&i.SizeBytes,
+		&i.Class,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigVersion,
+	)
+	return i, err
 }
 
 const listVolumesForApp = `-- name: ListVolumesForApp :many

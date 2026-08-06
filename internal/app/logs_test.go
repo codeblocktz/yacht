@@ -163,7 +163,7 @@ func TestNothingToShowSaysWhy(t *testing.T) {
 // at "running" for ever and the history read as a list of deploys still in
 // progress. Nothing failed and nothing looked broken — the page was simply
 // describing a state that had not been true since the moment it was written.
-func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
+func TestDeploymentHistoryKeepsTerminalAttemptsAndOneActivePointer(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-deploy-history")
@@ -191,11 +191,17 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 
 	var active, running int
 	for _, d := range deps {
-		switch d.Status {
-		case DeployActive:
+		if d.IsActive {
 			active++
-		case DeployRunning:
+		}
+		if d.Status == DeployRunning {
 			running++
+		}
+		if d.Status != DeploySucceeded {
+			t.Errorf("deployment status = %q, want terminal succeeded", d.Status)
+		}
+		if d.FinishedAt == nil {
+			t.Error("a completed attempt has no finish time")
 		}
 	}
 	if active != 1 {
@@ -206,15 +212,12 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 	}
 
 	// Newest first, and it is the live one.
-	if deps[0].Status != DeployActive {
-		t.Errorf("newest deployment is %q, want %q", deps[0].Status, DeployActive)
+	if !deps[0].IsActive {
+		t.Error("newest successful release is not the active pointer")
 	}
 	for _, d := range deps[1:] {
-		if d.Status != DeploySuperseded {
-			t.Errorf("an earlier deployment is %q, want %q", d.Status, DeploySuperseded)
-		}
-		if d.FinishedAt == nil {
-			t.Error("a retired deployment has no finish time")
+		if d.IsActive {
+			t.Error("an earlier release is also marked active")
 		}
 	}
 }
@@ -249,10 +252,9 @@ func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
 	}
 	var live, old Deployment
 	for _, d := range deps {
-		switch d.Status {
-		case DeployActive:
+		if d.IsActive {
 			live = d
-		case DeploySuperseded:
+		} else {
 			old = d
 		}
 	}

@@ -83,6 +83,16 @@ type Config struct {
 	// because a recovery path is a second way in.
 	SecretKey string
 
+	// SecretKeyPrevious are keys kept only to open values sealed before the
+	// current one. Comma-separated, each the same shape as SecretKey.
+	//
+	// Nothing is ever sealed with these. They exist so that replacing a key is
+	// not a flag day: the new key becomes YACHT_SECRET_KEY, the old one moves
+	// here, and every stored value keeps opening until it has been written
+	// again under the new key. An install that has never rotated sets only
+	// YACHT_SECRET_KEY and this stays empty.
+	SecretKeyPrevious []string
+
 	// AppDomain is the platform domain every app gets a hostname under, such
 	// as apps.example.com. Empty switches per-app hostnames off entirely.
 	AppDomain string
@@ -141,6 +151,11 @@ type Config struct {
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
 
+	// MaxConcurrentBuilds is the install-wide admission ceiling. It is paired
+	// with per-container bounds in the build namespace so the count represents
+	// a bounded amount of node capacity rather than an arbitrary pod count.
+	MaxConcurrentBuilds int32
+
 	// Debug enables verbose logging.
 	Debug bool
 }
@@ -148,30 +163,32 @@ type Config struct {
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{
-		Addr:            env("YACHT_ADDR", ":8080"),
-		DatabaseURL:     env("YACHT_DATABASE_URL", ""),
-		Kubeconfig:      env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
-		KubeInCluster:   envBool("YACHT_KUBE_IN_CLUSTER", false),
-		AuthToken:       env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:         env("YACHT_OWNER_ID", "owner-local"),
-		OwnerName:       env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:      strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
-		SecretKey:       strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
-		AppDomain:       env("YACHT_APP_DOMAIN", ""),
-		WildcardTLS:     envBool("YACHT_WILDCARD_TLS", false),
-		DNSResolver:     env("YACHT_DNS_RESOLVER", ""),
-		ReservedDomains: envList("YACHT_RESERVED_DOMAINS"),
-		BaseURL:         strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
-		SMTPAddr:        env("YACHT_SMTP_ADDR", ""),
-		SMTPUsername:    env("YACHT_SMTP_USER", ""),
-		SMTPPassword:    env("YACHT_SMTP_PASSWORD", ""),
-		SMTPFrom:        env("YACHT_SMTP_FROM", ""),
-		ResendAPIKey:    env("YACHT_RESEND_API_KEY", ""),
-		ResendFrom:      env("YACHT_RESEND_FROM", ""),
-		SessionTTL:      envDuration("YACHT_SESSION_TTL", 720*time.Hour),
-		MagicLinkTTL:    envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
-		ShutdownTimeout: envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
-		Debug:           envBool("YACHT_DEBUG", false),
+		Addr:                env("YACHT_ADDR", ":8080"),
+		DatabaseURL:         env("YACHT_DATABASE_URL", ""),
+		Kubeconfig:          env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
+		KubeInCluster:       envBool("YACHT_KUBE_IN_CLUSTER", false),
+		AuthToken:           env("YACHT_AUTH_TOKEN", ""),
+		OwnerID:             env("YACHT_OWNER_ID", "owner-local"),
+		OwnerName:           env("YACHT_OWNER_NAME", "Local"),
+		OwnerEmail:          strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		SecretKey:           strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
+		SecretKeyPrevious:   envList("YACHT_SECRET_KEY_PREVIOUS"),
+		AppDomain:           env("YACHT_APP_DOMAIN", ""),
+		WildcardTLS:         envBool("YACHT_WILDCARD_TLS", false),
+		DNSResolver:         env("YACHT_DNS_RESOLVER", ""),
+		ReservedDomains:     envList("YACHT_RESERVED_DOMAINS"),
+		BaseURL:             strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
+		SMTPAddr:            env("YACHT_SMTP_ADDR", ""),
+		SMTPUsername:        env("YACHT_SMTP_USER", ""),
+		SMTPPassword:        env("YACHT_SMTP_PASSWORD", ""),
+		SMTPFrom:            env("YACHT_SMTP_FROM", ""),
+		ResendAPIKey:        env("YACHT_RESEND_API_KEY", ""),
+		ResendFrom:          env("YACHT_RESEND_FROM", ""),
+		SessionTTL:          envDuration("YACHT_SESSION_TTL", 720*time.Hour),
+		MagicLinkTTL:        envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
+		ShutdownTimeout:     envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
+		MaxConcurrentBuilds: envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
+		Debug:               envBool("YACHT_DEBUG", false),
 	}
 
 	if err := c.validate(); err != nil {
@@ -191,6 +208,10 @@ func (c Config) validate() error {
 	}
 	if c.OwnerID == "" {
 		errs = append(errs, errors.New("YACHT_OWNER_ID must not be empty"))
+	}
+	if c.MaxConcurrentBuilds < 1 || c.MaxConcurrentBuilds > 16 {
+		errs = append(errs, errors.New(
+			"YACHT_MAX_CONCURRENT_BUILDS must be between 1 and 16"))
 	}
 	// A short shared secret is worse than none, because it invites exposing
 	// the dashboard while providing no real protection.
@@ -223,6 +244,14 @@ func (c Config) validate() error {
 	if c.WildcardTLS && c.AppDomain == "" {
 		errs = append(errs, errors.New(
 			"YACHT_WILDCARD_TLS requires YACHT_APP_DOMAIN — there would be no hostnames to serve"))
+	}
+	// Retired keys with nothing to be retired from. Nothing seals and nothing
+	// opens, while the setting that exists to keep values readable sits there
+	// looking as though it is doing that.
+	if len(c.SecretKeyPrevious) > 0 && c.SecretKey == "" {
+		errs = append(errs, errors.New(
+			"YACHT_SECRET_KEY_PREVIOUS is set without YACHT_SECRET_KEY — a retired key opens "+
+				"values but never seals them, so there would be no key in use"))
 	}
 	if c.OwnerEmail != "" {
 		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
@@ -332,6 +361,18 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func envInt32(key string, fallback int32) int32 {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(n)
 }
 
 // String redacts secrets so a Config can be logged safely.

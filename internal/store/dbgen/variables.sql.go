@@ -7,6 +7,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -28,6 +29,69 @@ func (q *Queries) DeleteVariable(ctx context.Context, arg DeleteVariableParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteVariableAndBump = `-- name: DeleteVariableAndBump :one
+WITH removed AS (
+    DELETE FROM variables
+    WHERE variables.owner_id = $1
+      AND variables.app_id = $2 AND variables.key = $3
+    RETURNING secret
+), bumped AS (
+    UPDATE apps
+    SET config_version = config_version + 1, updated_at = now()
+    WHERE apps.owner_id = $1 AND apps.id = $2
+      AND EXISTS (SELECT 1 FROM removed)
+    RETURNING config_version
+)
+SELECT removed.secret, bumped.config_version
+FROM removed CROSS JOIN bumped
+`
+
+type DeleteVariableAndBumpParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+	Key     string
+}
+
+type DeleteVariableAndBumpRow struct {
+	Secret        bool
+	ConfigVersion int64
+}
+
+func (q *Queries) DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error) {
+	row := q.db.QueryRow(ctx, deleteVariableAndBump, arg.OwnerID, arg.AppID, arg.Key)
+	var i DeleteVariableAndBumpRow
+	err := row.Scan(&i.Secret, &i.ConfigVersion)
+	return i, err
+}
+
+const getVariable = `-- name: GetVariable :one
+SELECT id, owner_id, app_id, key, value, sealed, secret, created_at, updated_at FROM variables
+WHERE owner_id = $1 AND app_id = $2 AND key = $3
+`
+
+type GetVariableParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+	Key     string
+}
+
+func (q *Queries) GetVariable(ctx context.Context, arg GetVariableParams) (Variable, error) {
+	row := q.db.QueryRow(ctx, getVariable, arg.OwnerID, arg.AppID, arg.Key)
+	var i Variable
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Key,
+		&i.Value,
+		&i.Sealed,
+		&i.Secret,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const listVariablesForApp = `-- name: ListVariablesForApp :many
@@ -110,6 +174,78 @@ func (q *Queries) UpsertVariable(ctx context.Context, arg UpsertVariableParams) 
 		&i.Secret,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertVariableAndBump = `-- name: UpsertVariableAndBump :one
+WITH changed AS (
+    INSERT INTO variables (owner_id, app_id, key, value, sealed, secret)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (app_id, key) DO UPDATE
+    SET value      = excluded.value,
+        sealed     = excluded.sealed,
+        secret     = excluded.secret,
+        updated_at = now()
+    WHERE (variables.value, variables.sealed, variables.secret)
+          IS DISTINCT FROM (excluded.value, excluded.sealed, excluded.secret)
+    RETURNING variables.id, variables.owner_id, variables.app_id, variables.key, variables.value, variables.sealed, variables.secret, variables.created_at, variables.updated_at
+), bumped AS (
+    UPDATE apps
+    SET config_version = config_version + 1, updated_at = now()
+    WHERE apps.owner_id = $1 AND apps.id = $2
+      AND EXISTS (SELECT 1 FROM changed)
+    RETURNING config_version
+)
+SELECT changed.id, changed.owner_id, changed.app_id, changed.key,
+       changed.value, changed.sealed, changed.secret,
+       changed.created_at, changed.updated_at, bumped.config_version
+FROM changed CROSS JOIN bumped
+`
+
+type UpsertVariableAndBumpParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+	Key     string
+	Value   string
+	Sealed  []byte
+	Secret  bool
+}
+
+type UpsertVariableAndBumpRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	AppID         uuid.UUID
+	Key           string
+	Value         string
+	Sealed        []byte
+	Secret        bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	ConfigVersion int64
+}
+
+func (q *Queries) UpsertVariableAndBump(ctx context.Context, arg UpsertVariableAndBumpParams) (UpsertVariableAndBumpRow, error) {
+	row := q.db.QueryRow(ctx, upsertVariableAndBump,
+		arg.OwnerID,
+		arg.AppID,
+		arg.Key,
+		arg.Value,
+		arg.Sealed,
+		arg.Secret,
+	)
+	var i UpsertVariableAndBumpRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.Key,
+		&i.Value,
+		&i.Sealed,
+		&i.Secret,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfigVersion,
 	)
 	return i, err
 }

@@ -506,27 +506,40 @@ templ appDeployments(d AppDetailData) {
 }
 
 templ AppDeploymentsBody(d AppDetailData) {
-	if len(d.Deployments) == 0 {
-		<div class="panel">
-			<div class="empty">
-				<p class="font-medium text-foreground">No deployments recorded</p>
-				<p>History appears here after the first deploy.</p>
-			</div>
+	if active, ok := activeDeploymentOf(d.Deployments); ok {
+		@activeDeployment(d, active)
+	} else if d.App.ActiveReleaseID != nil {
+		<div class="panel border-l-2 border-l-success p-4">
+			<p class="font-medium text-foreground">Active baseline release</p>
+			<p class="mt-1 text-[12.5px] text-muted-foreground">
+				This workload has an immutable baseline, but no legacy deployment attempt can own it.
+			</p>
 		</div>
 	} else {
-		@activeDeployment(d, d.Deployments[0])
-		if len(d.Deployments) > 1 {
-			<div class="panel mt-4">
-				<div class="panel-header">
-					<span class="panel-title">History</span>
-				</div>
-				<div class="rows">
-					for _, dep := range d.Deployments[1:] {
+		<div class="panel">
+			<div class="empty">
+				<p class="font-medium text-foreground">No baseline release yet</p>
+				if d.App.BaselineError != "" {
+					<p>{ d.App.BaselineError }</p>
+				} else {
+					<p>The first successful deploy, or the resumable upgrade backfill, will create one.</p>
+				}
+			</div>
+		</div>
+	}
+	if len(d.Deployments) > 0 {
+		<div class="panel mt-4">
+			<div class="panel-header">
+				<span class="panel-title">History</span>
+			</div>
+			<div class="rows">
+				for _, dep := range d.Deployments {
+					if !dep.IsActive {
 						@deploymentRow(d.App.Name, dep)
 					}
-				</div>
+				}
 			</div>
-		}
+		</div>
 	}
 	<div class="panel mt-4">
 		<div class="panel-header">
@@ -554,6 +567,7 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">
 					@deploymentStatus(dep)
+					<span class="tag">active release</span>
 					<span class="text-[12px] text-muted-foreground">
 						{ relativeTime(dep.StartedAt) } via { dep.Source() }
 					</span>
