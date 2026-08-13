@@ -31,6 +31,22 @@ func TestAppDomainDefaultsToOff(t *testing.T) {
 	}
 }
 
+func TestBuildAdmissionCeilingLoadsAndIsBounded(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_MAX_CONCURRENT_BUILDS": "3"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MaxConcurrentBuilds != 3 {
+		t.Fatalf("MaxConcurrentBuilds = %d, want 3", c.MaxConcurrentBuilds)
+	}
+
+	setEnv(t, map[string]string{"YACHT_MAX_CONCURRENT_BUILDS": "0"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_CONCURRENT_BUILDS") {
+		t.Fatalf("Load accepted an unbounded-zero build ceiling: %v", err)
+	}
+}
+
 func TestAppDomainAndReservedDomainsLoad(t *testing.T) {
 	setEnv(t, map[string]string{
 		"YACHT_APP_DOMAIN":       "apps.example.com",
@@ -149,6 +165,64 @@ func TestValidReservedDomainsLoad(t *testing.T) {
 	}
 	if len(c.ReservedDomains) != 2 {
 		t.Fatalf("ReservedDomains = %v, want 2", c.ReservedDomains)
+	}
+}
+
+// Retired keys with no active key is the shape of a rotation somebody got
+// half-way through — the new key not pasted in, or the old one moved out of
+// YACHT_SECRET_KEY before the new one arrived.
+//
+// Started rather than refused, it looks like the safest possible state and is
+// the opposite: no key seals, no key opens, and every secret variable fails at
+// deploy time pointing at the app rather than at the setting.
+func TestRetiredKeysWithoutAnActiveKeyFail(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_SECRET_KEY":          "",
+		"YACHT_SECRET_KEY_PREVIOUS": "aGVsbG8td29ybGQtdGhpcnR5LXR3by1ieXRlcyE=",
+	})
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted retired keys with nothing sealing")
+	} else if !strings.Contains(err.Error(), "YACHT_SECRET_KEY_PREVIOUS") {
+		t.Errorf("the failure does not name the setting at fault: %v", err)
+	}
+}
+
+// The two together are the state an install is in mid-rotation, and it has to
+// start — this is the whole point of holding a retired key.
+func TestAnActiveKeyWithRetiredKeysLoads(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_SECRET_KEY":          "YS1rZXktdGhhdC1pcy10aGlydHktdHdvLWJ5dGVzIQ==",
+		"YACHT_SECRET_KEY_PREVIOUS": "b25lLXJldGlyZWQta2V5LXRoaXJ0eS10d28tYnl0ZQ==, dHdvLXJldGlyZWQta2V5LXRoaXJ0eS10d28tYnl0ZQ==",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.SecretKeyPrevious) != 2 {
+		t.Fatalf("SecretKeyPrevious = %v, want both entries", c.SecretKeyPrevious)
+	}
+	// Trimmed, because a list an operator edits by hand grows spaces after the
+	// commas and a key with a leading space is not base64.
+	if strings.HasPrefix(c.SecretKeyPrevious[1], " ") {
+		t.Errorf("entry %q kept its leading space", c.SecretKeyPrevious[1])
+	}
+}
+
+// The install that has never rotated, which is nearly all of them. The setting
+// is present and empty — the installer writes the line either way — and that
+// must yield no retired keys rather than one empty one, which the keeper would
+// refuse to decode and stop startup over.
+func TestAnEmptyRetiredListHoldsNoKeys(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_SECRET_KEY":          "YS1rZXktdGhhdC1pcy10aGlydHktdHdvLWJ5dGVzIQ==",
+		"YACHT_SECRET_KEY_PREVIOUS": "",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.SecretKeyPrevious) != 0 {
+		t.Fatalf("SecretKeyPrevious = %v, want none", c.SecretKeyPrevious)
 	}
 }
 

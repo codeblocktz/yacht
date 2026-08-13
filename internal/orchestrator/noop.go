@@ -80,13 +80,20 @@ func (n *Noop) AppStatus(_ context.Context, ref Ref) (AppStatus, error) {
 		return AppStatus{}, ErrNotFound
 	}
 	if spec.Replicas == 0 {
-		return AppStatus{Phase: PhaseStopped}, nil
+		return AppStatus{
+			Phase: PhaseStopped, ReleaseID: spec.ReleaseID,
+			ConfigVersion: spec.ConfigVersion,
+			Generation:    1, ObservedGeneration: 1,
+			AvailableCondition: true,
+		}, nil
 	}
 	return AppStatus{
-		Phase:     PhaseRunning,
-		Desired:   spec.Replicas,
-		Ready:     spec.Replicas,
-		Available: spec.Replicas,
+		Phase: PhaseRunning, ReleaseID: spec.ReleaseID,
+		ConfigVersion: spec.ConfigVersion,
+		Generation:    1, ObservedGeneration: 1,
+		Desired: spec.Replicas, Updated: spec.Replicas,
+		Ready: spec.Replicas, Available: spec.Replicas,
+		AvailableCondition: true,
 	}, nil
 }
 

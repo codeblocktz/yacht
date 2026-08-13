@@ -5,10 +5,44 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: yacht
+          POSTGRES_PASSWORD: yacht
+          POSTGRES_DB: yacht
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The exact target used by CI includes generated-output drift, shell,
+      # database-backed race, vet, boundary, gallery, and compile gates.
+      - name: Verify
+        run: make verify OUT="${RUNNER_TEMP}/yacht-gallery"
+
+  build:
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
@@ -19,21 +53,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # A release is the one build nobody rebuilds by hand, so the drift checks
-      # that guard main guard it here too. Shipping a binary whose embedded
-      # stylesheet or templates are stale is a bug that only the people who
-      # installed it ever see.
-      - name: Verify generated output is current
-        run: |
-          go tool templ generate
-          make css
-          git diff --exit-code -- '*_templ.go' internal/web/assets/css/app.css \
-            || (echo "::error::generated output is stale — run 'make assets' and commit" && exit 1)
-
-      - name: Test
-        run: go test ./... -count=1
-
-      - name: Build
+      - name: Build release assets
         run: |
           set -eu
           version="${GITHUB_REF_NAME}"
@@ -49,11 +69,30 @@ jobs:
           cd dist && sha256sum ./*.tar.gz | sed 's| \./| |' > checksums.txt
           cat checksums.txt
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             dist/*.tar.gz dist/checksums.txt

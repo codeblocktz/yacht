@@ -31,7 +31,7 @@ INSERT INTO apps (
     repo_url, repo_branch, repo_subdir
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
 `
 
 type CreateAppParams struct {
@@ -100,22 +100,34 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const createDeployment = `-- name: CreateDeployment :one
-INSERT INTO deployments (owner_id, app_id, image, revision, status)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at
+INSERT INTO deployments (
+    owner_id, app_id, image, revision, status, release_id, trigger,
+    actor_kind, actor_id
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9
+)
+RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_id, trigger, actor_kind, actor_id
 `
 
 type CreateDeploymentParams struct {
-	OwnerID  string
-	AppID    uuid.UUID
-	Image    string
-	Revision string
-	Status   string
+	OwnerID   string
+	AppID     uuid.UUID
+	Image     string
+	Revision  string
+	Status    string
+	ReleaseID pgtype.UUID
+	Trigger   string
+	ActorKind string
+	ActorID   string
 }
 
 func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error) {
@@ -125,6 +137,10 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		arg.Image,
 		arg.Revision,
 		arg.Status,
+		arg.ReleaseID,
+		arg.Trigger,
+		arg.ActorKind,
+		arg.ActorID,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -137,6 +153,10 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseID,
+		&i.Trigger,
+		&i.ActorKind,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -244,7 +264,7 @@ const finishDeployment = `-- name: FinishDeployment :one
 UPDATE deployments
 SET status = $3, message = $4, finished_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at
+RETURNING id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_id, trigger, actor_kind, actor_id
 `
 
 type FinishDeploymentParams struct {
@@ -272,12 +292,16 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseID,
+		&i.Trigger,
+		&i.ActorKind,
+		&i.ActorID,
 	)
 	return i, err
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -316,12 +340,14 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -360,12 +386,14 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
+SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_id, trigger, actor_kind, actor_id FROM deployments
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -387,6 +415,10 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.Message,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ReleaseID,
+		&i.Trigger,
+		&i.ActorKind,
+		&i.ActorID,
 	)
 	return i, err
 }
@@ -408,8 +440,35 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 	return i, err
 }
 
+const incrementCNAMEAppConfigVersions = `-- name: IncrementCNAMEAppConfigVersions :exec
+UPDATE apps
+SET config_version = config_version + 1, updated_at = now()
+WHERE cname_only
+`
+
+// The platform CNAME target is an install-wide live overlay, but it only
+// renders into apps that explicitly opted into CNAME routing.
+func (q *Queries) IncrementCNAMEAppConfigVersions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, incrementCNAMEAppConfigVersions)
+	return err
+}
+
+const incrementGitAppConfigVersions = `-- name: IncrementGitAppConfigVersions :exec
+UPDATE apps
+SET config_version = config_version + 1, updated_at = now()
+WHERE source = 'git'
+`
+
+// Registry credentials are a live overlay for every Git-built image. They are
+// install-wide, so one settings mutation invalidates each Git app exactly
+// once without manufacturing release history.
+func (q *Queries) IncrementGitAppConfigVersions(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, incrementGitAppConfigVersions)
+	return err
+}
+
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -450,6 +509,71 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.RepoBranch,
 			&i.RepoSubdir,
 			&i.RunAsUser,
+			&i.ConfigVersion,
+			&i.ActiveReleaseID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAppsForReconciliation = `-- name: ListAppsForReconciliation :many
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
+WHERE active_release_id IS NOT NULL
+   OR EXISTS (
+       SELECT 1 FROM deployment_operations o
+       WHERE o.app_id = apps.id AND o.owner_id = apps.owner_id
+         AND o.status = 'queued' AND o.checkpoint IN ('applying', 'verifying')
+   )
+ORDER BY id
+`
+
+// Apps whose database pointer names the workload the cluster must converge to.
+// This is intentionally install-scoped: the reconciler acts from stored
+// ownership rather than from an authenticated request.
+func (q *Queries) ListAppsForReconciliation(ctx context.Context) ([]App, error) {
+	rows, err := q.db.Query(ctx, listAppsForReconciliation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []App{}
+	for rows.Next() {
+		var i App
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.Namespace,
+			&i.Image,
+			&i.Replicas,
+			&i.Port,
+			&i.CpuRequest,
+			&i.CpuLimit,
+			&i.MemoryRequest,
+			&i.MemoryLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HealthPath,
+			&i.HealthLiveness,
+			&i.Source,
+			&i.Internal,
+			&i.ProjectID,
+			&i.CanvasX,
+			&i.CanvasY,
+			&i.HttpsOnly,
+			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
+			&i.RunAsUser,
+			&i.ConfigVersion,
+			&i.ActiveReleaseID,
 		); err != nil {
 			return nil, err
 		}
@@ -462,7 +586,7 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 }
 
 const listAppsWithLastDeploy = `-- name: ListAppsWithLastDeploy :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, d.status AS last_deploy_status
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, d.status AS last_deploy_status
 FROM apps a
 LEFT JOIN LATERAL (
     SELECT status FROM deployments
@@ -524,6 +648,8 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 			&i.App.RepoBranch,
 			&i.App.RepoSubdir,
 			&i.App.RunAsUser,
+			&i.App.ConfigVersion,
+			&i.App.ActiveReleaseID,
 			&i.LastDeployStatus,
 		); err != nil {
 			return nil, err
@@ -537,7 +663,7 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 }
 
 const listDeployments = `-- name: ListDeployments :many
-SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at FROM deployments
+SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_id, trigger, actor_kind, actor_id FROM deployments
 WHERE owner_id = $1 AND app_id = $2
 ORDER BY started_at DESC
 LIMIT $3
@@ -568,6 +694,10 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 			&i.Message,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ReleaseID,
+			&i.Trigger,
+			&i.ActorKind,
+			&i.ActorID,
 		); err != nil {
 			return nil, err
 		}
@@ -580,7 +710,8 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 }
 
 const listRecentDeployments = `-- name: ListRecentDeployments :many
-SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, a.name AS app_name, a.namespace AS app_namespace
+SELECT d.id, d.owner_id, d.app_id, d.image, d.revision, d.status, d.message, d.started_at, d.finished_at, d.release_id, d.trigger, d.actor_kind, d.actor_id, a.name AS app_name, a.namespace AS app_namespace,
+       a.active_release_id
 FROM deployments d
 JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1
@@ -594,17 +725,22 @@ type ListRecentDeploymentsParams struct {
 }
 
 type ListRecentDeploymentsRow struct {
-	ID           uuid.UUID
-	OwnerID      string
-	AppID        uuid.UUID
-	Image        string
-	Revision     string
-	Status       string
-	Message      string
-	StartedAt    time.Time
-	FinishedAt   pgtype.Timestamptz
-	AppName      string
-	AppNamespace string
+	ID              uuid.UUID
+	OwnerID         string
+	AppID           uuid.UUID
+	Image           string
+	Revision        string
+	Status          string
+	Message         string
+	StartedAt       time.Time
+	FinishedAt      pgtype.Timestamptz
+	ReleaseID       pgtype.UUID
+	Trigger         string
+	ActorKind       string
+	ActorID         string
+	AppName         string
+	AppNamespace    string
+	ActiveReleaseID pgtype.UUID
 }
 
 // Joined to apps so the activity feed can name the workload without a second
@@ -629,8 +765,13 @@ func (q *Queries) ListRecentDeployments(ctx context.Context, arg ListRecentDeplo
 			&i.Message,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ReleaseID,
+			&i.Trigger,
+			&i.ActorKind,
+			&i.ActorID,
 			&i.AppName,
 			&i.AppNamespace,
+			&i.ActiveReleaseID,
 		); err != nil {
 			return nil, err
 		}
@@ -646,9 +787,12 @@ const setAppHealth = `-- name: SetAppHealth :one
 UPDATE apps
 SET health_path     = $1,
     health_liveness = $2,
+    config_version  = config_version + 1,
     updated_at      = now()
 WHERE owner_id = $3 AND id = $4
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
+  AND (health_path, health_liveness)
+      IS DISTINCT FROM ($1, $2)
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
 `
 
 type SetAppHealthParams struct {
@@ -693,15 +837,17 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const setAppImage = `-- name: SetAppImage :one
 UPDATE apps
-SET image = $3, updated_at = now()
-WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
+SET image = $3, config_version = config_version + 1, updated_at = now()
+WHERE owner_id = $1 AND id = $2 AND image IS DISTINCT FROM $3
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
 `
 
 type SetAppImageParams struct {
@@ -743,14 +889,18 @@ func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, 
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const setAppNetworking = `-- name: SetAppNetworking :execrows
 UPDATE apps
-SET https_only = $1, cname_only = $2, updated_at = now()
+SET https_only = $1, cname_only = $2,
+    config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $3 AND name = $4
+  AND (https_only, cname_only) IS DISTINCT FROM ($1, $2)
 `
 
 type SetAppNetworkingParams struct {
@@ -775,9 +925,9 @@ func (q *Queries) SetAppNetworking(ctx context.Context, arg SetAppNetworkingPara
 
 const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
-SET replicas = $3, updated_at = now()
-WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
+SET replicas = $3, config_version = config_version + 1, updated_at = now()
+WHERE owner_id = $1 AND id = $2 AND replicas IS DISTINCT FROM $3
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
 `
 
 type SetAppReplicasParams struct {
@@ -816,13 +966,18 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }
 
 const setAppRunAsUser = `-- name: SetAppRunAsUser :exec
-UPDATE apps SET run_as_user = $1, updated_at = now()
+UPDATE apps
+SET run_as_user = $1,
+    updated_at = now()
 WHERE owner_id = $2 AND id = $3
+  AND run_as_user IS DISTINCT FROM $1
 `
 
 type SetAppRunAsUserParams struct {
@@ -831,35 +986,11 @@ type SetAppRunAsUserParams struct {
 	ID        uuid.UUID
 }
 
-// Recorded by a build, which is the only thing that can discover it.
+// Recorded by a build, which is the only thing that can discover it. The
+// image update owns the build operation's single config_version increment.
 func (q *Queries) SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error {
 	_, err := q.db.Exec(ctx, setAppRunAsUser, arg.RunAsUser, arg.OwnerID, arg.ID)
 	return err
-}
-
-const supersedeDeployments = `-- name: SupersedeDeployments :execrows
-UPDATE deployments
-SET status = 'superseded', finished_at = COALESCE(finished_at, now())
-WHERE owner_id = $1 AND app_id = $2
-  AND status IN ('running', 'active')
-`
-
-type SupersedeDeploymentsParams struct {
-	OwnerID string
-	AppID   uuid.UUID
-}
-
-// Retires the deployments a new one replaces.
-//
-// Only rows that never reached a terminal state: a finished deployment already
-// says what happened to it, and rewriting that would lose the difference
-// between one that was replaced and one that failed.
-func (q *Queries) SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, supersedeDeployments, arg.OwnerID, arg.AppID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const updateApp = `-- name: UpdateApp :one
@@ -874,9 +1005,15 @@ SET image          = $1,
     repo_url       = $8,
     repo_branch    = $9,
     repo_subdir    = $10,
+    config_version = config_version + 1,
     updated_at     = now()
 WHERE owner_id = $11 AND id = $12
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user
+  AND (image, port, cpu_request, cpu_limit, memory_request, memory_limit,
+       internal, repo_url, repo_branch, repo_subdir)
+      IS DISTINCT FROM
+      ($1, $2, $3, $4, $5, $6,
+       $7, $8, $9, $10)
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
 `
 
 type UpdateAppParams struct {
@@ -946,6 +1083,8 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.RepoBranch,
 		&i.RepoSubdir,
 		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
 	)
 	return i, err
 }

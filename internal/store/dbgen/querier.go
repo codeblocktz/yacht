@@ -17,6 +17,8 @@ type Querier interface {
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
+	CancelDeploymentOperation(ctx context.Context, arg CancelDeploymentOperationParams) (DeploymentOperation, error)
+	ClaimDeploymentOperation(ctx context.Context, arg ClaimDeploymentOperationParams) (DeploymentOperation, error)
 	// Claims the domains whose next check is due, and leases them.
 	//
 	// Two things at once, and both matter.
@@ -34,6 +36,11 @@ type Querier interface {
 	// dies mid-pass simply lets the lease expire, and the next pass picks the row
 	// up again.
 	ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsDueForCheckParams) ([]Domain, error)
+	ClaimNextDeploymentOperation(ctx context.Context, arg ClaimNextDeploymentOperationParams) (DeploymentOperation, error)
+	// Applying and verifying are recovered from workload observation, never by
+	// the ordinary admission worker. The checkpoint tells this claimant which
+	// stage the dead worker had durably entered.
+	ClaimRecoverableDeploymentOperation(ctx context.Context, arg ClaimRecoverableDeploymentOperationParams) (DeploymentOperation, error)
 	ClearClusterJoin(ctx context.Context) (int64, error)
 	ClearPlatformRegistry(ctx context.Context) error
 	// Forget every saved position in a project, so the next render lays it out
@@ -46,8 +53,13 @@ type Querier interface {
 	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
+	CountPendingReleaseBackfills(ctx context.Context) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
+	// Release snapshots are owner-scoped at every read and write, like every
+	// other resource. There is intentionally no update query: a release is a fact
+	// about a past deployment, not editable configuration.
+	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (AppRelease, error)
 	// Builds. Owner-scoped in the row rather than through the deployment, because
 	// the log is readable output and the scoping has to be checkable in the query
 	// that reads it.
@@ -64,6 +76,7 @@ type Querier interface {
 	// whole difference between this and what it replaced.
 	CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
+	CreateDeploymentOperation(ctx context.Context, arg CreateDeploymentOperationParams) (DeploymentOperation, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
 	// the check, not a duplicate of one.
@@ -81,6 +94,7 @@ type Querier interface {
 	// query: a handler that forgets to scope produces no rows here rather than
 	// another team's storage.
 	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
+	CreateVolumeAndBump(ctx context.Context, arg CreateVolumeAndBumpParams) (CreateVolumeAndBumpRow, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
 	DeleteExpiredInvitations(ctx context.Context) error
@@ -117,7 +131,9 @@ type Querier interface {
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
+	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
+	DeleteVolumeAndBump(ctx context.Context, arg DeleteVolumeAndBumpParams) (DeleteVolumeAndBumpRow, error)
 	// Deploys per day and outcome, for the overview chart.
 	//
 	// Counted in the database rather than by reading rows and tallying them in Go:
@@ -127,21 +143,32 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	FailQueuedBuildOperation(ctx context.Context, arg FailQueuedBuildOperationParams) (int64, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
+	FinishDeploymentOperation(ctx context.Context, arg FinishDeploymentOperationParams) (int64, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	GetAppForReleaseBackfill(ctx context.Context, arg GetAppForReleaseBackfillParams) (App, error)
+	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
+	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
 	// The join settings are install-wide, so unlike every other query here these
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
 	GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error)
 	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
+	GetDeploymentOperation(ctx context.Context, arg GetDeploymentOperationParams) (DeploymentOperation, error)
+	GetDeploymentOperationByDeployment(ctx context.Context, arg GetDeploymentOperationByDeploymentParams) (DeploymentOperation, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.
 	GetInvitationByHash(ctx context.Context, tokenHash []byte) (GetInvitationByHashRow, error)
+	GetLatestSuccessfulBuildForApp(ctx context.Context, arg GetLatestSuccessfulBuildForAppParams) (Build, error)
+	// The live operation is the only candidate allowed to displace an app's
+	// active release. Steady-state convergence must stand down while one exists.
+	GetLiveDeploymentOperationForApp(ctx context.Context, arg GetLiveDeploymentOperationForAppParams) (DeploymentOperation, error)
 	// ---------------------------------------------------------------------------
 	// Step-up and session revocation
 	// ---------------------------------------------------------------------------
@@ -188,6 +215,7 @@ type Querier interface {
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
+	GetReleaseBackfillState(ctx context.Context, arg GetReleaseBackfillStateParams) (AppReleaseBackfill, error)
 	// Expiry is filtered here for the reason GetSessionByHash gives: so that an
 	// expired row can never be treated as valid by a caller that forgets to check.
 	// This one used to be the caller that forgot. It was not reachable with a dead
@@ -214,18 +242,35 @@ type Querier interface {
 	// and returning a row the caller must then remember to reject is how that
 	// check gets skipped.
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
+	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
+	GetVariable(ctx context.Context, arg GetVariableParams) (Variable, error)
 	GetVolume(ctx context.Context, arg GetVolumeParams) (Volume, error)
 	// Expansion only, enforced in the WHERE clause rather than by reading the row
 	// and comparing in Go: a check the caller performs is one a caller can skip,
 	// and Kubernetes cannot shrink a claim afterwards to undo it.
 	GrowVolume(ctx context.Context, arg GrowVolumeParams) (int64, error)
+	GrowVolumeAndBump(ctx context.Context, arg GrowVolumeAndBumpParams) (GrowVolumeAndBumpRow, error)
 	HasPassword(ctx context.Context, userID uuid.UUID) (bool, error)
+	HasVerifiedDomainsForApp(ctx context.Context, arg HasVerifiedDomainsForAppParams) (bool, error)
+	IncrementAppConfigVersion(ctx context.Context, arg IncrementAppConfigVersionParams) (int64, error)
+	// The platform CNAME target is an install-wide live overlay, but it only
+	// renders into apps that explicitly opted into CNAME routing.
+	IncrementCNAMEAppConfigVersions(ctx context.Context) error
+	// Registry credentials are a live overlay for every Git-built image. They are
+	// install-wide, so one settings mutation invalidates each Git app exactly
+	// once without manufacturing release history.
+	IncrementGitAppConfigVersions(ctx context.Context) error
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
+	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
+	// Apps whose database pointer names the workload the cluster must converge to.
+	// This is intentionally install-scoped: the reconciler acts from stored
+	// ownership rather than from an authenticated request.
+	ListAppsForReconciliation(ctx context.Context) ([]App, error)
 	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
 	// Every app, with how its most recent deployment ended.
 	//
@@ -249,6 +294,7 @@ type Querier interface {
 	// Nothing answered "which domains are stuck" before this. A domain that is not
 	// routed is the only kind anybody needs to find, so it sorts to the top.
 	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
+	ListDeploymentOperations(ctx context.Context, arg ListDeploymentOperationsParams) ([]DeploymentOperation, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
@@ -257,6 +303,7 @@ type Querier interface {
 	// This list feeds the team page, and a hash that never leaves the database
 	// cannot be rendered into it by a template that innocently prints a struct.
 	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
+	ListPendingReleaseBackfills(ctx context.Context, resultLimit int32) ([]ListPendingReleaseBackfillsRow, error)
 	ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
@@ -268,6 +315,10 @@ type Querier interface {
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
+	// Claim counting and selection must share this transaction-wide lock. Row
+	// locks alone protect candidates, not the cluster-wide count: two connections
+	// can otherwise lock different rows after both observed one free build slot.
+	LockDeploymentAdmission(ctx context.Context) error
 	// Reads and locks the person's password, for a caller inside a transaction that
 	// is about to replace or remove it.
 	//
@@ -291,7 +342,13 @@ type Querier interface {
 	// Guarded on the state it is coming from, so a check that has since found drift
 	// is not overwritten by an apply that started before it.
 	MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error)
+	// A verified domain becomes routed only after the app reconciler has observed
+	// or produced the matching workload convergence key. This app-scoped form
+	// closes the asynchronous handoff from the DNS checker.
+	MarkVerifiedDomainsRoutedForApp(ctx context.Context, arg MarkVerifiedDomainsRoutedForAppParams) (int64, error)
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
+	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
+	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	// Records what a check saw.
 	//
 	// Not scoped by owner, and deliberately: the background checker works through
@@ -302,7 +359,12 @@ type Querier interface {
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
+	RecoverBuiltDeploymentOperation(ctx context.Context, arg RecoverBuiltDeploymentOperationParams) (DeploymentOperation, error)
+	// A cluster outage is not a deployment failure. Give observation recovery
+	// back to the queue without changing its checkpoint or verification budget.
+	ReleaseRecoverableDeploymentOperation(ctx context.Context, arg ReleaseRecoverableDeploymentOperationParams) (int64, error)
 	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
+	RenewDeploymentOperationLease(ctx context.Context, arg RenewDeploymentOperationLeaseParams) (int64, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
 	// Brings a domain's next check forward. What the "Check now" button does.
 	//
@@ -316,6 +378,7 @@ type Querier interface {
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	// The image a build produced. Separate from UpdateApp because a build sets
 	// only this: the replicas and limits a person configured are not a build's to
@@ -325,23 +388,22 @@ type Querier interface {
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
-	// Recorded by a build, which is the only thing that can discover it.
+	// Recorded by a build, which is the only thing that can discover it. The
+	// image update owns the build operation's single config_version increment.
 	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
+	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
+	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
-	// Retires the deployments a new one replaces.
-	//
-	// Only rows that never reached a terminal state: a finished deployment already
-	// says what happened to it, and rewriting that would lose the difference
-	// between one that was replaced and one that failed.
-	SupersedeDeployments(ctx context.Context, arg SupersedeDeploymentsParams) (int64, error)
 	// Opens the step-up window. Scoped by expiry so an expired session cannot be
 	// revived into a recently-authenticated one; execrows so the caller can tell
 	// that it was not.
 	TouchSessionAuthentication(ctx context.Context, id uuid.UUID) (int64, error)
+	TransitionDeploymentOperation(ctx context.Context, arg TransitionDeploymentOperationParams) (DeploymentOperation, error)
 	// Everything about an app a person is allowed to change after creating it.
 	//
 	// Deliberately not replicas: scaling has its own query because it has its own
@@ -396,6 +458,7 @@ type Querier interface {
 	// person means by editing one, and a separate update path would need the
 	// caller to know which case they are in.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
+	UpsertVariableAndBump(ctx context.Context, arg UpsertVariableAndBumpParams) (UpsertVariableAndBumpRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

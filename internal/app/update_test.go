@@ -35,6 +35,7 @@ func (fakeBuilder) BuildJobName(orchestrator.BuildRequest) string { return "buil
 func (fakeBuilder) BuildState(context.Context, string) (orchestrator.BuildState, error) {
 	return orchestrator.BuildState{}, nil
 }
+func (fakeBuilder) CancelBuild(context.Context, string) error { return nil }
 
 // gitService is a service that can offer the repository source.
 func gitService(t *testing.T, name string) (*Service, *recordingOrchestrator, string) {
@@ -51,7 +52,7 @@ func TestAnImageTagCanBeChanged(t *testing.T) {
 	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-update-image")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -63,13 +64,17 @@ func TestAnImageTagCanBeChanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
+	if err := executeLiveOperation(s, ctx, updated); err != nil {
+		t.Fatalf("worker update: %v", err)
+	}
 	if updated.Image != "nginx:1.28" {
 		t.Fatalf("image = %q, want the new tag", updated.Image)
 	}
 
 	// And it reached the cluster rather than only the row.
-	if got := orch.lastAppSpec().Image; got != "nginx:1.28" {
-		t.Errorf("applied image = %q, want the new tag", got)
+	wantPinned := "nginx@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if got := orch.lastAppSpec().Image; got != wantPinned {
+		t.Errorf("applied image = %q, want immutable %q", got, wantPinned)
 	}
 
 	// Recorded as a deployment, naming what changed. A history of rows all
@@ -96,7 +101,7 @@ func TestChangingThePortReachesTheCluster(t *testing.T) {
 	s, orch, pool := testService(t, Options{AppDomain: "apps.update-port.test"})
 	id := owner(t, s, pool, "svc-update-port")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -106,6 +111,9 @@ func TestChangingThePortReachesTheCluster(t *testing.T) {
 		Image: "nginx:alpine", Port: 3000,
 	}); err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker update: %v", err)
 	}
 
 	spec := orch.lastAppSpec()
@@ -123,7 +131,7 @@ func TestAGitAppRefusesAHandTypedImage(t *testing.T) {
 	ctx := context.Background()
 	s, _, id := gitService(t, "svc-update-git")
 
-	created, err := s.Create(ctx, id, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "api", Source: SourceGit, Replicas: 1, Port: 8080,
 		Repo: Repo{URL: "https://github.com/example/api", Branch: "main"},
 	})
@@ -158,7 +166,7 @@ func TestAGitAppUpdatesWithoutTouchingItsImage(t *testing.T) {
 	ctx := context.Background()
 	s, _, id := gitService(t, "svc-update-git-ok")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "api", Source: SourceGit, Replicas: 1, Port: 8080,
 		Repo: Repo{URL: "https://github.com/example/api", Branch: "main"},
 	}); err != nil {
@@ -187,7 +195,7 @@ func TestARepositoryChangeAloneIsNotARollout(t *testing.T) {
 	ctx := context.Background()
 	s, _, id := gitService(t, "svc-update-repo")
 
-	created, err := s.Create(ctx, id, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "api", Source: SourceGit, Replicas: 1, Port: 8080,
 		Repo: Repo{URL: "https://github.com/example/api", Branch: "main"},
 	})
@@ -217,7 +225,7 @@ func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	s, orch, pool := testService(t, Options{AppDomain: "apps.update-internal.test"})
 	id := owner(t, s, pool, "svc-update-internal")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -231,6 +239,9 @@ func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Update to internal: %v", err)
 	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker internal update: %v", err)
+	}
 	if hosts := orch.lastAppSpec().Hosts; len(hosts) != 0 {
 		t.Errorf("hosts = %v, want none on an internal app", hosts)
 	}
@@ -239,6 +250,9 @@ func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 		Image: "nginx:alpine", Port: 8080, Internal: false,
 	}); err != nil {
 		t.Fatalf("Update back to public: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker public update: %v", err)
 	}
 	if len(orch.lastAppSpec().Hosts) == 0 {
 		t.Error("the hostname was not issued again")
@@ -278,7 +292,7 @@ func TestResourceLimitsCanBeChanged(t *testing.T) {
 	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-update-res")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -289,6 +303,9 @@ func TestResourceLimitsCanBeChanged(t *testing.T) {
 		CPURequest: "250m", CPULimit: "1", MemoryRequest: "128Mi", MemoryLimit: "512Mi",
 	}); err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker resource update: %v", err)
 	}
 
 	spec := orch.lastAppSpec()
@@ -309,7 +326,7 @@ func TestUpdateDoesNotResetReplicas(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-update-replicas")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 3, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)

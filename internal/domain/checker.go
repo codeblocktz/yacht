@@ -53,16 +53,14 @@ const lookupTimeout = 5 * time.Second
 // picked up promptly rather than at the domain's own next interval.
 const checkLease = 2 * time.Minute
 
-// Router re-applies an app's routing.
+// Router records that an app's routing projection changed.
 //
 // An interface here, implemented by the app service, because a domain becoming
 // routable has to reach the Ingress and this package must not import the one
 // that owns workloads — app already imports this one.
 //
-// It is also what closes a real gap. VerifyDomain used to commit verified=true
-// and then apply; if that apply failed, the row was proven and absent from the
-// Ingress with nothing that would ever retry it. The checker retries by
-// construction: the state is on the row, and the next pass sees it.
+// The app reconciler owns the actual cluster apply and promotes verified
+// domains only after its workload commit marker is observable.
 type Router interface {
 	ApplyRouting(ctx context.Context, ownerID string, appID uuid.UUID) error
 }
@@ -177,7 +175,7 @@ func (c *Checker) checkOne(
 	// which is the bug this replaced in a different shape.
 	switch {
 	case state == StateVerified:
-		c.route(ctx, q, row)
+		c.route(ctx, row)
 	case previous == StateRouted && state != StateRouted:
 		// Fell out of routing. The Ingress is rebuilt from the routable-hosts
 		// query, so re-applying is what drops the host — there is nothing to
@@ -186,23 +184,13 @@ func (c *Checker) checkOne(
 	}
 }
 
-// route applies a newly proven domain and marks it routed.
-//
-// Marking follows the apply rather than preceding it, so a domain only claims
-// to be live once the Ingress that serves it exists. If the apply fails the row
-// stays verified and the next pass tries again — which is the retry that was
-// missing before.
-func (c *Checker) route(ctx context.Context, q *dbgen.Queries, row dbgen.Domain) {
-	if !c.apply(ctx, row, "route") {
-		return
-	}
-	if _, err := q.MarkDomainRouted(ctx, row.ID); err != nil {
-		c.log.Warn("could not mark a domain routed",
-			slog.String("host", row.Host), slog.String("error", err.Error()))
-	}
+// route records the routing projection as dirty. The app reconciler marks the
+// domain routed only after the matching workload key is observable.
+func (c *Checker) route(ctx context.Context, row dbgen.Domain) {
+	c.apply(ctx, row, "route")
 }
 
-// apply asks the router to rebuild an app's routing, reporting whether it took.
+// apply asks the router to dirty an app's routing projection.
 func (c *Checker) apply(ctx context.Context, row dbgen.Domain, why string) bool {
 	if c.router == nil {
 		return false

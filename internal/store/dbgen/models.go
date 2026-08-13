@@ -12,32 +12,34 @@ import (
 )
 
 type App struct {
-	ID             uuid.UUID
-	OwnerID        string
-	Name           string
-	Namespace      string
-	Image          string
-	Replicas       int32
-	Port           int32
-	CpuRequest     string
-	CpuLimit       string
-	MemoryRequest  string
-	MemoryLimit    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	HealthPath     string
-	HealthLiveness bool
-	Source         string
-	Internal       bool
-	ProjectID      pgtype.UUID
-	CanvasX        *int32
-	CanvasY        *int32
-	HttpsOnly      bool
-	CnameOnly      bool
-	RepoUrl        string
-	RepoBranch     string
-	RepoSubdir     string
-	RunAsUser      int64
+	ID              uuid.UUID
+	OwnerID         string
+	Name            string
+	Namespace       string
+	Image           string
+	Replicas        int32
+	Port            int32
+	CpuRequest      string
+	CpuLimit        string
+	MemoryRequest   string
+	MemoryLimit     string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	HealthPath      string
+	HealthLiveness  bool
+	Source          string
+	Internal        bool
+	ProjectID       pgtype.UUID
+	CanvasX         *int32
+	CanvasY         *int32
+	HttpsOnly       bool
+	CnameOnly       bool
+	RepoUrl         string
+	RepoBranch      string
+	RepoSubdir      string
+	RunAsUser       int64
+	ConfigVersion   int64
+	ActiveReleaseID pgtype.UUID
 }
 
 type AppLink struct {
@@ -46,6 +48,44 @@ type AppLink struct {
 	ToAppID   uuid.UUID
 	ViaKey    string
 	CreatedAt time.Time
+}
+
+type AppRelease struct {
+	ID                     uuid.UUID
+	OwnerID                string
+	AppID                  uuid.UUID
+	ImageRef               string
+	ImageDigest            string
+	Source                 string
+	SourceRevision         string
+	Replicas               int32
+	Port                   int32
+	CpuRequest             string
+	CpuLimit               string
+	MemoryRequest          string
+	MemoryLimit            string
+	Internal               bool
+	RunAsUser              int64
+	FsGroup                int64
+	ScratchPaths           []string
+	WritableRootFilesystem bool
+	HealthPath             string
+	HealthLiveness         bool
+	Env                    []byte
+	SecretKeys             []string
+	ConfigVersion          int64
+	CreatedAt              time.Time
+	Origin                 string
+}
+
+type AppReleaseBackfill struct {
+	AppID         uuid.UUID
+	OwnerID       string
+	State         string
+	LastError     string
+	Attempts      int32
+	NextAttemptAt time.Time
+	UpdatedAt     time.Time
 }
 
 type Build struct {
@@ -83,6 +123,29 @@ type Deployment struct {
 	Message    string
 	StartedAt  time.Time
 	FinishedAt pgtype.Timestamptz
+	ReleaseID  pgtype.UUID
+	Trigger    string
+	ActorKind  string
+	ActorID    string
+}
+
+type DeploymentOperation struct {
+	ID             uuid.UUID
+	OwnerID        string
+	AppID          uuid.UUID
+	DeploymentID   uuid.UUID
+	ReleaseID      pgtype.UUID
+	RequiresBuild  bool
+	Status         string
+	Message        string
+	CreatedAt      time.Time
+	ClaimedAt      pgtype.Timestamptz
+	FinishedAt     pgtype.Timestamptz
+	ClaimToken     pgtype.UUID
+	LeaseExpiresAt pgtype.Timestamptz
+	CancelledAt    pgtype.Timestamptz
+	Checkpoint     string
+	StageStartedAt time.Time
 }
 
 type Domain struct {

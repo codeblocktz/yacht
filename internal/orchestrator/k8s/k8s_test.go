@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -9,7 +10,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -28,6 +31,7 @@ func testSpec() orchestrator.AppSpec {
 			Namespace: "yacht-demo",
 			Name:      "web",
 		},
+		ReleaseID: "11111111-1111-1111-1111-111111111111", ConfigVersion: 7,
 		Image:    "ghcr.io/example/web:v1",
 		Replicas: 2,
 		Port:     8080,
@@ -129,6 +133,29 @@ func TestApplyApp(t *testing.T) {
 	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 2 {
 		t.Errorf("replicas = %v, want 2", dep.Spec.Replicas)
 	}
+	if dep.Spec.ProgressDeadlineSeconds == nil ||
+		*dep.Spec.ProgressDeadlineSeconds != deploymentProgressDeadline {
+		t.Errorf("progress deadline = %v, want %d",
+			dep.Spec.ProgressDeadlineSeconds, deploymentProgressDeadline)
+	}
+	for _, annotations := range []map[string]string{
+		dep.Annotations, dep.Spec.Template.Annotations,
+	} {
+		if got := annotations[orchestrator.AnnotationReleaseID]; got != spec.ReleaseID {
+			t.Errorf("release annotation = %q, want %q", got, spec.ReleaseID)
+		}
+		if got := annotations[orchestrator.AnnotationConfigVersion]; got != "7" {
+			t.Errorf("config annotation = %q, want 7", got)
+		}
+	}
+	status, err := o.AppStatus(ctx, spec.Ref)
+	if err != nil {
+		t.Fatalf("AppStatus: %v", err)
+	}
+	if status.ReleaseID != spec.ReleaseID || status.ConfigVersion != spec.ConfigVersion {
+		t.Fatalf("observed convergence key = %q/%d, want %q/%d",
+			status.ReleaseID, status.ConfigVersion, spec.ReleaseID, spec.ConfigVersion)
+	}
 
 	podSpec := dep.Spec.Template.Spec
 	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
@@ -201,6 +228,31 @@ func TestApplyApp(t *testing.T) {
 	}
 	if got := dep.Labels[orchestrator.LabelOwner]; got != "owner-1" {
 		t.Errorf("owner label = %q, want owner-1", got)
+	}
+}
+
+func TestAResourceFailureDoesNotPublishTheConvergenceCommitMarker(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	client.Fake.PrependReactor("patch", "ingresses",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("ingress API unavailable")
+		})
+	spec := testSpec()
+	spec.Hosts = []string{"web.apps.test"}
+	if err := o.ApplyApp(ctx, spec); err == nil {
+		t.Fatal("ApplyApp succeeded despite the ingress failure")
+	}
+	dep, err := client.AppsV1().Deployments(spec.Namespace).
+		Get(ctx, spec.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get partially applied deployment: %v", err)
+	}
+	if got := dep.Annotations[orchestrator.AnnotationReleaseID]; got != "" {
+		t.Fatalf("partial apply published release %q", got)
+	}
+	if got := dep.Annotations[orchestrator.AnnotationConfigVersion]; got != "-1" {
+		t.Fatalf("partial apply published config version %q", got)
 	}
 }
 
@@ -332,11 +384,18 @@ func TestAppStatus(t *testing.T) {
 			o, client := testOrchestrator(t)
 			replicas := tc.desired
 			dep := &appsv1.Deployment{
-				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "yacht-demo"},
-				Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "web", Namespace: "yacht-demo", Generation: 3,
+				},
+				Spec: appsv1.DeploymentSpec{Replicas: &replicas},
 				Status: appsv1.DeploymentStatus{
-					ReadyReplicas:     tc.ready,
-					AvailableReplicas: tc.ready,
+					ObservedGeneration: 3,
+					UpdatedReplicas:    tc.ready,
+					ReadyReplicas:      tc.ready,
+					AvailableReplicas:  tc.ready,
+					Conditions: []appsv1.DeploymentCondition{{
+						Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue,
+					}},
 				},
 			}
 			if _, err := client.AppsV1().Deployments("yacht-demo").
@@ -357,7 +416,44 @@ func TestAppStatus(t *testing.T) {
 			if got.Ready != tc.ready {
 				t.Errorf("ready = %d, want %d", got.Ready, tc.ready)
 			}
+			if got.Generation != 3 || got.ObservedGeneration != 3 {
+				t.Errorf("generation = %d/%d, want 3/3",
+					got.Generation, got.ObservedGeneration)
+			}
 		})
+	}
+}
+
+func TestAppStatusCarriesTheTerminalKubernetesReason(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	replicas := int32(1)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "web", Namespace: "yacht-demo", Generation: 4,
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 4,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse,
+				Reason: "ProgressDeadlineExceeded", Message: "ReplicaSet timed out",
+			}},
+		},
+	}
+	if _, err := client.AppsV1().Deployments("yacht-demo").
+		Create(ctx, dep, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed deployment: %v", err)
+	}
+	got, err := o.AppStatus(ctx, orchestrator.Ref{
+		Owner: "owner-1", Namespace: "yacht-demo", Name: "web",
+	})
+	if err != nil {
+		t.Fatalf("AppStatus: %v", err)
+	}
+	if !got.Terminal || got.Reason != "ProgressDeadlineExceeded" ||
+		got.Message != "ReplicaSet timed out" {
+		t.Fatalf("terminal status = %#v", got)
 	}
 }
 

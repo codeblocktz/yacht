@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/domain"
@@ -34,6 +35,10 @@ var ErrNotFound = errors.New("app: not found")
 
 // ErrNameTaken is returned when an owner already has an app with that name.
 var ErrNameTaken = errors.New("app: name already in use")
+
+// ErrNoBaselineRelease means a legacy app has no immutable runtime truth yet.
+// Falling back to mutable desired fields would make the active pointer a lie.
+var ErrNoBaselineRelease = errors.New("app: no baseline release yet")
 
 // App is a workload as the engine sees it: the stored record plus whatever the
 // cluster currently reports.
@@ -58,6 +63,14 @@ type App struct {
 	// RunAsUser is the numeric uid a built image runs as, discovered by the
 	// build. Zero means unknown, which is every app not built from source.
 	RunAsUser int64
+
+	// ConfigVersion changes whenever editable runtime state or a live overlay
+	// changes. ActiveReleaseID is the sole database answer to what is serving;
+	// deployment status records only how an attempt ended.
+	ConfigVersion   int64
+	ActiveReleaseID *uuid.UUID
+	BaselineState   string
+	BaselineError   string
 
 	// HealthPath is an HTTP path reporting whether the app is serving. Empty
 	// means no probe. Liveness lets the same path also restart the container.
@@ -121,8 +134,13 @@ type App struct {
 type Deployment struct {
 	ID         uuid.UUID
 	AppID      uuid.UUID
+	ReleaseID  *uuid.UUID
 	Image      string
 	Revision   string
+	Trigger    string
+	ActorKind  string
+	ActorID    string
+	IsActive   bool
 	Status     string
 	Message    string
 	StartedAt  time.Time
@@ -211,6 +229,21 @@ type Options struct {
 	// unavailable with the reason rather than offered and failed.
 	Builder Builder
 	Images  Images
+
+	// Manifests pins a mutable image reference before it can become a release.
+	// Independent of Builder: image-sourced apps need it even on an install
+	// that cannot build repositories itself.
+	Manifests Manifests
+
+	// MaxConcurrentBuilds bounds claimed build operations across the install.
+	// Zero takes the production default so tests and embedders stay safe.
+	MaxConcurrentBuilds int32
+
+	// RolloutTimeout bounds verification after Kubernetes accepts an apply.
+	// RolloutPollInterval exists so tests can exercise slow and failed rollouts
+	// without sleeping on production intervals.
+	RolloutTimeout      time.Duration
+	RolloutPollInterval time.Duration
 }
 
 // Service manages app lifecycle.
@@ -221,8 +254,9 @@ type Service struct {
 	log  *slog.Logger
 	opts Options
 
-	builder Builder
-	images  Images
+	builder   Builder
+	images    Images
+	manifests Manifests
 
 	// resolver proves a custom domain points here. Nil leaves verification
 	// unavailable rather than failing oddly — an install with no DNS access
@@ -241,10 +275,19 @@ func NewService(
 	if log == nil {
 		log = slog.Default()
 	}
+	if opts.MaxConcurrentBuilds == 0 {
+		opts.MaxConcurrentBuilds = 2
+	}
+	if opts.RolloutTimeout == 0 {
+		opts.RolloutTimeout = 10 * time.Minute
+	}
+	if opts.RolloutPollInterval == 0 {
+		opts.RolloutPollInterval = time.Second
+	}
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
-		builder: opts.Builder, images: opts.Images,
+		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests,
 	}
 }
 
@@ -372,6 +415,9 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		RepoSubdir:    in.Repo.Subdir,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return a, nil
+		}
 		return App{}, fmt.Errorf("app: update: %w", err)
 	}
 	updated := toApp(row)
@@ -387,12 +433,11 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		s.log.Info("app updated", slog.String("app", name), slog.String("change", "repo"))
 		return updated, nil
 	}
+	if updated.Image == PendingImage {
+		return updated, nil
+	}
 
-	id := s.beginDeployment(ctx, ownerID, updated, updateReason(a, updated))
-	err = s.apply(ctx, s.q, updated)
-	// Recorded whichever way it went. A deploy that failed and left no trace is
-	// one nobody can find afterwards.
-	s.endDeployment(ctx, ownerID, id, err)
+	err = s.deployCurrentRelease(ctx, ownerID, updated, updateReason(a, updated))
 	if err != nil {
 		return App{}, err
 	}
@@ -462,14 +507,9 @@ func (in CreateInput) Validate() error {
 	return nil
 }
 
-// Create stores the app and applies it to the cluster.
-//
-// The database write and the cluster apply are kept consistent by doing the
-// apply inside the transaction and rolling back if it fails. That leaves one
-// window — a commit failure after a successful apply — which would orphan
-// cluster resources. Orphans are recoverable and idempotent to clean up; a
-// database row for a workload that was never applied is not, because nothing
-// would ever retry it.
+// Create stores the app, its first immutable release, and a deployment
+// operation in one transaction. The cluster is touched only after that commit,
+// through the same durable stage machine as every later deployment.
 func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (App, error) {
 	if in.Source == "" {
 		in.Source = SourceImage
@@ -636,43 +676,36 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	created.Host = host
 	created.TLS = s.opts.WildcardTLS && host != ""
 
-	if err := s.apply(ctx, q, created); err != nil {
-		// Best effort: the workload may be partly applied, and leaving it
-		// behind with no record would make it invisible.
-		if delErr := s.orch.DeleteApp(ctx, created.Ref()); delErr != nil {
-			s.log.Warn("could not clean up after a failed apply",
-				slog.String("app", created.Name),
-				slog.String("error", delErr.Error()))
+	var release Release
+	if created.Source != SourceGit {
+		release, err = s.createRelease(ctx, q, created, "")
+		if err != nil {
+			return App{}, err
 		}
-		return App{}, err
 	}
-
-	// A built app has nothing running yet — the first deploy is the build, and
-	// it starts once this transaction has committed. Recorded as running
-	// rather than active so the deployments list says "building" instead of
-	// claiming a placeholder image is live.
-	status := DeployActive
-	if created.Source == SourceGit {
-		status = DeployRunning
-	}
+	// Initial deployment is admitted like every later deployment. Nothing calls
+	// the cluster while this transaction is open, and neither an image app nor a
+	// Git app can claim success before the stage worker proves its rollout.
 	deploy, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: created.ID, Image: created.Image,
-		Revision: "initial", Status: status,
+		Revision: "initial", Status: DeployRunning, Trigger: "initial",
+		ActorKind: "user", ReleaseID: pgUUID(release.ID),
 	})
 	if err != nil {
 		return App{}, fmt.Errorf("app: record deployment: %w", err)
 	}
-
+	var initialRelease *uuid.UUID
+	if release.ID != uuid.Nil {
+		initialRelease = &release.ID
+	}
+	_, err = s.enqueueOperation(
+		ctx, q, ownerID, created.ID, deploy.ID, initialRelease, created.Source == SourceGit,
+	)
+	if err != nil {
+		return App{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit: %w", err)
-	}
-
-	// After the commit, never inside it. A build takes minutes and a
-	// transaction held open for them would block every other write to these
-	// tables — including the build's own log, which is written from the
-	// goroutine that would be waiting on it.
-	if created.Source == SourceGit {
-		s.deployInBackground(ctx, ownerID, created, deploy.ID)
 	}
 
 	s.log.Info("app created",
@@ -693,6 +726,28 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 // reconcile reads the app row it has not committed yet, everything else passes
 // the pool.
 func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
+	if a.Image == PendingImage {
+		return s.applyRelease(ctx, q, a, nil)
+	}
+	if a.ActiveReleaseID == nil {
+		return fmt.Errorf("%w for %s", ErrNoBaselineRelease, a.Name)
+	}
+	row, err := q.GetAppRelease(ctx, dbgen.GetAppReleaseParams{
+		OwnerID: a.OwnerID, AppID: a.ID, ID: *a.ActiveReleaseID,
+	})
+	if err != nil {
+		return fmt.Errorf("app: read active release: %w", err)
+	}
+	release := toRelease(row)
+	return s.applyRelease(ctx, q, a, &release)
+}
+
+// applyRelease is the single workload-write sink. Operation workers pass a
+// candidate release; the app reconciler passes the authoritative active
+// release. Request mutations never call it directly.
+func (s *Service) applyRelease(
+	ctx context.Context, q *dbgen.Queries, a App, release *Release,
+) error {
 	if err := s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
 		Owner: orchestrator.OwnerID(a.OwnerID),
 		Name:  a.Namespace,
@@ -700,7 +755,13 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return err
 	}
 
-	hosts, err := s.reconcileHosts(ctx, q, a)
+	effective := a
+	if release != nil {
+		effective.Port = release.Port
+		effective.Internal = release.Internal
+		effective.Source = release.Source
+	}
+	hosts, err := s.reconcileHosts(ctx, q, effective)
 	if err != nil {
 		return err
 	}
@@ -722,41 +783,20 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 		return err
 	}
 
-	plain, secrets, err := s.envFor(ctx, q, a.ID)
+	if release == nil {
+		return fmt.Errorf("%w for %s", ErrNoBaselineRelease, a.Name)
+	}
+	_, secrets, err := s.envFor(ctx, q, a.ID)
 	if err != nil {
 		return err
 	}
-
-	return s.orch.ApplyApp(ctx, orchestrator.AppSpec{
-		Ref:           a.Ref(),
-		Image:         a.Image,
-		RegistryAuth:  s.pullAuth(ctx, a),
-		Replicas:      a.Replicas,
-		Port:          a.Port,
-		Env:           plain,
-		Secrets:       secrets,
-		CPURequest:    a.CPURequest,
-		CPULimit:      a.CPULimit,
-		MemoryRequest: a.MemoryRequest,
-		MemoryLimit:   a.MemoryLimit,
-		Internal:      a.Internal,
-		RunAsUser:     runtimeOf(a).RunAsUser,
-		FSGroup:       runtimeOf(a).FSGroup,
-		ScratchPaths:  runtimeOf(a).ScratchPaths,
-		HealthPath:    a.HealthPath,
-		Liveness:      a.Liveness,
-		Hosts:         hosts,
-		// Only what the wildcard certificate actually covers. Every host used
-		// to go in, so a custom domain was served from a certificate that could
-		// not match it while the dashboard showed a green "routed" beside it.
-		TLSHosts:  s.tlsHosts(hosts),
-		HTTPSOnly: a.HTTPSOnly && len(hosts) > 0,
-		// Only when the install has a target to point at. Writing the
-		// annotation with an empty value would tell ExternalDNS to publish a
-		// CNAME to nothing, which is worse than leaving it to its default.
+	return s.orch.ApplyApp(ctx, release.AppSpec(ReleaseOverlays{
+		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
+		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
+		Volumes: volumeSpecs(vols), Hosts: hosts, TLSHosts: s.tlsHosts(hosts),
+		HTTPSOnly:   a.HTTPSOnly && len(hosts) > 0,
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
-		Volumes:     volumeSpecs(vols),
-	})
+	}))
 }
 
 // tlsHosts narrows a set of hostnames to those the install's certificate covers.
@@ -861,6 +901,7 @@ func (s *Service) List(ctx context.Context, ownerID string) ([]App, error) {
 		a.LastDeploy = row.LastDeployStatus
 		s.attachStatus(ctx, &a)
 		s.attachHost(ctx, &a)
+		s.attachBaseline(ctx, &a)
 		out = append(out, a)
 	}
 	return out, nil
@@ -887,7 +928,34 @@ func (s *Service) Get(ctx context.Context, ownerID, name string) (App, error) {
 	a := toApp(row)
 	s.attachStatus(ctx, &a)
 	s.attachHost(ctx, &a)
+	s.attachBaseline(ctx, &a)
 	return a, nil
+}
+
+func (s *Service) attachBaseline(ctx context.Context, a *App) {
+	if a.ActiveReleaseID != nil {
+		a.BaselineState = BaselineReady
+		return
+	}
+	if a.Image == PendingImage {
+		a.BaselineState = BaselinePendingImage
+		return
+	}
+	row, err := s.q.GetReleaseBackfillState(ctx, dbgen.GetReleaseBackfillStateParams{
+		OwnerID: a.OwnerID, AppID: a.ID,
+	})
+	if err == nil {
+		a.BaselineState = row.State
+		a.BaselineError = row.LastError
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		s.log.Debug("baseline status unavailable",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+	}
+	if a.BaselineState == "" {
+		a.BaselineState = BaselinePending
+	}
 }
 
 // attachHost reads the app's hostname, tolerating a store that will not answer.
@@ -950,22 +1018,17 @@ func (s *Service) Deployments(
 	if err != nil {
 		return nil, fmt.Errorf("app: list deployments: %w", err)
 	}
+	appRow, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
+		OwnerID: ownerID, ID: appID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("app: read active release for deployments: %w", err)
+	}
 
 	out := make([]Deployment, 0, len(rows))
 	for _, row := range rows {
-		d := Deployment{
-			ID:        row.ID,
-			AppID:     row.AppID,
-			Image:     row.Image,
-			Revision:  row.Revision,
-			Status:    row.Status,
-			Message:   row.Message,
-			StartedAt: row.StartedAt,
-		}
-		if row.FinishedAt.Valid {
-			finished := row.FinishedAt.Time
-			d.FinishedAt = &finished
-		}
+		d := toDeployment(row)
+		d.IsActive = sameRelease(d.ReleaseID, appRow.ActiveReleaseID)
 		out = append(out, d)
 	}
 	return out, nil
@@ -994,15 +1057,22 @@ func (s *Service) RecentActivity(
 
 	out := make([]Activity, 0, len(rows))
 	for _, row := range rows {
+		var releaseID *uuid.UUID
+		if row.ReleaseID.Valid {
+			id := uuid.UUID(row.ReleaseID.Bytes)
+			releaseID = &id
+		}
 		a := Activity{
 			Deployment: Deployment{
-				ID: row.ID, AppID: row.AppID, Image: row.Image,
-				Revision: row.Revision, Status: row.Status,
-				Message: row.Message, StartedAt: row.StartedAt,
+				ID: row.ID, AppID: row.AppID, ReleaseID: releaseID,
+				Image: row.Image, Revision: row.Revision, Trigger: row.Trigger,
+				ActorKind: row.ActorKind, ActorID: row.ActorID,
+				Status: row.Status, Message: row.Message, StartedAt: row.StartedAt,
 			},
 			AppName:      row.AppName,
 			AppNamespace: row.AppNamespace,
 		}
+		a.IsActive = sameRelease(a.ReleaseID, row.ActiveReleaseID)
 		if row.FinishedAt.Valid {
 			finished := row.FinishedAt.Time
 			a.FinishedAt = &finished
@@ -1012,38 +1082,57 @@ func (s *Service) RecentActivity(
 	return out, nil
 }
 
-// Deployment statuses.
-//
-// One deployment is active and the rest are history, which is the shape people
-// expect: the thing running now, and what it replaced. Superseded is distinct
-// from failed on purpose — a deployment that was replaced worked, and reading
-// a history of failures where none happened is worse than no history.
+func sameRelease(releaseID *uuid.UUID, active pgtype.UUID) bool {
+	return releaseID != nil && active.Valid && *releaseID == uuid.UUID(active.Bytes)
+}
+
+func toDeployment(row dbgen.Deployment) Deployment {
+	d := Deployment{
+		ID: row.ID, AppID: row.AppID, Image: row.Image,
+		Revision: row.Revision, Trigger: row.Trigger,
+		ActorKind: row.ActorKind, ActorID: row.ActorID,
+		Status: row.Status, Message: row.Message, StartedAt: row.StartedAt,
+	}
+	if row.ReleaseID.Valid {
+		id := uuid.UUID(row.ReleaseID.Bytes)
+		d.ReleaseID = &id
+	}
+	if row.FinishedAt.Valid {
+		finished := row.FinishedAt.Time
+		d.FinishedAt = &finished
+	}
+	return d
+}
+
+// Deployment statuses. Active and superseded remain readable for legacy rows;
+// new attempts finish as succeeded or failed. Which release is serving comes
+// only from apps.active_release_id.
 const (
 	DeployRunning    = "running"
 	DeployActive     = "active"
+	DeploySucceeded  = "succeeded"
 	DeployFailed     = "failed"
 	DeploySuperseded = "superseded"
 )
 
-// beginDeployment retires the previous deployment and opens a new one.
+// beginDeployment opens a new attempt without rewriting earlier history.
 //
 // Returns the new row's id, or uuid.Nil when history could not be written.
 // History is useful, not load-bearing: failing a deploy because its audit row
 // would not write is the wrong trade, and every caller checks for Nil rather
 // than assuming.
 func (s *Service) beginDeployment(
-	ctx context.Context, ownerID string, a App, revision string,
+	ctx context.Context, ownerID string, a App, revision string, releaseIDs ...uuid.UUID,
 ) uuid.UUID {
-	if _, err := s.q.SupersedeDeployments(ctx, dbgen.SupersedeDeploymentsParams{
-		OwnerID: ownerID, AppID: a.ID,
-	}); err != nil {
-		s.log.Warn("could not retire earlier deployments",
-			slog.String("app", a.Name), slog.String("error", err.Error()))
+	releaseID := uuid.Nil
+	if len(releaseIDs) > 0 {
+		releaseID = releaseIDs[0]
 	}
-
 	row, err := s.q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
 		Revision: revision, Status: DeployRunning,
+		ReleaseID: pgUUID(releaseID), Trigger: revision,
+		ActorKind: "user",
 	})
 	if err != nil {
 		s.log.Warn("could not record deployment",
@@ -1059,21 +1148,59 @@ func (s *Service) beginDeployment(
 // deployments reads as a list of things still in progress — which is what this
 // shipped as, because FinishDeployment existed and nothing called it.
 func (s *Service) endDeployment(
-	ctx context.Context, ownerID string, id uuid.UUID, cause error,
-) {
-	if id == uuid.Nil {
-		return
+	ctx context.Context, ownerID string, appID, releaseID, id uuid.UUID, cause error,
+) error {
+	// The pointer is authoritative now. If cluster apply worked but activation
+	// did not, surface the mismatch and record a failed attempt rather than
+	// returning success while reads continue to name the prior release.
+	if cause == nil && releaseID != uuid.Nil {
+		if n, err := s.q.SetActiveRelease(ctx, dbgen.SetActiveReleaseParams{
+			OwnerID: ownerID, AppID: appID, ReleaseID: pgUUID(releaseID),
+		}); err != nil || n != 1 {
+			if err == nil {
+				err = fmt.Errorf("updated %d rows", n)
+			}
+			cause = fmt.Errorf("app: activate release: %w", err)
+			s.log.Warn("could not activate release",
+				slog.String("app_id", appID.String()),
+				slog.String("release_id", releaseID.String()),
+				slog.String("error", err.Error()))
+		}
 	}
-	status, message := DeployActive, ""
+
+	status, message := DeploySucceeded, ""
 	if cause != nil {
 		status, message = DeployFailed, cause.Error()
 	}
-	if _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
-		OwnerID: ownerID, ID: id, Status: status, Message: message,
-	}); err != nil {
-		s.log.Warn("could not finish deployment record",
-			slog.String("error", err.Error()))
+	if id != uuid.Nil {
+		if _, err := s.q.FinishDeployment(ctx, dbgen.FinishDeploymentParams{
+			OwnerID: ownerID, ID: id, Status: status, Message: message,
+		}); err != nil {
+			s.log.Warn("could not finish deployment record",
+				slog.String("error", err.Error()))
+		}
 	}
+	return cause
+}
+
+// deployCurrentRelease resolves and snapshots desired release-owned state
+// before the orchestrator is called. A resolution failure therefore leaves the
+// previous workload and active-release pointer untouched.
+func (s *Service) deployCurrentRelease(
+	ctx context.Context, ownerID string, a App, trigger string,
+) error {
+	release, err := s.createRelease(ctx, s.q, a, "")
+	if err != nil {
+		return err
+	}
+	return s.deployReleaseOperation(ctx, ownerID, a, release, trigger)
+}
+
+func (s *Service) deployReleaseOperation(
+	ctx context.Context, ownerID string, a App, release Release, trigger string,
+) error {
+	_, err := s.admitDeployment(ctx, ownerID, a, trigger, release.ID, false)
+	return err
 }
 
 // Scale changes the replica count and reapplies.
@@ -1100,15 +1227,14 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 		OwnerID: ownerID, ID: a.ID, Replicas: replicas,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return a, nil
+		}
 		return App{}, fmt.Errorf("app: scale: %w", err)
 	}
 
 	updated := toApp(row)
-	id := s.beginDeployment(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
-	err = s.apply(ctx, s.q, updated)
-	// Recorded whichever way it went. A deploy that failed and left no trace is
-	// one nobody can find afterwards.
-	s.endDeployment(ctx, ownerID, id, err)
+	err = s.deployCurrentRelease(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
 	if err != nil {
 		return App{}, err
 	}
@@ -1121,58 +1247,15 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	if err != nil {
 		return err
 	}
-	id := s.beginDeployment(ctx, ownerID, a, "redeploy")
-
-	// A build takes minutes, so it does not happen on the request. The
-	// deployment is already recorded as running; the goroutine finishes it,
-	// and the page that started it polls the same row.
+	// Both source kinds stop at durable admission. The process worker claims
+	// the row independently, so disconnecting this request cannot cancel the
+	// build or rollout it admitted.
 	if a.Source == SourceGit {
-		s.deployInBackground(ctx, ownerID, a, id)
-		return nil
+		_, err := s.admitDeployment(ctx, ownerID, a, "redeploy", uuid.Nil, true)
+		return err
 	}
 
-	err = s.apply(ctx, s.q, a)
-	s.endDeployment(ctx, ownerID, id, err)
-	return err
-}
-
-// deployInBackground builds and applies without holding the request.
-//
-// The context is detached from the caller's. A build outlives the HTTP request
-// that asked for it by minutes, and one cancelled when the browser navigated
-// away would leave a deployment stuck on "running" with a half-built image
-// behind it.
-//
-// Nothing waits on the returned goroutine. That is a deliberate limit: a
-// process stopped mid-build leaves its deployment marked running, which the
-// deployments list shows as running because that is what it was when this
-// process last knew. Recovering those needs a reconciler, and inventing one
-// here would be worse than the gap — a build has no resumable state, so the
-// only honest recovery is to notice and say so.
-func (s *Service) deployInBackground(
-	ctx context.Context, ownerID string, a App, deployID uuid.UUID,
-) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deployTimeout)
-
-	go func() {
-		defer cancel()
-
-		built, err := s.buildIfNeeded(ctx, ownerID, a, deployID)
-		if err == nil {
-			err = s.apply(ctx, s.q, built)
-		}
-		s.endDeployment(ctx, ownerID, deployID, err)
-
-		if err != nil {
-			s.log.Warn("deploy failed",
-				slog.String("owner", ownerID), slog.String("app", a.Name),
-				slog.String("error", err.Error()))
-			return
-		}
-		s.log.Info("deployed",
-			slog.String("owner", ownerID), slog.String("app", a.Name),
-			slog.String("image", built.Image))
-	}()
+	return s.deployCurrentRelease(ctx, ownerID, a, "redeploy")
 }
 
 // buildIfNeeded turns a repository into an image before the app is applied.
@@ -1230,19 +1313,44 @@ func revisionFor(deployID uuid.UUID) string {
 // Cluster first: if the record went first and the cluster call failed, the
 // workload would keep running with nothing left to describe it.
 func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
-	a, err := s.Get(ctx, ownerID, name)
+	row, err := s.q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: name})
 	if err != nil {
-		return err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("app: read delete target: %w", err)
 	}
-
-	if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
+	a := toApp(row)
+	if err := s.withAppConvergenceLock(ctx, a.ID, func() error {
+		current, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
+			OwnerID: ownerID, ID: a.ID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("app: re-read delete target: %w", err)
+		}
+		a = toApp(current)
+		if _, err := s.liveOperation(ctx, a); err == nil {
+			return ErrOperationInFlight
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
+			return err
+		}
+		if err := s.orch.DeleteNamespace(ctx, a.Namespace); err != nil {
+			return err
+		}
+		if err := s.q.DeleteApp(ctx, dbgen.DeleteAppParams{
+			OwnerID: ownerID, ID: a.ID,
+		}); err != nil {
+			return fmt.Errorf("app: delete: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	if err := s.orch.DeleteNamespace(ctx, a.Namespace); err != nil {
-		return err
-	}
-	if err := s.q.DeleteApp(ctx, dbgen.DeleteAppParams{OwnerID: ownerID, ID: a.ID}); err != nil {
-		return fmt.Errorf("app: delete: %w", err)
 	}
 
 	s.log.Info("app deleted",
@@ -1263,7 +1371,7 @@ func Namespace(ownerID, name string) string {
 }
 
 func toApp(row dbgen.App) App {
-	return App{
+	a := App{
 		ID:            row.ID,
 		OwnerID:       row.OwnerID,
 		Name:          row.Name,
@@ -1273,6 +1381,7 @@ func toApp(row dbgen.App) App {
 		Port:          row.Port,
 		Source:        Source(row.Source),
 		RunAsUser:     row.RunAsUser,
+		ConfigVersion: row.ConfigVersion,
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
@@ -1291,6 +1400,11 @@ func toApp(row dbgen.App) App {
 		X:             row.CanvasX,
 		Y:             row.CanvasY,
 	}
+	if row.ActiveReleaseID.Valid {
+		id := uuid.UUID(row.ActiveReleaseID.Bytes)
+		a.ActiveReleaseID = &id
+	}
+	return a
 }
 
 func marshalEnv(env map[string]string) ([]byte, error) {
@@ -1345,11 +1459,14 @@ func (s *Service) SetHealth(
 		HealthPath: probe.HealthPath, HealthLiveness: probe.Liveness,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
 		return fmt.Errorf("app: set health: %w", err)
 	}
 
 	updated := toApp(row)
-	if err := s.apply(ctx, s.q, updated); err != nil {
+	if err := s.deployCurrentRelease(ctx, ownerID, updated, "health"); err != nil {
 		return err
 	}
 

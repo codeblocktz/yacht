@@ -33,6 +33,11 @@ const (
 	// AnnotationRevision changes on every apply, which is what triggers a
 	// rollout when the pod template is otherwise unchanged.
 	AnnotationRevision = "yacht/revision"
+
+	// These two annotations are the database convergence key observed by the
+	// app reconciler.
+	AnnotationReleaseID     = "yacht/release-id"
+	AnnotationConfigVersion = "yacht/config-version"
 )
 
 // FieldManager identifies the engine to Kubernetes server-side apply. Using a

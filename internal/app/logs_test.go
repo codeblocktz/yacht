@@ -58,7 +58,7 @@ func TestAPodNameFromTheRequestIsNotTrusted(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -86,7 +86,7 @@ func TestLogsAreReadFromTheAppsOwnNamespace(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs-ns")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestAnotherTeamCannotReadYourLogs(t *testing.T) {
 	mine := owner(t, s, pool, "owner-logs-mine")
 	theirs := owner(t, s, pool, "owner-logs-theirs")
 
-	if _, err := s.Create(ctx, mine, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, mine, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -141,7 +141,7 @@ func TestNothingToShowSaysWhy(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-logs-empty")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -163,12 +163,12 @@ func TestNothingToShowSaysWhy(t *testing.T) {
 // at "running" for ever and the history read as a list of deploys still in
 // progress. Nothing failed and nothing looked broken — the page was simply
 // describing a state that had not been true since the moment it was written.
-func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
+func TestDeploymentHistoryKeepsTerminalAttemptsAndOneActivePointer(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-deploy-history")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -177,8 +177,14 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
 	}
+	if err := executeLiveOperation(s, ctx, a); err != nil {
+		t.Fatalf("worker redeploy: %v", err)
+	}
 	if _, err := s.Scale(ctx, ownerID, "web", 2); err != nil {
 		t.Fatalf("Scale: %v", err)
+	}
+	if err := executeLiveOperation(s, ctx, a); err != nil {
+		t.Fatalf("worker scale: %v", err)
 	}
 
 	deps, err := s.Deployments(ctx, ownerID, a.ID, 20)
@@ -191,11 +197,17 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 
 	var active, running int
 	for _, d := range deps {
-		switch d.Status {
-		case DeployActive:
+		if d.IsActive {
 			active++
-		case DeployRunning:
+		}
+		if d.Status == DeployRunning {
 			running++
+		}
+		if d.Status != DeploySucceeded {
+			t.Errorf("deployment status = %q, want terminal succeeded", d.Status)
+		}
+		if d.FinishedAt == nil {
+			t.Error("a completed attempt has no finish time")
 		}
 	}
 	if active != 1 {
@@ -206,15 +218,12 @@ func TestDeploymentHistoryHasOneActiveAndTheRestRetired(t *testing.T) {
 	}
 
 	// Newest first, and it is the live one.
-	if deps[0].Status != DeployActive {
-		t.Errorf("newest deployment is %q, want %q", deps[0].Status, DeployActive)
+	if !deps[0].IsActive {
+		t.Error("newest successful release is not the active pointer")
 	}
 	for _, d := range deps[1:] {
-		if d.Status != DeploySuperseded {
-			t.Errorf("an earlier deployment is %q, want %q", d.Status, DeploySuperseded)
-		}
-		if d.FinishedAt == nil {
-			t.Error("a retired deployment has no finish time")
+		if d.IsActive {
+			t.Error("an earlier release is also marked active")
 		}
 	}
 }
@@ -232,7 +241,7 @@ func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-deploy-logs")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -249,10 +258,9 @@ func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
 	}
 	var live, old Deployment
 	for _, d := range deps {
-		switch d.Status {
-		case DeployActive:
+		if d.IsActive {
 			live = d
-		case DeploySuperseded:
+		} else {
 			old = d
 		}
 	}
@@ -296,13 +304,13 @@ func TestADeploymentIDFromAnotherAppIsRefused(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-deploy-cross")
 
-	one, err := s.Create(ctx, ownerID, CreateInput{
+	one, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "one", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
 		t.Fatalf("Create one: %v", err)
 	}
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "two", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create two: %v", err)
@@ -337,7 +345,7 @@ func TestAPodNameIsNotTrustedWhenStreamingEither(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-stream")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {
@@ -364,7 +372,7 @@ func TestLogStreamReadsFromTheAppsOwnNamespace(t *testing.T) {
 	s.orch = orch
 	ownerID := owner(t, s, pool, "owner-stream-ns")
 
-	a, err := s.Create(ctx, ownerID, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	})
 	if err != nil {

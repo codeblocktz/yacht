@@ -100,9 +100,22 @@ func run() error {
 	// read it as the feature being broken.
 	var keeper *secret.Keeper
 	if cfg.SecretKey != "" {
-		if keeper, err = secret.NewKeeper(cfg.SecretKey); err != nil {
+		if keeper, err = secret.NewKeeper(cfg.SecretKey, cfg.SecretKeyPrevious...); err != nil {
 			return err
 		}
+		// The ID is a fingerprint of the key, not the key: it is already stored
+		// beside every value sealed with it. Logging it is what lets an operator
+		// mid-rotation see which key this process will seal with, rather than
+		// inferring it from which values still fail to open.
+		//
+		// The count comes from the keeper rather than from the configuration,
+		// because the keeper is what actually holds them: a key listed twice, or
+		// listed as retired while it is also the active one, is held once. An
+		// operator reading this line is deciding whether the old key is still
+		// loaded, and the configured length would answer yes when it is not.
+		log.Info("secret key loaded",
+			slog.String("key_id", keeper.ActiveKeyID()),
+			slog.Int("retired_keys_held", len(keeper.KeyIDs())-1))
 	} else {
 		log.Warn("no YACHT_SECRET_KEY set — environment variables can be stored, " +
 			"but marking one secret will be refused rather than stored readable; " +
@@ -114,9 +127,12 @@ func run() error {
 	// working orchestrator — the source is listed as unavailable rather than
 	// offered and failed.
 	var images app.Images
+	var manifests app.Manifests
 	var builder app.Builder
+	registryStore := registry.New(pool, keeper, log)
+	manifests = registryStore
 	if keeper.Configured() {
-		images = registry.New(pool, keeper, log)
+		images = registryStore
 		if b, ok := orch.(orchestrator.Builder); ok {
 			builder = b
 		}
@@ -140,12 +156,14 @@ func run() error {
 	}
 
 	apps := app.NewService(pool, orch, log, app.Options{
-		Builder:         builder,
-		Images:          images,
-		AppDomain:       cfg.AppDomain,
-		WildcardTLS:     cfg.WildcardTLS,
-		Keeper:          keeper,
-		ReservedDomains: cfg.ReservedDomains,
+		Builder:             builder,
+		Images:              images,
+		Manifests:           manifests,
+		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
+		AppDomain:           cfg.AppDomain,
+		WildcardTLS:         cfg.WildcardTLS,
+		Keeper:              keeper,
+		ReservedDomains:     cfg.ReservedDomains,
 		// Verifying a custom domain is a DNS lookup, and an install that cannot
 		// make one says so rather than failing in a way that looks like the
 		// domain being wrong.
@@ -233,7 +251,10 @@ func run() error {
 	// replica that stopped. Level-triggered against the Job rather than driven
 	// by anything this process remembers, so it is correct after a restart and
 	// correct when several replicas run it at once.
+	go apps.RunReleaseBackfill(ctx)
+	go apps.RunOperationAdmission(ctx)
 	go apps.RunReconciler(ctx)
+	go apps.RunAppReconciler(ctx)
 
 	// Proves claimed custom domains without anybody pressing anything. Same
 	// shape as the reconciler above and safe for the same reasons: what a name

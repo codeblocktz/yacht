@@ -10,8 +10,9 @@ work is not wasted.
 ## Getting set up
 
 You need **Go 1.26+**, **Postgres**, and a **kubeconfig** pointing at a cluster.
-Nothing else — `templ` and `sqlc` are Go tool dependencies, and `make css`
-downloads the Tailwind standalone binary, so there is no Node or npm.
+Running the full verification also needs **shellcheck**. `templ` and `sqlc` are
+Go tool dependencies, and `make css` downloads the Tailwind standalone binary,
+so there is no Node or npm.
 
 ```bash
 git clone https://github.com/codeblocktz/yacht.git
@@ -31,8 +32,8 @@ of the dashboard is workable without one.
 
 > [!IMPORTANT]
 > **Tests that need a database skip themselves when it is absent, and a skip
-> looks like a pass.** `make check` can print `ok` for every package while the
-> tests that check owner scoping never ran.
+> looks like a pass.** `make check` therefore refuses to start without a test
+> database unless you explicitly request an intentionally partial run.
 
 Set the DSN to a database you do not mind being written to:
 
@@ -41,22 +42,25 @@ export YACHT_TEST_DATABASE_URL="postgres://yacht:yacht@localhost:5432/yacht_test
 make check          # vet + tests
 ```
 
-Check the output for `SKIP` before believing a green run.
+If a database is deliberately unavailable, use
+`YACHT_ALLOW_DATABASE_TEST_SKIPS=1 make check`. That opt-out is visible in the
+command and should not be used for release verification.
 
 ## The commands
 
 | | |
 |---|---|
 | `make assets` | templ codegen + Tailwind — run after touching a `.templ` or the CSS |
-| `make check` | `go vet` + tests |
+| `make check` | `go vet` + database-backed race tests; requires the test DSN |
+| `make verify` | Every CI/release gate, including generated output and gallery rendering |
 | `make dev` | Rebuild and run |
 | `make gallery` | Render every visual state to HTML |
 | `make sqlc` | Regenerate database code after editing a `.sql` query |
 
 ## What CI enforces
 
-Four things fail a build. All four are runnable locally, and all four exist
-because the alternative is a bug nobody sees:
+`make verify` is the shared CI and release contract. Its gates are runnable
+locally and exist because each catches a class of bug that otherwise ships:
 
 1. **Generated output is current.** `*_templ.go` and `internal/web/assets/css/app.css`
    are committed so plain `go build` works without codegen tools. CI regenerates
@@ -69,6 +73,10 @@ because the alternative is a bug nobody sees:
    named `Wallet` is a picture, not a billing concept.
 4. **`shellcheck` on `install.sh` and `upgrade.sh`.** They get piped into a root
    shell on somebody else's machine.
+5. **The complete gallery renders.** CI keeps the generated HTML as a reviewable
+   artifact so visual states do not silently rot.
+6. **Every Go package compiles without CGO.** Release builds add the supported
+   Linux architecture builds after this shared verification succeeds.
 
 ## Things this codebase cares about
 
@@ -105,7 +113,7 @@ you add a state worth looking at, add it there and it stays checked.
   the diff. `git log` is the house style guide.
 - **Tests come with behaviour changes.** For a bug fix, a test that fails before
   the fix and passes after.
-- **Run `make check` and `make assets` before pushing.**
+- **Run `make verify` before pushing.**
 
 Small, obviously-correct fixes — typos, a broken link, a clearer error message —
 need none of the ceremony. Just send them.

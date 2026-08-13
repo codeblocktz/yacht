@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -83,9 +85,16 @@ type Credentials struct {
 
 // Store reads and writes the install's registry.
 type Store struct {
+	pool   *pgxpool.Pool
 	q      *dbgen.Queries
 	keeper *secret.Keeper
 	log    *slog.Logger
+
+	// http asks the registry itself, for manifest resolution. Its own client
+	// rather than the default one, because a registry that accepts a
+	// connection and then says nothing would otherwise hold a deploy open for
+	// as long as the process lives.
+	http *http.Client
 }
 
 // New returns a Store. keeper may be nil, in which case storing a password is
@@ -94,7 +103,10 @@ func New(pool *pgxpool.Pool, keeper *secret.Keeper, log *slog.Logger) *Store {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Store{q: dbgen.New(pool), keeper: keeper, log: log}
+	return &Store{
+		pool: pool, q: dbgen.New(pool), keeper: keeper, log: log,
+		http: &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
 // CanStore reports whether a password can be sealed.
@@ -164,17 +176,37 @@ func (s *Store) Set(
 	if !s.keeper.Configured() {
 		return ErrNoSecretKey
 	}
+	current, settingsErr := s.Settings(ctx)
+	credentials, credentialsErr := s.Credentials(ctx)
+	if settingsErr == nil && credentialsErr == nil &&
+		current.Host == host && current.Repository == repository &&
+		current.Username == username && current.Insecure == insecure &&
+		credentials.Password == password {
+		return nil
+	}
 
 	sealed, err := s.keeper.Seal(password)
 	if err != nil {
 		return fmt.Errorf("registry: seal password: %w", err)
 	}
 
-	if _, err := s.q.SetPlatformRegistry(ctx, dbgen.SetPlatformRegistryParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("registry: begin settings update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	q := s.q.WithTx(tx)
+	if _, err := q.SetPlatformRegistry(ctx, dbgen.SetPlatformRegistryParams{
 		Host: host, Repository: repository, Username: username,
 		PasswordSealed: sealed, Insecure: insecure, UpdatedBy: pgUUID(by),
 	}); err != nil {
 		return fmt.Errorf("registry: store settings: %w", err)
+	}
+	if err := q.IncrementGitAppConfigVersions(ctx); err != nil {
+		return fmt.Errorf("registry: version affected apps: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("registry: commit settings update: %w", err)
 	}
 	// The password is not logged and neither is its length. What changed and
 	// who changed it is the useful record; anything about the value itself is
@@ -187,8 +219,27 @@ func (s *Store) Set(
 
 // Clear removes the registry.
 func (s *Store) Clear(ctx context.Context) error {
-	if err := s.q.ClearPlatformRegistry(ctx); err != nil {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	if !settings.Configured() {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("registry: begin clear: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	q := s.q.WithTx(tx)
+	if err := q.ClearPlatformRegistry(ctx); err != nil {
 		return fmt.Errorf("registry: clear settings: %w", err)
+	}
+	if err := q.IncrementGitAppConfigVersions(ctx); err != nil {
+		return fmt.Errorf("registry: version affected apps: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("registry: commit clear: %w", err)
 	}
 	s.log.Info("registry cleared")
 	return nil

@@ -2,29 +2,22 @@ name: pages
 
 # Publishes the install and upgrade scripts at codeblocktz.github.io/yacht/.
 #
-# The scripts are served straight from the repository root rather than kept as a
-# second copy under site/, so what the URL hands to a shell is the file that was
-# reviewed on main and nothing else.
+# A Pages deployment is triggered only by a successful CI run for a push to
+# main, and checks out that run's exact commit. The root-executed scripts can
+# therefore never be published from a revision that did not pass CI.
 #
-# No CNAME file: this is a project site on the organisation's own Pages domain,
-# which needs no DNS and cannot be taken over by a dangling record. Adding a
-# custom domain later means writing a CNAME here and verifying the domain at the
-# organisation level first.
+# The scripts are served straight from the repository root rather than kept as
+# a second copy under site/, so what the URL hands to a shell is the reviewed
+# file and nothing else.
 
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
-    paths:
-      - install.sh
-      - upgrade.sh
-      - site/**
-      - .github/workflows/pages.yml
-  workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deployment at a time, and never cancel one midway: an interrupted publish
 # is a domain serving half a script to whoever pipes it into a shell.
@@ -34,13 +27,37 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # A slow older CI run may finish after a newer one. Refuse its successful
+      # but stale revision so it cannot roll Pages back after the newer publish.
+      - name: Require the current main revision
+        env:
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -eu
+          git fetch --no-tags --depth=1 origin \
+            +refs/heads/main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          if [ "$VERIFIED_SHA" != "$main_sha" ]; then
+            echo "::error::refusing stale Pages revision $VERIFIED_SHA; origin/main is $main_sha"
+            exit 1
+          fi
 
       - name: Assemble
         run: |

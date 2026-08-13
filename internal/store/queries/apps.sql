@@ -84,22 +84,34 @@ SET image          = @image,
     repo_url       = @repo_url,
     repo_branch    = @repo_branch,
     repo_subdir    = @repo_subdir,
+    config_version = config_version + 1,
     updated_at     = now()
 WHERE owner_id = @owner_id AND id = @id
+  AND (image, port, cpu_request, cpu_limit, memory_request, memory_limit,
+       internal, repo_url, repo_branch, repo_subdir)
+      IS DISTINCT FROM
+      (@image, @port, @cpu_request, @cpu_limit, @memory_request, @memory_limit,
+       @internal, @repo_url, @repo_branch, @repo_subdir)
 RETURNING *;
 
 -- name: SetAppReplicas :one
 UPDATE apps
-SET replicas = $3, updated_at = now()
-WHERE owner_id = $1 AND id = $2
+SET replicas = $3, config_version = config_version + 1, updated_at = now()
+WHERE owner_id = $1 AND id = $2 AND replicas IS DISTINCT FROM $3
 RETURNING *;
 
 -- name: DeleteApp :exec
 DELETE FROM apps WHERE owner_id = $1 AND id = $2;
 
 -- name: CreateDeployment :one
-INSERT INTO deployments (owner_id, app_id, image, revision, status)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO deployments (
+    owner_id, app_id, image, revision, status, release_id, trigger,
+    actor_kind, actor_id
+)
+VALUES (
+    @owner_id, @app_id, @image, @revision, @status, @release_id, @trigger,
+    @actor_kind, @actor_id
+)
 RETURNING *;
 
 -- name: FinishDeployment :one
@@ -118,7 +130,8 @@ LIMIT $3;
 -- Joined to apps so the activity feed can name the workload without a second
 -- round trip per row. The join is on app_id AND owner_id: joining on app_id
 -- alone would be correct today and wrong the moment more than one owner exists.
-SELECT d.*, a.name AS app_name, a.namespace AS app_namespace
+SELECT d.*, a.name AS app_name, a.namespace AS app_namespace,
+       a.active_release_id
 FROM deployments d
 JOIN apps a ON a.id = d.app_id AND a.owner_id = d.owner_id
 WHERE d.owner_id = $1
@@ -146,25 +159,19 @@ ORDER BY 1;
 UPDATE apps
 SET health_path     = @health_path,
     health_liveness = @health_liveness,
+    config_version  = config_version + 1,
     updated_at      = now()
 WHERE owner_id = @owner_id AND id = @id
+  AND (health_path, health_liveness)
+      IS DISTINCT FROM (@health_path, @health_liveness)
 RETURNING *;
 
 -- name: SetAppNetworking :execrows
 UPDATE apps
-SET https_only = @https_only, cname_only = @cname_only, updated_at = now()
-WHERE owner_id = @owner_id AND name = @name;
-
--- Retires the deployments a new one replaces.
---
--- Only rows that never reached a terminal state: a finished deployment already
--- says what happened to it, and rewriting that would lose the difference
--- between one that was replaced and one that failed.
--- name: SupersedeDeployments :execrows
-UPDATE deployments
-SET status = 'superseded', finished_at = COALESCE(finished_at, now())
-WHERE owner_id = @owner_id AND app_id = @app_id
-  AND status IN ('running', 'active');
+SET https_only = @https_only, cname_only = @cname_only,
+    config_version = config_version + 1, updated_at = now()
+WHERE owner_id = @owner_id AND name = @name
+  AND (https_only, cname_only) IS DISTINCT FROM (@https_only, @cname_only);
 
 -- name: GetDeployment :one
 SELECT * FROM deployments
@@ -175,11 +182,43 @@ WHERE owner_id = @owner_id AND id = @id;
 -- only this: the replicas and limits a person configured are not a build's to
 -- overwrite, and passing them through would make every build a chance to.
 UPDATE apps
-SET image = $3, updated_at = now()
-WHERE owner_id = $1 AND id = $2
+SET image = $3, config_version = config_version + 1, updated_at = now()
+WHERE owner_id = $1 AND id = $2 AND image IS DISTINCT FROM $3
 RETURNING *;
 
 -- name: SetAppRunAsUser :exec
--- Recorded by a build, which is the only thing that can discover it.
-UPDATE apps SET run_as_user = @run_as_user, updated_at = now()
-WHERE owner_id = @owner_id AND id = @id;
+-- Recorded by a build, which is the only thing that can discover it. The
+-- image update owns the build operation's single config_version increment.
+UPDATE apps
+SET run_as_user = @run_as_user,
+    updated_at = now()
+WHERE owner_id = @owner_id AND id = @id
+  AND run_as_user IS DISTINCT FROM @run_as_user;
+
+-- name: IncrementGitAppConfigVersions :exec
+-- Registry credentials are a live overlay for every Git-built image. They are
+-- install-wide, so one settings mutation invalidates each Git app exactly
+-- once without manufacturing release history.
+UPDATE apps
+SET config_version = config_version + 1, updated_at = now()
+WHERE source = 'git';
+
+-- name: IncrementCNAMEAppConfigVersions :exec
+-- The platform CNAME target is an install-wide live overlay, but it only
+-- renders into apps that explicitly opted into CNAME routing.
+UPDATE apps
+SET config_version = config_version + 1, updated_at = now()
+WHERE cname_only;
+
+-- Apps whose database pointer names the workload the cluster must converge to.
+-- This is intentionally install-scoped: the reconciler acts from stored
+-- ownership rather than from an authenticated request.
+-- name: ListAppsForReconciliation :many
+SELECT * FROM apps
+WHERE active_release_id IS NOT NULL
+   OR EXISTS (
+       SELECT 1 FROM deployment_operations o
+       WHERE o.app_id = apps.id AND o.owner_id = apps.owner_id
+         AND o.status = 'queued' AND o.checkpoint IN ('applying', 'verifying')
+   )
+ORDER BY id;

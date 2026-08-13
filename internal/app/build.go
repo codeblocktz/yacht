@@ -68,6 +68,36 @@ type Images interface {
 	DockerConfig(ctx context.Context) ([]byte, error)
 }
 
+// Manifests answers what digest is behind an image reference.
+//
+// Alongside Images rather than part of it, because the two are asked at
+// different moments by different things: Images is where a build's result
+// goes, and this is what that result turned out to be. Something that only
+// needs to name an image should not have to be able to interrogate a registry.
+//
+// A tag can be pushed over and a digest cannot, so this is what lets a
+// deployment record an image identity that stays the same image. It is also
+// the recovery path: a build whose push succeeded before Yacht stopped left
+// its answer in the registry, and this is how to go and read it.
+type Manifests interface {
+	// ResolveDigest returns the digest behind a reference, or an error that
+	// says which kind of no it is. A reference that already names a digest
+	// comes back unchanged.
+	//
+	// Callers must distinguish registry.ErrManifestNotFound from every other
+	// failure: an absent image will not appear by waiting and the attempt has
+	// to fail, while a registry that could not be asked has said nothing about
+	// whether the image is there.
+	ResolveDigest(ctx context.Context, ref string) (string, error)
+}
+
+// ManifestAvailability asks whether an immutable reference remains pullable.
+// It is separate from resolution because resolving a digest is intentionally
+// a no-I/O pass-through, while rollback must make an authoritative preflight.
+type ManifestAvailability interface {
+	CheckDigest(ctx context.Context, ref string) error
+}
+
 // Build is a record of one.
 type Build struct {
 	ID           uuid.UUID

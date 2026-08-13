@@ -40,7 +40,7 @@ func TestTheDefaultProjectAdoptsAppsThatHaveNone(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-project-adopt")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "orphan", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("create app: %v", err)
@@ -83,7 +83,7 @@ func TestAPositionIsStoredAndCanBeGivenBack(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-project-pos")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("create app: %v", err)
@@ -125,7 +125,7 @@ func TestAnotherTeamCannotMoveYourCards(t *testing.T) {
 	mine := owner(t, s, pool, "owner-project-mine")
 	theirs := owner(t, s, pool, "owner-project-theirs")
 
-	if _, err := s.Create(ctx, mine, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, mine, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("create app: %v", err)

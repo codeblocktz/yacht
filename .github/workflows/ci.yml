@@ -12,9 +12,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # Store tests skip themselves without a database, so CI supplies one.
-    # The schema invariant they check — every resource table is owner-scoped —
-    # only has to be forgotten once to be expensive.
+    # Store tests skip themselves without a database. The shared verification
+    # target rejects that silent skip and CI supplies the database it requires.
     services:
       postgres:
         image: postgres:16-alpine
@@ -29,8 +28,17 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Manifest integration tests seed this registry themselves. Keeping it
+      # local makes media-type and digest verification deterministic and avoids
+      # teaching CI to depend on Docker Hub availability or rate limits.
+      registry:
+        image: registry:2
+        ports: ["5000:5000"]
+
     env:
       YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
+      YACHT_TEST_REGISTRY: localhost:5000
+      YACHT_TEST_REGISTRY_INSECURE: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -40,53 +48,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify templ output is current
-        run: |
-          go tool templ generate
-          git diff --exit-code -- '*_templ.go' \
-            || (echo "::error::templ output is stale — run 'make generate' and commit" && exit 1)
+      # This is deliberately the same target a tag must pass. Keep generation,
+      # shell, race, vet, boundary, gallery, and build gates in one maintained
+      # definition rather than letting release verification drift from CI.
+      - name: Verify
+        run: make verify OUT="${RUNNER_TEMP}/yacht-gallery"
 
-      # The compiled stylesheet is committed so `go build` works without the
-      # Tailwind CLI. That only holds if it is actually kept in sync, so CI
-      # rebuilds it and fails on any drift.
-      - name: Verify stylesheet is current
-        run: |
-          make css
-          git diff --exit-code -- internal/web/assets/css/app.css \
-            || (echo "::error::stylesheet is stale — run 'make css' and commit" && exit 1)
-
-      # These two get piped into a root shell on somebody else's machine, which
-      # is the least forgiving place for a quoting mistake to surface.
-      - name: Shellcheck the install and upgrade scripts
-        run: |
-          shellcheck -s sh install.sh upgrade.sh
-          sh -n install.sh && sh -n upgrade.sh
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./... -race -count=1
-
-      - name: Build
-        run: CGO_ENABLED=0 go build ./...
-
-      # The engine must remain useful standalone at a single owner. If it ever
-      # grows a commercial concept, the open-core boundary has leaked and the
-      # wrapping layer's only options become fork or rewrite.
-      #
-      # Checks declarations rather than free text, so prose like "a wrapping
-      # application is multi-tenant" in a doc comment does not trip it.
-      - name: Boundary check — no commercial concepts declared in the engine
-        run: |
-          # internal/web/ui is vendored templUI, copied in unmodified. The Lucide
-          # set it ships declares `var Wallet`, and an icon named after a wallet
-          # is not a billing concept — it is a picture. Scanning it would train
-          # the reader to ignore this check, which is the only way a check like
-          # this actually fails.
-          if grep -rnE '^[[:space:]]*(type|func|var|const)[[:space:]]+[A-Za-z_]*(Tenant|tenant|Wallet|wallet|Billing|billing|Invoice|invoice|Subscription)' \
-               --include='*.go' --exclude-dir=ui ./cmd ./internal 2>/dev/null; then
-            echo "::error::engine declares a commercial-layer concept — it belongs in the wrapping layer"
-            exit 1
-          fi
-          echo "boundary clean: no commercial declarations in engine code"
+      - name: Preserve rendered gallery
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: yacht-gallery
+          path: ${{ runner.temp }}/yacht-gallery
+          # Preserve partial output after a render failure without replacing
+          # the useful verification error when no page was written at all.
+          if-no-files-found: ignore
+          retention-days: 14

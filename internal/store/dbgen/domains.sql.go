@@ -234,6 +234,26 @@ func (q *Queries) GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain
 	return i, err
 }
 
+const hasVerifiedDomainsForApp = `-- name: HasVerifiedDomainsForApp :one
+SELECT EXISTS (
+    SELECT 1 FROM domains
+    WHERE owner_id = $1 AND app_id = $2
+      AND NOT managed AND state = 'verified'
+)
+`
+
+type HasVerifiedDomainsForAppParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+func (q *Queries) HasVerifiedDomainsForApp(ctx context.Context, arg HasVerifiedDomainsForAppParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasVerifiedDomainsForApp, arg.OwnerID, arg.AppID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listCustomDomains = `-- name: ListCustomDomains :many
 SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
 WHERE owner_id = $1 AND app_id = $2 AND NOT managed
@@ -392,6 +412,29 @@ WHERE id = $1 AND state = 'verified'
 // is not overwritten by an apply that started before it.
 func (q *Queries) MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, markDomainRouted, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markVerifiedDomainsRoutedForApp = `-- name: MarkVerifiedDomainsRoutedForApp :execrows
+UPDATE domains
+SET state = 'routed'
+WHERE owner_id = $1 AND app_id = $2
+  AND NOT managed AND state = 'verified'
+`
+
+type MarkVerifiedDomainsRoutedForAppParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+// A verified domain becomes routed only after the app reconciler has observed
+// or produced the matching workload convergence key. This app-scoped form
+// closes the asynchronous handoff from the DNS checker.
+func (q *Queries) MarkVerifiedDomainsRoutedForApp(ctx context.Context, arg MarkVerifiedDomainsRoutedForAppParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markVerifiedDomainsRoutedForApp, arg.OwnerID, arg.AppID)
 	if err != nil {
 		return 0, err
 	}

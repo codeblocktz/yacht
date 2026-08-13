@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -37,7 +39,55 @@ func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, 
 	t.Cleanup(pool.Close)
 
 	orch := &recordingOrchestrator{Noop: orchestrator.NewNoop()}
+	if opts.Manifests == nil {
+		opts.Manifests = staticManifests{}
+	}
 	return NewService(pool, orch, log, opts), orch, pool
+}
+
+// createAndDeploy keeps setup for tests outside the admission boundary
+// focused on an already-active app. Production callers stop at Create's
+// durable queued row; tests that care about that boundary call Create directly.
+func createAndDeploy(
+	t *testing.T, s *Service, ctx context.Context, ownerID string, in CreateInput,
+) (App, error) {
+	t.Helper()
+	a, err := s.Create(ctx, ownerID, in)
+	if err != nil || a.Source == SourceGit {
+		return a, err
+	}
+	if err := executeLiveOperation(s, ctx, a); err != nil {
+		return a, err
+	}
+	return s.Get(ctx, ownerID, a.Name)
+}
+
+func executeLiveOperation(s *Service, ctx context.Context, a App) error {
+	op, err := s.liveOperation(ctx, a)
+	if err != nil {
+		return err
+	}
+	op, err = s.claimOperation(ctx, a.OwnerID, op.ID)
+	if err != nil {
+		return err
+	}
+	return s.executeOperation(ctx, op)
+}
+
+func executeNamedOperation(
+	s *Service, ctx context.Context, ownerID, name string,
+) error {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return err
+	}
+	return executeLiveOperation(s, ctx, a)
+}
+
+type staticManifests struct{}
+
+func (staticManifests) ResolveDigest(context.Context, string) (string, error) {
+	return "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
 }
 
 // recordingOrchestrator keeps the last spec it was asked to apply, so a test
@@ -47,6 +97,46 @@ type recordingOrchestrator struct {
 
 	mu   sync.Mutex
 	last orchestrator.AppSpec
+}
+
+type deleteRaceOrchestrator struct {
+	*recordingOrchestrator
+	applyEntered  chan struct{}
+	allowApply    chan struct{}
+	verifyEntered chan struct{}
+	allowVerify   chan struct{}
+	statusCalls   atomic.Int32
+	blockVerify   atomic.Bool
+}
+
+func (o *deleteRaceOrchestrator) ApplyApp(
+	ctx context.Context, spec orchestrator.AppSpec,
+) error {
+	close(o.applyEntered)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-o.allowApply:
+	}
+	if err := o.recordingOrchestrator.ApplyApp(ctx, spec); err != nil {
+		return err
+	}
+	o.blockVerify.Store(true)
+	return nil
+}
+
+func (o *deleteRaceOrchestrator) AppStatus(
+	ctx context.Context, ref orchestrator.Ref,
+) (orchestrator.AppStatus, error) {
+	if o.blockVerify.Load() && o.statusCalls.Add(1) == 1 {
+		close(o.verifyEntered)
+		select {
+		case <-ctx.Done():
+			return orchestrator.AppStatus{}, ctx.Err()
+		case <-o.allowVerify:
+		}
+	}
+	return o.Noop.AppStatus(ctx, ref)
 }
 
 func (r *recordingOrchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) error {
@@ -81,12 +171,12 @@ func owner(t *testing.T, s *Service, pool *pgxpool.Pool, id string) string {
 	return id
 }
 
-func TestCreateAppliesToClusterAndStores(t *testing.T) {
+func TestCreateWorkerAppliesToClusterAndStores(t *testing.T) {
 	ctx := context.Background()
 	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-create")
 
-	a, err := s.Create(ctx, id, CreateInput{
+	a, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 2, Port: 8080,
 		Env: map[string]string{"LOG_LEVEL": "info"},
 	})
@@ -131,17 +221,17 @@ func TestCreateAppliesToClusterAndStores(t *testing.T) {
 	}
 }
 
-// If the cluster rejects the workload, the database row must not survive —
-// otherwise the app appears in the UI while nothing runs, and nothing ever
-// retries it.
-func TestCreateRollsBackWhenApplyFails(t *testing.T) {
+// A rejected initial rollout is durable history now: admission returned before
+// the worker touched the cluster, so failure is recorded without deleting the
+// app identity out from under the request that already received it.
+func TestCreateRecordsWorkerApplyFailureWithoutDeletingTheApp(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-rollback")
 
 	s.orch = failingOrchestrator{Noop: orchestrator.NewNoop()}
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1,
 	}); err == nil {
 		t.Fatal("expected Create to fail when the cluster rejects the workload")
@@ -152,8 +242,8 @@ func TestCreateRollsBackWhenApplyFails(t *testing.T) {
 		`SELECT count(*) FROM apps WHERE owner_id = $1`, id).Scan(&count); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("%d rows survived a failed apply, want 0", count)
+	if count != 1 {
+		t.Errorf("apps after failed worker apply = %d, want 1 durable app", count)
 	}
 }
 
@@ -163,10 +253,10 @@ func TestCreateRejectsDuplicateName(t *testing.T) {
 	id := owner(t, s, pool, "svc-dupe")
 
 	in := CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1}
-	if _, err := s.Create(ctx, id, in); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, id, in); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	_, err := s.Create(ctx, id, in)
+	_, err := createAndDeploy(t, s, ctx, id, in)
 	if !errors.Is(err, ErrNameTaken) {
 		t.Errorf("err = %v, want ErrNameTaken", err)
 	}
@@ -181,10 +271,10 @@ func TestNamesAreScopedByOwner(t *testing.T) {
 	b := owner(t, s, pool, "svc-owner-b")
 
 	in := CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1}
-	if _, err := s.Create(ctx, a, in); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, a, in); err != nil {
 		t.Fatalf("owner a: %v", err)
 	}
-	if _, err := s.Create(ctx, b, in); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, b, in); err != nil {
 		t.Errorf("owner b must be able to use the same app name: %v", err)
 	}
 
@@ -216,7 +306,7 @@ func TestScaleAndDelete(t *testing.T) {
 	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-scale")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -228,6 +318,9 @@ func TestScaleAndDelete(t *testing.T) {
 	}
 	if scaled.Replicas != 4 {
 		t.Errorf("replicas = %d, want 4", scaled.Replicas)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker scale: %v", err)
 	}
 
 	if err := s.Delete(ctx, id, "web"); err != nil {
@@ -241,6 +334,198 @@ func TestScaleAndDelete(t *testing.T) {
 	}
 }
 
+func assertDeletedFromStoreAndCluster(
+	t *testing.T, s *Service, orch *recordingOrchestrator, ownerID string, a App,
+) {
+	t.Helper()
+	if _, err := s.Get(context.Background(), ownerID, a.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted app lookup = %v, want ErrNotFound", err)
+	}
+	for _, ref := range orch.Apps() {
+		if ref == a.Ref().String() {
+			t.Fatalf("orphaned workload %s remains", ref)
+		}
+	}
+	for _, namespace := range orch.Namespaces() {
+		if namespace == a.Namespace {
+			t.Fatalf("orphaned namespace %s remains", namespace)
+		}
+	}
+}
+
+func TestDeleteRefusesLiveOperationBeforeApplyAndRemainsOwnerScoped(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{})
+	ownerA := owner(t, s, pool, "delete-live-owner-a")
+	ownerB := owner(t, s, pool, "delete-live-owner-b")
+	a, err := createAndDeploy(t, s, ctx, ownerA, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1,
+	})
+	if err != nil {
+		t.Fatalf("Create owner A: %v", err)
+	}
+	b, err := createAndDeploy(t, s, ctx, ownerB, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1,
+	})
+	if err != nil {
+		t.Fatalf("Create owner B: %v", err)
+	}
+	if _, err := s.Scale(ctx, ownerA, a.Name, 2); err != nil {
+		t.Fatalf("admit owner A scale: %v", err)
+	}
+	if err := s.Delete(ctx, ownerB, b.Name); err != nil {
+		t.Fatalf("owner B delete was blocked by owner A operation: %v", err)
+	}
+	assertDeletedFromStoreAndCluster(t, s, orch, ownerB, b)
+	if err := s.Delete(ctx, ownerA, a.Name); !errors.Is(err, ErrOperationInFlight) {
+		t.Fatalf("delete before apply = %v, want ErrOperationInFlight", err)
+	}
+	op, err := s.liveOperation(ctx, a)
+	if err != nil {
+		t.Fatalf("read owner A operation: %v", err)
+	}
+	if err := s.CancelOperation(ctx, ownerA, op.ID); err != nil {
+		t.Fatalf("cancel owner A operation: %v", err)
+	}
+	if err := s.Delete(ctx, ownerA, a.Name); err != nil {
+		t.Fatalf("delete after cancellation: %v", err)
+	}
+	assertDeletedFromStoreAndCluster(t, s, orch, ownerA, a)
+}
+
+func TestDeleteCannotPassWorkerBetweenRereadAndApply(t *testing.T) {
+	ctx := context.Background()
+	s, base, pool := testService(t, Options{
+		RolloutTimeout: time.Second, RolloutPollInterval: time.Millisecond,
+	})
+	ownerID := owner(t, s, pool, "delete-between-reread-apply")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Scale(ctx, ownerID, a.Name, 2); err != nil {
+		t.Fatalf("admit scale: %v", err)
+	}
+	op, err := s.liveOperation(ctx, a)
+	if err != nil {
+		t.Fatalf("read operation: %v", err)
+	}
+	op, err = s.claimOperation(ctx, ownerID, op.ID)
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	gate := &deleteRaceOrchestrator{
+		recordingOrchestrator: base,
+		applyEntered:          make(chan struct{}), allowApply: make(chan struct{}),
+		verifyEntered: make(chan struct{}), allowVerify: make(chan struct{}),
+	}
+	s.orch = gate
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- s.executeOperation(ctx, op) }()
+	select {
+	case <-gate.applyEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not reach apply after its app reread")
+	}
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- s.Delete(ctx, ownerID, a.Name) }()
+	select {
+	case err := <-deleteDone:
+		t.Fatalf("delete passed the worker's convergence lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(gate.allowApply)
+	select {
+	case <-gate.verifyEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not reach verification")
+	}
+	select {
+	case err := <-deleteDone:
+		if !errors.Is(err, ErrOperationInFlight) {
+			t.Fatalf("delete after serialized apply = %v, want ErrOperationInFlight", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serialized delete did not return")
+	}
+	if err := s.CancelOperation(ctx, ownerID, op.ID); err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	close(gate.allowVerify)
+	select {
+	case err := <-workerDone:
+		if !errors.Is(err, ErrOperationClaimLost) {
+			t.Fatalf("cancelled worker = %v, want ErrOperationClaimLost", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled worker did not stop")
+	}
+	if err := s.Delete(ctx, ownerID, a.Name); err != nil {
+		t.Fatalf("delete after cancellation: %v", err)
+	}
+	assertDeletedFromStoreAndCluster(t, s, base, ownerID, a)
+}
+
+func TestDeleteDuringVerificationRefusesUntilCancellation(t *testing.T) {
+	ctx := context.Background()
+	s, base, pool := testService(t, Options{
+		RolloutTimeout: time.Second, RolloutPollInterval: time.Millisecond,
+	})
+	ownerID := owner(t, s, pool, "delete-during-verifying")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := s.Scale(ctx, ownerID, a.Name, 2); err != nil {
+		t.Fatalf("admit scale: %v", err)
+	}
+	op, err := s.liveOperation(ctx, a)
+	if err != nil {
+		t.Fatalf("read operation: %v", err)
+	}
+	op, err = s.claimOperation(ctx, ownerID, op.ID)
+	if err != nil {
+		t.Fatalf("claim operation: %v", err)
+	}
+	gate := &deleteRaceOrchestrator{
+		recordingOrchestrator: base,
+		applyEntered:          make(chan struct{}), allowApply: make(chan struct{}),
+		verifyEntered: make(chan struct{}), allowVerify: make(chan struct{}),
+	}
+	close(gate.allowApply)
+	s.orch = gate
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- s.executeOperation(ctx, op) }()
+	select {
+	case <-gate.verifyEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not reach verifying")
+	}
+	if err := s.Delete(ctx, ownerID, a.Name); !errors.Is(err, ErrOperationInFlight) {
+		t.Fatalf("delete during verifying = %v, want ErrOperationInFlight", err)
+	}
+	if err := s.CancelOperation(ctx, ownerID, op.ID); err != nil {
+		t.Fatalf("cancel operation: %v", err)
+	}
+	close(gate.allowVerify)
+	select {
+	case err := <-workerDone:
+		if !errors.Is(err, ErrOperationClaimLost) {
+			t.Fatalf("cancelled worker = %v, want ErrOperationClaimLost", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled worker did not stop")
+	}
+	if err := s.Delete(ctx, ownerID, a.Name); err != nil {
+		t.Fatalf("delete after cancellation: %v", err)
+	}
+	assertDeletedFromStoreAndCluster(t, s, base, ownerID, a)
+}
+
 // A cluster that cannot be reached must not turn a list into an error. The
 // records are still real and the operator still needs to see them.
 func TestListToleratesUnreachableCluster(t *testing.T) {
@@ -248,7 +533,7 @@ func TestListToleratesUnreachableCluster(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-degraded")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -273,7 +558,7 @@ func TestCreateIssuesAManagedHostname(t *testing.T) {
 	s, _, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
 	id := owner(t, s, pool, "svc-host")
 
-	created, err := s.Create(ctx, id, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -301,7 +586,7 @@ func TestCreateWithoutAnAppDomainIssuesNoHostname(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-no-host")
 
-	created, err := s.Create(ctx, id, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	})
 	if err != nil {
@@ -320,7 +605,7 @@ func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
 	s, _, pool := testService(t, Options{AppDomain: "apps.example.com"})
 	id := owner(t, s, pool, "svc-reissue")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -330,6 +615,9 @@ func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
 
 	if err := s.Redeploy(ctx, id, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker redeploy: %v", err)
 	}
 
 	got, err := s.Get(ctx, id, "web")
@@ -346,7 +634,7 @@ func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
 	id := owner(t, s, pool, "svc-host-spec")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -455,7 +743,7 @@ func TestCreatePortlessAppWithAnAppDomain(t *testing.T) {
 	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
 	id := owner(t, s, pool, "svc-portless")
 
-	created, err := s.Create(ctx, id, CreateInput{
+	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "worker", Image: "busybox:latest", Replicas: 1, Port: 0,
 	})
 	if err != nil {
@@ -482,7 +770,7 @@ func TestRetiringTheAppDomainReleasesTheHostname(t *testing.T) {
 	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com"})
 	id := owner(t, s, pool, "svc-retire")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -492,6 +780,9 @@ func TestRetiringTheAppDomainReleasesTheHostname(t *testing.T) {
 
 	if err := s.Redeploy(ctx, id, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("worker redeploy: %v", err)
 	}
 
 	if got := orch.lastAppSpec().Hosts; len(got) != 0 {
@@ -512,7 +803,7 @@ func TestAttachVolumeReachesTheOrchestrator(t *testing.T) {
 	s, orch, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-vol")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -522,6 +813,9 @@ func TestAttachVolumeReachesTheOrchestrator(t *testing.T) {
 		Name: "data", MountPath: "/var/lib/data", SizeBytes: 1 << 30,
 	}); err != nil {
 		t.Fatalf("AttachVolume: %v", err)
+	}
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
 	}
 
 	spec := orch.lastAppSpec()
@@ -545,7 +839,7 @@ func TestVolumesGrowButNeverShrink(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-vol-grow")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -576,7 +870,7 @@ func TestDeletingAnAttachedVolumeIsRefused(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-vol-del")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -607,7 +901,7 @@ func TestScalingAnAppWithStorageIsRefused(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-vol-scale")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -633,7 +927,7 @@ func TestSecretIsUnreadableInTheDatabase(t *testing.T) {
 	s, orch, pool := testService(t, Options{Keeper: k})
 	id := owner(t, s, pool, "svc-secret")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -644,6 +938,9 @@ func TestSecretIsUnreadableInTheDatabase(t *testing.T) {
 		Key: "DATABASE_URL", Value: password, Secret: true,
 	}); err != nil {
 		t.Fatalf("SetVariable: %v", err)
+	}
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
 	}
 
 	// Not in any column of the row that holds it.
@@ -689,7 +986,7 @@ func TestSecretRefusedWithoutAKey(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	id := owner(t, s, pool, "svc-nokey")
 
-	if _, err := s.Create(ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -719,7 +1016,7 @@ func TestPostgresSourceArrivesComplete(t *testing.T) {
 	s, orch, pool := testService(t, Options{Keeper: k, AppDomain: "apps.example.test"})
 	id := owner(t, s, pool, "svc-pg")
 
-	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "db"}); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{Source: SourcePostgres, Name: "db"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -781,12 +1078,12 @@ func TestPostgresPasswordsAreNotShared(t *testing.T) {
 	s, orch, pool := testService(t, Options{Keeper: k})
 	id := owner(t, s, pool, "svc-pg2")
 
-	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "one"}); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{Source: SourcePostgres, Name: "one"}); err != nil {
 		t.Fatalf("Create one: %v", err)
 	}
 	first := orch.lastAppSpec().Secrets["POSTGRES_PASSWORD"]
 
-	if _, err := s.Create(ctx, id, CreateInput{Source: SourcePostgres, Name: "two"}); err != nil {
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{Source: SourcePostgres, Name: "two"}); err != nil {
 		t.Fatalf("Create two: %v", err)
 	}
 	second := orch.lastAppSpec().Secrets["POSTGRES_PASSWORD"]

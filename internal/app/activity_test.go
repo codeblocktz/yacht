@@ -15,7 +15,7 @@ func TestDeployActivityFillsDaysWithNoDeploys(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-activity-fill")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -46,7 +46,7 @@ func TestDeployActivityIsScopedToItsOwner(t *testing.T) {
 	theirs := owner(t, s, pool, "owner-activity-theirs")
 
 	for _, o := range []string{mine, theirs} {
-		if _, err := s.Create(ctx, o, CreateInput{
+		if _, err := createAndDeploy(t, s, ctx, o, CreateInput{
 			Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 		}); err != nil {
 			t.Fatalf("Create for %s: %v", o, err)
@@ -79,7 +79,7 @@ func TestDeployActivityCountsSupersededAsSucceeded(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-activity-superseded")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -87,6 +87,9 @@ func TestDeployActivityCountsSupersededAsSucceeded(t *testing.T) {
 	// A redeploy supersedes the first deployment.
 	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, ownerID, "web"); err != nil {
+		t.Fatalf("worker redeploy: %v", err)
 	}
 
 	got, err := s.DeployActivity(ctx, ownerID, 30)
@@ -127,7 +130,7 @@ func TestDeployActivityTotalsMatchTheColumns(t *testing.T) {
 	s, _, pool := testService(t, Options{})
 	ownerID := owner(t, s, pool, "owner-activity-totals")
 
-	if _, err := s.Create(ctx, ownerID, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
 	}); err != nil {
 		t.Fatalf("Create: %v", err)

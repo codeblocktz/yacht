@@ -8,6 +8,7 @@ import (
 	"path"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -91,7 +92,7 @@ func (s *Service) AttachVolume(
 			appName, a.Replicas)
 	}
 
-	row, err := s.q.CreateVolume(ctx, dbgen.CreateVolumeParams{
+	row, err := s.q.CreateVolumeAndBump(ctx, dbgen.CreateVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: in.Name,
 		MountPath: in.MountPath, SizeBytes: in.SizeBytes, Class: in.Class,
 	})
@@ -103,15 +104,15 @@ func (s *Service) AttachVolume(
 		}
 		return Volume{}, fmt.Errorf("app: attach volume: %w", err)
 	}
-
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return Volume{}, err
-	}
+	a.ConfigVersion = row.ConfigVersion
 
 	s.log.Info("volume attached",
 		slog.String("app", appName), slog.String("volume", in.Name),
 		slog.String("mount", in.MountPath))
-	return toVolume(row), nil
+	return Volume{
+		ID: row.ID, AppID: row.AppID, Name: row.Name,
+		MountPath: row.MountPath, SizeBytes: row.SizeBytes, Class: row.Class,
+	}, nil
 }
 
 // ResizeVolume grows a volume. It cannot shrink one.
@@ -131,24 +132,25 @@ func (s *Service) ResizeVolume(
 	// shrink matches no row rather than relying on a check here. Zero rows
 	// means either "no such volume" or "not larger", which the read below tells
 	// apart — and the read is only reached on the failure path.
-	n, err := s.q.GrowVolume(ctx, dbgen.GrowVolumeParams{
+	row, err := s.q.GrowVolumeAndBump(ctx, dbgen.GrowVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: volumeName, SizeBytes: sizeBytes,
 	})
 	if err != nil {
-		return fmt.Errorf("app: resize volume: %w", err)
-	}
-	if n == 0 {
-		if _, err := s.q.GetVolume(ctx, dbgen.GetVolumeParams{
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("app: resize volume: %w", err)
+		}
+		current, readErr := s.q.GetVolume(ctx, dbgen.GetVolumeParams{
 			OwnerID: ownerID, AppID: a.ID, Name: volumeName,
-		}); err != nil {
+		})
+		if readErr != nil {
 			return ErrVolumeNotFound
+		}
+		if current.SizeBytes == sizeBytes {
+			return nil
 		}
 		return ErrVolumeShrink
 	}
-
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
+	a.ConfigVersion = row.ConfigVersion
 
 	s.log.Info("volume resized",
 		slog.String("app", appName), slog.String("volume", volumeName),
@@ -160,8 +162,8 @@ func (s *Service) ResizeVolume(
 //
 // Refused while the workload still mounts it unless detach is set, because
 // deleting storage is not something to do as a side effect of tidying up. With
-// detach, the app is applied without the volume first, so the pod has let go
-// before the claim is removed.
+// detach, the desired attachment is removed and the reconciler converges the
+// workload without it. The persistent claim itself is never deleted here.
 func (s *Service) DeleteVolume(
 	ctx context.Context, ownerID, appName, volumeName string, detach bool,
 ) error {
@@ -183,22 +185,16 @@ func (s *Service) DeleteVolume(
 		return fmt.Errorf("%w: %s", ErrVolumeAttached, appName)
 	}
 
-	n, err := s.q.DeleteVolume(ctx, dbgen.DeleteVolumeParams{
+	row, err := s.q.DeleteVolumeAndBump(ctx, dbgen.DeleteVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: volumeName,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVolumeNotFound
+		}
 		return fmt.Errorf("app: delete volume: %w", err)
 	}
-	if n == 0 {
-		return ErrVolumeNotFound
-	}
-
-	// Applied after the row is gone, so the workload comes back without the
-	// mount. The claim itself is left in the namespace: the orchestrator never
-	// deletes storage, and it goes when the app does.
-	if err := s.apply(ctx, s.q, a); err != nil {
-		return err
-	}
+	a.ConfigVersion = row.ConfigVersion
 
 	s.log.Info("volume deleted",
 		slog.String("app", appName), slog.String("volume", volumeName))

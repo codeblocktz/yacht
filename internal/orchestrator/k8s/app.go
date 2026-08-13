@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -26,6 +27,12 @@ import (
 // of what port the container uses. Keeping it fixed means ingress and
 // service-discovery config does not change when an app changes its port.
 const servicePort int32 = 80
+
+// deploymentProgressDeadline is also the upper bound used by the application
+// worker. Setting it on the object lets the Deployment controller supply the
+// useful ProgressDeadlineExceeded reason instead of Yacht inventing one from
+// replica counts alone.
+const deploymentProgressDeadline int32 = 600
 
 // ApplyApp converges a workload to the given spec.
 //
@@ -75,6 +82,14 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
+	// The Deployment metadata key is the commit marker for the whole apply,
+	// not merely for the Deployment. Writing it last means a Service or
+	// Ingress failure remains visibly drifted and the app reconciler retries
+	// the complete idempotent apply.
+	if err := o.markDeploymentConverged(ctx, spec); err != nil {
+		return err
+	}
+
 	o.log.Info("app applied",
 		slog.String("ref", spec.Ref.String()),
 		slog.String("image", spec.Image),
@@ -98,6 +113,16 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 	}
 
 	podLabels := orchestrator.ObjectLabels(spec.Ref)
+	podAnnotations := map[string]string{
+		orchestrator.AnnotationRevision:      specHash(spec),
+		orchestrator.AnnotationReleaseID:     spec.ReleaseID,
+		orchestrator.AnnotationConfigVersion: strconv.FormatInt(spec.ConfigVersion, 10),
+	}
+	pendingAnnotations := map[string]string{
+		orchestrator.AnnotationRevision:      specHash(spec),
+		orchestrator.AnnotationReleaseID:     "",
+		orchestrator.AnnotationConfigVersion: "-1",
+	}
 
 	podSpec := corev1ac.PodSpec().
 		// Nothing the engine deploys talks to the Kubernetes API, so nothing
@@ -139,16 +164,16 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 
 	dep := appsv1ac.Deployment(spec.Name, spec.Namespace).
 		WithLabels(orchestrator.ObjectLabels(spec.Ref)).
+		WithAnnotations(pendingAnnotations).
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithStrategy(strategy).
+			WithProgressDeadlineSeconds(deploymentProgressDeadline).
 			WithReplicas(spec.Replicas).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(orchestrator.SelectorLabels(spec.Name))).
 			WithTemplate(corev1ac.PodTemplateSpec().
 				WithLabels(podLabels).
-				WithAnnotations(map[string]string{
-					orchestrator.AnnotationRevision: specHash(spec),
-				}).
+				WithAnnotations(podAnnotations).
 				WithSpec(podSpec)))
 
 	// The API server defaults spec.strategy.rollingUpdate whenever the strategy
@@ -178,6 +203,25 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 	if _, err := o.client.AppsV1().Deployments(spec.Namespace).
 		Apply(ctx, dep, applyOpts()); err != nil {
 		return fmt.Errorf("k8s: apply deployment %s: %w", spec.Ref, err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) markDeploymentConverged(
+	ctx context.Context, spec orchestrator.AppSpec,
+) error {
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{"annotations": map[string]string{
+			orchestrator.AnnotationReleaseID:     spec.ReleaseID,
+			orchestrator.AnnotationConfigVersion: strconv.FormatInt(spec.ConfigVersion, 10),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("k8s: encode convergence marker: %w", err)
+	}
+	if _, err := o.client.AppsV1().Deployments(spec.Namespace).Patch(
+		ctx, spec.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("k8s: mark deployment %s converged: %w", spec.Ref, err)
 	}
 	return nil
 }
@@ -343,9 +387,14 @@ func (o *Orchestrator) AppStatus(
 	}
 
 	status := orchestrator.AppStatus{
-		Desired:   desired,
-		Ready:     dep.Status.ReadyReplicas,
-		Available: dep.Status.AvailableReplicas,
+		ReleaseID:  dep.Annotations[orchestrator.AnnotationReleaseID],
+		Generation: dep.Generation, ObservedGeneration: dep.Status.ObservedGeneration,
+		Desired: desired, Updated: dep.Status.UpdatedReplicas,
+		Ready: dep.Status.ReadyReplicas, Available: dep.Status.AvailableReplicas,
+	}
+	if version, err := strconv.ParseInt(
+		dep.Annotations[orchestrator.AnnotationConfigVersion], 10, 64); err == nil {
+		status.ConfigVersion = version
 	}
 
 	switch {
@@ -361,13 +410,24 @@ func (o *Orchestrator) AppStatus(
 		status.Phase = orchestrator.PhaseRunning
 	}
 
-	// Surface the most recent unhealthy condition, if any. Deployment
-	// conditions carry the useful diagnostics (image pull failures, quota
-	// rejections) that raw replica counts do not.
+	// Conditions, unlike replica counts, say whether a rollout is merely slow or
+	// has crossed Kubernetes' own progress deadline. Preserve the reason and
+	// message so the deployment attempt reports what the controller observed.
 	for _, cond := range dep.Status.Conditions {
-		if cond.Status != corev1.ConditionTrue && cond.Message != "" {
+		if cond.Type == appsv1.DeploymentAvailable && cond.Status == corev1.ConditionTrue {
+			status.AvailableCondition = true
+		}
+		if (cond.Type == appsv1.DeploymentProgressing &&
+			cond.Status == corev1.ConditionFalse &&
+			cond.Reason == "ProgressDeadlineExceeded") ||
+			(cond.Type == appsv1.DeploymentReplicaFailure && cond.Status == corev1.ConditionTrue) {
+			status.Terminal = true
+			status.Reason = cond.Reason
 			status.Message = cond.Message
-			break
+		}
+		if status.Message == "" && cond.Status != corev1.ConditionTrue && cond.Message != "" {
+			status.Reason = cond.Reason
+			status.Message = cond.Message
 		}
 	}
 

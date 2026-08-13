@@ -123,6 +123,22 @@ UPDATE domains
 SET state = 'routed'
 WHERE id = @id AND state = 'verified';
 
+-- A verified domain becomes routed only after the app reconciler has observed
+-- or produced the matching workload convergence key. This app-scoped form
+-- closes the asynchronous handoff from the DNS checker.
+-- name: MarkVerifiedDomainsRoutedForApp :execrows
+UPDATE domains
+SET state = 'routed'
+WHERE owner_id = @owner_id AND app_id = @app_id
+  AND NOT managed AND state = 'verified';
+
+-- name: HasVerifiedDomainsForApp :one
+SELECT EXISTS (
+    SELECT 1 FROM domains
+    WHERE owner_id = @owner_id AND app_id = @app_id
+      AND NOT managed AND state = 'verified'
+);
+
 -- Brings a domain's next check forward. What the "Check now" button does.
 --
 -- It resets the attempt count as well, because somebody pressing it is telling

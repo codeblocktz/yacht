@@ -48,6 +48,7 @@ var poolRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]*[a-z0-9])?$`)
 
 // Joiner stores the join settings and builds the command.
 type Joiner struct {
+	pool   *pgxpool.Pool
 	q      *dbgen.Queries
 	keeper *secret.Keeper
 	log    *slog.Logger
@@ -59,7 +60,7 @@ func New(pool *pgxpool.Pool, keeper *secret.Keeper, log *slog.Logger) *Joiner {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Joiner{q: dbgen.New(pool), keeper: keeper, log: log}
+	return &Joiner{pool: pool, q: dbgen.New(pool), keeper: keeper, log: log}
 }
 
 // Settings is what the join settings look like from outside this package.
@@ -154,7 +155,8 @@ func (j *Joiner) Command(ctx context.Context, pool string) (string, error) {
 	token, err := j.keeper.Open(row.TokenSealed)
 	if err != nil {
 		// Named without the bytes. Which secret cannot be opened is what fixes
-		// it, and the reason is almost always that the key changed.
+		// it, and the wrapped error says whether the key that sealed it is one
+		// this install no longer holds or the stored value was altered.
 		return "", fmt.Errorf("cluster: opening the join token: %w", err)
 	}
 

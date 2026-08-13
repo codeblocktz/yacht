@@ -707,7 +707,8 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 	t.Cleanup(purge)
 
 	accounts := account.NewService(pool, log)
-	apps := app.NewService(pool, orchestrator.NewNoop(), log, app.Options{})
+	apps := app.NewService(pool, orchestrator.NewNoop(), log,
+		app.Options{Manifests: testManifests{}})
 	mailer := &fakeMailer{}
 
 	h := testServer(t, Options{
@@ -742,6 +743,21 @@ func (h *liveHarness) installedApp(t *testing.T, name string) {
 		Name: name, Image: "nginx:alpine", Replicas: 1, Port: 8080,
 	}); err != nil {
 		t.Fatalf("create the app the install already had: %v", err)
+	}
+	// Create stops at a durable queued operation for a worker to drain, and no
+	// worker runs in these tests. An app still holding a live operation is not
+	// the settled install this helper is named for: every lifecycle gate reads
+	// it as a deploy in flight, so deleting is refused for a reason that has
+	// nothing to do with the permission the test is measuring.
+	if _, err := h.pool.Exec(ctx, `
+		UPDATE deployment_operations o
+		SET status = 'succeeded', finished_at = now(),
+		    claim_token = NULL, lease_expires_at = NULL
+		FROM apps a
+		WHERE o.app_id = a.id AND a.owner_id = $1 AND a.name = $2
+		  AND o.status IN ('queued', 'claimed', 'building', 'applying', 'verifying')`,
+		h.teamID, name); err != nil {
+		t.Fatalf("settle the operation a worker would have drained: %v", err)
 	}
 }
 

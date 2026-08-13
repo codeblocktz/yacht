@@ -186,6 +186,77 @@ func (q *Queries) GetBuildForDeployment(ctx context.Context, arg GetBuildForDepl
 	return i, err
 }
 
+const getLatestSuccessfulBuildForApp = `-- name: GetLatestSuccessfulBuildForApp :one
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+WHERE owner_id = $1 AND app_id = $2
+  AND status = 'succeeded' AND commit_sha <> ''
+ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
+LIMIT 1
+`
+
+type GetLatestSuccessfulBuildForAppParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+func (q *Queries) GetLatestSuccessfulBuildForApp(ctx context.Context, arg GetLatestSuccessfulBuildForAppParams) (Build, error) {
+	row := q.db.QueryRow(ctx, getLatestSuccessfulBuildForApp, arg.OwnerID, arg.AppID)
+	var i Build
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.DeploymentID,
+		&i.RepoUrl,
+		&i.RepoRef,
+		&i.CommitSha,
+		&i.Image,
+		&i.Status,
+		&i.Message,
+		&i.Log,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.JobName,
+	)
+	return i, err
+}
+
+const getSuccessfulBuildForImage = `-- name: GetSuccessfulBuildForImage :one
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+WHERE owner_id = $1 AND app_id = $2
+  AND status = 'succeeded' AND commit_sha <> '' AND image = $3
+ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
+LIMIT 1
+`
+
+type GetSuccessfulBuildForImageParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+	Image   string
+}
+
+func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error) {
+	row := q.db.QueryRow(ctx, getSuccessfulBuildForImage, arg.OwnerID, arg.AppID, arg.Image)
+	var i Build
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.DeploymentID,
+		&i.RepoUrl,
+		&i.RepoRef,
+		&i.CommitSha,
+		&i.Image,
+		&i.Status,
+		&i.Message,
+		&i.Log,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.JobName,
+	)
+	return i, err
+}
+
 const listRunningBuilds = `-- name: ListRunningBuilds :many
 SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds WHERE status = 'running' ORDER BY started_at
 `

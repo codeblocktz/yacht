@@ -40,6 +40,12 @@ func testServer(t *testing.T, opts Options) http.Handler {
 	return s.Handler()
 }
 
+type testManifests struct{}
+
+func (testManifests) ResolveDigest(context.Context, string) (string, error) {
+	return "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
+}
+
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
