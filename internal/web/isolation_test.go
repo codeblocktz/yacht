@@ -212,21 +212,55 @@ func TestEveryPageIsReachableByClicking(t *testing.T) {
 // they had worked. The person saw the page they expected, the workload was
 // unchanged, and the only record was a log line nobody was reading — which is
 // how a broken deploy strategy went unnoticed through six passing tests.
+// What is asserted is that the reason reaches the screen, not that the status
+// code takes a particular shape. Scale and delete re-render carrying the error;
+// redeploy deliberately flashes and redirects instead, because it is pressed
+// from the canvas sheet where re-rendering would read as the click having
+// navigated rather than failed. Both are honest. A silent 303 is not, and that
+// is the only thing being ruled out.
 func TestFailedActionsDoNotReportSuccess(t *testing.T) {
-	srv := testServer(t, Options{Apps: &failingApps{}})
-
-	for _, path := range []string{
-		"/apps/web/scale", "/apps/web/redeploy", "/apps/web/delete",
+	for _, tc := range []struct{ name, path, form string }{
+		{"scale", "/apps/web/scale", "replicas=2"},
+		{"redeploy", "/apps/web/redeploy", ""},
+		// Deleting checks the typed-back name before it calls the engine, so a
+		// body without it is refused for that reason and never reaches the
+		// failure this test is about.
+		{"delete", "/apps/web/delete", "confirm=web"},
 	} {
-		req := httptest.NewRequest(http.MethodPost, path,
-			strings.NewReader("replicas=2"))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		rec := httptest.NewRecorder()
-		srv.ServeHTTP(rec, req)
+		t.Run(tc.name, func(t *testing.T) {
+			srv := testServer(t, Options{Apps: &failingApps{}})
 
-		if rec.Code == http.StatusSeeOther {
-			t.Errorf("POST %s failed and answered 303 — the caller is told it worked", path)
-		}
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.form))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			// Without an origin, csrfProtect answers 403 and no handler runs at
+			// all. This test spent its life confirming that a 403 is not a 303,
+			// for three paths it never reached.
+			req.Header.Set("Origin", "http://example.com")
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+
+			if rec.Code < 400 && rec.Code != http.StatusSeeOther {
+				t.Fatalf("POST %s failed and answered %d", tc.path, rec.Code)
+			}
+
+			body := rec.Body.String()
+			if rec.Code == http.StatusSeeOther {
+				// Follow it carrying the cookies it set. A flash is only a
+				// failure somebody sees if the next page renders it, and the
+				// redirect on its own says nothing.
+				next := httptest.NewRequest(http.MethodGet, "/apps/web", nil)
+				for _, c := range rec.Result().Cookies() {
+					next.AddCookie(c)
+				}
+				page := httptest.NewRecorder()
+				srv.ServeHTTP(page, next)
+				body = page.Body.String()
+			}
+			if !strings.Contains(body, "nope") {
+				t.Errorf("POST %s failed with %d and the reason never reached the screen",
+					tc.path, rec.Code)
+			}
+		})
 	}
 }
 
