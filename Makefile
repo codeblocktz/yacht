@@ -1,5 +1,6 @@
 .DEFAULT_GOAL := help
 GO ?= go
+TESTFLAGS ?=
 BIN := bin/yacht
 
 # The Tailwind standalone CLI is a single binary with no Node dependency.
@@ -78,8 +79,11 @@ build: assets ## Build the yacht binary
 	CGO_ENABLED=0 $(GO) build -o $(BIN) ./cmd/yacht
 
 .PHONY: test
+# Every package shares one test database, and operation admission/reclaim queues
+# are install-global. Package test binaries must not mutate those queues at the
+# same time; -p 1 comes after TESTFLAGS so callers cannot override this guard.
 test: ## Run tests
-	$(GO) test ./... -race -count=1
+	$(GO) test $(TESTFLAGS) -p 1 ./... -race -count=1
 
 .PHONY: vet
 vet: ## Run go vet
