@@ -506,6 +506,9 @@ templ appDeployments(d AppDetailData) {
 }
 
 templ AppDeploymentsBody(d AppDetailData) {
+	if deploymentsInFlight(d) {
+		@deployInFlight(d)
+	}
 	if active, ok := activeDeploymentOf(d.Deployments); ok {
 		@activeDeployment(d, active)
 	} else if d.App.ActiveReleaseID != nil {
@@ -560,6 +563,32 @@ templ AppDeploymentsBody(d AppDetailData) {
 
 // activeDeployment gets the tinted treatment because it is the one answering
 // "what is live right now" — the question the page exists for.
+// deployInFlight is the way out of a deploy that is still going.
+//
+// It lives in the deployments panel because that is the thing already polling
+// while something is in flight, and the panel is replaced whole — so this
+// appears when a deploy starts and goes when it stops without either side
+// having to know about the other.
+//
+// It says what stopping costs and what not stopping blocks. The engine refuses
+// to delete an app while a deploy is live, and until this existed there was no
+// way to reach cancellation at all: a worker that died before claiming left the
+// operation queued, with no lease to expire and nothing to rescue it, and the
+// app could then be neither deployed nor deleted by anybody.
+templ deployInFlight(d AppDetailData) {
+	<div class="panel mb-4 flex flex-wrap items-center justify-between gap-3 p-4">
+		<div class="min-w-0">
+			<p class="font-medium text-foreground">A deploy is in flight</p>
+			<p class="mt-1 text-[12.5px] text-muted-foreground">
+				Stopping it leaves the workload running whatever it is running now. This app cannot be deleted until it stops.
+			</p>
+		</div>
+		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/deployments/cancel") }>
+			<button class="btn" type="submit">Stop deploy</button>
+		</form>
+	</div>
+}
+
 templ activeDeployment(d AppDetailData, dep app.Deployment) {
 	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
 		<div class="flex flex-wrap items-center justify-between gap-3">

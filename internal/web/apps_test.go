@@ -33,6 +33,12 @@ type fakeApps struct {
 	branchErr   error
 	activity    app.DeployActivity
 	err         error
+
+	// cancelled records which apps had a deploy stopped, so a test can tell a
+	// cancellation that reached the engine from a handler that only redirected.
+	// cancelErr is what CancelLiveDeployment returns instead.
+	cancelled []string
+	cancelErr error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -107,6 +113,14 @@ func (f *fakeApps) Branches(_ context.Context, repoURL, query string) ([]string,
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }
+
+func (f *fakeApps) CancelLiveDeployment(_ context.Context, _, name string) error {
+	if f.cancelErr != nil {
+		return f.cancelErr
+	}
+	f.cancelled = append(f.cancelled, name)
+	return nil
+}
 
 // DeployActivity backs the overview chart. Empty by default, so the chart is
 // absent from pages that are not asserting on it; a test that wants it sets
@@ -526,13 +540,49 @@ func TestScaleAndDelete(t *testing.T) {
 	}
 }
 
+// Stopping a deploy has to reach the engine.
+//
+// A handler that redirected without calling it looks identical from the
+// outside — the page comes back and the flash says something happened — which
+// is how the absence of any route at all went unnoticed for as long as it did.
+func TestCancelDeployReachesTheEngine(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+
+	if code := post(t, h, "/apps/web/deployments/cancel", nil).Code; code != http.StatusSeeOther {
+		t.Fatalf("POST /apps/web/deployments/cancel = %d, want 303", code)
+	}
+	if len(apps.cancelled) != 1 || apps.cancelled[0] != "web" {
+		t.Fatalf("cancelled = %v, want [web]", apps.cancelled)
+	}
+}
+
+// Nothing in flight is a statement, not a failure. The engine reports
+// ErrNotFound, and a page that showed an error for a deploy which had simply
+// finished already would be reporting the race rather than the outcome.
+func TestCancelDeployWithNothingInFlightIsNotAnError(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	apps.cancelErr = app.ErrNotFound
+	h := testServer(t, Options{Apps: apps})
+
+	if code := post(t, h, "/apps/web/deployments/cancel", nil).Code; code != http.StatusSeeOther {
+		t.Fatalf("POST cancel with nothing in flight = %d, want 303", code)
+	}
+	if len(apps.cancelled) != 0 {
+		t.Fatalf("cancelled = %v, want nothing recorded", apps.cancelled)
+	}
+}
+
 // Mutations must be POST. A GET that changes state can be triggered by a
 // prefetch or a crawler.
 func TestMutationsRejectGET(t *testing.T) {
 	apps := newFakeApps(sampleApp("owner-1", "web"))
 	h := testServer(t, Options{Apps: apps})
 
-	for _, path := range []string{"/apps/web/scale", "/apps/web/delete", "/apps/web/redeploy"} {
+	for _, path := range []string{
+		"/apps/web/scale", "/apps/web/delete", "/apps/web/redeploy",
+		"/apps/web/deployments/cancel",
+	} {
 		if code := get(t, h, path).Code; code != http.StatusMethodNotAllowed {
 			t.Errorf("GET %s = %d, want 405", path, code)
 		}
