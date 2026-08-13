@@ -633,6 +633,75 @@ func TestCancellationFencesAWorkerBeforeItCanActivate(t *testing.T) {
 	}
 }
 
+// The wedge this closes. A worker that dies before claiming leaves the
+// operation queued: no lease to expire, and recovery only rescues one already
+// checkpointed into applying or verifying. Delete refuses while an operation is
+// live, so until cancellation was reachable the app could be neither deployed
+// nor deleted by anybody.
+func TestCancelLiveDeploymentUnblocksDeletingAStuckApp(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "operation-cancel-unblocks")
+
+	a, err := s.Create(ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.Delete(ctx, ownerID, a.Name); !errors.Is(err, ErrOperationInFlight) {
+		t.Fatalf("delete while queued = %v, want ErrOperationInFlight", err)
+	}
+	if err := s.CancelLiveDeployment(ctx, ownerID, a.Name); err != nil {
+		t.Fatalf("CancelLiveDeployment: %v", err)
+	}
+	if err := s.Delete(ctx, ownerID, a.Name); err != nil {
+		t.Fatalf("delete after cancelling: %v", err)
+	}
+	if _, err := s.Get(ctx, ownerID, a.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
+	}
+}
+
+// Cancelling nothing is not a failure. It is what the second click on a page
+// that has since finished deploying does, and the caller renders it as a
+// statement rather than an error.
+func TestCancelLiveDeploymentReportsNotFoundWithNothingInFlight(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "operation-cancel-idle")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.CancelLiveDeployment(ctx, ownerID, a.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cancel with nothing in flight = %v, want ErrNotFound", err)
+	}
+}
+
+// Owner scoping is not incidental here: the app is found by name, and names
+// are only unique within an owner.
+func TestCancelLiveDeploymentWillNotReachAnotherOwnersApp(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerA := owner(t, s, pool, "operation-cancel-owner-a")
+	ownerB := owner(t, s, pool, "operation-cancel-owner-b")
+	a, err := s.Create(ctx, ownerA, CreateInput{
+		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create owner A: %v", err)
+	}
+	if err := s.CancelLiveDeployment(ctx, ownerB, a.Name); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("owner B cancelling owner A's deploy = %v, want ErrNotFound", err)
+	}
+	if _, err := s.liveOperation(ctx, a); err != nil {
+		t.Fatalf("owner A's operation did not survive owner B's attempt: %v", err)
+	}
+}
+
 func TestCancellingABuildRemovesItsRecordedJob(t *testing.T) {
 	ctx := context.Background()
 	builder := &cancellingOperationBuilder{cancelled: make(chan string, 1)}

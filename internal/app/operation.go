@@ -260,6 +260,30 @@ func (s *Service) reclaimOperations(ctx context.Context) error {
 	return nil
 }
 
+// CancelLiveDeployment cancels whatever operation is currently holding an app.
+//
+// Named rather than identified, because the caller wanting to stop a deploy has
+// the app in hand and not an operation id — and handing the web layer a way to
+// read operation ids only so it can pass one straight back is a wider surface
+// than the thing it wants to do.
+//
+// ErrNotFound means nothing was in flight, which is also what the second click
+// on a page that has gone stale produces.
+func (s *Service) CancelLiveDeployment(ctx context.Context, ownerID, name string) error {
+	row, err := s.q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: name})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("app: read cancellation target: %w", err)
+	}
+	op, err := s.liveOperation(ctx, toApp(row))
+	if err != nil {
+		return err
+	}
+	return s.CancelOperation(ctx, ownerID, op.ID)
+}
+
 // CancelOperation makes cancellation terminal before any best-effort cluster
 // cleanup. Clearing the claim token in the same transaction is what prevents a
 // worker already past its last checkpoint from publishing success afterward.

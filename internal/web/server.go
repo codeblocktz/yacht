@@ -48,6 +48,10 @@ type Apps interface {
 	// git cannot read a tree without fetching objects, so this asks the host.
 	Directories(ctx context.Context, repoURL, path string) ([]string, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
+
+	// CancelLiveDeployment stops whatever deploy an app is holding, and reports
+	// app.ErrNotFound when it is holding none.
+	CancelLiveDeployment(ctx context.Context, ownerID, name string) error
 	Delete(ctx context.Context, ownerID, name string) error
 	Deployments(ctx context.Context, ownerID string, appID uuid.UUID, limit int32) ([]app.Deployment, error)
 
@@ -598,6 +602,7 @@ func (s *Server) Handler() http.Handler {
 			}
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
+			r.Post("/apps/{name}/deployments/cancel", s.appDeployCancel)
 
 			r.Get("/deployments", s.activity)
 
@@ -1000,6 +1005,40 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.flashOK(w, r, "Redeploying "+name+".")
+	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+}
+
+// appDeployCancel stops the deploy an app is currently holding.
+//
+// Without this there was no way to reach cancellation from the product at all,
+// and the engine refuses to delete an app while an operation is live. A worker
+// that died before claiming leaves the operation queued — no lease to expire,
+// and recovery only rescues one already checkpointed into applying or
+// verifying — so the app could not be deployed, cancelled or deleted by anyone.
+//
+// Gated as a member rather than an admin: stopping a deploy is the same
+// authority as starting one, and the person who pressed Redeploy by mistake is
+// exactly who should be able to take it back.
+func (s *Server) appDeployCancel(w http.ResponseWriter, r *http.Request) {
+	owner := identity.MustFromContext(r.Context())
+	name := chi.URLParam(r, "name")
+
+	if s.apps != nil {
+		err := s.apps.CancelLiveDeployment(r.Context(), owner.ID, name)
+		switch {
+		case errors.Is(err, app.ErrNotFound):
+			// Nothing in flight, which is what a second click on a page that
+			// has since finished deploying looks like. Saying so beats an error
+			// about a thing that is no longer true.
+			s.flashOK(w, r, "Nothing was deploying.")
+		case err != nil:
+			s.log.Error("cancel deploy",
+				slog.String("app", name), slog.String("error", err.Error()))
+			s.flashErr(w, r, err.Error())
+		default:
+			s.flashOK(w, r, "Stopped the deploy of "+name+".")
+		}
+	}
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
 

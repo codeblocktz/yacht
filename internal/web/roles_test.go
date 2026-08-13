@@ -268,6 +268,10 @@ func TestMemberCanDeployButNotDelete(t *testing.T) {
 	for _, path := range []string{
 		"/apps/" + rt.appName + "/redeploy",
 		"/apps/" + rt.appName + "/scale",
+		// Stopping a deploy is the same authority as starting one. The person
+		// who pressed Redeploy by mistake is exactly who should be able to
+		// take it back, and making that an admin's job means waiting for one.
+		"/apps/" + rt.appName + "/deployments/cancel",
 	} {
 		if code := rt.postAs(t, path, rt.member).Code; code != http.StatusSeeOther {
 			t.Errorf("POST %s as a member = %d, want 303 — a member who cannot "+
