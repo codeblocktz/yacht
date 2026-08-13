@@ -35,7 +35,22 @@ of the dashboard is workable without one.
 > looks like a pass.** `make check` therefore refuses to start without a test
 > database unless you explicitly request an intentionally partial run.
 
-Set the DSN to a database you do not mind being written to:
+No Postgres to hand? `make check-db` supplies a throwaway one and tears it down
+afterwards:
+
+```bash
+make check-db       # vet + tests, on a database that exists for the run
+make verify-db      # the full gate, same idea
+```
+
+That uses [popgres](https://github.com/algolab-cloud/popgres), which downloads
+real Postgres binaries once per version and runs them as an ordinary local
+process on a free port — no Docker, and nothing installed system-wide. It is
+reached through `npx`, so it needs Node but no install step; set `POPGRES` to a
+native binary if you would rather not use npm. An instance you started yourself
+with `popgres up` is reused and left running.
+
+Otherwise point the DSN at a database you do not mind being written to:
 
 ```bash
 export YACHT_TEST_DATABASE_URL="postgres://yacht:yacht@localhost:5432/yacht_test?sslmode=disable"
@@ -52,7 +67,9 @@ command and should not be used for release verification.
 |---|---|
 | `make assets` | templ codegen + Tailwind — run after touching a `.templ` or the CSS |
 | `make check` | `go vet` + database-backed race tests; requires the test DSN |
+| `make check-db` | `make check` on a throwaway Postgres, torn down afterwards |
 | `make verify` | Every CI/release gate, including generated output and gallery rendering |
+| `make verify-db` | `make verify` on a throwaway Postgres |
 | `make dev` | Rebuild and run |
 | `make gallery` | Render every visual state to HTML |
 | `make sqlc` | Regenerate database code after editing a `.sql` query |

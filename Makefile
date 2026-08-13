@@ -25,6 +25,14 @@ TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/$(
 CSS_IN  := assets/css/input.css
 CSS_OUT := internal/web/assets/css/app.css
 
+# Disposable Postgres for the tests that need one. Real Postgres binaries,
+# downloaded once per version and cached globally, run as an ordinary local
+# process on a free port — no Docker and nothing installed system-wide.
+#
+# Reached through npx because that needs no install step, but it is only a
+# launcher: point POPGRES at a native binary and nothing here changes.
+POPGRES ?= npx --yes @popgres/cli
+
 .PHONY: help
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -99,6 +107,22 @@ require-test-database:
 
 .PHONY: check
 check: require-test-database vet test ## Vet + database-backed race tests
+
+# popgres exports DATABASE_URL; Yacht reads YACHT_TEST_DATABASE_URL, and the
+# two are kept separate deliberately — the test DSN names a database being
+# written to and dropped, which is not a name to hand to anything that might be
+# pointed at a real install.
+#
+# The instance is torn down when make exits. An instance already running for
+# this directory is reused and left alone, so a `popgres up` you started by
+# hand survives.
+.PHONY: check-db
+check-db: ## make check against a throwaway Postgres
+	$(POPGRES) run -- sh -c 'YACHT_TEST_DATABASE_URL="$$DATABASE_URL" $(MAKE) check'
+
+.PHONY: verify-db
+verify-db: ## make verify against a throwaway Postgres
+	$(POPGRES) run -- sh -c 'YACHT_TEST_DATABASE_URL="$$DATABASE_URL" $(MAKE) verify'
 
 .PHONY: shell-check
 shell-check: ## Lint the root-executed installer scripts
