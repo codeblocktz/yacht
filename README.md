@@ -151,7 +151,7 @@ sudo -u postgres dropdb yacht && sudo -u postgres dropuser yacht
 
 For development, or to run against a cluster you already have.
 
-Requirements: Go 1.26+, Postgres, and a kubeconfig pointing at a cluster.
+Requirements: Go 1.26.6+, Postgres, and a kubeconfig pointing at a cluster.
 
 ```bash
 git clone https://github.com/codeblocktz/yacht.git
