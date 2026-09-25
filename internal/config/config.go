@@ -16,6 +16,10 @@ import (
 var appDomainRE = regexp.MustCompile(
 	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$`)
 
+// issuerNameRE is a Kubernetes object name: a DNS subdomain.
+var issuerNameRE = regexp.MustCompile(
+	`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
 // DNS limits, and the app-name limit they have to accommodate.
 //
 // maxAppName mirrors the 40-character cap app.CreateInput.Validate enforces.
@@ -106,6 +110,16 @@ type Config struct {
 	// one it should be noisy about.
 	WildcardTLS bool
 
+	// CertIssuer names the cert-manager ClusterIssuer that gives each custom
+	// domain a certificate of its own. Empty means there is none, and a custom
+	// domain is served over plain HTTP — the wildcard above can never cover a
+	// name outside the platform domain.
+	//
+	// Yacht only names it. Whether the issuer exists and can reach Let's
+	// Encrypt is the installer's to check, and what became of each request is
+	// read back and shown on the domain.
+	CertIssuer string
+
 	// ReservedDomains are additional suffixes no tenant may claim. AppDomain
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
@@ -175,6 +189,7 @@ func Load() (Config, error) {
 		SecretKeyPrevious:   envList("YACHT_SECRET_KEY_PREVIOUS"),
 		AppDomain:           env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:         envBool("YACHT_WILDCARD_TLS", false),
+		CertIssuer:          strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
 		DNSResolver:         env("YACHT_DNS_RESOLVER", ""),
 		ReservedDomains:     envList("YACHT_RESERVED_DOMAINS"),
 		BaseURL:             strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
@@ -238,6 +253,13 @@ func (c Config) validate() error {
 		if fault := domainFault(d); fault != "" {
 			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS entry %q %s", d, fault))
 		}
+	}
+	// Written into an annotation cert-manager resolves by name. A value that
+	// could never be an object name fails here rather than as an Ingress event
+	// nobody reads.
+	if c.CertIssuer != "" && (len(c.CertIssuer) > maxHostname || !issuerNameRE.MatchString(c.CertIssuer)) {
+		errs = append(errs, fmt.Errorf(
+			"YACHT_CERT_ISSUER %q is not a valid ClusterIssuer name", c.CertIssuer))
 	}
 	// TLS with nothing to apply it to leaves the operator believing apps are
 	// served over TLS while nothing says otherwise.

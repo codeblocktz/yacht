@@ -61,12 +61,19 @@ nothing you build here is locked in.
 | Custom domains people bring, proven continuously in the background | ✅ |
 | A domain that stops resolving is noticed and withdrawn | ✅ |
 | TLS from one shared wildcard certificate, for platform hostnames | ✅ |
+| A certificate of its own for every brought domain, from Let's Encrypt | ✅ |
 
-A brought domain is **not** covered by that certificate — a wildcard for the
-platform domain cannot match a name outside it, and there is no ACME here. Such
-a domain is served over plain HTTP unless you put a certificate for it in front
-of the cluster yourself, and the dashboard says so on the domain rather than
-leaving the browser to.
+A brought domain cannot be covered by the platform wildcard, so each one is
+issued its own certificate through cert-manager, which the installer sets up.
+Issuance is HTTP-01: public port 80 has to reach the cluster, and must not be
+redirected to HTTPS cluster-wide. The domain's page shows the certificate
+arriving, when it expires, and — if it does not arrive — what to check. An
+install without cert-manager serves brought domains over plain HTTP, and says
+so on the domain rather than leaving the browser to.
+
+The installer defaults to Let's Encrypt's **staging** environment, whose
+certificates browsers do not trust. Re-run it with
+`--acme-environment production --acme-email you@example.com` once you are ready.
 
 **Running the cluster**
 
@@ -193,6 +200,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
 | `YACHT_DEBUG` | `false` | Verbose logging |

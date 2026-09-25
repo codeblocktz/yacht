@@ -332,8 +332,23 @@ func galleryPages() []galleryPage {
 						"points at ghs.googlehosted.com")))),
 				section("Proven, not yet routed", "between the check and the Ingress",
 					CustomDomainList(domainGallery(domainAt(now, domain.StateVerified, "")))),
-				section("Live", "serving, and honest about the certificate",
+				section("Live, no issuer", "serving, and honest that no certificate covers it",
 					CustomDomainList(domainGallery(domainAt(now, domain.StateRouted, "")))),
+				section("Live, certificate requested", "an issuer is asked, and the page says so",
+					CustomDomainList(issuingGallery(domainAt(now, domain.StateRouted, ""),
+						orchestrator.Certificate{}))),
+				section("Live, certificate issued", "served over HTTPS, renewed on its own",
+					CustomDomainList(issuingGallery(domainAt(now, domain.StateRouted, ""),
+						orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(89 * 24 * time.Hour)}))),
+				section("Live, untrusted certificate", "issued by Let's Encrypt staging, the installer's default",
+					CustomDomainList(issuingGallery(domainAt(now, domain.StateRouted, ""),
+						orchestrator.Certificate{Issued: true, NotAfter: now.Add(89 * 24 * time.Hour)}))),
+				section("Live, certificate not arriving", "long enough that the page asks why",
+					CustomDomainList(issuingGallery(func() domain.Custom {
+						c := domainAt(now, domain.StateRouted, "")
+						c.VerifiedAt = now.Add(-40 * time.Minute)
+						return c
+					}(), orchestrator.Certificate{}))),
 				section("Needs attention", "was live and stopped resolving",
 					CustomDomainList(domainGallery(domainAt(now, domain.StateDrifted,
 						"points at ghs.googlehosted.com")))),
@@ -698,6 +713,16 @@ func domainGallery(c domain.Custom) NetworkingData {
 			Custom:    []domain.Custom{c},
 		},
 	}
+}
+
+// issuingGallery is domainGallery on an install that issues custom domains
+// their own certificates, holding cert for the domain.
+func issuingGallery(c domain.Custom, cert orchestrator.Certificate) NetworkingData {
+	d := domainGallery(c)
+	d.Net.Issuing = true
+	d.Net.Certs = map[string]orchestrator.Certificate{c.Host: cert}
+	d.Settled = domainsSettled(d.Net)
+	return d
 }
 
 // bodyPad puts a component inside a panel body, for components that are

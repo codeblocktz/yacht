@@ -20,6 +20,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"iter"
@@ -263,6 +265,23 @@ type AppSpec struct {
 	// Empty leaves the TLS block off entirely.
 	TLSHosts []string
 
+	// IssuedHosts are hostnames that each get a certificate of their own,
+	// issued by CertIssuer — the answer for a name the platform wildcard can
+	// never cover, which is every custom domain.
+	//
+	// A subset of Hosts and disjoint from TLSHosts. One certificate per name
+	// rather than one listing them all, because a certificate is issued whole
+	// or not at all: a single domain whose DNS has drifted would otherwise hold
+	// every other domain on the app hostage.
+	//
+	// Each lands in the Secret CertSecretName names, in the app's own
+	// namespace, which is where an Ingress can reference it.
+	IssuedHosts []string
+
+	// CertIssuer is the cluster-wide issuer IssuedHosts are requested from.
+	// Empty means the install has none, and IssuedHosts must be empty too.
+	CertIssuer string
+
 	// CNAMETarget, when set, becomes the ExternalDNS target annotation, so that
 	// controller publishes a CNAME rather than the nodes' own addresses as A
 	// records. Empty leaves the annotation off: an install running no
@@ -315,6 +334,9 @@ func (s AppSpec) Validate() error {
 			return fmt.Errorf("app spec: %q is not a valid hostname", h)
 		}
 	}
+	if err := s.validateIssued(); err != nil {
+		return err
+	}
 	if err := s.validateVolumes(); err != nil {
 		return err
 	}
@@ -322,6 +344,76 @@ func (s AppSpec) Validate() error {
 		return err
 	}
 	return nil
+}
+
+// validateIssued keeps IssuedHosts to names the Ingress actually routes and the
+// wildcard does not already serve. A certificate for a name that is not routed
+// is a request the issuer will fail, repeatedly, against a rate limit.
+func (s AppSpec) validateIssued() error {
+	if len(s.IssuedHosts) == 0 {
+		return nil
+	}
+	if s.CertIssuer == "" {
+		return errors.New("app spec: issued hosts need a certificate issuer")
+	}
+	routed := make(map[string]bool, len(s.Hosts))
+	for _, h := range s.Hosts {
+		routed[h] = true
+	}
+	for _, h := range s.TLSHosts {
+		routed[h] = false
+	}
+	for _, h := range s.IssuedHosts {
+		if !routed[h] {
+			return fmt.Errorf("app spec: %q is issued a certificate but is not a routed host outside the wildcard", h)
+		}
+	}
+	return nil
+}
+
+// CertSecretName is the Secret an issued certificate for host is kept in.
+//
+// The hostname itself where it fits, so `kubectl get certificates` reads as a
+// list of domains. A Secret name may be 253 characters but the Certificate
+// that shares it ends up in label values, which may be 63; past that the name
+// is shortened and a hash of the whole host keeps it unique.
+func CertSecretName(host string) string {
+	const prefix, max = "tls-", 63
+	name := prefix + host
+	if len(name) <= max {
+		return name
+	}
+	sum := sha256.Sum256([]byte(host))
+	suffix := "-" + hex.EncodeToString(sum[:])[:10]
+	head := strings.TrimRight(name[:max-len(suffix)], ".-")
+	return head + suffix
+}
+
+// Certificate is what is known about the certificate issued for one hostname.
+type Certificate struct {
+	// Issued is true once a certificate for the host is in place. False
+	// covers both "still being issued" and "failing to issue": the Secret is
+	// only written on success, and it cannot tell those apart.
+	Issued bool
+
+	// NotAfter is when the issued certificate expires. The issuer renews well
+	// before then; a date that has passed means renewal has been failing.
+	NotAfter time.Time
+
+	// Trusted is true when the certificate chains to an authority browsers
+	// trust. Let's Encrypt's staging environment — the installer's default —
+	// issues certificates that do not, and a visitor gets the same warning as
+	// for no certificate at all.
+	Trusted bool
+}
+
+// CertificateReader reports on certificates issued for IssuedHosts.
+//
+// Optional, and asserted for like NodeManager. An implementation that cannot
+// read them leaves the dashboard saying issuance was requested rather than
+// what became of it.
+type CertificateReader interface {
+	Certificate(ctx context.Context, ref Ref, host string) (Certificate, error)
 }
 
 // Phase is a coarse lifecycle state, deliberately smaller than the set of

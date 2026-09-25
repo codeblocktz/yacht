@@ -2,9 +2,11 @@ package web
 
 import (
 	"strings"
+	"time"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // Turning a domain's state into something a person can act on.
@@ -44,7 +46,7 @@ func domainStatus(c domain.Custom) (label, class string) {
 // Four steps, always all four, because the shape of what is coming is itself
 // information: somebody who has just added a domain can see that a certificate
 // is going to be a question before they get there.
-func domainSteps(c domain.Custom, httpsOnly bool) []Step {
+func domainSteps(c domain.Custom, n app.Networking) []Step {
 	return []Step{
 		{
 			Label: "Domain added",
@@ -53,7 +55,7 @@ func domainSteps(c domain.Custom, httpsOnly bool) []Step {
 		},
 		dnsStep(c),
 		routingStep(c),
-		certificateStep(c, httpsOnly),
+		certificateStep(c, n),
 	}
 }
 
@@ -121,11 +123,13 @@ func routingStep(c domain.Custom) Step {
 
 // certificateStep tells the truth about HTTPS on a brought domain.
 //
-// There is no per-domain certificate here at all: the install's one certificate
-// is a wildcard for the platform domain, and a custom domain can never be under
-// it. That used to be silent — the domain showed a green "routed" and the
-// browser showed a warning — which is the worst division of labour available.
-func certificateStep(c domain.Custom, httpsOnly bool) Step {
+// The install's own certificate is a wildcard for the platform domain, and a
+// custom domain can never be under it. Where the install has an issuer, each
+// custom domain is given a certificate of its own and this reports what became
+// of it; where it has none, it says the name is served over plain HTTP. That
+// used to be silent — the domain showed a green "routed" and the browser showed
+// a warning — which is the worst division of labour available.
+func certificateStep(c domain.Custom, n app.Networking) Step {
 	step := Step{Label: "Certificate"}
 
 	if c.State != domain.StateRouted {
@@ -133,8 +137,11 @@ func certificateStep(c domain.Custom, httpsOnly bool) Step {
 		step.Detail = "Checked once the name resolves."
 		return step
 	}
+	if n.Issuing {
+		return issuedStep(step, c, n)
+	}
 
-	if httpsOnly {
+	if n.HTTPSOnly {
 		// Enforce HTTPS is on, so plain HTTP is not served at all and there is
 		// no certificate that matches this name. Every visitor sees a warning.
 		step.State = StepErr
@@ -147,6 +154,63 @@ func certificateStep(c domain.Custom, httpsOnly bool) Step {
 	step.State = StepWait
 	step.Detail = "Served over plain HTTP. No certificate covers this name — " +
 		"the install's certificate only covers its own platform domain."
+	return step
+}
+
+// issuanceGrace is how long a certificate is simply "being requested" before
+// the page starts asking why not. An HTTP-01 challenge normally completes in
+// well under a minute; ten covers a slow issuer without leaving somebody
+// watching a spinner that will never finish.
+const issuanceGrace = 10 * time.Minute
+
+// issuedStep reports on the certificate requested for a routed custom domain.
+func issuedStep(step Step, c domain.Custom, n app.Networking) Step {
+	cert, known := n.Certs[c.Host]
+	switch {
+	case !known:
+		// The request was made; what became of it could not be read. Not an
+		// error about the domain, and not drawn as one.
+		step.State = StepActive
+		step.Detail = "A certificate has been requested. Its status could not be read just now."
+
+	case cert.Issued && time.Now().After(cert.NotAfter):
+		step.State = StepErr
+		step.Detail = "The certificate for this name expired " + relativeTime(cert.NotAfter) +
+			" and has not been renewed. Renewal needs this name to keep reaching the cluster on port 80."
+
+	case cert.Issued && !cert.Trusted:
+		// Issued, by an authority browsers do not trust — which is what the
+		// installer's default, Let's Encrypt staging, produces. To a visitor
+		// this is a warning page, so it is not drawn as done.
+		step.State = StepWait
+		if n.HTTPSOnly {
+			step.State = StepErr
+		}
+		step.Detail = "A certificate was issued, but by an authority browsers do not trust — " +
+			"usually Let's Encrypt's staging environment, the installer's default. Visitors on HTTPS see a warning. " +
+			"Re-run the installer with --acme-environment production and --acme-email, then delete the Secret " +
+			orchestrator.CertSecretName(c.Host) + " in the app's namespace so this one is issued again rather than at renewal."
+
+	case cert.Issued:
+		step.State = StepDone
+		step.Detail = "Served over HTTPS. Valid until " + cert.NotAfter.Local().Format("2 Jan 2006") +
+			", and renewed automatically before then."
+
+	case time.Since(c.VerifiedAt) > issuanceGrace:
+		step.State = StepErr
+		step.Detail = "Still no certificate " + strings.TrimSuffix(relativeTime(c.VerifiedAt), " ago") + " after this name went live. " +
+			"Issuing one needs this name to reach the cluster on port 80, with nothing redirecting it to HTTPS first. " +
+			"The cluster's own account of it: kubectl describe certificate " + orchestrator.CertSecretName(c.Host) + "."
+
+	default:
+		step.State = StepActive
+		step.Detail = "Requesting a certificate for this name. This usually takes under a minute"
+		if n.HTTPSOnly {
+			step.Detail += " — until it arrives, browsers will warn visitors."
+		} else {
+			step.Detail += "; it is served over plain HTTP meanwhile."
+		}
+	}
 	return step
 }
 
@@ -184,6 +248,12 @@ func domainRecord(host, target string) DNSRecord {
 func domainsSettled(n app.Networking) bool {
 	for _, c := range n.Custom {
 		if !c.State.Settled() {
+			return false
+		}
+		// A live name still waiting on its certificate keeps the list
+		// watched, so the tick appears when it is issued rather than on the
+		// next manual refresh.
+		if n.Issuing && c.State == domain.StateRouted && !n.Certs[c.Host].Issued {
 			return false
 		}
 	}

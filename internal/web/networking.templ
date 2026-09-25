@@ -210,7 +210,7 @@ templ customDomainCard(d NetworkingData, c domain.Custom) {
 			</form>
 		</div>
 		<div class="px-4 py-3">
-			@stepList(domainSteps(c, d.Net.HTTPSOnly))
+			@stepList(domainSteps(c, d.Net))
 			// The record stays on screen while it is still the thing to do.
 			// Hiding it the moment a domain goes live is right; hiding it while
 			// somebody is trying to get the record correct is not.

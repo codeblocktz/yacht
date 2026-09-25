@@ -7,6 +7,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // The name field is the part before the person's own domain.
@@ -70,7 +71,7 @@ func TestAFailedLookupIsNotShownAsTheDomainBeingWrong(t *testing.T) {
 func TestTheCertificateStepIsHarshestWhenHTTPSIsEnforced(t *testing.T) {
 	live := domain.Custom{State: domain.StateRouted}
 
-	enforced := certificateStep(live, true)
+	enforced := certificateStep(live, app.Networking{HTTPSOnly: true})
 	if enforced.State != StepErr {
 		t.Errorf("state = %q, want an error when HTTPS is enforced with no certificate", enforced.State)
 	}
@@ -78,7 +79,7 @@ func TestTheCertificateStepIsHarshestWhenHTTPSIsEnforced(t *testing.T) {
 		t.Errorf("detail = %q, want it to say what a visitor sees", enforced.Detail)
 	}
 
-	plain := certificateStep(live, false)
+	plain := certificateStep(live, app.Networking{})
 	if plain.State == StepErr {
 		t.Error("plain HTTP works, so it should not be drawn as an error")
 	}
@@ -86,7 +87,7 @@ func TestTheCertificateStepIsHarshestWhenHTTPSIsEnforced(t *testing.T) {
 
 // Nothing about a certificate is claimed before the name even resolves.
 func TestTheCertificateStepWaitsUntilTheDomainIsLive(t *testing.T) {
-	step := certificateStep(domain.Custom{State: domain.StateAwaitingDNS}, true)
+	step := certificateStep(domain.Custom{State: domain.StateAwaitingDNS}, app.Networking{HTTPSOnly: true})
 	if step.State != StepWait {
 		t.Errorf("state = %q, want it to wait until there is something to serve", step.State)
 	}
@@ -122,7 +123,7 @@ func TestDomainsSettled(t *testing.T) {
 func TestDomainStepsAlwaysShowTheWholeJourney(t *testing.T) {
 	steps := domainSteps(domain.Custom{
 		State: domain.StatePending, CreatedAt: time.Now(),
-	}, false)
+	}, app.Networking{})
 
 	if len(steps) != 4 {
 		t.Fatalf("steps = %d, want 4", len(steps))
@@ -134,5 +135,66 @@ func TestDomainStepsAlwaysShowTheWholeJourney(t *testing.T) {
 		if s.State == StepDone {
 			t.Errorf("%q is done on a domain nothing has checked yet", s.Label)
 		}
+	}
+}
+
+// With an issuer, the certificate step reports what became of the request
+// rather than admitting there is no certificate.
+func TestTheCertificateStepReportsIssuance(t *testing.T) {
+	now := time.Now()
+	live := domain.Custom{Host: "shop.example.com", State: domain.StateRouted, VerifiedAt: now.Add(-time.Minute)}
+	issuing := func(cert *orchestrator.Certificate, httpsOnly bool) app.Networking {
+		n := app.Networking{Issuing: true, HTTPSOnly: httpsOnly, Certs: map[string]orchestrator.Certificate{}}
+		if cert != nil {
+			n.Certs[live.Host] = *cert
+		}
+		return n
+	}
+
+	stuck := live
+	stuck.VerifiedAt = now.Add(-time.Hour)
+
+	cases := []struct {
+		name   string
+		c      domain.Custom
+		net    app.Networking
+		state  StepState
+		detail string
+	}{
+		{"requested", live, issuing(&orchestrator.Certificate{}, false), StepActive, "served over plain HTTP meanwhile"},
+		{"requested, HTTPS enforced", live, issuing(&orchestrator.Certificate{}, true), StepActive, "browsers will warn"},
+		{"issued", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepDone, "renewed automatically"},
+		{"untrusted", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepErr, "--acme-environment production"},
+		{"untrusted, plain HTTP served", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, false), StepWait, "browsers do not trust"},
+		{"expired", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(-time.Hour)}, true), StepErr, "has not been renewed"},
+		{"unreadable", live, issuing(nil, false), StepActive, "could not be read"},
+		{"stuck", stuck, issuing(&orchestrator.Certificate{}, false), StepErr, "port 80"},
+	}
+
+	for _, tc := range cases {
+		step := certificateStep(tc.c, tc.net)
+		if step.State != tc.state {
+			t.Errorf("%s: state = %q, want %q", tc.name, step.State, tc.state)
+		}
+		if !strings.Contains(step.Detail, tc.detail) {
+			t.Errorf("%s: detail = %q, want it to mention %q", tc.name, step.Detail, tc.detail)
+		}
+		if strings.Contains(step.Detail, "No certificate covers this name") {
+			t.Errorf("%s: says no certificate covers a name one is being issued for", tc.name)
+		}
+	}
+}
+
+// A live domain still waiting on its certificate keeps the list polled, so the
+// tick appears when it lands; once issued, the list is left alone.
+func TestDomainsWaitingOnACertificateAreNotSettled(t *testing.T) {
+	live := domain.Custom{Host: "shop.example.com", State: domain.StateRouted}
+	n := app.Networking{Issuing: true, Custom: []domain.Custom{live}}
+	if domainsSettled(n) {
+		t.Error("a domain still being issued a certificate is settled")
+	}
+	n.Certs = map[string]orchestrator.Certificate{live.Host: {Issued: true}}
+	if !domainsSettled(n) {
+		t.Error("a domain with its certificate is not settled")
 	}
 }

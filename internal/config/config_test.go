@@ -84,6 +84,24 @@ func TestWildcardTLSWithoutAnAppDomainFails(t *testing.T) {
 	}
 }
 
+func TestCertIssuerLoadsAndIsValidated(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_CERT_ISSUER": "yacht-acme"})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.CertIssuer != "yacht-acme" {
+		t.Fatalf("CertIssuer = %q, want yacht-acme", c.CertIssuer)
+	}
+
+	for _, bad := range []string{"Yacht_ACME", "has space", "-leading"} {
+		setEnv(t, map[string]string{"YACHT_CERT_ISSUER": bad})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_CERT_ISSUER") {
+			t.Errorf("%q: err = %v, want it refused by name", bad, err)
+		}
+	}
+}
+
 func TestMalformedAppDomainFails(t *testing.T) {
 	setEnv(t, map[string]string{"YACHT_APP_DOMAIN": "not a domain"})
 	if _, err := Load(); err == nil {
@@ -105,6 +123,7 @@ func TestEveryVariableIsDocumented(t *testing.T) {
 
 	for _, name := range []string{
 		"YACHT_APP_DOMAIN", "YACHT_WILDCARD_TLS", "YACHT_RESERVED_DOMAINS",
+		"YACHT_CERT_ISSUER",
 	} {
 		if !strings.Contains(string(src), name) {
 			t.Fatalf("%s is not read by config.go", name)

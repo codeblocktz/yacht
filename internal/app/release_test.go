@@ -34,7 +34,7 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"Ref": true, "ReleaseID": true, "ConfigVersion": true,
 		"Hosts": true, "Secrets": true, "Volumes": true,
 		"TLSHosts": true, "CNAMETarget": true, "HTTPSOnly": true,
-		"RegistryAuth": true,
+		"RegistryAuth": true, "IssuedHosts": true, "CertIssuer": true,
 	}
 
 	typ := reflect.TypeOf(orchestrator.AppSpec{})
@@ -71,9 +71,11 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 	}
 	overlays := ReleaseOverlays{
 		Ref: ref, ConfigVersion: 7, RegistryAuth: []byte("auth"),
-		Secrets: map[string]string{"SECRET": "current"},
-		Volumes: []orchestrator.VolumeSpec{{Name: "data", MountPath: "/data", SizeBytes: 42}},
-		Hosts:   []string{"web.example.test"}, TLSHosts: []string{"web.example.test"},
+		Secrets:     map[string]string{"SECRET": "current"},
+		Volumes:     []orchestrator.VolumeSpec{{Name: "data", MountPath: "/data", SizeBytes: 42}},
+		Hosts:       []string{"web.example.test", "shop.customer.test"},
+		TLSHosts:    []string{"web.example.test"},
+		IssuedHosts: []string{"shop.customer.test"}, CertIssuer: "yacht-acme",
 		HTTPSOnly: true, CNAMETarget: "edge.example.test",
 	}
 	want := orchestrator.AppSpec{
@@ -86,8 +88,10 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		RunAsUser: 1001, FSGroup: 1002, ScratchPaths: []string{"/tmp/run"},
 		HealthPath: "/ready", Liveness: true,
 		RegistryAuth: []byte("auth"), Secrets: map[string]string{"SECRET": "current"},
-		Volumes: []orchestrator.VolumeSpec{{Name: "data", MountPath: "/data", SizeBytes: 42}},
-		Hosts:   []string{"web.example.test"}, TLSHosts: []string{"web.example.test"},
+		Volumes:     []orchestrator.VolumeSpec{{Name: "data", MountPath: "/data", SizeBytes: 42}},
+		Hosts:       []string{"web.example.test", "shop.customer.test"},
+		TLSHosts:    []string{"web.example.test"},
+		IssuedHosts: []string{"shop.customer.test"}, CertIssuer: "yacht-acme",
 		HTTPSOnly: true, CNAMETarget: "edge.example.test",
 	}
 	if got := release.AppSpec(overlays); !reflect.DeepEqual(got, want) {

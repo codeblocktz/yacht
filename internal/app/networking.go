@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
@@ -30,6 +31,16 @@ type Networking struct {
 	// install has not been told, which is the state the page has to explain
 	// rather than show an input that cannot work.
 	Target string
+
+	// Issuing is true when the install gives custom domains certificates of
+	// their own. False means a custom domain is served over plain HTTP, and
+	// the page has to say so rather than promise a certificate.
+	Issuing bool
+
+	// Certs is what the cluster holds for each routed custom domain, by host.
+	// A host that is missing could not be read, which is not the same as not
+	// issued and must not be drawn as a failure.
+	Certs map[string]orchestrator.Certificate
 }
 
 // Networking returns an app's routing.
@@ -48,7 +59,35 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 	if out.Custom, err = domain.ListCustom(ctx, s.q, ownerID, a.ID); err != nil {
 		return Networking{}, err
 	}
+	out.Issuing = s.opts.CertIssuer != ""
+	out.Certs = s.certificates(ctx, a, out.Custom)
 	return out, nil
+}
+
+// certificates reads the certificate issued for each routed custom domain.
+//
+// Only routed ones: nothing is requested for a name until it is on the
+// Ingress. A read that fails is logged and left out rather than failing the
+// page — the domain list is still worth showing without it.
+func (s *Service) certificates(ctx context.Context, a App, custom []domain.Custom) map[string]orchestrator.Certificate {
+	reader, ok := s.orch.(orchestrator.CertificateReader)
+	if s.opts.CertIssuer == "" || !ok {
+		return nil
+	}
+	out := make(map[string]orchestrator.Certificate)
+	for _, c := range custom {
+		if c.State != domain.StateRouted {
+			continue
+		}
+		cert, err := reader.Certificate(ctx, a.Ref(), c.Host)
+		if err != nil {
+			s.log.Warn("read certificate", slog.String("app", a.Name),
+				slog.String("host", c.Host), slog.String("error", err.Error()))
+			continue
+		}
+		out[c.Host] = cert
+	}
+	return out
 }
 
 // SetNetworking records the routing choices. The app reconciler owns the
