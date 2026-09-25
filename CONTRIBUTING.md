@@ -9,7 +9,7 @@ work is not wasted.
 
 ## Getting set up
 
-You need **Go 1.26+**, **Postgres**, and a **kubeconfig** pointing at a cluster.
+You need **Go 1.26.6+**, **Postgres**, and a **kubeconfig** pointing at a cluster.
 Running the full verification also needs **shellcheck**. `templ` and `sqlc` are
 Go tool dependencies, and `make css` downloads the Tailwind standalone binary,
 so there is no Node or npm.

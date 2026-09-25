@@ -144,13 +144,20 @@ boundary-check: ## Reject commercial-layer declarations in the engine
 build-check: ## Compile every Go package without CGO
 	CGO_ENABLED=0 $(GO) build ./...
 
+# Only reports what the code actually reaches, so a finding here is a fix to
+# make, not noise to triage. The go directive in go.mod is the toolchain CI and
+# releases build with: a standard-library finding means raising it.
+.PHONY: vulncheck
+vulncheck: ## Fail on known vulnerabilities reachable from the code
+	$(GO) tool govulncheck ./...
+
 # Keep these dependency graphs serial even when a caller has MAKEFLAGS=-j.
 # `verify` then executes each expensive gate once, while `assets` remains shared
 # by generated-check and gallery within the same Make invocation.
 .NOTPARALLEL: verify check assets
 
 .PHONY: verify
-verify: require-test-database generated-check shell-check check boundary-check gallery build-check ## Run every CI/release gate
+verify: require-test-database generated-check shell-check check boundary-check gallery build-check vulncheck ## Run every CI/release gate
 
 .PHONY: run
 run: build ## Run locally
