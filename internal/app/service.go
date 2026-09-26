@@ -215,6 +215,11 @@ type Options struct {
 	// controller's default certificate.
 	WildcardTLS bool
 
+	// CertIssuer is the cluster-wide certificate issuer custom domains are
+	// given certificates from. Empty means the install has none, and a custom
+	// domain is served over plain HTTP.
+	CertIssuer string
+
 	// ReservedDomains are hostnames no app may claim, even under the app
 	// domain. An app named "admin" would otherwise take admin.<app domain>
 	// simply by being created first.
@@ -794,6 +799,7 @@ func (s *Service) applyRelease(
 		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
 		Volumes: volumeSpecs(vols), Hosts: hosts, TLSHosts: s.tlsHosts(hosts),
+		IssuedHosts: s.issuedHosts(hosts), CertIssuer: s.opts.CertIssuer,
 		HTTPSOnly:   a.HTTPSOnly && len(hosts) > 0,
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
 	}))
@@ -815,6 +821,27 @@ func (s *Service) tlsHosts(hosts []string) []string {
 		return nil
 	}
 	return domain.WildcardHosts(hosts, s.opts.AppDomain)
+}
+
+// issuedHosts narrows a set of hostnames to those that get a certificate of
+// their own: every one the platform wildcard cannot cover, which is to say every
+// custom domain, and only when the install has an issuer to ask.
+//
+// Decided by coverage rather than by whether wildcard TLS is on. A platform
+// hostname with wildcard TLS off stays on plain HTTP as before — issuing it a
+// certificate of its own would spend the issuer's rate limit on names an
+// operator chose to serve without one.
+func (s *Service) issuedHosts(hosts []string) []string {
+	if s.opts.CertIssuer == "" {
+		return nil
+	}
+	var out []string
+	for _, h := range hosts {
+		if !domain.CoveredByWildcard(h, s.opts.AppDomain) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // reconcileHosts brings the managed hostname in line with current config and

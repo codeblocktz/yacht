@@ -162,6 +162,7 @@ func run() error {
 		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
 		AppDomain:           cfg.AppDomain,
 		WildcardTLS:         cfg.WildcardTLS,
+		CertIssuer:          cfg.CertIssuer,
 		Keeper:              keeper,
 		ReservedDomains:     cfg.ReservedDomains,
 		// Verifying a custom domain is a DNS lookup, and an install that cannot
@@ -179,6 +180,11 @@ func run() error {
 			"ingress controller's default certificate; Yacht cannot verify one is "+
 			"configured",
 			slog.String("app_domain", cfg.AppDomain))
+	}
+	if cfg.CertIssuer != "" {
+		log.Info("custom domains are issued certificates",
+			slog.String("cluster_issuer", cfg.CertIssuer),
+			slog.String("needs", "public port 80 reaching the cluster, not redirected to HTTPS"))
 	}
 	if cfg.AppDomain != "" {
 		log.Info("per-app hostnames enabled",

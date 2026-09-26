@@ -721,6 +721,13 @@ render_env() {
 	fi
 	owner_email=$(env_get YACHT_OWNER_EMAIL || printf '')
 	max_concurrent_builds=$(env_get YACHT_MAX_CONCURRENT_BUILDS || printf '2')
+	# Offered only when this run found the issuer ready, and kept once written:
+	# an operator who has pointed it at an issuer of their own keeps it.
+	if [ "${CERT_MANAGER_AVAILABLE:-no}" = "yes" ]; then
+		cert_issuer=$(env_get YACHT_CERT_ISSUER || printf '%s' "$CERT_MANAGER_ISSUER")
+	else
+		cert_issuer=$(env_get YACHT_CERT_ISSUER || printf '')
+	fi
 
 	cat <<-EOF
 		# Written by the Yacht installer. Re-running preserves every value here
@@ -741,6 +748,10 @@ render_env() {
 		YACHT_SECRET_KEY_PREVIOUS=${secret_key_previous}
 		YACHT_OWNER_EMAIL=${owner_email}
 		YACHT_MAX_CONCURRENT_BUILDS=${max_concurrent_builds}
+
+		# The cert-manager ClusterIssuer custom domains get certificates from.
+		# Empty serves them over plain HTTP.
+		YACHT_CERT_ISSUER=${cert_issuer}
 
 		# Set YACHT_BASE_URL to a public https URL to turn magic-link sign-in on,
 		# and YACHT_APP_DOMAIN to the domain apps get a hostname under.

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1133,5 +1134,25 @@ func TestAnUntrustedCertificateIsReported(t *testing.T) {
 	}
 	if (App{HTTPSOnly: true}).UntrustedCert() {
 		t.Error("an app with no hostname is reported as untrusted")
+	}
+}
+
+// Custom domains are issued certificates; the platform hostname is left to the
+// wildcard, or to plain HTTP where the operator chose that. Nothing is issued
+// on an install with no issuer.
+func TestOnlyCustomDomainsAreIssuedCertificates(t *testing.T) {
+	hosts := []string{"web.apps.example.com", "shop.customer.test", "customer.test"}
+
+	for _, wildcard := range []bool{true, false} {
+		s := &Service{opts: Options{AppDomain: "apps.example.com", WildcardTLS: wildcard, CertIssuer: "yacht-acme"}}
+		got := s.issuedHosts(hosts)
+		if !slices.Equal(got, []string{"shop.customer.test", "customer.test"}) {
+			t.Errorf("wildcard=%v: issued %v, want only the custom domains", wildcard, got)
+		}
+	}
+
+	s := &Service{opts: Options{AppDomain: "apps.example.com", WildcardTLS: true}}
+	if got := s.issuedHosts(hosts); got != nil {
+		t.Errorf("no issuer: issued %v, want nothing", got)
 	}
 }

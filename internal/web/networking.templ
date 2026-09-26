@@ -31,12 +31,12 @@ type NetworkingData struct {
 
 // customDomainURL is where the hostname links to.
 //
-// http unless the app is HTTPS-only, and deliberately not https-by-default: no
-// certificate covers a brought domain, so an https link is one that fails in the
-// browser. Sending somebody to a scheme that works is better than sending them
-// to the one we wish worked.
+// https once a trusted certificate covers the name, or when the app is served
+// over nothing else; http otherwise. Deliberately not https-by-default: a link
+// to a scheme that fails in the browser sends somebody to the one we wish
+// worked rather than the one that does.
 func customDomainURL(d NetworkingData, c domain.Custom) string {
-	if d.Net.HTTPSOnly {
+	if phase, _ := certPhaseOf(c, d.Net); d.Net.HTTPSOnly || phase == certTrusted {
 		return "https://" + c.Host
 	}
 	return "http://" + c.Host
@@ -186,13 +186,20 @@ templ customDomainCard(d NetworkingData, c domain.Custom) {
 	<div class="rounded-md border border-border">
 		<div class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
 			@icon("globe")
-			<span class="min-w-0 flex-1">
+			{{ transport, transportClass, transportIcon, live := domainTransport(c, d.Net) }}
+			<span class="flex min-w-0 flex-1 items-center gap-2.5">
 				<a
 					class="mono block truncate hover:underline"
 					href={ templ.URL(customDomainURL(d, c)) }
 					target="_blank"
 					rel="noreferrer"
 				>{ c.Host }</a>
+				if live {
+					<span class={ "domain-transport", transportClass }>
+						@icon(transportIcon)
+						{ transport }
+					</span>
+				}
 			</span>
 			{{ label, class := domainStatus(c) }}
 			<span class={ "status", class }>{ label }</span>
@@ -210,7 +217,7 @@ templ customDomainCard(d NetworkingData, c domain.Custom) {
 			</form>
 		</div>
 		<div class="px-4 py-3">
-			@stepList(domainSteps(c, d.Net.HTTPSOnly))
+			@stepList(domainSteps(c, d.Net))
 			// The record stays on screen while it is still the thing to do.
 			// Hiding it the moment a domain goes live is right; hiding it while
 			// somebody is trying to get the record correct is not.

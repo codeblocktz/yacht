@@ -160,8 +160,46 @@ func sourceableInstaller(t *testing.T) string {
 	return lib
 }
 
+// The issuer is offered when this run found cert-manager ready, and kept once
+// written — including across a later run that did not, and over the default
+// when an operator has named an issuer of their own.
+func TestInstallerOffersTheCertIssuerOnlyWhenReady(t *testing.T) {
+	lib := sourceableInstaller(t)
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "yacht.env")
+
+	if got := valueOf(renderEnvWith(t, lib, envFile, "no"), "YACHT_CERT_ISSUER"); got != "" {
+		t.Fatalf("no cert-manager: YACHT_CERT_ISSUER = %q, want empty", got)
+	}
+
+	ready := renderEnvWith(t, lib, envFile, "yes")
+	if got := valueOf(ready, "YACHT_CERT_ISSUER"); got != "yacht-acme" {
+		t.Fatalf("cert-manager ready: YACHT_CERT_ISSUER = %q, want yacht-acme", got)
+	}
+	if err := os.WriteFile(envFile, []byte(ready), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := valueOf(renderEnvWith(t, lib, envFile, "no"), "YACHT_CERT_ISSUER"); got != "yacht-acme" {
+		t.Fatalf("re-run without cert-manager dropped the issuer: %q", got)
+	}
+
+	own := strings.Replace(ready, "YACHT_CERT_ISSUER=yacht-acme", "YACHT_CERT_ISSUER=corp-issuer", 1)
+	if err := os.WriteFile(envFile, []byte(own), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := valueOf(renderEnvWith(t, lib, envFile, "yes"), "YACHT_CERT_ISSUER"); got != "corp-issuer" {
+		t.Fatalf("operator's own issuer replaced with %q", got)
+	}
+}
+
 // renderEnv runs the installer's render_env against one env file.
 func renderEnv(t *testing.T, lib, envFile string) string {
+	t.Helper()
+	return renderEnvWith(t, lib, envFile, "no")
+}
+
+// renderEnvWith is renderEnv with cert-manager found ready or not.
+func renderEnvWith(t *testing.T, lib, envFile, certManager string) string {
 	t.Helper()
 
 	// The globals render_env reads, pinned so the only thing that varies
@@ -174,10 +212,11 @@ DATABASE_URL='postgres://yacht:pw@127.0.0.1:5432/yacht?sslmode=disable'
 KUBECONFIG_DST='/etc/yacht/kubeconfig'
 PORT=8080
 ROTATE_TOKEN=no
+CERT_MANAGER_AVAILABLE="$3"
 render_env
 `
 	var out, errb bytes.Buffer
-	cmd := exec.Command("sh", "-c", script, "sh", lib, envFile)
+	cmd := exec.Command("sh", "-c", script, "sh", lib, envFile, certManager)
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {

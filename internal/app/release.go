@@ -71,6 +71,8 @@ type ReleaseOverlays struct {
 	Volumes       []orchestrator.VolumeSpec
 	Hosts         []string
 	TLSHosts      []string
+	IssuedHosts   []string
+	CertIssuer    string
 	HTTPSOnly     bool
 	CNAMETarget   string
 }
@@ -102,6 +104,8 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		Secrets:                cloneStrings(overlays.Secrets),
 		Volumes:                append([]orchestrator.VolumeSpec(nil), overlays.Volumes...),
 		TLSHosts:               append([]string(nil), overlays.TLSHosts...),
+		IssuedHosts:            append([]string(nil), overlays.IssuedHosts...),
+		CertIssuer:             overlays.CertIssuer,
 		CNAMETarget:            overlays.CNAMETarget,
 		HTTPSOnly:              overlays.HTTPSOnly,
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
