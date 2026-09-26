@@ -54,6 +54,11 @@ func TestGallery(t *testing.T) {
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
 		slots.Bare = g.bare
+		// No gallery page is the canvas. Under /apps/ the live app draws its
+		// panel on one, which brings its own inset; the gallery draws the panel's
+		// contents alone, and in the full-bleed shape they sat flush against the
+		// sidebar with nothing to scroll them.
+		slots.FullBleed = false
 		if g.bare {
 			slots.Nav = nil
 			slots.SidebarTop = nil
