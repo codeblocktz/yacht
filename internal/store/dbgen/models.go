@@ -42,6 +42,17 @@ type App struct {
 	ActiveReleaseID pgtype.UUID
 }
 
+type AppHook struct {
+	AppID           uuid.UUID
+	OwnerID         string
+	Secret          []byte
+	CreatedAt       time.Time
+	PendingAt       pgtype.Timestamptz
+	PendingRevision string
+	LastDeliveryAt  pgtype.Timestamptz
+	LastDelivery    string
+}
+
 type AppLink struct {
 	OwnerID   string
 	FromAppID uuid.UUID

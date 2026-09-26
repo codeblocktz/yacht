@@ -39,7 +39,8 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 // configured dashboard origin. SameSite cookies alone are insufficient when a
 // user-controlled app and the dashboard share a registrable parent domain.
 // Only the cookie-free sign-in endpoint accepts missing browser origin metadata,
-// preserving CLI sign-in without exempting unrelated mutations.
+// preserving CLI sign-in without exempting unrelated mutations — and webhook
+// deliveries, which carry a signature rather than a session.
 func (s *Server) csrfProtect(next http.Handler) http.Handler {
 	configuredOrigin := originOf(s.baseURL)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +59,12 @@ func (s *Server) csrfProtect(next http.Handler) http.Handler {
 		}
 		_, sessionErr := r.Cookie(SessionCookie)
 		originlessSignIn := got == "" && sessionErr != nil && r.URL.Path == "/sign-in"
-		if !originlessSignIn && (got == "" || want == "" || originOf(got) != want) {
+		// A webhook is a server calling a server: no browser, no Origin, and
+		// no cookie that a forged cross-site post could ride on. It is
+		// authorised by a signature over its body, which a page on another
+		// origin cannot produce.
+		webhook := strings.HasPrefix(r.URL.Path, hookPath)
+		if !originlessSignIn && !webhook && (got == "" || want == "" || originOf(got) != want) {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}

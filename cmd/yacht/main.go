@@ -212,6 +212,7 @@ func run() error {
 		WildcardTLS:   cfg.WildcardTLS,
 		Logger:        log,
 		Nets:          apps,
+		Hooks:         apps,
 		Logs:          apps,
 	}
 

@@ -94,7 +94,7 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 	// A live operation refuses admission here, which abandons the whole
 	// transaction: the settings are not rolled back behind a deploy that never
 	// got to run.
-	if _, err := s.admitDeploymentTx(ctx, q, ownerID, restored, RollbackTrigger, release.ID, false); err != nil {
+	if _, err := s.admitDeploymentTx(ctx, q, ownerID, restored, RollbackTrigger, release.ID, false, "user"); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

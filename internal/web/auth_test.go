@@ -713,6 +713,7 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 
 	h := testServer(t, Options{
 		Apps:     apps,
+		Hooks:    apps,
 		Accounts: accounts,
 		// The provider under test end to end: the cookie the callback sets is
 		// the cookie the dashboard resolves an owner from.
