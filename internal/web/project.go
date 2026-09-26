@@ -26,6 +26,13 @@ func (s *Server) projectList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 
+	// An install with no app service has no projects. The sidebar links here
+	// regardless, so the answer is the empty list rather than a nil
+	// dereference or a 404 for a link the page itself offered.
+	if s.apps == nil {
+		s.render(w, r, ProjectList(ProjectListData{}))
+		return
+	}
 	projects, err := s.apps.Projects(ctx, owner.ID)
 	if err != nil {
 		s.log.Error("list projects", slog.String("error", err.Error()))

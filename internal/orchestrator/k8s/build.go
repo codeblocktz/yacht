@@ -53,7 +53,11 @@ const (
 	// packImage is the buildpacks fallback: it builds a repository that has no
 	// Dockerfile by detecting what the code is. Large, and only pulled on
 	// repositories that need it.
-	packImage = "paketobuildpacks/builder-jammy-base:latest"
+	//
+	// A version, like the images beside it, rather than latest: the builder
+	// decides the base image and language runtimes of everything it builds,
+	// and latest moved them twice a day without anything here changing.
+	packImage = "paketobuildpacks/builder-jammy-base:0.4.649"
 )
 
 // buildTimeout caps a single build.
