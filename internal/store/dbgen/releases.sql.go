@@ -406,6 +406,74 @@ func (q *Queries) NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64,
 	return result.RowsAffected(), nil
 }
 
+const restoreAppFromRelease = `-- name: RestoreAppFromRelease :one
+UPDATE apps
+SET image           = r.image_ref,
+    replicas        = r.replicas,
+    port            = r.port,
+    cpu_request     = r.cpu_request,
+    cpu_limit       = r.cpu_limit,
+    memory_request  = r.memory_request,
+    memory_limit    = r.memory_limit,
+    internal        = r.internal,
+    health_path     = r.health_path,
+    health_liveness = r.health_liveness,
+    run_as_user     = CASE WHEN apps.source = 'git' THEN r.run_as_user ELSE apps.run_as_user END,
+    config_version  = apps.config_version + 1,
+    updated_at      = now()
+FROM app_releases r
+WHERE apps.owner_id = $1 AND apps.id = $2
+  AND r.id = $3 AND r.owner_id = $1 AND r.app_id = apps.id
+RETURNING apps.id, apps.owner_id, apps.name, apps.namespace, apps.image, apps.replicas, apps.port, apps.cpu_request, apps.cpu_limit, apps.memory_request, apps.memory_limit, apps.created_at, apps.updated_at, apps.health_path, apps.health_liveness, apps.source, apps.internal, apps.project_id, apps.canvas_x, apps.canvas_y, apps.https_only, apps.cname_only, apps.repo_url, apps.repo_branch, apps.repo_subdir, apps.run_as_user, apps.config_version, apps.active_release_id
+`
+
+type RestoreAppFromReleaseParams struct {
+	OwnerID   string
+	AppID     uuid.UUID
+	ReleaseID uuid.UUID
+}
+
+// Rollback makes the app's desired state the release's again, so the next edit
+// builds on what is running rather than quietly rolling forward to what was
+// replaced. Only release-owned fields: hostnames, networking, storage and the
+// repository are current state and stay as they are. The uid is a build's
+// discovery for a Git app, and belongs to the image being restored.
+func (q *Queries) RestoreAppFromRelease(ctx context.Context, arg RestoreAppFromReleaseParams) (App, error) {
+	row := q.db.QueryRow(ctx, restoreAppFromRelease, arg.OwnerID, arg.AppID, arg.ReleaseID)
+	var i App
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Namespace,
+		&i.Image,
+		&i.Replicas,
+		&i.Port,
+		&i.CpuRequest,
+		&i.CpuLimit,
+		&i.MemoryRequest,
+		&i.MemoryLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.HealthPath,
+		&i.HealthLiveness,
+		&i.Source,
+		&i.Internal,
+		&i.ProjectID,
+		&i.CanvasX,
+		&i.CanvasY,
+		&i.HttpsOnly,
+		&i.CnameOnly,
+		&i.RepoUrl,
+		&i.RepoBranch,
+		&i.RepoSubdir,
+		&i.RunAsUser,
+		&i.ConfigVersion,
+		&i.ActiveReleaseID,
+	)
+	return i, err
+}
+
 const setActiveRelease = `-- name: SetActiveRelease :execrows
 UPDATE apps
 SET active_release_id = $1, updated_at = now()

@@ -49,6 +49,10 @@ type Apps interface {
 	Directories(ctx context.Context, repoURL, path string) ([]string, error)
 	Redeploy(ctx context.Context, ownerID, name string) error
 
+	// Rollback puts an app back on one of its earlier releases, settings and
+	// workload both.
+	Rollback(ctx context.Context, ownerID, name string, releaseID uuid.UUID) error
+
 	// CancelLiveDeployment stops whatever deploy an app is holding, and reports
 	// app.ErrNotFound when it is holding none.
 	CancelLiveDeployment(ctx context.Context, ownerID, name string) error
@@ -602,6 +606,8 @@ func (s *Server) Handler() http.Handler {
 			}
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
+			// A member's, like redeploying: it is undone by deploying again.
+			r.Post("/apps/{name}/rollback", s.appRollback)
 			r.Post("/apps/{name}/deployments/cancel", s.appDeployCancel)
 
 			r.Get("/deployments", s.activity)
@@ -1006,6 +1012,39 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.flashOK(w, r, "Redeploying "+name+".")
 	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+}
+
+// appRollback puts an app back on the release a history row ran.
+//
+// The release is a form field rather than a path segment so the button is an
+// ordinary form in the row, and so a malformed one is answered on the page
+// somebody was looking at rather than with a 404.
+func (s *Server) appRollback(w http.ResponseWriter, r *http.Request) {
+	owner := identity.MustFromContext(r.Context())
+	name := chi.URLParam(r, "name")
+	back := "/apps/" + name
+
+	releaseID, err := uuid.Parse(strings.TrimSpace(r.FormValue("release")))
+	if err != nil {
+		s.flashErr(w, r, "Choose a release from the history to roll back to.")
+		http.Redirect(w, r, back, http.StatusSeeOther)
+		return
+	}
+	if s.apps != nil {
+		err := s.apps.Rollback(r.Context(), owner.ID, name, releaseID)
+		switch {
+		case errors.Is(err, app.ErrReleaseActive):
+			s.flashOK(w, r, "That release is already the one running.")
+		case errors.Is(err, app.ErrOperationInFlight):
+			s.flashErr(w, r, "A deploy is already in flight — stop it or let it finish, then roll back.")
+		case err != nil:
+			s.log.Error("rollback", slog.String("app", name), slog.String("error", err.Error()))
+			s.flashErr(w, r, err.Error())
+		default:
+			s.flashOK(w, r, "Rolling "+name+" back.")
+		}
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
 // appDeployCancel stops the deploy an app is currently holding.

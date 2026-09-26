@@ -272,6 +272,8 @@ func TestMemberCanDeployButNotDelete(t *testing.T) {
 		// who pressed Redeploy by mistake is exactly who should be able to
 		// take it back, and making that an admin's job means waiting for one.
 		"/apps/" + rt.appName + "/deployments/cancel",
+		// Rolling back is undone by deploying again, so it is a member's too.
+		"/apps/" + rt.appName + "/rollback",
 	} {
 		if code := rt.postAs(t, path, rt.member).Code; code != http.StatusSeeOther {
 			t.Errorf("POST %s as a member = %d, want 303 — a member who cannot "+

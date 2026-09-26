@@ -156,6 +156,8 @@ func (d Deployment) Source() string {
 	switch {
 	case strings.HasPrefix(d.Revision, "git:"):
 		return "Git"
+	case d.Revision == RollbackTrigger:
+		return "rollback"
 	case d.Revision == "initial", d.Revision == "":
 		return "image"
 	}

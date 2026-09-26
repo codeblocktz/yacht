@@ -238,14 +238,17 @@ func galleryPages() []galleryPage {
 		Volumes: 13, UsageKnown: true,
 	}
 
+	// Each with a release, so the history shows which rows can be rolled back
+	// to: the succeeded one can; the failed and cancelled ones never ran.
+	release := func() *uuid.UUID { id := uuid.New(); return &id }
 	deployments := []app.Deployment{
-		{ID: uuid.New(), Image: "nginx:alpine", Revision: "initial", Status: "running",
+		{ID: uuid.New(), ReleaseID: release(), Image: "nginx:alpine", Revision: "initial", Status: "running",
 			StartedAt: now.Add(-12 * time.Minute)},
-		{ID: uuid.New(), Image: "nginx:1.27", Revision: "redeploy", Status: "succeeded",
+		{ID: uuid.New(), ReleaseID: release(), Image: "nginx:1.27", Revision: "redeploy", Status: "succeeded",
 			StartedAt: now.Add(-6 * 24 * time.Hour)},
-		{ID: uuid.New(), Image: "nginx:1.26", Revision: "scale:4", Status: "failed",
+		{ID: uuid.New(), ReleaseID: release(), Image: "nginx:1.26", Revision: "scale:4", Status: "failed",
 			Message: "readiness probe never passed", StartedAt: now.Add(-7 * 24 * time.Hour)},
-		{ID: uuid.New(), Image: "nginx:1.25", Revision: "redeploy", Status: "cancelled",
+		{ID: uuid.New(), ReleaseID: release(), Image: "nginx:1.25", Revision: "redeploy", Status: "cancelled",
 			StartedAt: now.Add(-21 * 24 * time.Hour)},
 	}
 
@@ -268,6 +271,23 @@ func galleryPages() []galleryPage {
 				App: running, Siblings: allApps, Tab: "",
 				Pods: pods[:2], Deployments: deployments,
 			}),
+		},
+		{
+			// Settled, so the history offers rollback: the earlier release that
+			// ran can be gone back to, and the failed and cancelled ones cannot.
+			file: "states-detail-history.html", path: "/apps/web",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}},
+			page: func() templ.Component {
+				settled := append([]app.Deployment{{
+					ID: uuid.New(), ReleaseID: release(), Image: "nginx:1.28", Revision: "redeploy",
+					Status: "succeeded", IsActive: true, StartedAt: now.Add(-40 * time.Minute),
+				}}, deployments[1:]...)
+				a := running
+				a.ActiveReleaseID = settled[0].ReleaseID
+				return AppDetail(AppDetailData{
+					App: a, Siblings: allApps, Pods: pods[:2], Deployments: settled,
+				})
+			}(),
 		},
 		{
 			file: "states-detail-degraded.html", path: "/apps/api",

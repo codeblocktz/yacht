@@ -161,11 +161,11 @@ func (o *Orchestrator) Pods(
 			Namespace:  p.Namespace,
 			DrainMoves: !skipOnDrain(&p),
 			Phase:      string(p.Status.Phase),
-			Node:      p.Spec.NodeName,
-			Total:     int32(len(p.Status.ContainerStatuses)),
-			CreatedAt: p.CreationTimestamp.Time,
-			App:       p.Labels[orchestrator.LabelApp],
-			Owner:     orchestrator.OwnerID(p.Labels[orchestrator.LabelOwner]),
+			Node:       p.Spec.NodeName,
+			Total:      int32(len(p.Status.ContainerStatuses)),
+			CreatedAt:  p.CreationTimestamp.Time,
+			App:        p.Labels[orchestrator.LabelApp],
+			Owner:      orchestrator.OwnerID(p.Labels[orchestrator.LabelOwner]),
 		}
 		for _, cs := range p.Status.ContainerStatuses {
 			if cs.Ready {

@@ -618,3 +618,19 @@ func methodsIn(lines []orchestrator.HTTPLogLine) []string {
 	sort.Strings(out)
 	return out
 }
+
+// canRollBackTo reports whether a history row can be rolled back to.
+//
+// Only a deployment that succeeded, of a release that is not the one running,
+// with an image that exists. A failed one never ran, so there is nothing to go
+// back to; and a row with no release predates releases being recorded, with
+// nothing pinned to restore.
+func canRollBackTo(a app.App, dep app.Deployment) bool {
+	switch {
+	case dep.ReleaseID == nil, dep.Status != app.DeploySucceeded, imageIsPending(dep.Image):
+		return false
+	case a.ActiveReleaseID != nil && *a.ActiveReleaseID == *dep.ReleaseID:
+		return false
+	}
+	return true
+}

@@ -97,7 +97,22 @@ func (s *Service) admitDeployment(
 		return Operation{}, fmt.Errorf("app: begin deployment admission: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	q := s.q.WithTx(tx)
+	op, err := s.admitDeploymentTx(ctx, s.q.WithTx(tx), ownerID, a, trigger, releaseID, requiresBuild)
+	if err != nil {
+		return Operation{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Operation{}, fmt.Errorf("app: commit deployment admission: %w", err)
+	}
+	return op, nil
+}
+
+// admitDeploymentTx writes the attempt and its queue record on the caller's
+// transaction, for an admission that has to commit alongside other writes.
+func (s *Service) admitDeploymentTx(
+	ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string,
+	releaseID uuid.UUID, requiresBuild bool,
+) (Operation, error) {
 	deployment, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
 		Revision: trigger, Status: DeployRunning,
@@ -110,14 +125,7 @@ func (s *Service) admitDeployment(
 	if releaseID != uuid.Nil {
 		release = &releaseID
 	}
-	op, err := s.enqueueOperation(ctx, q, ownerID, a.ID, deployment.ID, release, requiresBuild)
-	if err != nil {
-		return Operation{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Operation{}, fmt.Errorf("app: commit deployment admission: %w", err)
-	}
-	return op, nil
+	return s.enqueueOperation(ctx, q, ownerID, a.ID, deployment.ID, release, requiresBuild)
 }
 
 // ClaimOperation selects one globally admissible operation. The advisory lock

@@ -95,3 +95,28 @@ UPDATE apps
 SET config_version = config_version + 1, updated_at = now()
 WHERE owner_id = @owner_id AND id = @app_id
 RETURNING config_version;
+
+-- name: RestoreAppFromRelease :one
+-- Rollback makes the app's desired state the release's again, so the next edit
+-- builds on what is running rather than quietly rolling forward to what was
+-- replaced. Only release-owned fields: hostnames, networking, storage and the
+-- repository are current state and stay as they are. The uid is a build's
+-- discovery for a Git app, and belongs to the image being restored.
+UPDATE apps
+SET image           = r.image_ref,
+    replicas        = r.replicas,
+    port            = r.port,
+    cpu_request     = r.cpu_request,
+    cpu_limit       = r.cpu_limit,
+    memory_request  = r.memory_request,
+    memory_limit    = r.memory_limit,
+    internal        = r.internal,
+    health_path     = r.health_path,
+    health_liveness = r.health_liveness,
+    run_as_user     = CASE WHEN apps.source = 'git' THEN r.run_as_user ELSE apps.run_as_user END,
+    config_version  = apps.config_version + 1,
+    updated_at      = now()
+FROM app_releases r
+WHERE apps.owner_id = @owner_id AND apps.id = @app_id
+  AND r.id = @release_id AND r.owner_id = @owner_id AND r.app_id = apps.id
+RETURNING apps.*;
