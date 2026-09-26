@@ -39,6 +39,11 @@ type fakeApps struct {
 	// cancelErr is what CancelLiveDeployment returns instead.
 	cancelled []string
 	cancelErr error
+
+	// rolledBack records app@release for each rollback that reached the
+	// engine; rollbackErr is what Rollback returns instead.
+	rolledBack  []string
+	rollbackErr error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -113,6 +118,14 @@ func (f *fakeApps) Branches(_ context.Context, repoURL, query string) ([]string,
 }
 
 func (f *fakeApps) Redeploy(context.Context, string, string) error { return nil }
+
+func (f *fakeApps) Rollback(_ context.Context, _, name string, release uuid.UUID) error {
+	if f.rollbackErr != nil {
+		return f.rollbackErr
+	}
+	f.rolledBack = append(f.rolledBack, name+"@"+release.String())
+	return nil
+}
 
 func (f *fakeApps) CancelLiveDeployment(_ context.Context, _, name string) error {
 	if f.cancelErr != nil {
@@ -573,6 +586,57 @@ func TestCancelDeployWithNothingInFlightIsNotAnError(t *testing.T) {
 	}
 }
 
+// Rolling back has to reach the engine with the release the row named.
+func TestRollbackReachesTheEngine(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+	release := uuid.New()
+
+	rec := post(t, h, "/apps/web/rollback", url.Values{"release": {release.String()}})
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web" {
+		t.Fatalf("POST rollback = %d to %q, want 303 to /apps/web", rec.Code, rec.Header().Get("Location"))
+	}
+	if want := "web@" + release.String(); len(apps.rolledBack) != 1 || apps.rolledBack[0] != want {
+		t.Fatalf("rolledBack = %v, want [%s]", apps.rolledBack, want)
+	}
+}
+
+// A release that is not one is answered on the page, and never reaches the
+// engine as a zero id.
+func TestRollbackWithoutAReleaseIsRefused(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+
+	for _, form := range []url.Values{nil, {"release": {"not-a-uuid"}}} {
+		if code := post(t, h, "/apps/web/rollback", form).Code; code != http.StatusSeeOther {
+			t.Errorf("POST rollback with %v = %d, want 303", form, code)
+		}
+	}
+	if len(apps.rolledBack) != 0 {
+		t.Fatalf("rolledBack = %v, want nothing", apps.rolledBack)
+	}
+}
+
+// The button is offered only where there is something to go back to.
+func TestOnlyEarlierSuccessfulReleasesOfferRollback(t *testing.T) {
+	active, older := uuid.New(), uuid.New()
+	a := app.App{ActiveReleaseID: &active}
+	ok := app.Deployment{ReleaseID: &older, Status: app.DeploySucceeded, Image: "nginx:1.26"}
+	if !canRollBackTo(a, ok) {
+		t.Error("an earlier successful release does not offer rollback")
+	}
+	for name, dep := range map[string]app.Deployment{
+		"running":    {ReleaseID: &active, Status: app.DeploySucceeded, Image: "nginx:1.27"},
+		"failed":     {ReleaseID: &older, Status: app.DeployFailed, Image: "nginx:1.26"},
+		"no release": {Status: app.DeploySucceeded, Image: "nginx:1.25"},
+		"unbuilt":    {ReleaseID: &older, Status: app.DeploySucceeded, Image: app.PendingImage},
+	} {
+		if canRollBackTo(a, dep) {
+			t.Errorf("%s: offers rollback", name)
+		}
+	}
+}
+
 // Mutations must be POST. A GET that changes state can be triggered by a
 // prefetch or a crawler.
 func TestMutationsRejectGET(t *testing.T) {
@@ -581,7 +645,7 @@ func TestMutationsRejectGET(t *testing.T) {
 
 	for _, path := range []string{
 		"/apps/web/scale", "/apps/web/delete", "/apps/web/redeploy",
-		"/apps/web/deployments/cancel",
+		"/apps/web/deployments/cancel", "/apps/web/rollback",
 	} {
 		if code := get(t, h, path).Code; code != http.StatusMethodNotAllowed {
 			t.Errorf("GET %s = %d, want 405", path, code)

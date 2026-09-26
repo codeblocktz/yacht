@@ -538,7 +538,7 @@ templ AppDeploymentsBody(d AppDetailData) {
 			<div class="rows">
 				for _, dep := range d.Deployments {
 					if !dep.IsActive {
-						@deploymentRow(d.App.Name, dep)
+						@deploymentRow(d.App, dep, !deploymentsInFlight(d))
 					}
 				}
 			</div>
@@ -617,7 +617,9 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 	</div>
 }
 
-templ deploymentRow(appName string, dep app.Deployment) {
+// rollback is false while a deploy is in flight: the engine would refuse it,
+// and a button whose only answer is "not now" is one to leave off until then.
+templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
 	<div class="row-item !py-2.5">
 		<span class="w-24 shrink-0">
 			@deploymentStatus(dep)
@@ -628,8 +630,30 @@ templ deploymentRow(appName string, dep app.Deployment) {
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { dep.Source() }
 		</span>
-		@deployLogsButton(appName, dep)
+		if rollback && canRollBackTo(a, dep) {
+			@rollbackButton(a, dep)
+		}
+		@deployLogsButton(a.Name, dep)
 	</div>
+}
+
+// rollbackButton puts the app back on the release this row ran.
+//
+// Confirmed, because it changes more than the workload: the app's own settings
+// go back too, and the dialog says which ones and which stay — that split is
+// the thing somebody would otherwise only find out afterwards.
+templ rollbackButton(a app.App, dep app.Deployment) {
+	<form
+		class="order-last"
+		method="post"
+		action={ templ.URL("/apps/" + a.Name + "/rollback") }
+		data-confirm={ "Runs " + imageLabel(dep.Image) + " again, with the replicas, port, limits, health check and plain variables it had then. Secrets, domains and storage stay as they are now." }
+		data-confirm-title="Roll back to this release?"
+		data-confirm-label="Roll back"
+	>
+		<input type="hidden" name="release" value={ dep.ReleaseID.String() }/>
+		<button class="btn btn-sm" type="submit">Roll back</button>
+	</form>
 }
 
 // deployLogsButton opens one deployment's logs over the list.

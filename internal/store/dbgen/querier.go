@@ -372,6 +372,12 @@ type Querier interface {
 	// us the situation changed — and a domain that had backed off to a fifteen
 	// minute interval should not go straight back to one.
 	RequestDomainCheck(ctx context.Context, arg RequestDomainCheckParams) (int64, error)
+	// Rollback makes the app's desired state the release's again, so the next edit
+	// builds on what is running rather than quietly rolling forward to what was
+	// replaced. Only release-owned fields: hostnames, networking, storage and the
+	// repository are current state and stay as they are. The uid is a build's
+	// discovery for a Git app, and belongs to the image being restored.
+	RestoreAppFromRelease(ctx context.Context, arg RestoreAppFromReleaseParams) (App, error)
 	// Hostnames that may actually be routed to.
 	//
 	// A managed host is routable because the platform issued it; a custom one only

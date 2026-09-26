@@ -47,6 +47,7 @@ nothing you build here is locked in.
 | Scale, redeploy, delete | ✅ |
 | Liveness and readiness probes | ✅ |
 | Deployment history, with a log per deployment | ✅ |
+| Roll back to an earlier release, settings and all | ✅ |
 | App logs, and per-request HTTP logs you can search and page | ✅ |
 | Live logs, streamed as the container writes them | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
