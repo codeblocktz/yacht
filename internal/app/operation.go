@@ -97,7 +97,7 @@ func (s *Service) admitDeployment(
 		return Operation{}, fmt.Errorf("app: begin deployment admission: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	op, err := s.admitDeploymentTx(ctx, s.q.WithTx(tx), ownerID, a, trigger, releaseID, requiresBuild)
+	op, err := s.admitDeploymentTx(ctx, s.q.WithTx(tx), ownerID, a, trigger, releaseID, requiresBuild, "user")
 	if err != nil {
 		return Operation{}, err
 	}
@@ -109,14 +109,15 @@ func (s *Service) admitDeployment(
 
 // admitDeploymentTx writes the attempt and its queue record on the caller's
 // transaction, for an admission that has to commit alongside other writes.
+// actorKind says who asked: "user" for a person, "webhook" for a Git host.
 func (s *Service) admitDeploymentTx(
 	ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string,
-	releaseID uuid.UUID, requiresBuild bool,
+	releaseID uuid.UUID, requiresBuild bool, actorKind string,
 ) (Operation, error) {
 	deployment, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
 		Revision: trigger, Status: DeployRunning,
-		ReleaseID: pgUUID(releaseID), Trigger: trigger, ActorKind: "user",
+		ReleaseID: pgUUID(releaseID), Trigger: trigger, ActorKind: actorKind,
 	})
 	if err != nil {
 		return Operation{}, fmt.Errorf("app: record admitted deployment: %w", err)
@@ -935,6 +936,11 @@ func (s *Service) RunOperationAdmission(ctx context.Context) {
 	for {
 		if err := s.reclaimOperations(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			s.log.Warn("operation reclaim paused", "error", err)
+		}
+		// Before claiming, so a push that waited for a deploy to end is queued
+		// in the same pass that would have been idle.
+		if err := s.admitPendingPushes(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			s.log.Warn("waiting push admission paused", "error", err)
 		}
 		for {
 			op, err := s.ClaimOperation(ctx)
