@@ -27,6 +27,16 @@ templ stepList(steps []Step) {
 					if st.Detail != "" {
 						<div class="step-detail">{ st.Detail }</div>
 					}
+					if len(st.Commands) > 0 {
+						<div class="step-cmds">
+							for _, cmd := range st.Commands {
+								<div class="step-cmd">
+									<code class="step-cmd-v">{ cmd }</code>
+									@copyButton(cmd, "command")
+								</div>
+							}
+						</div>
+					}
 					if !st.At.IsZero() {
 						<div class="step-time" title={ absoluteTime(st.At) }>
 							{ preciseAgo(st.At) }

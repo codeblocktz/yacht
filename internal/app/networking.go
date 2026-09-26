@@ -41,6 +41,10 @@ type Networking struct {
 	// A host that is missing could not be read, which is not the same as not
 	// issued and must not be drawn as a failure.
 	Certs map[string]orchestrator.Certificate
+
+	// Namespace is where the app's objects live, so a command the page offers
+	// for looking into one can be pasted and run as it is.
+	Namespace string
 }
 
 // Networking returns an app's routing.
@@ -55,6 +59,7 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 		HTTPSOnly: a.HTTPSOnly,
 		CNAMEOnly: a.CNAMEOnly,
 		Target:    s.cnameTarget(ctx),
+		Namespace: a.Ref().Namespace,
 	}
 	if out.Custom, err = domain.ListCustom(ctx, s.q, ownerID, a.ID); err != nil {
 		return Networking{}, err

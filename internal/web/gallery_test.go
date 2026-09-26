@@ -711,6 +711,7 @@ func domainGallery(c domain.Custom) NetworkingData {
 			// so every visitor gets a warning.
 			HTTPSOnly: true,
 			Custom:    []domain.Custom{c},
+			Namespace: app.Namespace("owner-local", "web"),
 		},
 	}
 }

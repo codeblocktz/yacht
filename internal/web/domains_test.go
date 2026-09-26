@@ -1,6 +1,7 @@
 package web
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -144,7 +145,8 @@ func TestTheCertificateStepReportsIssuance(t *testing.T) {
 	now := time.Now()
 	live := domain.Custom{Host: "shop.example.com", State: domain.StateRouted, VerifiedAt: now.Add(-time.Minute)}
 	issuing := func(cert *orchestrator.Certificate, httpsOnly bool) app.Networking {
-		n := app.Networking{Issuing: true, HTTPSOnly: httpsOnly, Certs: map[string]orchestrator.Certificate{}}
+		n := app.Networking{Issuing: true, HTTPSOnly: httpsOnly, Namespace: "yacht-demo",
+			Certs: map[string]orchestrator.Certificate{}}
 		if cert != nil {
 			n.Certs[live.Host] = *cert
 		}
@@ -154,21 +156,26 @@ func TestTheCertificateStepReportsIssuance(t *testing.T) {
 	stuck := live
 	stuck.VerifiedAt = now.Add(-time.Hour)
 
+	const describe = "kubectl -n yacht-demo describe certificate tls-shop.example.com"
 	cases := []struct {
-		name   string
-		c      domain.Custom
-		net    app.Networking
-		state  StepState
-		detail string
+		name      string
+		c         domain.Custom
+		net       app.Networking
+		state     StepState
+		detail    string
+		transport string
+		commands  []string
 	}{
-		{"requested", live, issuing(&orchestrator.Certificate{}, false), StepActive, "served over plain HTTP meanwhile"},
-		{"requested, HTTPS enforced", live, issuing(&orchestrator.Certificate{}, true), StepActive, "browsers will warn"},
-		{"issued", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepDone, "renewed automatically"},
-		{"untrusted", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepErr, "--acme-environment production"},
-		{"untrusted, plain HTTP served", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, false), StepWait, "browsers do not trust"},
-		{"expired", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(-time.Hour)}, true), StepErr, "has not been renewed"},
-		{"unreadable", live, issuing(nil, false), StepActive, "could not be read"},
-		{"stuck", stuck, issuing(&orchestrator.Certificate{}, false), StepErr, "port 80"},
+		{"requested", live, issuing(&orchestrator.Certificate{}, false), StepActive, "plain HTTP works meanwhile", "HTTPS pending", nil},
+		{"requested, HTTPS enforced", live, issuing(&orchestrator.Certificate{}, true), StepActive, "browsers warn", "HTTPS pending", nil},
+		{"issued", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepDone, "Renews automatically", "HTTPS", nil},
+		{"untrusted", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, true), StepErr, "browsers don't trust", "certificate problem",
+			[]string{productionInstall, "kubectl -n yacht-demo delete secret tls-shop.example.com"}},
+		{"untrusted, plain HTTP served", live, issuing(&orchestrator.Certificate{Issued: true, NotAfter: now.Add(60 * 24 * time.Hour)}, false), StepWait, "browsers don't trust", "certificate problem",
+			[]string{productionInstall, "kubectl -n yacht-demo delete secret tls-shop.example.com"}},
+		{"expired", live, issuing(&orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: now.Add(-time.Hour)}, true), StepErr, "not renewed", "certificate problem", []string{describe}},
+		{"unreadable", live, issuing(nil, false), StepActive, "could not be read", "HTTPS pending", nil},
+		{"stuck", stuck, issuing(&orchestrator.Certificate{}, false), StepErr, "port 80", "certificate problem", []string{describe}},
 	}
 
 	for _, tc := range cases {
@@ -182,6 +189,43 @@ func TestTheCertificateStepReportsIssuance(t *testing.T) {
 		if strings.Contains(step.Detail, "No certificate covers this name") {
 			t.Errorf("%s: says no certificate covers a name one is being issued for", tc.name)
 		}
+		// The fix is something to copy, never buried in the sentence.
+		if !slices.Equal(step.Commands, tc.commands) {
+			t.Errorf("%s: commands = %q, want %q", tc.name, step.Commands, tc.commands)
+		}
+		// The header and the step read the same state, so they cannot disagree.
+		if label, _, _, ok := domainTransport(tc.c, tc.net); !ok || label != tc.transport {
+			t.Errorf("%s: header says %q, want %q", tc.name, label, tc.transport)
+		}
+	}
+}
+
+// Before a domain is live the header says nothing about how it is served, and
+// once it is, an install without an issuer says plainly that it is HTTP.
+func TestTheHeaderOnlyDescribesTransportForALiveDomain(t *testing.T) {
+	if _, _, _, ok := domainTransport(domain.Custom{State: domain.StateAwaitingDNS}, app.Networking{Issuing: true}); ok {
+		t.Error("a domain nothing is served on yet claims a transport")
+	}
+	live := domain.Custom{Host: "shop.example.com", State: domain.StateRouted}
+	if label, _, _, _ := domainTransport(live, app.Networking{}); label != "HTTP only" {
+		t.Errorf("no issuer: header = %q, want HTTP only", label)
+	}
+	if label, class, _, _ := domainTransport(live, app.Networking{HTTPSOnly: true}); label != "no certificate" || class != "status-err" {
+		t.Errorf("no issuer, HTTPS enforced: header = %q %q, want an error", label, class)
+	}
+}
+
+// The name links to the scheme that works: https once a trusted certificate
+// covers it, http until then.
+func TestTheDomainLinksToHTTPSOnceTrusted(t *testing.T) {
+	live := domain.Custom{Host: "shop.example.com", State: domain.StateRouted}
+	d := NetworkingData{Net: app.Networking{Issuing: true, Certs: map[string]orchestrator.Certificate{}}}
+	if got := customDomainURL(d, live); got != "http://shop.example.com" {
+		t.Errorf("still issuing: link = %q, want http", got)
+	}
+	d.Net.Certs[live.Host] = orchestrator.Certificate{Issued: true, Trusted: true, NotAfter: time.Now().Add(time.Hour)}
+	if got := customDomainURL(d, live); got != "https://shop.example.com" {
+		t.Errorf("trusted: link = %q, want https", got)
 	}
 }
 

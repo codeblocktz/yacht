@@ -1028,6 +1028,19 @@
     @apply mt-1 text-[11px] tabular-nums text-muted-foreground/70;
   }
 
+  /* The fix, as something to paste rather than something to retype. Drawn like
+     the DNS record table, which is the other place the page hands over a value
+     for somebody to put into another system. */
+  .step-cmds {
+    @apply mt-2 overflow-hidden rounded-md border border-border;
+  }
+  .step-cmd {
+    @apply flex items-start gap-2 border-b border-border bg-muted/40 px-3 py-2 last:border-b-0;
+  }
+  .step-cmd-v {
+    @apply min-w-0 flex-1 break-all font-mono text-[11.5px] leading-relaxed text-foreground;
+  }
+
   .step-done .step-dot  { @apply border-success bg-success; }
   .step-active .step-dot { @apply border-info bg-info; }
   .step-err .step-dot   { @apply border-destructive bg-destructive; }
@@ -1141,6 +1154,15 @@
      not other custom classes. The same trap the .row-link comment records. */
   .record-v {
     @apply min-w-0 flex-1 break-all font-mono text-[12px];
+  }
+  /* How a visitor reaches a live domain, beside its name: a lock and a word, in
+     the status colours, so "HTTPS" and a red certificate step cannot disagree.
+     Not a pill, for the reason .status gives. */
+  .domain-transport {
+    @apply inline-flex shrink-0 items-center gap-1 text-[11.5px] font-medium whitespace-nowrap;
+  }
+  .domain-transport svg {
+    @apply size-3.5 opacity-100;
   }
   .copy-btn {
     @apply shrink-0 rounded p-1 text-muted-foreground transition-colors

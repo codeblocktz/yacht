@@ -38,6 +38,11 @@ type Step struct {
 	// is the whole of the user's complaint about waiting without feedback.
 	Detail string
 
+	// Commands are what to run about it, each shown on its own line with a
+	// copy button. Kept out of Detail because a command inside a sentence is
+	// retyped by hand, and a command retyped by hand is the one with the typo.
+	Commands []string
+
 	// At is when this stage last changed. Zero renders nothing rather than the
 	// epoch.
 	At time.Time
