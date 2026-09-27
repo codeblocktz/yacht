@@ -42,6 +42,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
 	"github.com/codeblocktz/yacht/internal/registry"
+	"github.com/codeblocktz/yacht/internal/retire"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
 	"github.com/codeblocktz/yacht/internal/web"
@@ -510,6 +511,13 @@ func (e *Engine) Start(ctx context.Context) {
 	// the cluster, and an unreachable API server must delay the dashboard
 	// coming up, not stop it.
 	go apps.EnsureHTTPLogs(ctx)
+
+	// Advances node retirements: one app moved at a time, each after the last
+	// has finished. Read from the cluster on every pass, so a retirement
+	// resumes after a restart and replicas make the same choice.
+	if r, ok := retire.For(e.Orchestrator, log); ok {
+		go r.Run(ctx)
+	}
 }
 
 // Serve starts the background work and serves the dashboard on the configured

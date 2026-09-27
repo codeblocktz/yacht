@@ -56,27 +56,39 @@ func (o *Orchestrator) Drain(ctx context.Context, node string) (int, error) {
 			continue
 		}
 
-		err := o.client.PolicyV1().Evictions(pod.Namespace).Evict(ctx, &policyv1.Eviction{
-			ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
-		})
-		switch {
-		case err == nil:
+		asked, err := o.evict(ctx, pod.Namespace, pod.Name)
+		if err != nil {
+			return requested, err
+		}
+		if asked {
 			requested++
-		case apierrors.IsNotFound(err):
-			// Gone between the list and the eviction, which is the outcome
-			// asked for.
-		case apierrors.IsTooManyRequests(err):
-			// A disruption budget refused. Named, because the operator has to
-			// decide whether to wait or to change the budget, and neither is
-			// something this should decide for them.
-			return requested, fmt.Errorf(
-				"k8s: %s/%s cannot be evicted without breaking its disruption budget",
-				pod.Namespace, pod.Name)
-		default:
-			return requested, fmt.Errorf("k8s: evict %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
 	return requested, nil
+}
+
+// evict asks one pod to leave, and reports whether a request was made.
+func (o *Orchestrator) evict(ctx context.Context, namespace, name string) (bool, error) {
+	err := o.client.PolicyV1().Evictions(namespace).Evict(ctx, &policyv1.Eviction{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err):
+		// Gone between the list and the eviction, which is the outcome
+		// asked for.
+		return false, nil
+	case apierrors.IsTooManyRequests(err):
+		// A disruption budget refused. Named, because the operator has to
+		// decide whether to wait or to change the budget, and neither is
+		// something this should decide for them.
+		return false, fmt.Errorf(
+			"k8s: %s/%s cannot be evicted without breaking its disruption budget",
+			namespace, name)
+	default:
+		return false, fmt.Errorf("k8s: evict %s/%s: %w", namespace, name, err)
+	}
 }
 
 // skipOnDrain reports whether a pod should be left where it is.

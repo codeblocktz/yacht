@@ -155,8 +155,19 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 	// Recreating costs downtime on every deploy, which is why it is applied
 	// only when there is storage to justify it, and said out loud in the
 	// dashboard rather than changed underneath the operator.
+	//
+	// Rolling means one extra pod and none missing. Kubernetes' default is a
+	// quarter of each, which rounds to the same thing for one to three replicas
+	// and from four lets one go unready — and the replacement being ready before the
+	// original stops is the whole promise of a restart that moves an app off a
+	// machine being retired, so it is stated rather than left to rounding. One
+	// surge pod rather than a quarter is also the least spare room a rollout
+	// can need, which on a cluster of one small machine is the room there is.
 	strategy := appsv1ac.DeploymentStrategy().
-		WithType(appsv1.RollingUpdateDeploymentStrategyType)
+		WithType(appsv1.RollingUpdateDeploymentStrategyType).
+		WithRollingUpdate(appsv1ac.RollingUpdateDeployment().
+			WithMaxSurge(intstr.FromInt32(1)).
+			WithMaxUnavailable(intstr.FromInt32(0)))
 	if len(spec.Volumes) > 0 {
 		strategy = appsv1ac.DeploymentStrategy().
 			WithType(appsv1.RecreateDeploymentStrategyType)

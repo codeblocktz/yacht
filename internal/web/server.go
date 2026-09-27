@@ -22,6 +22,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/retire"
 )
 
 // Apps is the workload lifecycle this server drives.
@@ -385,6 +386,10 @@ type Server struct {
 	// no page.
 	joiner Joiner
 
+	// retirer moves work off a machine without a gap in service. Nil when the
+	// orchestrator cannot, which leaves only the forceful drain.
+	retirer *retire.Retirer
+
 	// stacks deploys templates. Nil leaves the templates surface off, which is
 	// right for an install with no secret key: every stack here mints
 	// credentials, and one that could not seal them would fail halfway.
@@ -478,7 +483,12 @@ func New(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: flash key: %w", err)
 	}
+	// Built here rather than passed in: a Retirer holds nothing but the
+	// orchestrator, and the one advancing retirements in the background reads
+	// the same cluster this one starts them in.
+	retirer, _ := retire.For(opts.Orchestrator, opts.Logger)
 	return &Server{
+		retirer:   retirer,
 		orch:      opts.Orchestrator,
 		ident:     opts.Identity,
 		apps:      opts.Apps,
@@ -897,6 +907,8 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/cluster/nodes/{name}/status", s.nodeDetailFragment)
 				r.Post("/cluster/nodes/{name}/cordon", s.nodeCordon)
 				r.Post("/cluster/nodes/{name}/drain", s.nodeDrain)
+				r.Post("/cluster/nodes/{name}/retire", s.nodeRetire)
+				r.Post("/cluster/nodes/{name}/retire/stop", s.nodeRetireStop)
 				r.Post("/cluster/nodes/{name}/remove", s.nodeRemove)
 			})
 		}
