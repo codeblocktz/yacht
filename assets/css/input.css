@@ -216,6 +216,9 @@
   .status-err     { @apply text-destructive; }
   .status-info    { @apply text-info; }
   .status-neutral { @apply text-muted-foreground; }
+  /* Asleep: a hollow dot, so it reads as neither running nor stopped. */
+  .status-sleep   { @apply text-muted-foreground; }
+  .status-sleep::before { @apply bg-transparent ring-1 ring-current; }
 
   .tag {
     @apply inline-flex items-center rounded border border-border bg-muted/60

@@ -3,6 +3,7 @@ package web
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codeblocktz/yacht/internal/app"
 )
@@ -71,13 +72,8 @@ func TestACycleStillDraws(t *testing.T) {
 		if len(d.Nodes) != 2 {
 			t.Fatalf("nodes = %d, want both apps drawn", len(d.Nodes))
 		}
-	default:
-		// layout is synchronous and fast; if it has not finished by the time
-		// the goroutine is scheduled, something is looping.
-	}
-	d := <-done
-	if len(d.Nodes) != 2 {
-		t.Fatalf("nodes = %d, want 2", len(d.Nodes))
+	case <-time.After(5 * time.Second):
+		t.Fatal("layout did not finish: something is looping")
 	}
 }
 

@@ -447,5 +447,6 @@ func (s *Server) detailWith(
 		}
 	}
 	s.attachHook(r.Context(), r, &d)
+	s.attachSleep(r.Context(), &d)
 	return d
 }

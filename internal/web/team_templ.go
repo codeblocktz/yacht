@@ -469,6 +469,12 @@ func TeamPage(d TeamPageData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
+		if d.Sleep != nil {
+			templ_7745c5c3_Err = teamSleepPanel(*d.Sleep, d.Viewer.CanAdminister()).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
 		return nil
 	})
 }

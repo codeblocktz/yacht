@@ -27,7 +27,7 @@ func (q *Queries) CountCapacityRefusalsSince(ctx context.Context, since time.Tim
 
 const getCapacityPolicy = `-- name: GetCapacityPolicy :one
 
-SELECT id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at FROM capacity_policy WHERE id = 1
+SELECT id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at, wake_reserve_percent FROM capacity_policy WHERE id = 1
 `
 
 // The install's capacity policy and the changes refused for it.
@@ -46,6 +46,7 @@ func (q *Queries) GetCapacityPolicy(ctx context.Context) (CapacityPolicy, error)
 		&i.WarnPercent,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.WakeReservePercent,
 	)
 	return i, err
 }
@@ -102,7 +103,7 @@ func (q *Queries) ListCapacityRefusalsSince(ctx context.Context, arg ListCapacit
 }
 
 const listInstallFootprints = `-- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit
+SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep
 FROM apps
 `
 
@@ -111,11 +112,13 @@ type ListInstallFootprintsRow struct {
 	Replicas    int32
 	CpuLimit    string
 	MemoryLimit string
+	Asleep      bool
 }
 
 // Every app on the install, with its id so a change to one can be counted in
 // place. What the admission check totals; see ListAppFootprints for why the
-// arithmetic is in Go.
+// arithmetic is in Go. Asleep is whether the app is counted at the wake
+// reserve rather than in full: a waking app's pods are already asked for.
 func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error) {
 	rows, err := q.db.Query(ctx, listInstallFootprints)
 	if err != nil {
@@ -130,6 +133,7 @@ func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootp
 			&i.Replicas,
 			&i.CpuLimit,
 			&i.MemoryLimit,
+			&i.Asleep,
 		); err != nil {
 			return nil, err
 		}
@@ -142,7 +146,7 @@ func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootp
 }
 
 const lockCapacityPolicy = `-- name: LockCapacityPolicy :one
-SELECT id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at FROM capacity_policy WHERE id = 1 FOR UPDATE
+SELECT id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at, wake_reserve_percent FROM capacity_policy WHERE id = 1 FOR UPDATE
 `
 
 // Taken inside the transaction that commits a change, after the team's quota
@@ -161,6 +165,7 @@ func (q *Queries) LockCapacityPolicy(ctx context.Context) (CapacityPolicy, error
 		&i.WarnPercent,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.WakeReservePercent,
 	)
 	return i, err
 }
@@ -184,30 +189,32 @@ func (q *Queries) RecordCapacityRefusal(ctx context.Context, arg RecordCapacityR
 const setCapacityPolicy = `-- name: SetCapacityPolicy :one
 INSERT INTO capacity_policy (
     id, enforce, cpu_commit_ratio, memory_commit_ratio,
-    reserve_percent, warn_percent, storage_bytes
+    reserve_percent, warn_percent, storage_bytes, wake_reserve_percent
 )
 VALUES (
     1, $1, $2, $3,
-    $4, $5, $6
+    $4, $5, $6, $7
 )
 ON CONFLICT (id) DO UPDATE
-SET enforce             = excluded.enforce,
-    cpu_commit_ratio    = excluded.cpu_commit_ratio,
-    memory_commit_ratio = excluded.memory_commit_ratio,
-    reserve_percent     = excluded.reserve_percent,
-    warn_percent        = excluded.warn_percent,
-    storage_bytes       = excluded.storage_bytes,
-    updated_at          = now()
-RETURNING id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at
+SET enforce              = excluded.enforce,
+    cpu_commit_ratio     = excluded.cpu_commit_ratio,
+    memory_commit_ratio  = excluded.memory_commit_ratio,
+    reserve_percent      = excluded.reserve_percent,
+    warn_percent         = excluded.warn_percent,
+    storage_bytes        = excluded.storage_bytes,
+    wake_reserve_percent = excluded.wake_reserve_percent,
+    updated_at           = now()
+RETURNING id, enforce, cpu_commit_ratio, memory_commit_ratio, reserve_percent, warn_percent, storage_bytes, updated_at, wake_reserve_percent
 `
 
 type SetCapacityPolicyParams struct {
-	Enforce           bool
-	CpuCommitRatio    float64
-	MemoryCommitRatio float64
-	ReservePercent    int32
-	WarnPercent       int32
-	StorageBytes      int64
+	Enforce            bool
+	CpuCommitRatio     float64
+	MemoryCommitRatio  float64
+	ReservePercent     int32
+	WarnPercent        int32
+	StorageBytes       int64
+	WakeReservePercent int32
 }
 
 func (q *Queries) SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error) {
@@ -218,6 +225,7 @@ func (q *Queries) SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyPa
 		arg.ReservePercent,
 		arg.WarnPercent,
 		arg.StorageBytes,
+		arg.WakeReservePercent,
 	)
 	var i CapacityPolicy
 	err := row.Scan(
@@ -229,6 +237,7 @@ func (q *Queries) SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyPa
 		&i.WarnPercent,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.WakeReservePercent,
 	)
 	return i, err
 }

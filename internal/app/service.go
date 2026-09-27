@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -129,6 +130,11 @@ type App struct {
 	// read from configuration rather than stored, because it is a property of
 	// the install and not of the app.
 	TLS bool
+
+	// Sleep is whether the app sleeps when idle, and whether it is asleep.
+	// A sleeping app's Status reads stopped — it has no pods — and this is
+	// what says why.
+	Sleep Sleep
 }
 
 // Deployment is one recorded attempt to run a version of an app.
@@ -254,6 +260,19 @@ type Options struct {
 	// without sleeping on production intervals.
 	RolloutTimeout      time.Duration
 	RolloutPollInterval time.Duration
+
+	// Waker is where a sleeping app's hostnames are routed: the engine's
+	// waker, at an address the cluster reaches it on. Nil means this install
+	// cannot wake an app, so none sleeps.
+	Waker *orchestrator.WakerEndpoint
+
+	// WakeTimeout bounds one wake, from asking for the pods to one of them
+	// being ready. WakePollInterval is how often it looks, and
+	// SleepCheckInterval how often idle apps are looked for — both settable
+	// so tests need not wait on production intervals.
+	WakeTimeout        time.Duration
+	WakePollInterval   time.Duration
+	SleepCheckInterval time.Duration
 }
 
 // Service manages app lifecycle.
@@ -284,6 +303,17 @@ type Service struct {
 	// refusals is the capacity refusals still being recorded, so a test can
 	// wait for them rather than poll.
 	refusals sync.WaitGroup
+
+	// wakes is the wakes in flight in this process, one per app, shared by
+	// every request for it; wakeWG lets a test wait for them to finish.
+	wakesMu sync.Mutex
+	wakes   map[uuid.UUID]*wakeCall
+	wakeWG  sync.WaitGroup
+
+	// requestsUnknown is whether the last attempt to count requests failed,
+	// so that a cluster that cannot be counted is logged once and not every
+	// minute.
+	requestsUnknown atomic.Bool
 }
 
 // NewService wires the store and the orchestrator together.
@@ -302,11 +332,20 @@ func NewService(
 	if opts.RolloutPollInterval == 0 {
 		opts.RolloutPollInterval = time.Second
 	}
+	if opts.WakeTimeout == 0 {
+		opts.WakeTimeout = DefaultWakeTimeout
+	}
+	if opts.WakePollInterval == 0 {
+		opts.WakePollInterval = 500 * time.Millisecond
+	}
+	if opts.SleepCheckInterval == 0 {
+		opts.SleepCheckInterval = DefaultSleepCheckInterval
+	}
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests,
-		room: newRoomSource(orch, log),
+		room: newRoomSource(orch, log), wakes: map[uuid.UUID]*wakeCall{},
 	}
 }
 
@@ -845,14 +884,28 @@ func (s *Service) applyRelease(
 	if err != nil {
 		return err
 	}
-	return s.orch.ApplyApp(ctx, release.AppSpec(ReleaseOverlays{
+	spec := release.AppSpec(ReleaseOverlays{
 		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
 		Volumes: volumeSpecs(vols), Hosts: hosts, TLSHosts: s.tlsHosts(hosts),
 		IssuedHosts: s.issuedHosts(hosts), CertIssuer: s.opts.CertIssuer,
 		HTTPSOnly:   a.HTTPSOnly && len(hosts) > 0,
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
-	}))
+		Asleep:      a.Sleep.State == SleepAsleep,
+		Waker:       s.wakerFor(a, hosts),
+	})
+	return s.orch.ApplyApp(ctx, spec)
+}
+
+// wakerFor is where a sleeping or waking app's hostnames are routed: the
+// waker, where the install has one and the app has hostnames to route. The
+// same sink as every other apply, so the reconciler restoring a drifted
+// workload restores a sleeping one asleep.
+func (s *Service) wakerFor(a App, hosts []string) *orchestrator.WakerEndpoint {
+	if !a.Sleep.Asleep() || s.opts.Waker == nil || len(hosts) == 0 {
+		return nil
+	}
+	return s.opts.Waker
 }
 
 // tlsHosts narrows a set of hostnames to those the install's certificate covers.
@@ -1495,6 +1548,7 @@ func toApp(row dbgen.App) App {
 		ProjectID:     row.ProjectID.Bytes,
 		X:             row.CanvasX,
 		Y:             row.CanvasY,
+		Sleep:         toSleep(row),
 	}
 	if row.ActiveReleaseID.Valid {
 		id := uuid.UUID(row.ActiveReleaseID.Bytes)

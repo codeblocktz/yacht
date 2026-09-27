@@ -75,18 +75,34 @@ type ReleaseOverlays struct {
 	CertIssuer    string
 	HTTPSOnly     bool
 	CNAMETarget   string
+
+	// Asleep runs none of the release's replicas, and Waker routes its hosts
+	// to the waker; see sleep.go. The one overlay that reaches into a field
+	// the release owns: a sleeping app is still running that release, at
+	// zero, and wakes to it unchanged.
+	Asleep bool
+	Waker  *orchestrator.WakerEndpoint
 }
 
 // AppSpec reconstructs the exact orchestrator input from a release and the
 // current overlays. The image is pinned even though ImageRef retains the tag a
 // person recognizes in history.
 func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
+	replicas := r.Replicas
+	if overlays.Asleep {
+		replicas = 0
+	}
+	var waker *orchestrator.WakerEndpoint
+	if overlays.Waker != nil {
+		w := *overlays.Waker
+		waker = &w
+	}
 	return orchestrator.AppSpec{
 		Ref:                    overlays.Ref,
 		ReleaseID:              r.ID.String(),
 		ConfigVersion:          overlays.ConfigVersion,
 		Image:                  pinImage(r.ImageRef, r.ImageDigest),
-		Replicas:               r.Replicas,
+		Replicas:               replicas,
 		Port:                   r.Port,
 		Env:                    cloneStrings(r.Env),
 		CPURequest:             r.CPURequest,
@@ -109,6 +125,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		CNAMETarget:            overlays.CNAMETarget,
 		HTTPSOnly:              overlays.HTTPSOnly,
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
+		Waker:                  waker,
 	}
 }
 

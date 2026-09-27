@@ -48,6 +48,7 @@ type Querier interface {
 	// again from the dependencies.
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
 	ClearSessionActing(ctx context.Context, id uuid.UUID) error
+	CloseAppSleep(ctx context.Context, arg CloseAppSleepParams) error
 	// Marking consumed and reading the user are one statement, so there is no
 	// window between the two in which a second request can also find the link
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
@@ -168,6 +169,11 @@ type Querier interface {
 	FinishDeploymentOperation(ctx context.Context, arg FinishDeploymentOperationParams) (int64, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
+	// The app a hostname routes to. Not owner-scoped, and it cannot be: the waker
+	// is reached by a request for a hostname, and the hostname is the whole of
+	// what it knows. It returns only what the ingress controller would have
+	// routed there anyway — a managed name, or a custom one that was proven.
+	GetAppByRoutableHost(ctx context.Context, host string) (App, error)
 	GetAppForReleaseBackfill(ctx context.Context, arg GetAppForReleaseBackfillParams) (App, error)
 	GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook, error)
 	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
@@ -286,6 +292,8 @@ type Querier interface {
 	GetTeamQuota(ctx context.Context, ownerID string) (TeamQuota, error)
 	GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQuotaSummaryRow, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
+	// Apps that sleep when idle. See the 00033 migration.
+	GetTeamSleepDefault(ctx context.Context, ownerID string) (TeamSleepDefault, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetVariable(ctx context.Context, arg GetVariableParams) (Variable, error)
@@ -319,6 +327,8 @@ type Querier interface {
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
+	// An app's own history, newest first.
+	ListAppSleeps(ctx context.Context, arg ListAppSleepsParams) ([]AppSleep, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
 	// Apps whose database pointer names the workload the cluster must converge to.
 	// This is intentionally install-scoped: the reconciler acts from stored
@@ -357,7 +367,8 @@ type Querier interface {
 	ListImpersonationEvents(ctx context.Context, arg ListImpersonationEventsParams) ([]ImpersonationEvent, error)
 	// Every app on the install, with its id so a change to one can be counted in
 	// place. What the admission check totals; see ListAppFootprints for why the
-	// arithmetic is in Go.
+	// arithmetic is in Go. Asleep is whether the app is counted at the wake
+	// reserve rather than in full: a waking app's pods are already asked for.
 	ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
@@ -375,6 +386,15 @@ type Querier interface {
 	// feeds the reconciler, which is the platform settling its own records rather
 	// than a team reading theirs.
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	// Awake apps that sleep, by their own setting or their team's. Every team's:
+	// the sleeper runs for the whole install, like the reconciler.
+	ListSleepCandidates(ctx context.Context) ([]ListSleepCandidatesRow, error)
+	// Every interval of a team's that overlaps [since, until), with the app's
+	// name as it is now.
+	ListSleepIntervals(ctx context.Context, arg ListSleepIntervalsParams) ([]ListSleepIntervalsRow, error)
+	ListSleepingApps(ctx context.Context) ([]App, error)
+	// Wakes whose process went away: a restart, or a replica that stopped.
+	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
 	// Every team with its quota, its storage and how many people are in it. The
 	// operator's list; see ListAllAppFootprints for why it crosses teams.
 	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
@@ -417,6 +437,19 @@ type Querier interface {
 	// decides — without this both read the same total, both fit, and together they
 	// do not. No row means no limit, and nothing to race against.
 	LockTeamQuota(ctx context.Context, ownerID string) (TeamQuota, error)
+	MarkAppAsleep(ctx context.Context, arg MarkAppAsleepParams) (App, error)
+	// From whichever of the states the caller names: a finished wake from
+	// 'waking', a deploy from either.
+	MarkAppAwake(ctx context.Context, arg MarkAppAwakeParams) (App, error)
+	// A wake that started and did not finish puts the app back to sleep. The
+	// interval it would have closed stays open: it never came up to serve anyone.
+	MarkAppWakeFailed(ctx context.Context, arg MarkAppWakeFailedParams) (App, error)
+	// A wake refused before it started: nothing was asked of the cluster, so the
+	// workload is as it was and only the reason changes.
+	MarkAppWakeRefused(ctx context.Context, arg MarkAppWakeRefusedParams) error
+	// Guarded on 'asleep', so of every request, button and replica trying to wake
+	// one app at once exactly one does.
+	MarkAppWaking(ctx context.Context, arg MarkAppWakingParams) (App, error)
 	// Moves a proven domain to routed, once the Ingress actually carries it.
 	//
 	// Guarded on the state it is coming from, so a check that has since found drift
@@ -429,6 +462,7 @@ type Querier interface {
 	MarkVerifiedDomainsRoutedForApp(ctx context.Context, arg MarkVerifiedDomainsRoutedForAppParams) (int64, error)
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
+	OpenAppSleep(ctx context.Context, arg OpenAppSleepParams) error
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	RecordCapacityRefusal(ctx context.Context, arg RecordCapacityRefusalParams) error
 	// Records what a check saw.
@@ -442,6 +476,10 @@ type Querier interface {
 	// the backoff can be tested against an injected clock instead of against now().
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
 	RecordHookDelivery(ctx context.Context, arg RecordHookDeliveryParams) error
+	// Records the ingress controller's counter for an app. A counter that moved
+	// in either direction is a request: up is traffic, and down is the controller
+	// having restarted, which is not a reason to believe nobody came.
+	RecordRequestCount(ctx context.Context, arg RecordRequestCountParams) (App, error)
 	RecoverBuiltDeploymentOperation(ctx context.Context, arg RecoverBuiltDeploymentOperationParams) (DeploymentOperation, error)
 	// A cluster outage is not a deployment failure. Give observation recovery
 	// back to the queue without changing its checkpoint or verification budget.
@@ -455,6 +493,9 @@ type Querier interface {
 	// us the situation changed — and a domain that had backed off to a fifteen
 	// minute interval should not go straight back to one.
 	RequestDomainCheck(ctx context.Context, arg RequestDomainCheckParams) (int64, error)
+	// A deploy restarts the idle clock: somebody who has just shipped a change is
+	// about to go and look at it.
+	ResetIdleClock(ctx context.Context, arg ResetIdleClockParams) error
 	// Rollback makes the app's desired state the release's again, so the next edit
 	// builds on what is running rather than quietly rolling forward to what was
 	// replaced. Only release-owned fields: hostnames, networking, storage and the
@@ -480,6 +521,9 @@ type Querier interface {
 	// Recorded by a build, which is the only thing that can discover it. The
 	// image update owns the build operation's single config_version increment.
 	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
+	// The idle clock restarts with the setting, so turning sleep on for an app
+	// that has been quiet all week does not put it to sleep a minute later.
+	SetAppSleepSetting(ctx context.Context, arg SetAppSleepSettingParams) (App, error)
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
@@ -509,6 +553,9 @@ type Querier interface {
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.
 	TakeHookPending(ctx context.Context, appID uuid.UUID) (int64, error)
+	// A request the waker answered, for an app the counter cannot see because
+	// its route is the waker's.
+	TouchAppRequest(ctx context.Context, arg TouchAppRequestParams) error
 	// Opens the step-up window. Scoped by expiry so an expired session cannot be
 	// revived into a recently-authenticated one; execrows so the caller can tell
 	// that it was not.
@@ -563,6 +610,7 @@ type Querier interface {
 	// struct for no reason at all, which is the shortest route to it being logged.
 	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
 	UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error)
+	UpsertTeamSleepDefault(ctx context.Context, arg UpsertTeamSleepDefaultParams) (TeamSleepDefault, error)
 	// Users, sessions and credentials carry no owner_id: a person exists before they
 	// belong to any team, and what proves who they are is not a fact about a tenant.
 	// Memberships and invitations do, and stay scoped by it like everything else.

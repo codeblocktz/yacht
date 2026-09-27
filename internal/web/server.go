@@ -299,6 +299,16 @@ type Options struct {
 	// team on the install, and what each may commit.
 	Quotas Quotas
 
+	// Sleep, when set, puts sleeping on the app page — the setting, Wake now
+	// and Sleep now — and the team default on the team page, and is what the
+	// waker answers from. Nil leaves them off; Waker still serves, and finds
+	// no app.
+	Sleep Sleeper
+
+	// WakerBrand is the name the waking-up page says an app is hosted on.
+	// Empty is the engine's own.
+	WakerBrand string
+
 	// Capacity, when set with Quotas, puts the capacity policy on the Admin
 	// area's Capacity page, the operator's alert on every page when the
 	// install is nearly out of room, and a notice on the deploy forms when it
@@ -412,6 +422,11 @@ type Server struct {
 	// the operator's alert and the customers' notice off.
 	capacity Capacity
 
+	// sleep puts apps to sleep and wakes them; nil leaves it off. wakerBrand
+	// is what the waking-up page says an app is hosted on.
+	sleep      Sleeper
+	wakerBrand string
+
 	// logs reads container output. Nil leaves the log surface off, which is
 	// right for an install whose orchestrator has no containers to read.
 	logs Logger
@@ -509,6 +524,8 @@ func New(opts Options) (*Server, error) {
 		registries:     opts.Registries,
 		quotas:         opts.Quotas,
 		capacity:       opts.Capacity,
+		sleep:          opts.Sleep,
+		wakerBrand:     cmp.Or(opts.WakerBrand, DefaultBrandName),
 		logs:           opts.Logs,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
@@ -707,6 +724,12 @@ func (s *Server) Handler() http.Handler {
 			// A member's, like redeploying: it is undone by deploying again.
 			r.Post("/apps/{name}/rollback", s.appRollback)
 			r.Post("/apps/{name}/deployments/cancel", s.appDeployCancel)
+			// A member's, like scaling: sleeping is undone by the next request.
+			if s.sleep != nil {
+				r.Post("/apps/{name}/sleep", s.appSleepNow)
+				r.Post("/apps/{name}/wake", s.appWakeNow)
+				r.Post("/apps/{name}/sleep/settings", s.appSleepSetting)
+			}
 
 			r.Get("/deployments", s.activity)
 
@@ -792,6 +815,11 @@ func (s *Server) Handler() http.Handler {
 			}
 
 			if s.accounts != nil {
+				// The team's default decides for every app that follows it,
+				// which is more than any one member's app.
+				if s.sleep != nil {
+					r.Post("/team/sleep", s.teamSleepDefault)
+				}
 				r.Post("/team/invite", s.teamInvite)
 				r.Post("/team/invitations/{id}/revoke", s.teamRevokeInvitation)
 				r.Post("/team/members/{id}/remove", s.teamRemoveMember)

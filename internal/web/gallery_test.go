@@ -51,6 +51,15 @@ func TestGallery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create %s: %v", path, err)
 		}
+		if g.standalone {
+			if err := g.page.Render(context.Background(), f); err != nil {
+				f.Close()
+				t.Fatalf("render %s: %v", g.file, err)
+			}
+			f.Close()
+			t.Logf("wrote %s", path)
+			continue
+		}
 		// Drawn as the operator sees it, on an install with every optional
 		// page: the gallery is for reviewing every page, and the Admin group
 		// is part of the chrome. Signed in, in a team, with projects — the
@@ -156,6 +165,10 @@ type galleryPage struct {
 
 	// customer draws the page as somebody who does not run the install.
 	customer bool
+
+	// standalone is a page that is its own document — the waker's — and is
+	// written as it is served, with no layout around it.
+	standalone bool
 }
 
 // section renders a labelled band so several states can share one image.
@@ -800,6 +813,67 @@ func galleryPages() []galleryPage {
 			}(),
 		},
 		{
+			// An app asleep: distinct from stopped in the list and on its
+			// page, since when, its last request, and Wake now.
+			file: "states-sleeping.html", path: "/apps/web",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}},
+			page: func() templ.Component {
+				asleep := sleepingGallery(running, now)
+				return stack(
+					section("Asleep", "hollow dot, not stopped; Wake now instead of Sleep now",
+						AppDetail(AppDetailData{
+							App: asleep, Siblings: []app.App{asleep, degraded, pending, stopped},
+							Deployments: deployments[1:2], Sleep: sleepStatusGallery(asleep, now),
+						})),
+					section("In a list", "sleeping beside running and stopped",
+						panelWrap(appRows([]app.App{asleep, degraded, stopped}))),
+				)
+			}(),
+		},
+		{
+			// The app's sleep setting, following its team, with its history.
+			file: "states-sleep-settings.html", path: "/apps/web/settings",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}, {Label: "Settings"}},
+			page: func() templ.Component {
+				d := settingsGallery(running, 8000, 16<<30)
+				st := sleepStatusGallery(running, now)
+				d.Sleep = st
+				return appSleepSection(d)
+			}(),
+		},
+		{
+			// The waker's page, in each of its three states, as a browser
+			// visiting a sleeping app sees it.
+			file: "states-waking.html", path: "/", standalone: true,
+			page: WakingPage(WakingData{Brand: "Kilicore", App: "shop", State: wakeStarting, Refresh: 3,
+				Sentence: wakeSentence("shop", wakeStarting)}),
+		},
+		{
+			file: "states-waking-busy.html", path: "/", standalone: true,
+			page: WakingPage(WakingData{Brand: "Kilicore", App: "shop", State: wakeBusy, Refresh: 60,
+				Sentence: wakeSentence("shop", wakeBusy)}),
+		},
+		{
+			// Capacity with apps asleep: what they would take awake, and the
+			// reserve kept so a quarter of them can wake at once.
+			file: "states-admin-capacity-sleeping.html", path: "/admin/capacity",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Capacity"}},
+			page: func() templ.Component {
+				p := galleryPolicy(2, 10)
+				p.WakeReservePercent = 25
+				snap := galleryCapacity(nodes, now, p, 1)
+				snap.Sleeping = app.SleepingCapacity{
+					Apps: 14, CPUMillis: 3500, MemoryBytes: 7 << 30, ReservePercent: 25,
+					ReserveCPUMillis: 875, ReserveMemoryBytes: 7 << 28,
+				}
+				d := CapacityData{OK: true, CanAddNode: true, Sleeping: true,
+					Form: capacityPolicyForm(snap.Policy), Refusals: galleryRefusals(now)}
+				d.addSnapshot(snap)
+				d.addTeams(galleryTeams(now))
+				return AdminCapacity(d)
+			}(),
+		},
+		{
 			// What a customer is told when the install is nearly full: that a
 			// change may be refused, and no figure behind it.
 			file: "states-room-notice.html", path: "/apps/new", customer: true,
@@ -813,6 +887,38 @@ func galleryPages() []galleryPage {
 			}(),
 		},
 	}
+}
+
+// sleepingGallery is an app asleep for the last forty minutes, last asked for
+// an hour and a quarter ago.
+func sleepingGallery(a app.App, now time.Time) app.App {
+	since, last := now.Add(-40*time.Minute), now.Add(-75*time.Minute)
+	a.Sleep = app.Sleep{
+		Setting: app.SleepSetting{Mode: app.SleepInherit}, State: app.SleepAsleep,
+		Since: &since, LastRequestAt: &last,
+	}
+	a.Status = orchestrator.AppStatus{Phase: orchestrator.PhaseStopped}
+	return a
+}
+
+// sleepStatusGallery is an app following a team that sleeps after 30 idle
+// minutes, with a few nights behind it.
+func sleepStatusGallery(a app.App, now time.Time) *app.SleepStatus {
+	team := app.SleepPolicy{Enabled: true, After: 30 * time.Minute}
+	idle := int32(30)
+	at := func(d time.Duration) *time.Time { t := now.Add(d); return &t }
+	st := &app.SleepStatus{
+		Setting: app.SleepSetting{Mode: app.SleepInherit}, Team: team, Effective: team, Sleep: a.Sleep,
+		History: []app.SleepInterval{
+			{From: now.Add(-9 * time.Hour), To: at(-2 * time.Hour), IdleMinutes: &idle, WokeBy: app.WokeByRequest},
+			{From: now.Add(-26 * time.Hour), To: at(-19 * time.Hour), WokeBy: app.WokeByManual},
+			{From: now.Add(-50 * time.Hour), To: at(-43 * time.Hour), IdleMinutes: &idle, WokeBy: app.WokeByDeploy},
+		},
+	}
+	if a.Sleep.Asleep() {
+		st.History = append([]app.SleepInterval{{From: *a.Sleep.Since, IdleMinutes: &idle}}, st.History...)
+	}
+	return st
 }
 
 // galleryPolicy is an enforced policy selling CPU at a ratio and keeping a

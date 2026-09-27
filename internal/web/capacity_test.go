@@ -235,8 +235,9 @@ func TestTheCapacityPolicyFormSavesAndRefuses(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("POST a sensible policy = %d, want 303", rec.Code)
 	}
+	// No wake reserve in the form is the default one, not none.
 	want := app.CapacityPolicy{Enforce: true, CPURatio: 2, MemoryRatio: 1, ReservePercent: 10,
-		WarnPercent: 85, StorageBytes: 500 << 30}
+		WarnPercent: 85, StorageBytes: 500 << 30, WakeReservePercent: 25}
 	if c.saved == nil || *c.saved != want {
 		t.Fatalf("saved %+v, want %+v", c.saved, want)
 	}

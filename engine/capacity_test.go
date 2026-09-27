@@ -46,7 +46,7 @@ func TestAWrapperReadsTheInstallsCapacity(t *testing.T) {
 	t.Cleanup(e.Close)
 	defaults := func() {
 		if err := e.Apps.SetCapacityPolicy(context.Background(), CapacityPolicy{
-			CPURatio: 1, MemoryRatio: 1, WarnPercent: 80,
+			CPURatio: 1, MemoryRatio: 1, WarnPercent: 80, WakeReservePercent: 25,
 		}); err != nil {
 			t.Errorf("reset the capacity policy: %v", err)
 		}

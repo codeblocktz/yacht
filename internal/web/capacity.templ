@@ -77,6 +77,9 @@ templ AdminCapacity(d CapacityData) {
 	</div>
 	if d.Snapshot != nil {
 		@capacitySold(*d.Snapshot)
+		if d.Snapshot.Sleeping.Apps > 0 || d.Sleeping {
+			@capacitySleeping(*d.Snapshot)
+		}
 		@capacityPolicyPanel(d)
 		@capacityRefusals(d)
 	}
@@ -233,6 +236,8 @@ templ capacityPolicyPanel(d CapacityData) {
 						"Of what is sellable. Past it, every operator page says so.")
 					@policyField("storage", "Storage capacity", "GiB", d.Form.Storage, "decimal", "Not counted",
 						"What your storage can provision. Empty is not counted — a node's disk is not volume capacity.")
+					@policyField("wake_reserve", "Wake reserve", "%", d.Form.WakeReserve, "numeric", "25",
+						"Of the sleeping apps, kept free so that many can wake at once. A sleeper counts at this share of its size.")
 				</div>
 				<div class="flex items-center gap-2">
 					<button class="btn btn-primary" type="submit">Save policy</button>

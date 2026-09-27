@@ -31,7 +31,7 @@ INSERT INTO apps (
     repo_url, repo_branch, repo_subdir
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure
 `
 
 type CreateAppParams struct {
@@ -102,6 +102,17 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
@@ -302,7 +313,7 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -343,12 +354,23 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -389,6 +411,17 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
@@ -470,7 +503,7 @@ func (q *Queries) IncrementGitAppConfigVersions(ctx context.Context) error {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -513,6 +546,17 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.RunAsUser,
 			&i.ConfigVersion,
 			&i.ActiveReleaseID,
+			&i.SleepMode,
+			&i.SleepAfterMinutes,
+			&i.SleepState,
+			&i.SleepingSince,
+			&i.WakingSince,
+			&i.AwakeSince,
+			&i.LastRequestAt,
+			&i.RequestCount,
+			&i.RequestsSeenSince,
+			&i.WakeFailedAt,
+			&i.WakeFailure,
 		); err != nil {
 			return nil, err
 		}
@@ -525,7 +569,7 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 }
 
 const listAppsForReconciliation = `-- name: ListAppsForReconciliation :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure FROM apps
 WHERE active_release_id IS NOT NULL
    OR EXISTS (
        SELECT 1 FROM deployment_operations o
@@ -576,6 +620,17 @@ func (q *Queries) ListAppsForReconciliation(ctx context.Context) ([]App, error) 
 			&i.RunAsUser,
 			&i.ConfigVersion,
 			&i.ActiveReleaseID,
+			&i.SleepMode,
+			&i.SleepAfterMinutes,
+			&i.SleepState,
+			&i.SleepingSince,
+			&i.WakingSince,
+			&i.AwakeSince,
+			&i.LastRequestAt,
+			&i.RequestCount,
+			&i.RequestsSeenSince,
+			&i.WakeFailedAt,
+			&i.WakeFailure,
 		); err != nil {
 			return nil, err
 		}
@@ -588,7 +643,7 @@ func (q *Queries) ListAppsForReconciliation(ctx context.Context) ([]App, error) 
 }
 
 const listAppsWithLastDeploy = `-- name: ListAppsWithLastDeploy :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, d.status AS last_deploy_status
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, d.status AS last_deploy_status
 FROM apps a
 LEFT JOIN LATERAL (
     SELECT status FROM deployments
@@ -652,6 +707,17 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 			&i.App.RunAsUser,
 			&i.App.ConfigVersion,
 			&i.App.ActiveReleaseID,
+			&i.App.SleepMode,
+			&i.App.SleepAfterMinutes,
+			&i.App.SleepState,
+			&i.App.SleepingSince,
+			&i.App.WakingSince,
+			&i.App.AwakeSince,
+			&i.App.LastRequestAt,
+			&i.App.RequestCount,
+			&i.App.RequestsSeenSince,
+			&i.App.WakeFailedAt,
+			&i.App.WakeFailure,
 			&i.LastDeployStatus,
 		); err != nil {
 			return nil, err
@@ -794,7 +860,7 @@ SET health_path     = $1,
 WHERE owner_id = $3 AND id = $4
   AND (health_path, health_liveness)
       IS DISTINCT FROM ($1, $2)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure
 `
 
 type SetAppHealthParams struct {
@@ -841,6 +907,17 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
@@ -849,7 +926,7 @@ const setAppImage = `-- name: SetAppImage :one
 UPDATE apps
 SET image = $3, config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $1 AND id = $2 AND image IS DISTINCT FROM $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure
 `
 
 type SetAppImageParams struct {
@@ -893,6 +970,17 @@ func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, 
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
@@ -929,7 +1017,7 @@ const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $1 AND id = $2 AND replicas IS DISTINCT FROM $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure
 `
 
 type SetAppReplicasParams struct {
@@ -970,6 +1058,17 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }
@@ -1015,7 +1114,7 @@ WHERE owner_id = $11 AND id = $12
       IS DISTINCT FROM
       ($1, $2, $3, $4, $5, $6,
        $7, $8, $9, $10)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure
 `
 
 type UpdateAppParams struct {
@@ -1087,6 +1186,17 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.RunAsUser,
 		&i.ConfigVersion,
 		&i.ActiveReleaseID,
+		&i.SleepMode,
+		&i.SleepAfterMinutes,
+		&i.SleepState,
+		&i.SleepingSince,
+		&i.WakingSince,
+		&i.AwakeSince,
+		&i.LastRequestAt,
+		&i.RequestCount,
+		&i.RequestsSeenSince,
+		&i.WakeFailedAt,
+		&i.WakeFailure,
 	)
 	return i, err
 }

@@ -140,4 +140,7 @@ templ TeamPage(d TeamPageData) {
 			</div>
 		</div>
 	}
+	if d.Sleep != nil {
+		@teamSleepPanel(*d.Sleep, d.Viewer.CanAdminister())
+	}
 }

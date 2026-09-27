@@ -295,6 +295,12 @@ type AppSpec struct {
 	// it comes from a private registry. Empty leaves the namespace without a
 	// pull secret, which is right for a public image.
 	RegistryAuth []byte
+
+	// Waker, when set, routes Hosts to the engine's waker instead of to the
+	// workload. Set while the workload sleeps, with Replicas zero, and while
+	// it wakes, with Replicas back — the route returns only once pods are
+	// ready to take it, so nobody is sent to a Service with nothing behind it.
+	Waker *WakerEndpoint
 }
 
 // VolumeSpec is one piece of storage attached to a workload.
@@ -343,7 +349,7 @@ func (s AppSpec) Validate() error {
 	if err := s.validateHealth(); err != nil {
 		return err
 	}
-	return nil
+	return s.validateWaker()
 }
 
 // validateIssued keeps IssuedHosts to names the Ingress actually routes and the
