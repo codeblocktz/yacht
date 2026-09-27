@@ -337,6 +337,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Apps:         e.Apps,
 		Slots:        ov.Slots,
 		Extra:        ov.Extra,
+		Operators:    cfg.Operators,
 		// Accounts are a credential of their own, so the settings page must not
 		// report the install as open to anyone merely because no shared token
 		// is set.

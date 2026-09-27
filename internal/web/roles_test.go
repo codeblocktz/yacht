@@ -208,9 +208,15 @@ type roleTeam struct {
 
 func newRoleTeam(t *testing.T, teamID, appName string) *roleTeam {
 	t.Helper()
+	return newRoleTeamWith(t, teamID, appName, nil)
+}
+
+// newRoleTeamWith is newRoleTeam on an install that names its operators.
+func newRoleTeamWith(t *testing.T, teamID, appName string, operators []string) *roleTeam {
+	t.Helper()
 	ctx := context.Background()
 
-	h := newLiveHarness(t, teamID)
+	h := newLiveHarnessWith(t, teamID, "", operators)
 	h.installedApp(t, appName)
 
 	rt := &roleTeam{liveHarness: h, appName: appName}
@@ -415,4 +421,53 @@ func (rt *roleTeam) postClaiming(
 	rec := httptest.NewRecorder()
 	rt.handler.ServeHTTP(rec, req)
 	return rec
+}
+
+// Cluster-wide pages read across every team, so they are the operator's. With
+// no operators named, that is the owner of the team — the single-team reading
+// — and a member neither reaches them nor is offered them.
+func TestClusterPagesAreTheOperators(t *testing.T) {
+	rt := newRoleTeam(t, "web-role-operator", "operator-app")
+
+	for _, path := range []string{"/cluster/nodes", "/cluster/pods", "/cluster/volumes", "/cluster/events"} {
+		if code := rt.getAs(t, path, rt.owner).Code; code != http.StatusOK {
+			t.Errorf("GET %s as the owner = %d, want 200 — with no operators named, the owner is one", path, code)
+		}
+		if code := rt.getAs(t, path, rt.member).Code; code != http.StatusForbidden {
+			t.Errorf("GET %s as a member = %d, want 403", path, code)
+		}
+	}
+
+	home := rt.getAs(t, "/", rt.member).Body.String()
+	if strings.Contains(home, `href="/cluster/nodes"`) {
+		t.Error("a member is offered the Infrastructure pages")
+	}
+	if strings.Contains(home, ">Nodes<") {
+		t.Error("a member's overview shows the cluster's nodes")
+	}
+	if !strings.Contains(rt.getAs(t, "/", rt.owner).Body.String(), `href="/cluster/nodes"`) {
+		t.Error("the owner, who is the operator here, is not offered the Infrastructure pages")
+	}
+}
+
+// Named operators replace the team-owner reading entirely. On an install
+// hosting several teams this is the whole point: a team's owner must not be
+// able to drain the nodes every other team runs on.
+func TestNamedOperatorsReplaceTeamOwners(t *testing.T) {
+	rt := newRoleTeamWith(t, "web-role-named-op", "named-op-app", []string{"Admin@Web.Test"})
+
+	if code := rt.getAs(t, "/cluster/pods", rt.owner).Code; code != http.StatusForbidden {
+		t.Errorf("GET /cluster/pods as a team owner who is not an operator = %d, want 403", code)
+	}
+	if code := rt.postAs(t, "/cluster/nodes/any/drain", rt.owner).Code; code == http.StatusSeeOther || code == http.StatusOK {
+		t.Errorf("a team owner who is not an operator could drain a node: %d", code)
+	}
+	// The operator is named by address, case-insensitively, whatever their
+	// role in the team happens to be.
+	if code := rt.getAs(t, "/cluster/pods", rt.admin).Code; code != http.StatusOK {
+		t.Errorf("GET /cluster/pods as the named operator = %d, want 200", code)
+	}
+	if code := rt.getAs(t, "/cluster/pods", rt.member).Code; code != http.StatusForbidden {
+		t.Errorf("GET /cluster/pods as a member = %d, want 403", code)
+	}
 }

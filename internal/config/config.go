@@ -80,6 +80,16 @@ type Config struct {
 	// has an account of its own.
 	OwnerEmail string
 
+	// Operators are the people who run the install itself, as opposed to a
+	// team on it: nodes, the registry, DNS, every team's quota. Email
+	// addresses, matched case-insensitively against the signed-in person.
+	//
+	// Empty keeps the single-team reading — the owner of the team a request
+	// acts as is the operator — which is right for an install with one team
+	// and wrong for one hosting several: there, every team's owner would be
+	// able to drain the nodes every other team runs on.
+	Operators []string
+
 	// SecretKey seals secret environment variables, base64 of 32 bytes.
 	//
 	// Empty means secrets are refused rather than stored readable. Losing it
@@ -192,6 +202,7 @@ func Load() (Config, error) {
 		CertIssuer:          strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
 		DNSResolver:         env("YACHT_DNS_RESOLVER", ""),
 		ReservedDomains:     envList("YACHT_RESERVED_DOMAINS"),
+		Operators:           envList("YACHT_OPERATORS"),
 		BaseURL:             strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
 		SMTPAddr:            env("YACHT_SMTP_ADDR", ""),
 		SMTPUsername:        env("YACHT_SMTP_USER", ""),

@@ -235,6 +235,12 @@ type Options struct {
 	// handling as the engine's without re-implementing any of it.
 	Extra ExtraRoutes
 
+	// Operators are the email addresses of the people who run the install:
+	// the only ones who reach cluster-wide pages and actions. Empty means the
+	// owner of the team a request acts as, which is right for one team and
+	// wrong for many. See config.Config.Operators.
+	Operators []string
+
 	// Authenticated reports whether a credential is required, purely so the
 	// settings page can warn when it is not.
 	Authenticated bool
@@ -331,6 +337,7 @@ type Server struct {
 	apps      Apps
 	slots     SlotProvider
 	extra     ExtraRoutes
+	operators map[string]bool
 	authn     bool
 	ver       string
 	appDomain string
@@ -434,6 +441,7 @@ func New(opts Options) (*Server, error) {
 		apps:      opts.Apps,
 		slots:     opts.Slots,
 		extra:     opts.Extra,
+		operators: normaliseEmails(opts.Operators),
 		authn:     opts.Authenticated,
 		ver:       opts.Version,
 		appDomain: opts.AppDomain,
@@ -649,11 +657,6 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/account/password/remove", s.accountPasswordRemove)
 			}
 
-			r.Get("/cluster", s.clusterNodes)
-			r.Get("/cluster/nodes", s.clusterNodes)
-			r.Get("/cluster/pods", s.clusterPods)
-			r.Get("/cluster/volumes", s.clusterVolumes)
-			r.Get("/cluster/events", s.clusterEvents)
 			r.Get("/settings", s.settings)
 
 			if s.extra.Member != nil {
@@ -720,7 +723,29 @@ func (s *Server) Handler() http.Handler {
 			}
 		})
 
-		// The cluster's own settings, gated at owner whether or not accounts
+		// The operator: whoever runs the install, as opposed to a team on it.
+		//
+		// Cluster-wide views read across every team — the pods list is every
+		// namespace's pods — so they are the operator's, not any team's
+		// member's. On an install with one team the operator is that team's
+		// owner, which is the reading everything below had before operators
+		// existed; on one hosting several, YACHT_OPERATORS names them, and a
+		// team's owner can no longer drain the nodes the other teams run on.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireOperator)
+
+			r.Get("/cluster", s.clusterNodes)
+			r.Get("/cluster/nodes", s.clusterNodes)
+			r.Get("/cluster/pods", s.clusterPods)
+			r.Get("/cluster/volumes", s.clusterVolumes)
+			r.Get("/cluster/events", s.clusterEvents)
+
+			if s.extra.Operator != nil {
+				s.extra.Operator(r)
+			}
+		})
+
+		// The cluster's own settings, gated at the operator whether or not accounts
 		// are switched on.
 		//
 		// Not in the group below, because that one only exists when there are
@@ -736,7 +761,7 @@ func (s *Server) Handler() http.Handler {
 		// owner already draws.
 		if s.joiner != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireOperator)
 
 				r.Get("/cluster/dns", s.dnsSettings)
 				r.Post("/cluster/dns", s.dnsSet)
@@ -758,7 +783,7 @@ func (s *Server) Handler() http.Handler {
 		// unavailable.
 		if s.registries != nil {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireOperator)
 
 				r.Get("/cluster/registry", s.registrySettings)
 				r.Post("/cluster/registry", s.registrySet)
@@ -777,7 +802,7 @@ func (s *Server) Handler() http.Handler {
 		// feature because an unrelated one was unavailable.
 		if _, ok := s.nodeManager(); ok {
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireRole(account.RoleOwner))
+				r.Use(s.requireOperator)
 
 				r.Get("/cluster/nodes/{name}", s.nodeDetail)
 				r.Get("/cluster/nodes/{name}/status", s.nodeDetailFragment)
@@ -831,6 +856,9 @@ type ExtraRoutes struct {
 	Admin func(r chi.Router)
 	// Owner is behind the owner gate: who can administer, and what it costs.
 	Owner func(r chi.Router)
+	// Operator is behind the operator gate: the people who run the install
+	// rather than a team on it. See Server.IsOperator.
+	Operator func(r chi.Router)
 }
 
 // Render draws a page inside the engine's layout, with the chrome the
@@ -893,7 +921,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 
-	data := OverviewData{OwnerName: displayName(owner), ClusterOK: true}
+	data := OverviewData{OwnerName: displayName(owner), ClusterOK: true, Operator: s.IsOperator(r)}
 	if err := s.orch.Ping(ctx); err != nil {
 		data.ClusterOK = false
 		data.ClusterError = err.Error()

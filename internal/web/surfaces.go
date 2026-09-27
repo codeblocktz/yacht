@@ -17,6 +17,10 @@ import (
 type Surfaces struct {
 	DNS      bool
 	Registry bool
+
+	// Operator is whether this request's person runs the install, and so
+	// whether the cluster-wide pages are theirs to be offered.
+	Operator bool
 }
 
 // surfacesKey addresses them on the request. An unexported struct type, so
@@ -40,7 +44,10 @@ func (s *Server) withSurfaces(next http.Handler) http.Handler {
 		Registry: s.registries != nil,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Per request, unlike the rest: it depends on who is asking.
+		here := available
+		here.Operator = s.IsOperator(r)
 		next.ServeHTTP(w, r.WithContext(
-			context.WithValue(r.Context(), surfacesKey{}, available)))
+			context.WithValue(r.Context(), surfacesKey{}, here)))
 	})
 }
