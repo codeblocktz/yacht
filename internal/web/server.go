@@ -230,6 +230,11 @@ type Options struct {
 	// Slots is optional; DefaultSlots is used when nil.
 	Slots SlotProvider
 
+	// Extra is routes a wrapping application mounts inside the engine's own
+	// role gates, so its pages get the same session, identity and CSRF
+	// handling as the engine's without re-implementing any of it.
+	Extra ExtraRoutes
+
 	// Authenticated reports whether a credential is required, purely so the
 	// settings page can warn when it is not.
 	Authenticated bool
@@ -325,6 +330,7 @@ type Server struct {
 	ident     identity.Provider
 	apps      Apps
 	slots     SlotProvider
+	extra     ExtraRoutes
 	authn     bool
 	ver       string
 	appDomain string
@@ -427,6 +433,7 @@ func New(opts Options) (*Server, error) {
 		ident:     opts.Identity,
 		apps:      opts.Apps,
 		slots:     opts.Slots,
+		extra:     opts.Extra,
 		authn:     opts.Authenticated,
 		ver:       opts.Version,
 		appDomain: opts.AppDomain,
@@ -649,6 +656,10 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/cluster/events", s.clusterEvents)
 			r.Get("/settings", s.settings)
 
+			if s.extra.Member != nil {
+				s.extra.Member(r)
+			}
+
 			// Switching team is gated at member because that is what holding any
 			// session amounts to — the gate proves this browser is acting in a team
 			// it belongs to. Which team it may move to is a separate question, and
@@ -697,6 +708,10 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/apps/{name}/storage", s.storageAttach)
 			r.Post("/apps/{name}/storage/{volume}/resize", s.storageResize)
 			r.Post("/apps/{name}/storage/{volume}/delete", s.storageDelete)
+
+			if s.extra.Admin != nil {
+				s.extra.Admin(r)
+			}
 
 			if s.accounts != nil {
 				r.Post("/team/invite", s.teamInvite)
@@ -790,9 +805,55 @@ func (s *Server) Handler() http.Handler {
 				// gated, and useless.
 			})
 		}
+
+		// A wrapping application's owner-only routes: billing, most likely.
+		// Its own group so it exists whether or not accounts are on — a
+		// single-owner install has an owner too.
+		if s.extra.Owner != nil {
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireRole(account.RoleOwner))
+				s.extra.Owner(r)
+			})
+		}
 	})
 
 	return r
+}
+
+// ExtraRoutes are what a wrapping application mounts inside the engine's role
+// gates. Each is called with the group's router once, while the handler is
+// being built, and may register any routes it likes there.
+type ExtraRoutes struct {
+	// Member is behind identity and the member gate: reading, and every
+	// change a redeploy undoes.
+	Member func(r chi.Router)
+	// Admin is behind the admin gate: what a redeploy does not undo.
+	Admin func(r chi.Router)
+	// Owner is behind the owner gate: who can administer, and what it costs.
+	Owner func(r chi.Router)
+}
+
+// Render draws a page inside the engine's layout, with the chrome the
+// SlotProvider supplies and whatever flash the last request left. For a
+// wrapping application's own pages, so they look like the engine's.
+func (s *Server) Render(w http.ResponseWriter, r *http.Request, page templ.Component) {
+	s.render(w, r, page)
+}
+
+// RenderStatus is Render with a status other than 200 — a form re-shown with
+// its refusal, say.
+func (s *Server) RenderStatus(w http.ResponseWriter, r *http.Request, status int, page templ.Component) {
+	s.renderStatus(w, r, status, page)
+}
+
+// FlashOK, FlashErr and FlashWarn leave a message for the next full page
+// render, across a redirect. Same mechanism as the engine's own actions use.
+func (s *Server) FlashOK(w http.ResponseWriter, r *http.Request, text string) { s.flashOK(w, r, text) }
+func (s *Server) FlashErr(w http.ResponseWriter, r *http.Request, text string) {
+	s.flashErr(w, r, text)
+}
+func (s *Server) FlashWarn(w http.ResponseWriter, r *http.Request, text string) {
+	s.flashWarn(w, r, text)
 }
 
 // detailTab derives which tab is selected from the trailing path segment,

@@ -1,5 +1,11 @@
 .DEFAULT_GOAL := help
 GO ?= go
+
+# The engine builds alone. A go.work in a parent directory — the one that
+# lets an application wrapping the engine build against this checkout — must
+# not leak into the engine's own gates, or a change here could pass only
+# because of something beside it.
+export GOWORK := off
 TESTFLAGS ?=
 BIN := bin/yacht
 
@@ -134,7 +140,7 @@ shell-check: ## Lint the root-executed installer scripts
 boundary-check: ## Reject commercial-layer declarations in the engine
 	@# internal/web/ui is vendored templUI; its Lucide Wallet icon is not billing.
 	@if grep -rnE '^[[:space:]]*(type|func|var|const)[[:space:]]+[A-Za-z_]*(Tenant|tenant|Wallet|wallet|Billing|billing|Invoice|invoice|Subscription)' \
-		--include='*.go' --exclude-dir=ui ./cmd ./internal 2>/dev/null; then \
+		--include='*.go' --exclude-dir=ui ./cmd ./internal ./engine 2>/dev/null; then \
 		echo "::error::engine declares a commercial-layer concept — it belongs in the wrapping layer"; \
 		exit 1; \
 	fi
