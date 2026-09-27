@@ -38,6 +38,15 @@ const (
 	// app reconciler.
 	AnnotationReleaseID     = "yacht/release-id"
 	AnnotationConfigVersion = "yacht/config-version"
+
+	// AnnotationRetiringSince marks a node being retired, with when it began
+	// as Unix seconds. The only state a retirement keeps.
+	AnnotationRetiringSince = "yacht/retiring-since"
+
+	// AnnotationRetiredFrom is written into an app's pod template by a
+	// retirement, which is what restarts it. Its value is the retirement's
+	// token, so writing it twice starts one rollout, not two.
+	AnnotationRetiredFrom = "yacht/retired-from"
 )
 
 // FieldManager identifies the engine to Kubernetes server-side apply. Using a

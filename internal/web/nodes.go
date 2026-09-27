@@ -152,6 +152,8 @@ func nodeDrainSteps(d NodeDetailData) []Step {
 // nodeJoinStatus is the word beside a node in the join list.
 func nodeJoinStatus(n orchestrator.NodeInfo) (label, class string) {
 	switch {
+	case n.Ready && !n.RetiringSince.IsZero():
+		return "retiring", "status-warn status-live"
 	case n.Ready && n.Unschedulable:
 		return "cordoned", "status-warn"
 	case n.Ready:

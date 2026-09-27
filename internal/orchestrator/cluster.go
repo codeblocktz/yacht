@@ -52,6 +52,10 @@ type NodeInfo struct {
 	// Empty while the node is Ready.
 	Reason  string
 	Message string
+
+	// RetiringSince is when this node's retirement began, zero when it is not
+	// being retired.
+	RetiringSince time.Time
 }
 
 // Joining reports whether this node has registered and is not serving yet.

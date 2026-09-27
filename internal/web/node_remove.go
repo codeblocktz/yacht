@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,16 @@ type NodeDetailData struct {
 	// that a drain would move, which is the condition for offering removal.
 	Pods    []orchestrator.PodInfo
 	Drained bool
+
+	// Retire is what retiring this node involves, or how far a retirement
+	// under way has got. CanRetire is false when the orchestrator cannot move
+	// work gently, or the plan could not be read, which leaves only the drain.
+	Retire    orchestrator.RetirePlan
+	CanRetire bool
+
+	// Removable is when removal is offered: drained, or retired down to
+	// nothing but pods that stay.
+	Removable bool
 
 	// CanManage is false when the orchestrator cannot take a node out of
 	// service, so the page explains rather than offering buttons that fail.
@@ -101,6 +112,8 @@ func (s *Server) nodeDetailData(r *http.Request, notice string) NodeDetailData {
 			break
 		}
 	}
+	data.Removable = data.Drained
+	s.fillRetire(r, &data)
 	return data
 }
 
@@ -114,7 +127,15 @@ func (s *Server) nodeCordon(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	on := r.FormValue("unschedulable") == "true"
 
-	if err := nm.Cordon(r.Context(), name, on); err != nil {
+	// Reopening a retiring node abandons the retirement too. Otherwise the
+	// next pass would close it again, and the button would seem to do nothing.
+	cordon := nm.Cordon
+	if !on && s.retirer != nil {
+		cordon = func(ctx context.Context, node string, _ bool) error {
+			return s.retirer.Stop(ctx, node)
+		}
+	}
+	if err := cordon(r.Context(), name, on); err != nil {
 		s.renderNodeError(w, r, err)
 		return
 	}
@@ -182,9 +203,9 @@ func (s *Server) nodeRemove(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !data.Drained {
+	if !data.Removable {
 		s.renderNodeError(w, r, errors.New(
-			"this node is still running workloads — drain it before removing it"))
+			"this node is still running workloads — retire or drain it before removing it"))
 		return
 	}
 

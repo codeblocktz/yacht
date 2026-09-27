@@ -493,6 +493,22 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			// Retiring, half way: one app moved, one moving, one waiting, and
+			// what Yacht does not manage queued behind them. The page a hosting
+			// business watches while it swaps a small machine for a bigger one.
+			file: "states-node-retiring.html", path: "/cluster/nodes/yacht-w1",
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
+			page:   NodeDetail(retiringGallery(now)),
+		},
+		{
+			// Retired down to a database whose volume lives on the machine:
+			// listed as staying, with its size, and removal offered with the
+			// warning that the volume goes with it.
+			file: "states-node-pinned.html", path: "/cluster/nodes/yacht-w1",
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
+			page:   NodeDetail(pinnedGallery(now)),
+		},
+		{
 			// The reworked settings, for both kinds of app. A Git app shows a
 			// connected repository and a locked image; an image app shows the
 			// image and no repository at all — two different pages from one
@@ -1040,6 +1056,60 @@ func issuingGallery(c domain.Custom, cert orchestrator.Certificate) NetworkingDa
 	d.Net.Issuing = true
 	d.Net.Certs = map[string]orchestrator.Certificate{c.Host: cert}
 	d.Settled = domainsSettled(d.Net)
+	return d
+}
+
+// retiringGallery is a node half way through retiring.
+func retiringGallery(now time.Time) NodeDetailData {
+	node := orchestrator.NodeInfo{
+		Name: "yacht-w1", Ready: true, Unschedulable: true, Version: "v1.35.5+k3s1",
+		OS: "linux", Architecture: "amd64", Address: "10.0.0.11",
+		RetiringSince: now.Add(-4 * time.Minute),
+	}
+	pod := func(ns, name, app string, drain bool) orchestrator.PodInfo {
+		return orchestrator.PodInfo{Name: name, Namespace: ns, App: app, Node: node.Name,
+			Phase: "Running", Ready: 1, Total: 1, DrainMoves: drain}
+	}
+	return NodeDetailData{
+		Node: node, Found: true, CanManage: true, CanRetire: true,
+		Pods: []orchestrator.PodInfo{
+			pod("kube-system", "coredns-7b98449c4-kq2wz", "", true),
+			pod("kube-system", "svclb-traefik-4x8vd", "", false),
+			pod("yacht-shop", "web-6d5f7c9b8-2xk9p", "web", true),
+			pod("yacht-shop", "worker-5c7d8b6f4-m3n7q", "worker", true),
+		},
+		Retire: orchestrator.RetirePlan{
+			Node: node.Name, Since: node.RetiringSince, Cordoned: true,
+			Apps: []orchestrator.RetireApp{
+				{Namespace: "yacht-shop", Name: "api", Rolling: true, Restarted: true, RolledOut: true},
+				{Namespace: "yacht-shop", Name: "web", PodsHere: 1, Rolling: true, Restarted: true},
+				{Namespace: "yacht-shop", Name: "worker", PodsHere: 1, Rolling: true},
+			},
+			Evict: []orchestrator.PodRef{{Namespace: "kube-system", Name: "coredns-7b98449c4-kq2wz"}},
+		},
+	}
+}
+
+// pinnedGallery is a node retired down to a pod held by its volume.
+func pinnedGallery(now time.Time) NodeDetailData {
+	d := retiringGallery(now)
+	d.Pods = []orchestrator.PodInfo{
+		{Name: "postgres-7f9c6d5b4-q9zlw", Namespace: "yacht-shop", App: "postgres", Node: d.Node.Name,
+			Phase: "Running", Ready: 1, Total: 1, DrainMoves: true},
+		{Name: "svclb-traefik-4x8vd", Namespace: "kube-system", Node: d.Node.Name,
+			Phase: "Running", Ready: 1, Total: 1},
+	}
+	d.Retire.Apps = []orchestrator.RetireApp{
+		{Namespace: "yacht-shop", Name: "api", Rolling: true, Restarted: true, RolledOut: true},
+		{Namespace: "yacht-shop", Name: "web", Rolling: true, Restarted: true, RolledOut: true},
+		{Namespace: "yacht-shop", Name: "worker", Rolling: true, Restarted: true, RolledOut: true},
+	}
+	d.Retire.Evict = nil
+	d.Retire.Pinned = []orchestrator.PinnedPod{{
+		Namespace: "yacht-shop", Name: "postgres-7f9c6d5b4-q9zlw", App: "postgres",
+		Claim: "postgres-data", SizeBytes: 20 << 30,
+	}}
+	d.Removable = true
 	return d
 }
 

@@ -86,6 +86,7 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			PodCapacity:       int(n.Status.Capacity.Pods().Value()),
 			CreatedAt:         n.CreationTimestamp.Time,
 			Unschedulable:     n.Spec.Unschedulable,
+			RetiringSince:     retiringSince(n),
 
 			CPUAllocatableMillis: n.Status.Allocatable.Cpu().MilliValue(),
 			MemAllocatableBytes:  n.Status.Allocatable.Memory().Value(),

@@ -1,7 +1,5 @@
 package web
 
-import "strconv"
-
 // NodeDetail is one machine, what is on it, and how to take it out of service.
 templ NodeDetail(d NodeDetailData) {
 	@pageHead(d.Node.Name, "One machine in the cluster, and what it is running.", nil)
@@ -38,7 +36,9 @@ templ NodeDetail(d NodeDetailData) {
 					} else {
 						<span class="status status-err">not ready</span>
 					}
-					if d.Node.Unschedulable {
+					if d.Retire.Retiring() {
+						<span class="status status-warn">retiring</span>
+					} else if d.Node.Unschedulable {
 						<span class="status status-warn">cordoned</span>
 					}
 				</dd>
@@ -58,8 +58,10 @@ templ NodeDetail(d NodeDetailData) {
 	if d.CanManage {
 		@nodeActions(d)
 	}
-	// Draining is asynchronous: the eviction is a request, and the pods leave
-	// when they leave. The page watches rather than holding a request open.
+	// Retiring and draining are both asynchronous: a rollout finishes when its
+	// replacement is ready, an eviction when the pod leaves. The page watches
+	// rather than holding a request open, and since the retirement's state is
+	// read from the cluster, a reload shows exactly where it has got.
 	<div
 		hx-get={ "/cluster/nodes/" + d.Node.Name + "/status" }
 		hx-trigger="load, every 4s"
@@ -76,11 +78,18 @@ templ nodeActions(d NodeDetailData) {
 		</div>
 		<div class="panel-body">
 			<div class="flex flex-wrap items-center gap-2">
+				if d.CanRetire {
+					@retireButton(d)
+				}
 				if d.Node.Unschedulable {
-					<form method="post" action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/cordon") }>
-						<input type="hidden" name="unschedulable" value="false"/>
-						<button class="btn" type="submit">Allow scheduling again</button>
-					</form>
+					// While retiring, reopening the node is stopping the
+					// retirement, and the button above already says so.
+					if !d.Retire.Retiring() {
+						<form method="post" action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/cordon") }>
+							<input type="hidden" name="unschedulable" value="false"/>
+							<button class="btn" type="submit">Allow scheduling again</button>
+						</form>
+					}
 				} else {
 					<form method="post" action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/cordon") }>
 						<input type="hidden" name="unschedulable" value="true"/>
@@ -90,81 +99,136 @@ templ nodeActions(d NodeDetailData) {
 				<form
 					method="post"
 					action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/drain") }
-					data-confirm="Each pod restarts elsewhere. A pod whose storage lives on this machine cannot move and will stay pending until the node is back."
-					data-confirm-title="Drain this node?"
-					data-confirm-label="Drain node"
+					data-confirm="Every pod is evicted at once. An app with one replica is down until its replacement starts, and a pod whose storage lives on this machine cannot move and stays pending until the node is back. Retiring moves apps without the gap."
+					data-confirm-title="Force-drain this node?"
+					data-confirm-label="Force drain"
 				>
-					<button class="btn" type="submit">Drain</button>
+					<button class="btn" type="submit">Force drain</button>
 				</form>
-				if d.Drained {
-					<form
-						method="post"
-						action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/remove") }
-						data-confirm="The machine itself keeps running and must be shut down separately."
-						data-confirm-title="Remove this node?"
-						data-confirm-label="Remove node"
-					>
-						<button class="btn btn-danger" type="submit">Remove from cluster</button>
-					</form>
-			} else {
-					// Offered only once the node is empty. A button that would be
-					// refused is worse than one that is not there: it reads as
-					// permission and answers with an error.
-					//
-					// The reason moves from a title attribute into a popover: a
-					// title waits a second, cannot be reached by keyboard, and
-					// reads as a browser artefact rather than part of the page —
-					// the same argument .nav-tip already makes in the sidebar.
-					<span class="inline-flex items-center gap-1">
-						<button class="btn" type="button" disabled>
-							Remove from cluster
-						</button>
-						@helpNote("this cannot be removed yet") {
-							<p>
-								A node is only removed once nothing a drain would move is
-								left on it. Drain it first, and this becomes available when
-								the list below is empty.
-							</p>
-							<p class="mt-2">
-								If something refuses to move, the steps above name it. A pod
-								with storage on this machine cannot go anywhere, and that
-								one needs deciding rather than waiting.
-							</p>
-						}
-					</span>
-				}
+				@removeButton(d)
 			</div>
-			<p class="mt-3 text-[12.5px] text-muted-foreground">
-				Draining stops scheduling first, then asks each pod to leave. A pod
-				covered by a disruption budget is refused rather than taken down, and
-				the refusal is reported here.
+			if d.CanRetire {
+				<p class="mt-3 text-[12.5px] text-muted-foreground">
+					Retiring stops scheduling here, then moves each app with a rolling
+					restart, one at a time: the replacement starts on another node and is
+					ready before the original stops, so nobody using the app sees a gap.
+					Pods Yacht does not manage are evicted afterwards, as a drain would, and
+					pods that run on every node stay.
+				</p>
+			}
+			<p class="mt-2 text-[12.5px] text-muted-foreground">
+				Force drain is the blunt option: it evicts everything at once, which is
+				downtime for any app with a single replica. Use it when the machine is
+				already gone and there is nothing left to wait for.
 			</p>
 			<p class="mt-2 text-[12.5px] text-muted-foreground">
 				A pod with storage on this machine is the case to watch. Local volumes
-				are bound to the node that holds them, so the pod is evicted and then
-				has nowhere to go — it stays pending until this node accepts work
-				again, whatever spare capacity the rest of the cluster has.
+				are bound to the node that holds them, so no restart or eviction can move
+				it — it runs here until its data is moved, whatever spare capacity the
+				rest of the cluster has.
 			</p>
 		</div>
 	</div>
 }
 
-// NodeDetailBody is the polled half: how far the drain has got, and what is
-// still running.
+// retireButton starts or stops a retirement, or says why one cannot start.
+templ retireButton(d NodeDetailData) {
+	if d.Retire.Retiring() {
+		<form
+			method="post"
+			action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/retire/stop") }
+			data-confirm="The node takes new work again. Apps that already moved stay where they went."
+			data-confirm-title="Stop retiring this node?"
+			data-confirm-label="Stop retiring"
+		>
+			<button class="btn" type="submit">Stop retiring</button>
+		</form>
+	} else if d.Retire.Room.Fits() {
+		<form
+			method="post"
+			action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/retire") }
+			data-confirm="Scheduling stops here, then each app moves by rolling restart, one at a time, without a gap. Nothing is removed until you remove the node."
+			data-confirm-title="Retire this node?"
+			data-confirm-label="Retire node"
+		>
+			<button class="btn btn-primary" type="submit">Retire this node</button>
+		</form>
+	} else {
+		// Refused before it starts, not half way: a retirement that ran out of
+		// room would leave apps on a machine that no longer takes work.
+		<span class="inline-flex items-center gap-1">
+			<button class="btn btn-primary" type="button" disabled>Retire this node</button>
+			@helpNote("why this cannot be retired yet") {
+				<p>{ noRoomMessage(d.Node.Name, d.Retire.Room) }</p>
+			}
+		</span>
+	}
+}
+
+templ removeButton(d NodeDetailData) {
+	if d.Removable {
+		<form
+			method="post"
+			action={ templ.URL("/cluster/nodes/" + d.Node.Name + "/remove") }
+			if len(d.Retire.Pinned) > 0 {
+				data-confirm="Storage on this machine goes with it: the pods listed as staying for their volume have nowhere else to run. The machine itself keeps running and must be shut down separately."
+			} else {
+				data-confirm="The machine itself keeps running and must be shut down separately."
+			}
+			data-confirm-title="Remove this node?"
+			data-confirm-label="Remove node"
+		>
+			<button class="btn btn-danger" type="submit">Remove from cluster</button>
+		</form>
+	} else {
+		// Offered only once the node is empty. A button that would be
+		// refused is worse than one that is not there: it reads as
+		// permission and answers with an error.
+		//
+		// The reason moves from a title attribute into a popover: a
+		// title waits a second, cannot be reached by keyboard, and
+		// reads as a browser artefact rather than part of the page —
+		// the same argument .nav-tip already makes in the sidebar.
+		<span class="inline-flex items-center gap-1">
+			<button class="btn" type="button" disabled>
+				Remove from cluster
+			</button>
+			@helpNote("this cannot be removed yet") {
+				<p>
+					A node is only removed once everything that can move has left it.
+					Retire it first, and this becomes available when the steps below
+					reach the end.
+				</p>
+				<p class="mt-2">
+					If something refuses to move, the steps below name it. A pod
+					with storage on this machine cannot go anywhere, and that
+					one needs deciding rather than waiting.
+				</p>
+			}
+		</span>
+	}
+}
+
+// NodeDetailBody is the polled half: how far the retirement or drain has got,
+// and what is still running.
 templ NodeDetailBody(d NodeDetailData) {
-	<div class="panel mb-5">
-		<div class="panel-header">
-			<span class="panel-title">Taking out of service</span>
+	if d.CanRetire && (d.Retire.Retiring() || !d.Node.Unschedulable) {
+		@retirePanel(d)
+	} else {
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">Taking out of service</span>
+			</div>
+			<div class="panel-body">
+				@stepList(nodeDrainSteps(d))
+			</div>
 		</div>
-		<div class="panel-body">
-			@stepList(nodeDrainSteps(d))
-		</div>
-	</div>
+	}
 	<div class="panel">
 		<div class="panel-header">
 			<span class="panel-title">Running here</span>
 			<span class="text-muted-foreground">
-				{ strconv.Itoa(len(d.Pods)) } { plural(len(d.Pods), "pod") }
+				{ plural(len(d.Pods), "pod") }
 			</span>
 		</div>
 		if len(d.Pods) == 0 {
@@ -180,11 +244,11 @@ templ NodeDetailBody(d NodeDetailData) {
 							<span class="block truncate font-medium">{ p.Name }</span>
 							<span class="mono block truncate text-muted-foreground">{ p.Namespace }</span>
 						</span>
-						if !p.DrainMoves {
-							// Said rather than hidden. These are why "0 pods" never
-							// happens on a real node, and somebody waiting for that
-							// number deserves to know it is not coming.
-							<span class="status status-neutral">stays</span>
+						// Said rather than hidden. The pods that stay are why "0
+						// pods" never happens on a real node, and somebody waiting
+						// for that number deserves to know it is not coming.
+						if label, class := podRetireTag(d, p); label != "" {
+							<span class={ "status", class }>{ label }</span>
 						}
 						if p.Healthy() {
 							<span class="status status-ok">ready</span>
@@ -195,5 +259,44 @@ templ NodeDetailBody(d NodeDetailData) {
 				}
 			</div>
 		}
+	</div>
+}
+
+// retirePanel is a retirement's progress, or before one starts, what it would
+// do and whether there is room for it.
+templ retirePanel(d NodeDetailData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			if d.Retire.Retiring() {
+				<span class="panel-title">Retiring</span>
+				if d.Retire.Empty() {
+					<span class="status status-ok">ready to remove</span>
+				} else {
+					<span class="status status-info status-live">in progress</span>
+				}
+			} else {
+				<span class="panel-title">Retiring this node would</span>
+			}
+		</div>
+		<div class="panel-body">
+			if !d.Retire.Retiring() {
+				if d.Retire.Room.Fits() {
+					<p class="mb-4 text-[12.5px] text-muted-foreground">
+						{ roomDetail(d.Retire.Room) }
+					</p>
+				} else {
+					<div class="callout callout-err mb-4">
+						<div class="min-w-0">
+							<div class="font-medium">Not enough room elsewhere</div>
+							<p class="mt-0.5 text-muted-foreground">{ noRoomMessage(d.Node.Name, d.Retire.Room) }</p>
+							<p class="mt-1">
+								<a class="underline" href="/cluster/nodes/add">Add a node</a>
+							</p>
+						</div>
+					</div>
+				}
+			}
+			@stepList(nodeRetireSteps(d))
+		</div>
 	</div>
 }
