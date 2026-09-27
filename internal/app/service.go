@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -275,6 +276,14 @@ type Service struct {
 	// keeper seals secret variables. Nil when no key is configured, which is
 	// why every use goes through Configured() rather than a nil check.
 	keeper *secret.Keeper
+
+	// room is the cluster's machines, read at most every roomTTL, for
+	// admission and for the pages that show the install's capacity.
+	room *roomSource
+
+	// refusals is the capacity refusals still being recorded, so a test can
+	// wait for them rather than poll.
+	refusals sync.WaitGroup
 }
 
 // NewService wires the store and the orchestrator together.
@@ -297,6 +306,7 @@ func NewService(
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests,
+		room: newRoomSource(orch, log),
 	}
 }
 
@@ -420,7 +430,7 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 	q := s.q.WithTx(tx)
 
-	if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+	if err := s.admit(ctx, q, ownerID, quotaChange{
 		Changed: a.ID, Reshape: func(sh shape) shape {
 			sh.CPULimit, sh.MemoryLimit = in.CPULimit, in.MemoryLimit
 			return sh
@@ -614,7 +624,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if blueprint.Volume != nil {
 		change.Storage = blueprint.Volume.SizeBytes
 	}
-	if err := s.withinQuota(ctx, q, ownerID, change); err != nil {
+	if err := s.admit(ctx, q, ownerID, change); err != nil {
 		return App{}, err
 	}
 
@@ -1301,7 +1311,7 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 	q := s.q.WithTx(tx)
 
-	if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+	if err := s.admit(ctx, q, ownerID, quotaChange{
 		Changed: a.ID, Reshape: func(sh shape) shape { sh.Replicas = replicas; return sh },
 	}); err != nil {
 		return App{}, err

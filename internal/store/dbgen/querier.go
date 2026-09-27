@@ -6,6 +6,7 @@ package dbgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -53,6 +54,7 @@ type Querier interface {
 	// has just expired must fail here rather than in whatever checks it later.
 	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
+	CountCapacityRefusalsSince(ctx context.Context, since time.Time) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CountPendingReleaseBackfills(ctx context.Context) (int64, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
@@ -172,6 +174,11 @@ type Querier interface {
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
 	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
+	// The install's capacity policy and the changes refused for it.
+	//
+	// Install-wide, so unlike most queries here these take no owner_id — the same
+	// as the cluster join settings. See the 00032 migration.
+	GetCapacityPolicy(ctx context.Context) (CapacityPolicy, error)
 	// The join settings are install-wide, so unlike every other query here these
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
@@ -334,6 +341,8 @@ type Querier interface {
 	// because assigning one is a write and a read should not have side effects
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
+	// The operator's list, newest first, with the team's name as it is now.
+	ListCapacityRefusalsSince(ctx context.Context, arg ListCapacityRefusalsSinceParams) ([]ListCapacityRefusalsSinceRow, error)
 	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
 	// Every custom domain on the install, worst first.
 	//
@@ -346,6 +355,10 @@ type Querier interface {
 	// Newest first, for the team page. Scoped by the team acted as, which is
 	// whose record it is.
 	ListImpersonationEvents(ctx context.Context, arg ListImpersonationEventsParams) ([]ImpersonationEvent, error)
+	// Every app on the install, with its id so a change to one can be counted in
+	// place. What the admission check totals; see ListAppFootprints for why the
+	// arithmetic is in Go.
+	ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
 	// The columns are named rather than starred, and token_hash is not among them.
@@ -367,6 +380,11 @@ type Querier interface {
 	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
+	// Taken inside the transaction that commits a change, after the team's quota
+	// row, when the install enforces its capacity. Every change that would raise
+	// what the install has committed then runs one after another, so two creates
+	// racing for the last room cannot both read it as free.
+	LockCapacityPolicy(ctx context.Context) (CapacityPolicy, error)
 	// Claim counting and selection must share this transaction-wide lock. Row
 	// locks alone protect candidates, not the cluster-wide count: two connections
 	// can otherwise lock different rows after both observed one free build slot.
@@ -412,6 +430,7 @@ type Querier interface {
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
+	RecordCapacityRefusal(ctx context.Context, arg RecordCapacityRefusalParams) error
 	// Records what a check saw.
 	//
 	// Not scoped by owner, and deliberately: the background checker works through
@@ -462,6 +481,7 @@ type Querier interface {
 	// image update owns the build operation's single config_version increment.
 	SetAppRunAsUser(ctx context.Context, arg SetAppRunAsUserParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
+	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
@@ -484,6 +504,7 @@ type Querier interface {
 	// Scoped by expiry so a session that has ended cannot be made to act; execrows
 	// so the caller can tell that it was not.
 	StartActing(ctx context.Context, arg StartActingParams) (int64, error)
+	SumInstallVolumeBytes(ctx context.Context) (int64, error)
 	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.

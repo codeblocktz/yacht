@@ -25,10 +25,15 @@ type TemplateListData struct {
 	Stack     string
 	Slug      string
 	Error     string
+
+	// RoomShort says the install is nearly out of room; see NewAppData.
+	RoomShort bool
 }
 
 func (s *Server) templateList(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, TemplateList(TemplateListData{Templates: app.Templates()}))
+	s.render(w, r, TemplateList(TemplateListData{
+		Templates: app.Templates(), RoomShort: s.roomShort(r.Context()),
+	}))
 }
 
 // templateDeploy creates the stack and opens its canvas.
@@ -47,6 +52,7 @@ func (s *Server) templateDeploy(w http.ResponseWriter, r *http.Request) {
 			slog.String("template", slug), slog.String("error", err.Error()))
 		data := TemplateListData{
 			Templates: app.Templates(), Stack: stack, Slug: slug, Error: err.Error(),
+			RoomShort: s.roomShort(ctx),
 		}
 		if errors.Is(err, app.ErrTemplateNotFound) {
 			http.NotFound(w, r)

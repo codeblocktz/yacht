@@ -298,6 +298,13 @@ type Options struct {
 	// team on the install, and what each may commit.
 	Quotas Quotas
 
+	// Capacity, when set with Quotas, puts the capacity policy on the Admin
+	// area's Capacity page, the operator's alert on every page when the
+	// install is nearly out of room, and a notice on the deploy forms when it
+	// is short. Nil leaves the page reading the cluster directly, as it did
+	// before there was a policy.
+	Capacity Capacity
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -396,6 +403,10 @@ type Server struct {
 	// pages off.
 	quotas Quotas
 
+	// capacity is how much of the install is sold. Nil leaves the policy,
+	// the operator's alert and the customers' notice off.
+	capacity Capacity
+
 	// logs reads container output. Nil leaves the log surface off, which is
 	// right for an install whose orchestrator has no containers to read.
 	logs Logger
@@ -487,6 +498,7 @@ func New(opts Options) (*Server, error) {
 		hooks:          opts.Hooks,
 		registries:     opts.Registries,
 		quotas:         opts.Quotas,
+		capacity:       opts.Capacity,
 		logs:           opts.Logs,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
@@ -803,6 +815,9 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/admin/teams/{id}", s.adminTeam)
 				r.Post("/admin/teams/{id}/quota", s.adminTeamQuota)
 				r.Get("/admin/capacity", s.adminCapacity)
+				if s.capacity != nil {
+					r.Post("/admin/capacity/policy", s.adminCapacityPolicy)
+				}
 			}
 
 			// Acting as a team. Mounted wherever there are sessions to layer a
@@ -1003,6 +1018,15 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 	if summary, err := s.orch.ClusterSummary(ctx); err == nil {
 		data.Summary = summary
 	}
+	// How much of the install is sold, beside the cluster's own numbers, and
+	// only where they are: it totals every team.
+	if data.Operator && s.capacity != nil && s.quotas != nil {
+		if snap, err := s.capacity.Capacity(ctx); err == nil {
+			data.Capacity = &snap
+		} else {
+			s.log.Error("read capacity for the overview", slog.String("error", err.Error()))
+		}
+	}
 	if s.apps != nil {
 		if apps, err := s.apps.List(ctx, owner.ID); err == nil {
 			data.Apps = apps
@@ -1040,7 +1064,7 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
-	data := NewAppData{Sources: s.sources(r.Context())}
+	data := NewAppData{Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context())}
 
 	// Only somebody the registry page would actually admit is offered a link
 	// to it. A control that leads to a 403 tells the viewer they have a
@@ -1146,7 +1170,9 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderErrFor(
 	w http.ResponseWriter, r *http.Request, src app.Source, form NewAppForm, msg string,
 ) {
-	data := NewAppData{Error: msg, Form: form, Sources: s.sources(r.Context())}
+	data := NewAppData{
+		Error: msg, Form: form, Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
+	}
 	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b
 	}
@@ -1505,6 +1531,10 @@ func (s *Server) renderWithSlotsStatus(
 	// forgot to look for one — and fragments, which do not come through here,
 	// cannot swallow a message meant for the page around them.
 	slots.Flash = s.takeFlash(w, r)
+
+	// The operator's capacity alert, for the same reason: every page, a
+	// wrapper's included, whatever its SlotProvider put in Banner.
+	slots.Banner = withCapacityBanner(s.capacityBannerFor(r), slots.Banner)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)

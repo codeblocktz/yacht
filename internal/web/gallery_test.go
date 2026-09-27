@@ -56,12 +56,15 @@ func TestGallery(t *testing.T) {
 		// is part of the chrome. Signed in, in a team, with projects — the
 		// sidebar a real install draws, rather than an empty one.
 		opCtx := galleryChromeContext(context.WithValue(context.Background(), surfacesKey{},
-			Surfaces{Operator: true, Quotas: true, DNS: true, Registry: true,
+			Surfaces{Operator: !g.customer, Quotas: true, DNS: true, Registry: true,
 				ActingAs: g.actingAs}), g)
 		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
 		slots.Bare = g.bare
+		// Composed the way the server's render does it, so the alert is
+		// reviewed where it ships: under the acting notice, above the rest.
+		slots.Banner = withCapacityBanner(g.banner, slots.Banner)
 		// No gallery page is the canvas. Under /apps/ the live app draws its
 		// panel on one, which brings its own inset; the gallery draws the panel's
 		// contents alone, and in the full-bleed shape they sat flush against the
@@ -147,6 +150,12 @@ type galleryPage struct {
 	// solo draws the chrome of an install with no accounts: one owner, no
 	// teams to switch between.
 	solo bool
+
+	// banner is the operator's capacity alert, drawn as the server would.
+	banner templ.Component
+
+	// customer draws the page as somebody who does not run the install.
+	customer bool
 }
 
 // section renders a labelled band so several states can share one image.
@@ -727,6 +736,100 @@ func galleryPages() []galleryPage {
 				return AdminCapacity(d)
 			}(),
 		},
+		{
+			// The same install under a policy: CPU sold twice with a tenth
+			// kept back, storage counted, enforced — memory past the warning
+			// line, and a week of demand turned away.
+			file: "states-admin-capacity-policy.html", path: "/admin/capacity",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Capacity"}},
+			page: func() templ.Component {
+				snap := galleryCapacity(nodes, now, galleryPolicy(2, 10), 2)
+				d := CapacityData{OK: true, CanAddNode: true, Form: capacityPolicyForm(snap.Policy),
+					Refusals: galleryRefusals(now)}
+				d.addSnapshot(snap)
+				d.addTeams(galleryTeams(now))
+				return AdminCapacity(d)
+			}(),
+		},
+		{
+			// The operator's alert past the warning line, and the overview's
+			// card saying how much is sold.
+			file: "states-capacity-banner.html", path: "/",
+			crumbs: []Crumb{{Label: "Overview"}},
+			banner: capacityBanner(capacityAlert{
+				Snapshot: galleryCapacity(nodes, now, galleryPolicy(2, 10), 0), CanAddNode: true,
+			}),
+			page: func() templ.Component {
+				snap := galleryCapacity(nodes, now, galleryPolicy(2, 10), 0)
+				return Overview(OverviewData{Operator: true,
+					OwnerName: "Eric", ClusterOK: true, AppCount: 6,
+					Summary: summary, Apps: allApps, Activity: activityBusy(), Capacity: &snap,
+				})
+			}(),
+		},
+		{
+			// Sold out, with customers refused, while acting as one of them:
+			// the acting notice first, the alert under it.
+			file: "states-capacity-banner-full.html", path: "/", actingAs: "Acme Corp",
+			crumbs: []Crumb{{Label: "Overview"}},
+			banner: capacityBanner(capacityAlert{
+				Snapshot: galleryCapacity(nodes, now, galleryPolicy(1, 25), 4), CanAddNode: true,
+			}),
+			page: func() templ.Component {
+				snap := galleryCapacity(nodes, now, galleryPolicy(1, 25), 4)
+				return Overview(OverviewData{Operator: true,
+					OwnerName: "Acme Corp", ClusterOK: true, AppCount: 6,
+					Summary: summary, Apps: allApps, Activity: activityBusy(), Capacity: &snap,
+				})
+			}(),
+		},
+		{
+			// What a customer is told when the install is nearly full: that a
+			// change may be refused, and no figure behind it.
+			file: "states-room-notice.html", path: "/apps/new", customer: true,
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "New"}},
+			page: func() templ.Component {
+				b, _ := app.BlueprintFor(app.SourceImage)
+				return NewApp(NewAppData{
+					Source: app.SourceImage, Blueprint: b, RoomShort: true,
+					Form: NewAppForm{Name: "web", Image: "nginx:alpine", Port: "8080", Replicas: "3"},
+				})
+			}(),
+		},
+	}
+}
+
+// galleryPolicy is an enforced policy selling CPU at a ratio and keeping a
+// reserve back, with 100 GiB of storage to sell.
+func galleryPolicy(cpuRatio float64, reserve int) app.CapacityPolicy {
+	return app.CapacityPolicy{Enforce: true, CPURatio: cpuRatio, MemoryRatio: 1,
+		ReservePercent: reserve, WarnPercent: 80, StorageBytes: 100 << 30}
+}
+
+// galleryCapacity is the gallery's install under a policy: its nodes, its
+// teams' commitments, and this many refusals in the last day.
+func galleryCapacity(nodes []orchestrator.NodeInfo, now time.Time, p app.CapacityPolicy, refused int) app.CapacitySnapshot {
+	var used app.Usage
+	for _, t := range galleryTeams(now) {
+		used.Apps += t.Usage.Apps
+		used.CPUMillis += t.Usage.CPUMillis
+		used.MemoryBytes += t.Usage.MemoryBytes
+		used.StorageBytes += t.Usage.StorageBytes
+	}
+	return app.NewCapacitySnapshot(p, app.RoomOf(nodes), used, refused)
+}
+
+// galleryRefusals is a week of changes refused for want of room, newest first.
+func galleryRefusals(now time.Time) []app.CapacityRefusal {
+	r := func(ago time.Duration, team, name, resource string, short int64) app.CapacityRefusal {
+		return app.CapacityRefusal{ID: uuid.New(), TeamID: team, TeamName: name,
+			Resource: resource, Shortfall: short, At: now.Add(-ago)}
+	}
+	return []app.CapacityRefusal{
+		r(40*time.Minute, "acme", "Acme Corp", "memory", 1<<30+512<<20),
+		r(3*time.Hour, "northwind", "Northwind", "memory", 256<<20),
+		r(2*24*time.Hour, "acme", "Acme Corp", "cpu", 1500),
+		r(5*24*time.Hour, "hooli", "Hooli", "storage", 20<<30),
 	}
 }
 

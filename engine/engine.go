@@ -116,6 +116,24 @@ type (
 	// TeamUsage is a team's committed use beside its quota, from
 	// Apps.TeamUsage and Apps.TeamUsages.
 	TeamUsage = app.TeamUsage
+
+	// CapacitySnapshot is the whole install's room at one moment, from
+	// Engine.Capacity: what the capacity policy sells of the machines, what
+	// every team has committed, and what is still free to sell. CPU is in
+	// millicores, memory and storage in bytes. It totals every team, so it is
+	// for the install's operator and the wrapper's own arithmetic — a plan
+	// catalogue saying how many more of each plan fit, say — and not for
+	// showing to a customer beyond RoomShort.
+	CapacitySnapshot = app.CapacitySnapshot
+	// CapacityResource is one resource in a CapacitySnapshot.
+	CapacityResource = app.CapacityResource
+	// CapacityLevel is a snapshot's fullness in a word: ok, warn, full, or
+	// unknown when the cluster could not be read.
+	CapacityLevel = app.CapacityLevel
+	// CapacityPolicy is how much of the install is sold, which the operator
+	// edits on Admin → Capacity and Apps.SetCapacityPolicy replaces.
+	CapacityPolicy = app.CapacityPolicy
+
 	// Server is the engine's dashboard.
 	Server = web.Server
 	// Keeper seals secrets at rest.
@@ -138,6 +156,12 @@ const (
 	// pages. A wrapper mounting its own with ExtraRoutes.Operator appends
 	// their entries to this group.
 	AdminNavHeading = web.AdminNavHeading
+
+	// The levels a CapacitySnapshot can be at.
+	CapacityOK      = app.CapacityOK
+	CapacityWarn    = app.CapacityWarn
+	CapacityFull    = app.CapacityFull
+	CapacityUnknown = app.CapacityUnknown
 )
 
 var (
@@ -145,6 +169,13 @@ var (
 	// a team past its quota, for a wrapper that answers it with something of
 	// its own rather than the engine's sentence.
 	ErrQuotaExceeded = app.ErrQuotaExceeded
+
+	// ErrCapacityFull is what Apps refuses a change with when the install
+	// enforces its capacity policy and has no room left to sell for it. The
+	// engine's sentence says how much more was needed and nothing about any
+	// other team; a wrapper may answer it with its own, an upgrade prompt or
+	// a waiting list, say.
+	ErrCapacityFull = app.ErrCapacityFull
 
 	// LoadConfig reads the engine's configuration from the environment.
 	LoadConfig = config.Load
@@ -400,6 +431,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Hooks:         e.Apps,
 		Logs:          e.Apps,
 		Quotas:        e.Apps,
+		Capacity:      e.Apps,
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.
@@ -436,6 +468,18 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	}
 	e.Server = srv
 	return nil
+}
+
+// Capacity is the install's room now, for a wrapper deciding what it can
+// still sell: how many more of a plan fit is Free divided by the plan's size,
+// per resource, taking the smallest. The machines are read from the cluster at
+// most every 30 seconds; what the teams have committed is read as it stands.
+//
+// Known false means the cluster could not be read — nothing is being refused
+// for capacity then, and a wrapper should not advertise room it cannot see.
+// RoomShort is the one field fit to turn into something a customer is shown.
+func (e *Engine) Capacity(ctx context.Context) (CapacitySnapshot, error) {
+	return e.Apps.Capacity(ctx)
 }
 
 // Handler is the dashboard, with the wrapper's extra routes mounted.

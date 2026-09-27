@@ -3,10 +3,14 @@ package web
 import (
 	"fmt"
 	"strconv"
+	"time"
+
+	"github.com/codeblocktz/yacht/internal/app"
 )
 
 // AdminCapacity puts the cluster's room beside what the teams on it have
-// committed, and says when it is time to add a machine.
+// committed, says how much of it the install sells, and says when it is time
+// to add a machine.
 templ AdminCapacity(d CapacityData) {
 	if d.CanAddNode {
 		@pageHead("Capacity", "Whether the cluster has room for what its teams have committed.", addNodeButton())
@@ -16,11 +20,30 @@ templ AdminCapacity(d CapacityData) {
 	if !d.OK {
 		@clusterCallout(d.Error)
 	}
+	if d.Snapshot != nil && !d.Snapshot.Known {
+		<div class={ "callout mb-5", templ.KV("callout-warn", d.Snapshot.Enforced) }>
+			<div class="min-w-0">
+				<div class="font-medium">Capacity is unknown</div>
+				<p class="mt-0.5 text-muted-foreground">
+					The cluster's machines could not be read, so there is no room to hold changes to.
+					Nothing is refused for capacity until they can be — an unreachable API server
+					must not stop every customer deploying.
+				</p>
+				if d.Snapshot.Reason != "" {
+					<p class="mono mt-1.5 break-all text-muted-foreground">{ d.Snapshot.Reason }</p>
+				}
+			</div>
+		</div>
+	}
 	for _, p := range d.Pressures() {
-		<div class="callout callout-warn mb-5">
+		<div class={ "callout mb-5", templ.KV("callout-warn", p.Percent < 100), templ.KV("callout-err", p.Percent >= 100) }>
 			<div class="min-w-0">
 				<div class="font-medium">
-					Customers have committed { strconv.Itoa(p.Percent) }% of the cluster's { p.Resource } —
+					if d.Snapshot != nil {
+						Customers have committed { strconv.Itoa(p.Percent) }% of the { p.Resource } this install sells —
+					} else {
+						Customers have committed { strconv.Itoa(p.Percent) }% of the cluster's { p.Resource } —
+					}
 					if d.CanAddNode {
 						<a class="underline" href="/cluster/nodes/add">add a node</a>
 					} else {
@@ -28,13 +51,13 @@ templ AdminCapacity(d CapacityData) {
 					}
 				</div>
 				<p class="mt-0.5 text-muted-foreground">
-					Past { strconv.Itoa(capacityWarnPercent) }% there is little room left for a rollout,
+					Past { strconv.Itoa(d.WarnPercent()) }% there is little room left for a rollout,
 					which briefly runs old and new pods together, or for a drain to move pods into.
 				</p>
 			</div>
 		</div>
 	}
-	if d.Schedulable == 0 && d.OK {
+	if d.Schedulable == 0 && d.OK && (d.Snapshot == nil || d.Snapshot.Known) {
 		<div class="callout mb-5">
 			<div class="min-w-0">
 				<div class="font-medium">No node is taking new work</div>
@@ -52,6 +75,11 @@ templ AdminCapacity(d CapacityData) {
 		@metric("Storage", byteAmount(d.Committed.StorageBytes), "reserved by volumes")
 		@metric("Apps", strconv.FormatInt(d.Committed.Apps, 10), fmt.Sprintf("across %d teams", len(d.Teams)))
 	</div>
+	if d.Snapshot != nil {
+		@capacitySold(*d.Snapshot)
+		@capacityPolicyPanel(d)
+		@capacityRefusals(d)
+	}
 	<div class="mb-5 grid gap-5 lg:grid-cols-2">
 		@capacityPanel("CPU", d.Committed.CPUMillis, d.CPUUsed, d.CPUAllocatable, d.UsageKnown, cpuAmount)
 		@capacityPanel("Memory", d.Committed.MemoryBytes, d.MemUsed, d.MemAllocatable, d.UsageKnown, byteAmount)
@@ -108,6 +136,170 @@ templ AdminCapacity(d CapacityData) {
 	</p>
 }
 
+// capacitySold is what the install sells of each resource, against what its
+// teams have committed and what is left to sell.
+templ capacitySold(s app.CapacitySnapshot) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Sold</span>
+			if s.Enforced {
+				<span class="status status-ok">enforced — changes past sellable are refused</span>
+			} else {
+				<span class="status status-neutral">not enforced — counted, never refused</span>
+			}
+		</div>
+		<div class="panel-body grid gap-6 lg:grid-cols-3">
+			@soldResource("CPU", s.CPU, s.Known, s.Policy.CPURatio, s.Policy.ReservePercent, cpuAmount)
+			@soldResource("Memory", s.Memory, s.Known, s.Policy.MemoryRatio, s.Policy.ReservePercent, byteAmount)
+			@soldResource("Storage", s.Storage, true, 1, 0, byteAmount)
+		</div>
+	</div>
+}
+
+// soldResource is one resource: committed of sellable as a bar, with how
+// sellable was arrived at and what is free beneath it.
+templ soldResource(label string, r app.CapacityResource, known bool, ratio float64, reserve int, amount func(int64) string) {
+	<div class="min-w-0" data-sold={ label }>
+		<div class="flex items-baseline justify-between gap-2">
+			<span class="micro">{ label }</span>
+			if r.Counted {
+				<span class="text-[12px] tabular-nums">
+					{ amount(r.Committed) } <span class="text-muted-foreground">of { amount(r.Sellable) } · { strconv.Itoa(r.Percent()) }%</span>
+				</span>
+			}
+		</div>
+		if r.Counted {
+			@meter(r.Percent(), meterClass(r.Percent()))
+			<dl class="mt-3 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-[12px]">
+				<dt class="text-muted-foreground">Sellable</dt>
+				<dd class="text-right tabular-nums">{ amount(r.Sellable) }</dd>
+				<dt class="text-muted-foreground">Committed</dt>
+				<dd class="text-right tabular-nums">{ amount(r.Committed) }</dd>
+				<dt class="text-muted-foreground">Free to sell</dt>
+				<dd class="text-right font-medium tabular-nums">{ amount(r.Free) }</dd>
+			</dl>
+			<p class="mt-2 text-[11.5px] text-muted-foreground">
+				if label == "Storage" {
+					The capacity entered below.
+				} else {
+					{ amount(r.Allocatable) } allocatable × { ratioLabel(ratio) }, less { strconv.Itoa(reserve) }% reserve.
+				}
+			</p>
+		} else {
+			@meter(0, "meter-ok")
+			<p class="mt-3 text-[12px] text-muted-foreground">
+				if !known {
+					Unknown — the cluster could not be read. { amount(r.Committed) } committed.
+				} else {
+					Not counted — { amount(r.Committed) } reserved by volumes. Enter what your storage can
+					provision below to sell it.
+				}
+			</p>
+		}
+	</div>
+}
+
+// capacityPolicyPanel is the policy, as a form.
+templ capacityPolicyPanel(d CapacityData) {
+	<div class="panel mb-5" id="policy">
+		<div class="panel-header">
+			<span class="panel-title">Policy</span>
+			if d.Snapshot != nil && !d.Snapshot.Policy.UpdatedAt.IsZero() {
+				<span class="text-[11.5px] text-muted-foreground">last changed { relativeTime(d.Snapshot.Policy.UpdatedAt) }</span>
+			}
+		</div>
+		<div class="panel-body">
+			if d.FormError != "" {
+				<div class="callout callout-err mb-5">
+					<div class="min-w-0">
+						<div class="font-medium">That was not saved</div>
+						<p class="mt-0.5 text-muted-foreground">{ d.FormError }</p>
+					</div>
+				</div>
+			}
+			<form method="post" action="/admin/capacity/policy" class="flex flex-col gap-5">
+				@toggle("enforce", "Refuse changes past what is sellable",
+					"New apps, more replicas, higher limits and bigger volumes are refused when the install has no room for them. "+
+						"Lowering, scaling down and deleting never are. Off, everything is counted and nothing is refused.",
+					d.Form.Enforce)
+				<div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+					@policyField("cpu_ratio", "CPU commit ratio", "×", d.Form.CPURatio, "decimal", "1",
+						"How many times each allocatable core is sold. CPU past a limit is throttled, so 2 or more is common.")
+					@policyField("memory_ratio", "Memory commit ratio", "×", d.Form.MemoryRatio, "decimal", "1",
+						"Above 1 risks OOM kills: memory is not throttled, and a node that runs out kills pods.")
+					@policyField("reserve", "Reserve", "%", d.Form.Reserve, "numeric", "0",
+						"Kept free for a node failing, a drain, and rollouts running old and new pods together.")
+					@policyField("warn", "Warn operators at", "%", d.Form.Warn, "numeric", strconv.Itoa(capacityWarnPercent),
+						"Of what is sellable. Past it, every operator page says so.")
+					@policyField("storage", "Storage capacity", "GiB", d.Form.Storage, "decimal", "Not counted",
+						"What your storage can provision. Empty is not counted — a node's disk is not volume capacity.")
+				</div>
+				<div class="flex items-center gap-2">
+					<button class="btn btn-primary" type="submit">Save policy</button>
+				</div>
+			</form>
+		</div>
+	</div>
+}
+
+templ policyField(name, label, unit, value, mode, placeholder, hint string) {
+	<div class="field">
+		<label class="label" for={ "policy-" + name }>{ label } <span class="text-muted-foreground font-normal">({ unit })</span></label>
+		<input
+			class="control"
+			id={ "policy-" + name }
+			name={ name }
+			value={ value }
+			inputmode={ mode }
+			autocomplete="off"
+			placeholder={ placeholder }
+		/>
+		<span class="hint">{ hint }</span>
+	</div>
+}
+
+// capacityRefusals is demand turned away: who asked, for what, and how far
+// short the install was.
+templ capacityRefusals(d CapacityData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Refused for want of room</span>
+			<span class="text-[11.5px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(d.RefusedSince(time.Now().Add(-24 * time.Hour))) } in the last 24 hours ·
+				{ strconv.Itoa(len(d.Refusals)) } in 7 days
+			</span>
+		</div>
+		if len(d.Refusals) == 0 {
+			<div class="border-t border-border px-4 py-3 text-[12.5px] text-muted-foreground">
+				Nothing has been refused in the last week.
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[560px]">
+					<thead>
+						<tr>
+							<th>When</th>
+							<th>Team</th>
+							<th>Short by</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range d.Refusals {
+							<tr>
+								<td class="whitespace-nowrap text-muted-foreground" title={ r.At.UTC().Format("2006-01-02 15:04:05 UTC") }>{ relativeTime(r.At) }</td>
+								<td class="max-w-[260px] truncate">
+									<a class="hover:underline" href={ templ.URL(adminTeamHref(r.TeamID)) }>{ r.TeamName }</a>
+								</td>
+								<td class="tabular-nums">{ refusalAmount(r) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
 // capacityPanel is one resource: what the teams have committed and what is in
 // use now, each against the room on the schedulable nodes.
 //
@@ -161,4 +353,70 @@ templ shareCell(used, total int64, usedLabel string) {
 	if total > 0 {
 		@meter(quotaPercent(used, total), meterClass(quotaPercent(used, total)))
 	}
+}
+
+// capacityBanner is the operator's alert, above every dashboard page while the
+// install is nearly out of room, has turned somebody away, or cannot see its
+// cluster while it is enforcing. Customers never see it.
+templ capacityBanner(a capacityAlert) {
+	<div class={ "callout", templ.KV("callout-warn", !a.Severe()), templ.KV("callout-err", a.Severe()) } data-capacity-banner role="status">
+		<svg class={ "size-4 shrink-0 mt-0.5", templ.KV("text-warning", !a.Severe()), templ.KV("text-destructive", a.Severe()) } viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M12 9v4"></path>
+			<path d="M12 17h.01"></path>
+			<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"></path>
+		</svg>
+		<div class="min-w-0 flex-1">
+			<div class="font-medium">{ a.Headline() }</div>
+			<p class="mt-0.5 text-muted-foreground">{ a.Detail() }</p>
+		</div>
+		<div class="flex shrink-0 flex-wrap items-center gap-2">
+			<a class="btn btn-sm" href="/admin/capacity">Capacity</a>
+			if a.CanAddNode {
+				<a class="btn btn-sm" href="/cluster/nodes/add">Add a node</a>
+			}
+		</div>
+	</div>
+}
+
+// bannerStack draws two banners one above the other, either of which may be
+// nil.
+templ bannerStack(top, below templ.Component) {
+	<div class="flex flex-col gap-2">
+		if top != nil {
+			@top
+		}
+		if below != nil {
+			@below
+		}
+	</div>
+}
+
+// roomNotice tells a customer, calmly, that a change may be refused. No
+// numbers: how much room is left is a fact about every other team too.
+templ roomNotice() {
+	<div class="callout mb-5" data-room-notice>
+		<div class="min-w-0">
+			<div class="font-medium">Room is limited right now — new apps or more replicas may be refused.</div>
+			<p class="mt-0.5 text-muted-foreground">
+				If a deploy is refused, fewer replicas or smaller limits may fit, or try again a little later.
+			</p>
+		</div>
+	</div>
+}
+
+// capacityMetric is the operator's overview of how much of the install is
+// sold: the fuller of CPU and memory, linking to the page that says more.
+templ capacityMetric(s app.CapacitySnapshot) {
+	<a class="metric hover:bg-accent/40" href="/admin/capacity" data-capacity-metric>
+		<div class="metric-k">Sold</div>
+		if s.Known {
+			{{ label, r := soldFuller(s) }}
+			<div class="metric-v">{ strconv.Itoa(r.Percent()) }%</div>
+			@meter(r.Percent(), meterClass(r.Percent()))
+			<div class="metric-sub">of sellable { label }</div>
+		} else {
+			<div class="metric-v text-muted-foreground/50">&mdash;</div>
+			<div class="metric-sub">cluster unknown</div>
+		}
+	</a>
 }

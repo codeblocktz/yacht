@@ -99,6 +99,10 @@ type OverviewData struct {
 	// Checklist is getting started, for a team that has not finished it. Nil
 	// hides it: dismissed, done, or nothing to compute it from.
 	Checklist *Checklist
+
+	// Capacity is how much of the install is sold, for the operator; nil for
+	// anyone else, and where the server has no capacity to read.
+	Capacity *app.CapacitySnapshot
 }
 
 templ Overview(d OverviewData) {
@@ -119,6 +123,9 @@ templ Overview(d OverviewData) {
 				clusterCPUDetail(d.Summary))
 			@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
 				clusterMemDetail(d.Summary))
+			if d.Capacity != nil {
+				@capacityMetric(*d.Capacity)
+			}
 		}
 	</div>
 	if len(d.Activity.Days) > 0 {
@@ -1319,6 +1326,10 @@ type NewAppData struct {
 	// way out or only names who has one. The registry page is owner-only, so
 	// linking a member to it would replace a dead end with a locked door.
 	CanConfigureRegistry bool
+
+	// RoomShort says the install is nearly out of room, so a deploy may be
+	// refused. Said before the form is filled in rather than only after.
+	RoomShort bool
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -1351,6 +1362,11 @@ templ NewApp(d NewAppData) {
 // considered them, and somebody will ask anyway.
 templ sourcePicker(d NewAppData) {
 	@pageHead("Deploy", "What would you like to run?", nil)
+	if d.RoomShort {
+		<div class="max-w-2xl">
+			@roomNotice()
+		</div>
+	}
 	<div class="panel max-w-2xl">
 		<div class="rows">
 			for _, b := range d.Sources {
@@ -1445,6 +1461,11 @@ templ repoFields(d NewAppData) {
 
 templ newAppForm(d NewAppData) {
 	@pageHead("Deploy "+d.Blueprint.Label, d.Blueprint.Description, backToSources())
+	if d.RoomShort {
+		<div class="max-w-2xl">
+			@roomNotice()
+		</div>
+	}
 	if d.Blueprint.Source != app.SourceImage && d.Blueprint.Volume != nil {
 		<div class="callout mb-5">
 			<div class="min-w-0">

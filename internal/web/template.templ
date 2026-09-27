@@ -7,6 +7,9 @@ templ TemplateList(d TemplateListData) {
 	@pageHead("Templates",
 		"A stack of apps deployed together, already holding each other's addresses.",
 		backToSources())
+	if d.RoomShort {
+		@roomNotice()
+	}
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">
