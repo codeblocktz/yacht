@@ -381,7 +381,9 @@ templ appRows(apps []app.App) {
 }
 
 templ appStatus(a app.App) {
-	if !a.StatusKnown {
+	if a.Sleep.Asleep() {
+		@sleepingStatus(a)
+	} else if !a.StatusKnown {
 		@statusDot("unknown", "status-neutral")
 	} else {
 		@statusDot(string(a.Status.Phase), phaseClass(string(a.Status.Phase)))
@@ -437,6 +439,10 @@ type AppDetailData struct {
 	// HookSecret is set only on the response that issued it. It is never read
 	// back, so this is the one render that can show it.
 	HookSecret string
+
+	// Sleep is the app's sleeping — setting, state, history — where the
+	// server can put apps to sleep; nil leaves every sleep control off.
+	Sleep *app.SleepStatus
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -447,7 +453,8 @@ templ AppDetail(d AppDetailData) {
 		@appRail(d)
 		@appMobileSwitcher(d)
 		<div class="min-w-0 flex-1">
-			@appDetailHeader(d.App)
+			@appDetailHeader(d)
+			@sleepCallout(d)
 			<nav class="tabs mb-5">
 				@appTab(d.App.Name, d.Tab, "", "Deployments")
 				@appTab(d.App.Name, d.Tab, "variables", "Variables")
@@ -519,7 +526,8 @@ templ appMobileSwitcher(d AppDetailData) {
 	</details>
 }
 
-templ appDetailHeader(a app.App) {
+templ appDetailHeader(d AppDetailData) {
+	{{ a := d.App }}
 	<div class="mb-4 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<div class="flex items-center gap-2.5">
@@ -545,6 +553,7 @@ templ appDetailHeader(a app.App) {
 			<p class={ "mono mt-1 truncate text-muted-foreground", templ.KV("italic", imageIsPending(a.Image)) }>{ imageLabel(a.Image) }</p>
 		</div>
 		<div class="flex items-center gap-2">
+			@sleepActions(d)
 			<form method="post" action={ templ.URL("/apps/" + a.Name + "/redeploy") }>
 				<button class="btn" type="submit">Redeploy</button>
 			</form>
@@ -1051,6 +1060,9 @@ templ appSettings(d AppDetailData) {
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
 			<a href="#replicas">Replicas</a>
+			if d.Sleep != nil {
+				<a href="#sleep">Sleep</a>
+			}
 			<a href="#danger">Danger</a>
 		</nav>
 		<div class="settings-main">
@@ -1061,6 +1073,7 @@ templ appSettings(d AppDetailData) {
 				@appPushSection(d)
 			}
 			@appLegacySettings(d)
+			@appSleepSection(d)
 		</div>
 	</div>
 }

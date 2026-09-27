@@ -82,7 +82,7 @@ func (o *Orchestrator) applyIngress(ctx context.Context, spec orchestrator.AppSp
 					WithPathType(pathType).
 					WithBackend(networkingv1ac.IngressBackend().
 						WithService(networkingv1ac.IngressServiceBackend().
-							WithName(spec.Name).
+							WithName(ingressBackend(spec)).
 							WithPort(networkingv1ac.ServiceBackendPort().
 								WithNumber(servicePort)))))))
 	}

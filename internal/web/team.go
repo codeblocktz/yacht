@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
 )
@@ -203,6 +204,10 @@ type TeamPageData struct {
 
 	// Error is a message from the action that redirected here, if it failed.
 	Error string
+
+	// Sleep is the team's default for sleeping apps, nil where the install
+	// cannot put apps to sleep.
+	Sleep *app.SleepPolicy
 }
 
 // teamPage shows who is in the team and who has been invited.
@@ -241,7 +246,7 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		viewer = account.RoleMember
 	}
 
-	s.render(w, r, TeamPage(TeamPageData{
+	data := TeamPageData{
 		TeamID:      owner.ID,
 		TeamName:    displayName(owner),
 		Viewer:      viewer,
@@ -249,7 +254,15 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		Members:     members,
 		Invitations: invitations,
 		Error:       r.URL.Query().Get("error"),
-	}))
+	}
+	if s.sleep != nil && s.sleep.CanSleep() {
+		if p, err := s.sleep.TeamSleepDefault(ctx, owner.ID); err == nil {
+			data.Sleep = &p
+		} else {
+			s.log.Error("read team sleep default", slog.String("error", err.Error()))
+		}
+	}
+	s.render(w, r, TeamPage(data))
 }
 
 // teamInvite mails an invitation.

@@ -729,6 +729,16 @@ render_env() {
 		cert_issuer=$(env_get YACHT_CERT_ISSUER || printf '')
 	fi
 
+	# Sleeping apps need the cluster to reach this engine's waker. Kept once
+	# written; offered commented out, with this node's address, until then —
+	# turning it on means opening the port to the cluster's pods.
+	if waker_addr=$(env_get YACHT_WAKER_ADDR); then
+		waker_line="YACHT_WAKER_ADDR=${waker_addr}"
+	else
+		node_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+		waker_line="#YACHT_WAKER_ADDR=${node_ip:-<this-node-ip>}:8090"
+	fi
+
 	cat <<-EOF
 		# Written by the Yacht installer. Re-running preserves every value here
 		# except the port and the binary; edit freely and restart the service.
@@ -757,6 +767,11 @@ render_env() {
 		# and YACHT_APP_DOMAIN to the domain apps get a hostname under.
 		#YACHT_BASE_URL=
 		#YACHT_APP_DOMAIN=
+
+		# Where the cluster reaches the waker that wakes sleeping apps: this
+		# node's address and a port open to the cluster's pods. Set, idle apps
+		# can scale to zero and wake on their next request; unset, none sleeps.
+		${waker_line}
 	EOF
 }
 

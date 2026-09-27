@@ -4,7 +4,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -175,6 +177,26 @@ type Config struct {
 	// ShutdownTimeout bounds graceful shutdown.
 	ShutdownTimeout time.Duration
 
+	// WakerAddr is where the cluster's ingress controller reaches the engine's
+	// waker, as ip:port: the address a sleeping app's hostnames are routed to.
+	// Empty means apps cannot sleep, because nothing could wake them.
+	//
+	// An IP, because it becomes a Service endpoint. Where the engine runs as a
+	// process on a cluster node — the installer's layout — it is that node's
+	// address; where it runs in the cluster, the cluster IP of a Service in
+	// front of it. Either way the port must be open to the cluster's pods.
+	WakerAddr string
+
+	// WakerListen is where the engine serves the waker, by default every
+	// interface on WakerAddr's port. Its own listener rather than a route on
+	// the dashboard's: the waker answers any hostname the cluster sends it,
+	// and none of those requests should be able to reach a dashboard page.
+	WakerListen string
+
+	// WakeTimeout bounds one wake, from asking for a sleeping app's pods to
+	// one of them being ready. A request is held that long at most.
+	WakeTimeout time.Duration
+
 	// MaxConcurrentBuilds is the install-wide admission ceiling. It is paired
 	// with per-container bounds in the build namespace so the count represents
 	// a bounded amount of node capacity rather than an arbitrary pod count.
@@ -214,6 +236,9 @@ func Load() (Config, error) {
 		MagicLinkTTL:        envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout:     envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		MaxConcurrentBuilds: envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
+		WakerAddr:           strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
+		WakerListen:         strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
+		WakeTimeout:         envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
 		Debug:               envBool("YACHT_DEBUG", false),
 	}
 
@@ -286,6 +311,7 @@ func (c Config) validate() error {
 			"YACHT_SECRET_KEY_PREVIOUS is set without YACHT_SECRET_KEY — a retired key opens "+
 				"values but never seals them, so there would be no key in use"))
 	}
+	errs = append(errs, c.wakerFaults()...)
 	if c.OwnerEmail != "" {
 		if _, err := mail.ParseAddress(c.OwnerEmail); err != nil {
 			errs = append(errs, errors.New("YACHT_OWNER_EMAIL must be an email address"))
@@ -294,6 +320,56 @@ func (c Config) validate() error {
 	errs = append(errs, c.accountFaults()...)
 
 	return errors.Join(errs...)
+}
+
+// wakerFaults validates the waker's settings. Each of these would otherwise be
+// found by the first app to fall asleep and never wake.
+func (c Config) wakerFaults() []error {
+	var errs []error
+	if c.WakerAddr != "" {
+		if _, _, err := c.Waker(); err != nil {
+			errs = append(errs, err)
+		}
+	} else if c.WakerListen != "" {
+		errs = append(errs, errors.New(
+			"YACHT_WAKER_LISTEN is set without YACHT_WAKER_ADDR — the cluster would not know where the waker is"))
+	}
+	if c.WakeTimeout < 5*time.Second || c.WakeTimeout > 10*time.Minute {
+		errs = append(errs, errors.New("YACHT_WAKE_TIMEOUT must be between 5s and 10m"))
+	}
+	return errs
+}
+
+// Waker is WakerAddr's address and port. The address must be one the cluster
+// can reach: loopback is the ingress controller's own pod to the ingress
+// controller.
+func (c Config) Waker() (string, int32, error) {
+	host, portText, err := net.SplitHostPort(c.WakerAddr)
+	if err != nil {
+		return "", 0, fmt.Errorf("YACHT_WAKER_ADDR must be ip:port, such as 10.0.0.5:8090: %w", err)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return "", 0, fmt.Errorf("YACHT_WAKER_ADDR %q must name an IP address the cluster's pods can reach — "+
+			"this node's address, not a hostname or loopback", c.WakerAddr)
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return "", 0, fmt.Errorf("YACHT_WAKER_ADDR %q has no usable port", c.WakerAddr)
+	}
+	return ip.String(), int32(port), nil
+}
+
+// WakerListenAddr is where the waker is served: WakerListen, or every
+// interface on WakerAddr's port. Empty when there is no waker.
+func (c Config) WakerListenAddr() string {
+	if c.WakerListen != "" {
+		return c.WakerListen
+	}
+	if _, port, err := c.Waker(); err == nil {
+		return ":" + strconv.Itoa(int(port))
+	}
+	return ""
 }
 
 // accountFaults validates the sign-in settings, and only once accounts are on.
@@ -416,10 +492,10 @@ func (c Config) String() string {
 	}
 	return fmt.Sprintf(
 		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
-			"accounts=%t mail=%s debug=%t",
+			"accounts=%t mail=%s waker=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
 		c.KubeInCluster, token, c.OwnerID,
-		c.AccountsEnabled(), c.MailTransport(), c.Debug,
+		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), c.Debug,
 	)
 }
 
@@ -451,6 +527,13 @@ func redactDSN(dsn string) string {
 		}
 	}
 	return "set"
+}
+
+func orOff(s string) string {
+	if s == "" {
+		return "off"
+	}
+	return s
 }
 
 func orNone(s string) string {

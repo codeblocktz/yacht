@@ -114,6 +114,9 @@ func (s *Service) admitDeploymentTx(
 	ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string,
 	releaseID uuid.UUID, requiresBuild bool, actorKind string,
 ) (Operation, error) {
+	if err := s.wakeForDeploy(ctx, q, ownerID, a.ID); err != nil {
+		return Operation{}, err
+	}
 	deployment, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
 		Revision: trigger, Status: DeployRunning,
@@ -400,6 +403,15 @@ func (s *Service) completeOperation(ctx context.Context, op Operation, cause err
 			}
 			return fmt.Errorf("app: activate fenced release: %w", err)
 		}
+	}
+	// The idle clock restarts when a deploy ends as well as when it begins: a
+	// build can take longer than an app's idle time, and an app that slept the
+	// moment its new version came up would greet whoever deployed it with the
+	// waker.
+	if err := q.ResetIdleClock(ctx, dbgen.ResetIdleClockParams{
+		OwnerID: op.OwnerID, ID: op.AppID,
+	}); err != nil {
+		return fmt.Errorf("app: restart idle clock: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("app: commit operation completion: %w", err)

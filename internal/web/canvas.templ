@@ -201,6 +201,7 @@ templ appPanelBody(d AppDetailData) {
 		}
 	}
 	<div class="canvas-sheet-actions">
+		@sleepActions(d)
 		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/redeploy") }>
 			<button class="btn btn-sm" type="submit">Redeploy</button>
 		</form>
@@ -216,6 +217,7 @@ templ appPanelBody(d AppDetailData) {
 	</div>
 	@appTabs(d.App.Name, d.Tab)
 	<div class="canvas-sheet-body">
+		@sleepCallout(d)
 		switch d.Tab {
 			case "variables":
 				@appVariables(d)

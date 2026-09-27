@@ -253,7 +253,7 @@ func setRoom(s *Service, cpuMillis, memoryBytes int64) {
 // roomAbove gives the install this much room past what it has committed now.
 func roomAbove(t *testing.T, s *Service, cpuMillis, memoryBytes int64) {
 	t.Helper()
-	u, err := s.installUsageWith(context.Background(), s.q, nil)
+	u, err := s.installUsageWith(context.Background(), s.q, nil, DefaultCapacityPolicy().WakeReservePercent)
 	if err != nil {
 		t.Fatalf("install usage: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestStorageIsHeldToTheCapacityEntered(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	u, err := s.installUsageWith(ctx, s.q, nil)
+	u, err := s.installUsageWith(ctx, s.q, nil, DefaultCapacityPolicy().WakeReservePercent)
 	if err != nil {
 		t.Fatalf("install usage: %v", err)
 	}

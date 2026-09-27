@@ -16,27 +16,29 @@ SELECT * FROM capacity_policy WHERE id = 1 FOR UPDATE;
 -- name: SetCapacityPolicy :one
 INSERT INTO capacity_policy (
     id, enforce, cpu_commit_ratio, memory_commit_ratio,
-    reserve_percent, warn_percent, storage_bytes
+    reserve_percent, warn_percent, storage_bytes, wake_reserve_percent
 )
 VALUES (
     1, @enforce, @cpu_commit_ratio, @memory_commit_ratio,
-    @reserve_percent, @warn_percent, @storage_bytes
+    @reserve_percent, @warn_percent, @storage_bytes, @wake_reserve_percent
 )
 ON CONFLICT (id) DO UPDATE
-SET enforce             = excluded.enforce,
-    cpu_commit_ratio    = excluded.cpu_commit_ratio,
-    memory_commit_ratio = excluded.memory_commit_ratio,
-    reserve_percent     = excluded.reserve_percent,
-    warn_percent        = excluded.warn_percent,
-    storage_bytes       = excluded.storage_bytes,
-    updated_at          = now()
+SET enforce              = excluded.enforce,
+    cpu_commit_ratio     = excluded.cpu_commit_ratio,
+    memory_commit_ratio  = excluded.memory_commit_ratio,
+    reserve_percent      = excluded.reserve_percent,
+    warn_percent         = excluded.warn_percent,
+    storage_bytes        = excluded.storage_bytes,
+    wake_reserve_percent = excluded.wake_reserve_percent,
+    updated_at           = now()
 RETURNING *;
 
 -- Every app on the install, with its id so a change to one can be counted in
 -- place. What the admission check totals; see ListAppFootprints for why the
--- arithmetic is in Go.
+-- arithmetic is in Go. Asleep is whether the app is counted at the wake
+-- reserve rather than in full: a waking app's pods are already asked for.
 -- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit
+SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep
 FROM apps;
 
 -- name: SumInstallVolumeBytes :one

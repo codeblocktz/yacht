@@ -189,6 +189,11 @@ func (o *Orchestrator) Pods(
 				info.Message = cs.State.Terminated.Message
 			}
 		}
+		// A pod no node has room for has no containers to explain it; the
+		// scheduler says why on the pod itself.
+		if info.Reason == "" {
+			info.Reason, info.Message = unscheduled(&p)
+		}
 		out = append(out, info)
 	}
 
@@ -279,4 +284,17 @@ func ownedBy(owner orchestrator.OwnerID) string {
 		sel += "," + orchestrator.LabelOwner + "=" + string(owner)
 	}
 	return sel
+}
+
+// unscheduled is why the scheduler has not placed a pod, when that is
+// because nothing has room: orchestrator.ReasonUnschedulable and the
+// scheduler's own sentence, "0/2 nodes are available: 2 Insufficient memory".
+func unscheduled(p *corev1.Pod) (reason, message string) {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse &&
+			c.Reason == corev1.PodReasonUnschedulable {
+			return orchestrator.ReasonUnschedulable, c.Message
+		}
+	}
+	return "", ""
 }

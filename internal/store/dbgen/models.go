@@ -12,34 +12,45 @@ import (
 )
 
 type App struct {
-	ID              uuid.UUID
-	OwnerID         string
-	Name            string
-	Namespace       string
-	Image           string
-	Replicas        int32
-	Port            int32
-	CpuRequest      string
-	CpuLimit        string
-	MemoryRequest   string
-	MemoryLimit     string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	HealthPath      string
-	HealthLiveness  bool
-	Source          string
-	Internal        bool
-	ProjectID       pgtype.UUID
-	CanvasX         *int32
-	CanvasY         *int32
-	HttpsOnly       bool
-	CnameOnly       bool
-	RepoUrl         string
-	RepoBranch      string
-	RepoSubdir      string
-	RunAsUser       int64
-	ConfigVersion   int64
-	ActiveReleaseID pgtype.UUID
+	ID                uuid.UUID
+	OwnerID           string
+	Name              string
+	Namespace         string
+	Image             string
+	Replicas          int32
+	Port              int32
+	CpuRequest        string
+	CpuLimit          string
+	MemoryRequest     string
+	MemoryLimit       string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	HealthPath        string
+	HealthLiveness    bool
+	Source            string
+	Internal          bool
+	ProjectID         pgtype.UUID
+	CanvasX           *int32
+	CanvasY           *int32
+	HttpsOnly         bool
+	CnameOnly         bool
+	RepoUrl           string
+	RepoBranch        string
+	RepoSubdir        string
+	RunAsUser         int64
+	ConfigVersion     int64
+	ActiveReleaseID   pgtype.UUID
+	SleepMode         string
+	SleepAfterMinutes *int32
+	SleepState        string
+	SleepingSince     pgtype.Timestamptz
+	WakingSince       pgtype.Timestamptz
+	AwakeSince        time.Time
+	LastRequestAt     pgtype.Timestamptz
+	RequestCount      *int64
+	RequestsSeenSince pgtype.Timestamptz
+	WakeFailedAt      pgtype.Timestamptz
+	WakeFailure       string
 }
 
 type AppHook struct {
@@ -99,6 +110,16 @@ type AppReleaseBackfill struct {
 	UpdatedAt     time.Time
 }
 
+type AppSleep struct {
+	ID          uuid.UUID
+	OwnerID     string
+	AppID       uuid.UUID
+	SleptAt     time.Time
+	IdleMinutes *int32
+	WokeAt      pgtype.Timestamptz
+	WokeBy      *string
+}
+
 type Build struct {
 	ID           uuid.UUID
 	OwnerID      string
@@ -117,14 +138,15 @@ type Build struct {
 }
 
 type CapacityPolicy struct {
-	ID                int32
-	Enforce           bool
-	CpuCommitRatio    float64
-	MemoryCommitRatio float64
-	ReservePercent    int32
-	WarnPercent       int32
-	StorageBytes      int64
-	UpdatedAt         time.Time
+	ID                 int32
+	Enforce            bool
+	CpuCommitRatio     float64
+	MemoryCommitRatio  float64
+	ReservePercent     int32
+	WarnPercent        int32
+	StorageBytes       int64
+	UpdatedAt          time.Time
+	WakeReservePercent int32
 }
 
 type CapacityRefusal struct {
@@ -290,6 +312,13 @@ type TeamQuota struct {
 	CpuMillis    int64
 	MemoryBytes  int64
 	StorageBytes int64
+	UpdatedAt    time.Time
+}
+
+type TeamSleepDefault struct {
+	OwnerID      string
+	Enabled      bool
+	AfterMinutes int32
 	UpdatedAt    time.Time
 }
 

@@ -1,0 +1,257 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// moonIcon marks sleeping, in the icon set's own drawing style. Here rather
+// than in the layout's set: it is drawn only by the pages in this file.
+templ moonIcon() {
+	<svg class="size-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+		<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+	</svg>
+}
+
+// sleepingStatus is an asleep or waking app's status: distinct from stopped,
+// which is an app somebody scaled to nothing and which no request will bring
+// back. The title says since when, and when it was last asked for.
+templ sleepingStatus(a app.App) {
+	if a.Sleep.State == app.SleepWaking {
+		<span class="status status-info" title="Its pods are starting; the waker holds requests until one is ready.">waking</span>
+	} else {
+		<span class="status status-sleep" title={ sleepingTitle(a.Sleep) }>sleeping</span>
+	}
+}
+
+// sleepActions are the panel's Wake now and Sleep now, beside Redeploy.
+templ sleepActions(d AppDetailData) {
+	if d.Sleep != nil {
+		if d.App.Sleep.Asleep() {
+			<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/wake") }>
+				<button class="btn btn-primary btn-sm" type="submit">Wake now</button>
+			</form>
+		} else if d.Sleep.Unavailable == nil {
+			<form
+				method="post"
+				action={ templ.URL("/apps/" + d.App.Name + "/sleep") }
+				data-confirm="Its pods stop now. The next request to it wakes it, and waits a few seconds while it starts."
+				data-confirm-title={ "Put " + d.App.Name + " to sleep?" }
+				data-confirm-label="Sleep now"
+			>
+				<button class="btn btn-sm" type="submit">Sleep now</button>
+			</form>
+		}
+	}
+}
+
+// sleepCallout says an app is asleep, since when, and what wakes it.
+templ sleepCallout(d AppDetailData) {
+	if d.Sleep != nil && d.App.Sleep.Asleep() {
+		<div class="callout mb-4" data-sleeping>
+			<span class="text-muted-foreground">
+				@moonIcon()
+			</span>
+			<div class="min-w-0">
+				<div class="font-medium">
+					if d.App.Sleep.State == app.SleepWaking {
+						Waking up
+					} else if d.App.Sleep.Since != nil {
+						Asleep since { relativeTime(*d.App.Sleep.Since) }
+					} else {
+						Asleep
+					}
+				</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Its pods are stopped and its CPU and memory are free for others — { lastRequestLabel(d.App.Sleep) }.
+					The next request wakes it and waits a few seconds while it starts; a browser is shown a
+					waking-up page in the meantime.
+				</p>
+				if msg := recentWakeFailure(d.App.Sleep); msg != "" {
+					<p class="mt-1.5 text-destructive">{ msg }</p>
+				}
+			</div>
+		</div>
+	}
+}
+
+// appSleepSection is the app's sleep setting and history, on its settings tab.
+templ appSleepSection(d AppDetailData) {
+	if d.Sleep != nil {
+		{{ st := *d.Sleep }}
+		<section id="sleep" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">
+					@moonIcon()
+				</span>
+				<h2 class="settings-section-title">Sleep</h2>
+			</div>
+			<div class="panel mb-5">
+				<div class="panel-header">
+					<span class="panel-title">Sleep when idle</span>
+					if st.Effective.Enabled && st.Unavailable == nil {
+						<span class="status status-ok">after { minutesLabel(st.Effective.After) } without requests</span>
+					} else {
+						<span class="status status-neutral">never sleeps</span>
+					}
+				</div>
+				<div class="panel-body flex flex-col gap-4">
+					if st.Unavailable != nil {
+						<div class="callout">
+							<div class="min-w-0 text-muted-foreground">{ sleepRefusal(st.Unavailable) }</div>
+						</div>
+					}
+					<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/sleep/settings") } class="flex flex-col gap-4" data-sleep-form>
+						<div class="flex flex-wrap items-end gap-3">
+							<div class="field w-[260px]">
+								<label class="label" for="sleep-mode">When nobody is using it</label>
+								@selectbox.SelectBox() {
+									@selectbox.Trigger(selectbox.TriggerProps{ID: "sleep-mode", Name: "mode"}) {
+										@selectbox.Value(selectbox.ValueProps{Placeholder: sleepModeLabel(st.Setting.Mode, st.Team)})
+									}
+									@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+										for _, m := range []app.SleepMode{app.SleepInherit, app.SleepOn, app.SleepOff} {
+											@selectbox.Item(selectbox.ItemProps{Value: string(m), Selected: m == st.Setting.Mode}) {
+												{ sleepModeLabel(m, st.Team) }
+											}
+										}
+									}
+								}
+							</div>
+							<div class="field w-[180px]">
+								<label class="label" for="sleep-after">Idle time <span class="font-normal text-muted-foreground">(minutes)</span></label>
+								<input
+									class="control"
+									id="sleep-after"
+									name="after"
+									inputmode="numeric"
+									autocomplete="off"
+									value={ minutesValue(st.Setting.After) }
+									placeholder={ strconv.Itoa(int(st.Team.After.Minutes())) }
+								/>
+							</div>
+							<button class="btn btn-primary" type="submit">Save</button>
+						</div>
+					</form>
+					<p class="text-[12px] text-muted-foreground">
+						Following the team, it sleeps or not as the team's default says, now and whenever that
+						changes. The idle time is at least 5 minutes; empty takes the team's. A sleeping app's volume stays, every replica
+						stops, and the first request after it wakes it — held for the few seconds it takes to start,
+						or answered with a waking-up page in a browser. Never during a deploy: deploying wakes it.
+					</p>
+				</div>
+			</div>
+			<div class="panel mb-5">
+				<div class="panel-header">
+					<span class="panel-title">Recent sleeps</span>
+					<span class="text-[11.5px] text-muted-foreground">{ lastRequestLabel(st.Sleep) }</span>
+				</div>
+				if len(st.History) == 0 {
+					<div class="border-t border-border px-4 py-3 text-[12.5px] text-muted-foreground">
+						It has not slept yet.
+					</div>
+				} else {
+					<div class="rows">
+						for _, h := range st.History {
+							<div class="flex items-center gap-3 px-4 py-2.5 text-[12.5px]" data-sleep-event>
+								<span class="text-muted-foreground">
+									@moonIcon()
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="block">{ h.Describe() }</span>
+									if h.To != nil {
+										<span class="block text-muted-foreground">{ h.DescribeWake() } · asleep { sleptFor(h) }</span>
+									} else {
+										<span class="block text-muted-foreground">Still asleep</span>
+									}
+								</span>
+								<span class="whitespace-nowrap text-muted-foreground" title={ h.From.UTC().Format("2006-01-02 15:04 UTC") }>{ relativeTime(h.From) }</span>
+							</div>
+						}
+					</div>
+				}
+			</div>
+		</section>
+	}
+}
+
+// teamSleepPanel is the team's default, for every app left to follow it.
+templ teamSleepPanel(p app.SleepPolicy, canEdit bool) {
+	<div class="panel mb-5" id="sleep">
+		<div class="panel-header">
+			<span class="panel-title">Sleeping apps</span>
+			if p.Enabled {
+				<span class="status status-ok">apps sleep after { minutesLabel(p.After) } idle</span>
+			} else {
+				<span class="status status-neutral">off</span>
+			}
+		</div>
+		<div class="panel-body">
+			if canEdit {
+				<form method="post" action="/team/sleep" class="flex flex-col gap-4">
+					@toggle("enabled", "Apps sleep when idle",
+						"The default for every app of this team that follows it. An app scaled to zero wakes on its next request, "+
+							"after a few seconds' start. Each app can still choose for itself.", p.Enabled)
+					<div class="flex flex-wrap items-end gap-3">
+						<div class="field w-[180px]">
+							<label class="label" for="team-sleep-after">Idle time <span class="font-normal text-muted-foreground">(minutes)</span></label>
+							<input class="control" id="team-sleep-after" name="after" inputmode="numeric" autocomplete="off" value={ minutesValue(p.After) }/>
+						</div>
+						<button class="btn btn-primary" type="submit">Save</button>
+					</div>
+				</form>
+			} else {
+				<p class="text-muted-foreground">
+					if p.Enabled {
+						Apps that follow the team's default sleep after { minutesLabel(p.After) } without a request.
+					} else {
+						Apps sleep only where they have been set to.
+					}
+					An admin can change this.
+				</p>
+			}
+		</div>
+	</div>
+}
+
+// capacitySleeping is the sleeping apps on Admin → Capacity: what they would
+// take awake, and the reserve kept so they can.
+templ capacitySleeping(s app.CapacitySnapshot) {
+	<div class="panel mb-5" data-capacity-sleeping>
+		<div class="panel-header">
+			<span class="panel-title">Sleeping apps</span>
+			<span class="text-[11.5px] text-muted-foreground">
+				room kept for { strconv.Itoa(s.Sleeping.ReservePercent) }% of them to wake at once
+			</span>
+		</div>
+		<div class="panel-body">
+			<dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-[12.5px] sm:grid-cols-4">
+				<div>
+					<dt class="micro">Asleep</dt>
+					<dd class="mt-0.5 text-[15px] font-medium tabular-nums">{ strconv.FormatInt(s.Sleeping.Apps, 10) }</dd>
+				</div>
+				<div>
+					<dt class="micro">Awake they would take</dt>
+					<dd class="mt-0.5 tabular-nums">{ cpuAmount(s.Sleeping.CPUMillis) } · { byteAmount(s.Sleeping.MemoryBytes) }</dd>
+				</div>
+				<div>
+					<dt class="micro">Wake reserve, committed</dt>
+					<dd class="mt-0.5 tabular-nums">{ cpuAmount(s.Sleeping.ReserveCPUMillis) } · { byteAmount(s.Sleeping.ReserveMemoryBytes) }</dd>
+				</div>
+				<div>
+					<dt class="micro">Freed for sale</dt>
+					<dd class="mt-0.5 font-medium tabular-nums">
+						{ cpuAmount(s.Sleeping.CPUMillis - s.Sleeping.ReserveCPUMillis) } · { byteAmount(s.Sleeping.MemoryBytes - s.Sleeping.ReserveMemoryBytes) }
+					</dd>
+				</div>
+			</dl>
+			<p class="mt-3 text-[12px] text-muted-foreground">
+				A sleeping app is counted as committed at the wake reserve's share of its size rather than in full, so
+				what it gave back can be sold without selling so much that the sleepers cannot come back. A wake past
+				the reserve is refused while there is no room, and shows here as a refusal.
+			</p>
+		</div>
+	</div>
+}

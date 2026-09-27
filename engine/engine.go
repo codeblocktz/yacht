@@ -132,8 +132,32 @@ type (
 	// unknown when the cluster could not be read.
 	CapacityLevel = app.CapacityLevel
 	// CapacityPolicy is how much of the install is sold, which the operator
-	// edits on Admin → Capacity and Apps.SetCapacityPolicy replaces.
+	// edits on Admin → Capacity and Apps.SetCapacityPolicy replaces. Its
+	// WakeReservePercent is the share of each sleeping app still counted as
+	// committed, so that many of the sleepers can wake at once.
 	CapacityPolicy = app.CapacityPolicy
+	// SleepingCapacity is CapacitySnapshot.Sleeping: the apps asleep across
+	// the install, their size awake, and the wake reserve held for them.
+	SleepingCapacity = app.SleepingCapacity
+
+	// SleepPolicy is whether apps sleep when idle and after how long: a
+	// team's default, from Apps.TeamSleepDefault and Apps.SetTeamSleepDefault,
+	// and what an app's own setting comes to beside it.
+	SleepPolicy = app.SleepPolicy
+	// SleepSetting is one app's own choice — its team's default, on, or off,
+	// and an idle time of its own — which Apps.SetSleepSetting replaces.
+	SleepSetting = app.SleepSetting
+	SleepMode    = app.SleepMode
+	// SleepStatus is everything about one app's sleeping, from
+	// Apps.SleepStatus: its setting, its team's, what they come to, where it
+	// stands, and its recent sleeps.
+	SleepStatus = app.SleepStatus
+	// Sleep is App.Sleep: an app's setting and state, read with the app.
+	Sleep      = app.Sleep
+	SleepState = app.SleepState
+	// SleepInterval is one stretch an app spent asleep, from
+	// Apps.SleepIntervals — what a meter subtracts; see AwakeWithin.
+	SleepInterval = app.SleepInterval
 
 	// Server is the engine's dashboard.
 	Server = web.Server
@@ -163,6 +187,21 @@ const (
 	CapacityWarn    = app.CapacityWarn
 	CapacityFull    = app.CapacityFull
 	CapacityUnknown = app.CapacityUnknown
+
+	// An app's sleep setting: its team's default, or on or off whatever that is.
+	SleepInherit = app.SleepInherit
+	SleepOn      = app.SleepOn
+	SleepOff     = app.SleepOff
+
+	// Where an app stands. Waking is its pods starting, with requests held.
+	SleepAwake  = app.SleepAwake
+	SleepAsleep = app.SleepAsleep
+	SleepWaking = app.SleepWaking
+
+	// DefaultSleepAfter and MinSleepAfter bound the idle time: 30 minutes
+	// where nobody says otherwise, and never under 5.
+	DefaultSleepAfter = app.DefaultSleepAfter
+	MinSleepAfter     = app.MinSleepAfter
 )
 
 var (
@@ -177,6 +216,20 @@ var (
 	// other team; a wrapper may answer it with its own, an upgrade prompt or
 	// a waiting list, say.
 	ErrCapacityFull = app.ErrCapacityFull
+
+	// ErrSleepUnavailable is what putting an app to sleep is refused with on
+	// an install with no waker (YACHT_WAKER_ADDR unset); ErrCannotSleep on an
+	// app with no public hostname for a request to wake it through.
+	ErrSleepUnavailable = app.ErrSleepUnavailable
+	ErrCannotSleep      = app.ErrCannotSleep
+	// ErrWakeNoRoom is a wake the install had no room for. The app stays
+	// asleep, the refusal is recorded like any other capacity refusal, and a
+	// request a minute later tries again.
+	ErrWakeNoRoom = app.ErrWakeNoRoom
+
+	// AwakeWithin is how long an app was awake in [from, to), given the
+	// intervals Apps.SleepIntervals returned for that window.
+	AwakeWithin = app.AwakeWithin
 
 	// LoadConfig reads the engine's configuration from the environment.
 	LoadConfig = config.Load
@@ -229,6 +282,12 @@ type Overrides struct {
 
 	// Extra is routes mounted inside the engine's role gates.
 	Extra ExtraRoutes
+
+	// WakerBrand is the name the waking-up page says a sleeping app is
+	// hosted on. The page is served on the app's own hostname to its
+	// visitors, outside any chrome, so it cannot ask Slots. Empty is the
+	// engine's own name.
+	WakerBrand string
 
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
 	// own migrations. They share the database; a wrapper keeps its own goose
@@ -375,6 +434,11 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 			slog.String("resolver", domain.ResolverName(e.resolver)))
 	}
 
+	waker, err := wakerEndpoint(cfg, log)
+	if err != nil {
+		return err
+	}
+
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		Builder:             builder,
 		Images:              images,
@@ -386,6 +450,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Keeper:              e.Keeper,
 		ReservedDomains:     cfg.ReservedDomains,
 		Resolver:            e.resolver,
+		Waker:               waker,
+		WakeTimeout:         cfg.WakeTimeout,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -433,6 +499,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Logs:          e.Apps,
 		Quotas:        e.Apps,
 		Capacity:      e.Apps,
+		Sleep:         e.Apps,
+		WakerBrand:    ov.WakerBrand,
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.
@@ -486,6 +554,13 @@ func (e *Engine) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 // Handler is the dashboard, with the wrapper's extra routes mounted.
 func (e *Engine) Handler() http.Handler { return e.Server.Handler() }
 
+// Waker is the handler a sleeping app's hostnames are routed to: it wakes the
+// app, holds or answers the request, and hands it on. Serve runs it on
+// Config.WakerListenAddr() beside the dashboard; a wrapper serving the
+// dashboard itself serves this there too, on a listener of its own — never on
+// the dashboard's, since it answers any hostname the cluster sends it.
+func (e *Engine) Waker() http.Handler { return e.Server.Waker() }
+
 // Start runs the engine's background work until ctx ends: the operation
 // worker that admits and executes deploys, the reconcilers, the domain
 // checker, and request logging. Every loop is safe to run in several
@@ -501,6 +576,10 @@ func (e *Engine) Start(ctx context.Context) {
 	go apps.RunOperationAdmission(ctx)
 	go apps.RunReconciler(ctx)
 	go apps.RunAppReconciler(ctx)
+
+	// Counts each app's requests and puts the idle ones to sleep, where the
+	// install has a waker to wake them again.
+	go apps.RunSleeper(ctx)
 
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.
@@ -521,10 +600,32 @@ func (e *Engine) Start(ctx context.Context) {
 }
 
 // Serve starts the background work and serves the dashboard on the configured
-// address until ctx ends, then shuts down within the configured timeout.
+// address until ctx ends, then shuts down within the configured timeout. With
+// a waker configured it serves that too, on its own address; either listener
+// failing stops both.
 func (e *Engine) Serve(ctx context.Context) error {
 	e.Start(ctx)
-	return ServeHTTP(ctx, e.Config.Addr, e.Handler(), e.Config.ShutdownTimeout, e.Log)
+	wakerAddr := e.Config.WakerListenAddr()
+	if wakerAddr == "" {
+		return ServeHTTP(ctx, e.Config.Addr, e.Handler(), e.Config.ShutdownTimeout, e.Log)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errs := make(chan error, 2)
+	go func() {
+		errs <- ServeHTTP(ctx, e.Config.Addr, e.Handler(), e.Config.ShutdownTimeout, e.Log)
+	}()
+	go func() {
+		errs <- ServeHTTP(ctx, wakerAddr, e.Waker(), e.Config.ShutdownTimeout,
+			e.Log.With(slog.String("listener", "waker")))
+	}()
+	err := <-errs
+	cancel()
+	if second := <-errs; err == nil {
+		err = second
+	}
+	return err
 }
 
 // Close releases the database pool. Run does this itself.
@@ -597,6 +698,24 @@ func newOrchestrator(ctx context.Context, cfg Config, log *slog.Logger) Orchestr
 		slog.String("error", err.Error()),
 	)
 	return orchestrator.NewNoop()
+}
+
+// wakerEndpoint is where sleeping apps' hostnames are routed, nil when the
+// install has no waker — and then no app sleeps, which is said once here.
+func wakerEndpoint(cfg Config, log *slog.Logger) (*orchestrator.WakerEndpoint, error) {
+	if cfg.WakerAddr == "" {
+		log.Info("apps cannot sleep — set YACHT_WAKER_ADDR to an address the cluster " +
+			"reaches the engine at to let idle apps scale to zero and wake on their next request")
+		return nil, nil
+	}
+	ip, port, err := cfg.Waker()
+	if err != nil {
+		return nil, err
+	}
+	log.Info("apps can sleep when idle — a sleeping app's hostnames route to the waker",
+		slog.String("waker", cfg.WakerAddr), slog.String("listen", cfg.WakerListenAddr()),
+		slog.String("needs", "the ingress controller's pods reaching "+cfg.WakerAddr))
+	return &orchestrator.WakerEndpoint{IP: ip, Port: port}, nil
 }
 
 func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProvider, error) {

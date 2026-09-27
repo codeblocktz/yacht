@@ -59,6 +59,18 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
+	// Going to sleep, the route moves to the waker before the pods go away,
+	// so a request arriving in between is held by the waker rather than
+	// answered by a controller with nothing to send it to.
+	if spec.Waker != nil {
+		if err := o.applyWakerRoute(ctx, spec); err != nil {
+			return err
+		}
+		if err := o.applyIngress(ctx, spec); err != nil {
+			return err
+		}
+	}
+
 	if err := o.applyDeployment(ctx, spec); err != nil {
 		return err
 	}
@@ -74,12 +86,24 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
-	if spec.Port > 0 && len(spec.Hosts) > 0 {
+	switch {
+	case spec.Waker != nil:
+		// Already pointed at the waker, above.
+	case spec.Port > 0 && len(spec.Hosts) > 0:
 		if err := o.applyIngress(ctx, spec); err != nil {
 			return err
 		}
-	} else if err := o.deleteIngress(ctx, spec.Ref); err != nil {
-		return err
+	default:
+		if err := o.deleteIngress(ctx, spec.Ref); err != nil {
+			return err
+		}
+	}
+
+	// Awake, the waker's route goes once the Ingress no longer names it.
+	if spec.Waker == nil {
+		if err := o.deleteWakerRoute(ctx, spec.Ref); err != nil {
+			return err
+		}
 	}
 
 	// The Deployment metadata key is the commit marker for the whole apply,

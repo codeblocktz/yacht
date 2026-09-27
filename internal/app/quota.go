@@ -222,21 +222,26 @@ func (s *Service) usageWith(
 	}
 	apps := make([]footprint, len(rows))
 	for i, a := range rows {
-		apps[i] = footprint{a.ID, shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
+		apps[i] = footprint{ID: a.ID, shape: shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
 	}
-	return tally(apps, storage, c), nil
+	return tally(apps, storage, c, 100), nil
 }
 
 // footprint is one existing app's shape, with the id a change names it by.
+// Asleep is an app scaled to zero while nobody uses it — counted at a share of
+// its size by the install's capacity, and in full by its team's quota.
 type footprint struct {
 	ID uuid.UUID
 	shape
+	Asleep bool
 }
 
 // tally is what a set of apps and volumes commits, with a change applied when
 // there is one. One function for a team and for the whole install, so the two
-// can never count an app differently.
-func tally(apps []footprint, storage int64, c *quotaChange) Usage {
+// can never count an app differently — except for a sleeping app, which counts
+// for asleepPercent of its size: 100 for a quota, which a sleeper can wake
+// back into at any moment, and the wake reserve for the install's capacity.
+func tally(apps []footprint, storage int64, c *quotaChange, asleepPercent int) Usage {
 	u := Usage{Apps: int64(len(apps)), StorageBytes: storage}
 	for _, a := range apps {
 		sh := a.shape
@@ -244,6 +249,9 @@ func tally(apps []footprint, storage int64, c *quotaChange) Usage {
 			sh = c.Reshape(sh)
 		}
 		cpu, mem := sh.cost()
+		if a.Asleep {
+			cpu, mem = share(cpu, asleepPercent), share(mem, asleepPercent)
+		}
 		u.CPUMillis += cpu
 		u.MemoryBytes += mem
 	}
@@ -257,6 +265,15 @@ func tally(apps []footprint, storage int64, c *quotaChange) Usage {
 		u.StorageBytes += c.Storage
 	}
 	return u
+}
+
+// share is percent of n, rounded up: a reserve that rounds a sleeper down to
+// nothing keeps no room for it.
+func share(n int64, percent int) int64 {
+	if percent >= 100 {
+		return n
+	}
+	return (n*int64(percent) + 99) / 100
 }
 
 // Quota returns a team's quota. A team with none is unlimited, which is the

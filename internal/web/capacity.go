@@ -95,6 +95,10 @@ type CapacityData struct {
 	// Refusals is the last week's changes refused for want of room, newest
 	// first.
 	Refusals []app.CapacityRefusal
+
+	// Sleeping is whether the install can put apps to sleep, which shows the
+	// sleeping apps' panel even while none is asleep.
+	Sleeping bool
 }
 
 // addNodes totals the room on the machines new pods can be placed on — see
@@ -224,7 +228,10 @@ func (s *Server) renderCapacity(
 	w http.ResponseWriter, r *http.Request, status int, form *CapacityPolicyForm, formErr string,
 ) {
 	ctx := r.Context()
-	d := CapacityData{OK: true, CanAddNode: s.joiner != nil, FormError: formErr}
+	d := CapacityData{
+		OK: true, CanAddNode: s.joiner != nil, FormError: formErr,
+		Sleeping: s.sleep != nil && s.sleep.CanSleep(),
+	}
 
 	if s.capacity != nil {
 		snap, err := s.capacity.Capacity(ctx)
@@ -269,6 +276,7 @@ func (s *Server) adminCapacityPolicy(w http.ResponseWriter, r *http.Request) {
 		Enforce:  formChecked(r, "enforce"),
 		CPURatio: r.FormValue("cpu_ratio"), MemoryRatio: r.FormValue("memory_ratio"),
 		Reserve: r.FormValue("reserve"), Warn: r.FormValue("warn"), Storage: r.FormValue("storage"),
+		WakeReserve: r.FormValue("wake_reserve"),
 	}
 	p, err := form.Parse()
 	if err == nil {
@@ -300,6 +308,7 @@ type CapacityPolicyForm struct {
 	Reserve     string
 	Warn        string
 	Storage     string
+	WakeReserve string
 }
 
 func capacityPolicyForm(p app.CapacityPolicy) CapacityPolicyForm {
@@ -309,6 +318,7 @@ func capacityPolicyForm(p app.CapacityPolicy) CapacityPolicyForm {
 		MemoryRatio: strconv.FormatFloat(p.MemoryRatio, 'f', -1, 64),
 		Reserve:     strconv.Itoa(p.ReservePercent),
 		Warn:        strconv.Itoa(p.WarnPercent),
+		WakeReserve: strconv.Itoa(p.WakeReservePercent),
 	}
 	if p.StorageBytes > 0 {
 		f.Storage = strconv.FormatFloat(roundTo(float64(p.StorageBytes)/(1<<30), 3), 'f', -1, 64)
@@ -350,6 +360,9 @@ func (f CapacityPolicyForm) Parse() (app.CapacityPolicy, error) {
 		return p, err
 	}
 	if p.WarnPercent, err = whole(f.Warn, "The warning", d.WarnPercent); err != nil {
+		return p, err
+	}
+	if p.WakeReservePercent, err = whole(f.WakeReserve, "The wake reserve", d.WakeReservePercent); err != nil {
 		return p, err
 	}
 	storage, err := quotaNumber(f.Storage, "Storage", 1<<20)

@@ -54,6 +54,7 @@ nothing you build here is locked in.
 | Persistent volumes, mounted and expandable | ✅ |
 | Secrets sealed at rest, kept out of the app record | ✅ |
 | Deploy a wired stack from a template in one action | ✅ |
+| Apps that sleep when idle and wake on the next request | ✅ |
 
 **Reaching it**
 
@@ -72,6 +73,18 @@ redirected to HTTPS cluster-wide. The domain's page shows the certificate
 arriving, when it expires, and — if it does not arrive — what to check. An
 install without cert-manager serves brought domains over plain HTTP, and says
 so on the domain rather than leaving the browser to.
+
+An app can **sleep** when it has had no requests for a while — 30 minutes by
+default, never under 5 — set per app or as a team default, and off until
+somebody turns it on. It is scaled to zero, its hostnames are routed to the
+engine's waker, and the next request wakes it: an API call is held until the
+app answers it, a browser sees a small waking-up page that reloads itself.
+Idleness is read from Traefik's per-service request counters (its k3s chart
+publishes them by default), so nothing sleeps where requests cannot be
+counted. The cluster has to reach the waker: set `YACHT_WAKER_ADDR` to this
+node's address and a port open to the cluster's pods. A sleeping app's CPU
+and memory are sold to others, less a wake reserve the capacity policy keeps
+so that a share of the sleepers can wake at once.
 
 The installer defaults to Let's Encrypt's **staging** environment, whose
 certificates browsers do not trust. Re-run it with
@@ -209,6 +222,8 @@ configured separately to pull from an insecure registry.
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
+| `YACHT_WAKER_ADDR` | — | `ip:port` the cluster reaches the waker at. **Setting it lets idle apps sleep.** The waker listens on its own port, never the dashboard's |
+| `YACHT_WAKE_TIMEOUT` | `60s` | How long a wake may take before the app goes back to sleep |
 | `YACHT_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
@@ -242,6 +257,17 @@ deciding what else to show. A wrapper that builds its own identity on
 `Accounts.Provider` passes `engine.OperatorCheck(cfg.Operators)` to
 `WithActingCheck` to keep impersonation; without it, no session acts as
 anything.
+
+Sleeping is driven through `Engine.Apps` like quotas are:
+`SetTeamSleepDefault(ctx, team, engine.SleepPolicy{Enabled: true, After: 30 * time.Minute})`
+turns it on for a plan's teams, `SetSleepSetting` and `SleepStatus` override
+and read one app, and `SleepNow` / `Wake` do it by hand. For metering, an app
+asleep has `App.RunningReplicas()` of zero, and
+`SleepIntervals(ctx, team, from, to)` with `engine.AwakeWithin` says how long
+each app was awake in a window — charge replicas × awake time. `Serve` runs
+the waker beside the dashboard; a wrapper serving its own handler serves
+`Engine.Waker()` on `Config.WakerListenAddr()` too, and
+`Overrides.WakerBrand` names it on the waking-up page.
 
 ## Security posture
 

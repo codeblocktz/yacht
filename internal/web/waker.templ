@@ -1,0 +1,79 @@
+package web
+
+import "strconv"
+
+// WakingPage is what a browser is shown while the app it asked for wakes up.
+//
+// A page of its own, with its styles inline, rather than one in the
+// dashboard's layout: it is served on the app's hostname, where the
+// dashboard's stylesheet does not exist, to a visitor of the app who has no
+// idea there is a dashboard. It reloads itself; once the app is up, the reload
+// is the app.
+templ WakingPage(d WakingData) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta http-equiv="refresh" content={ strconv.Itoa(d.Refresh) }/>
+			<meta name="robots" content="noindex"/>
+			<title>
+				if d.State == wakeBusy {
+					{ d.App } is busy
+				} else {
+					Waking up { d.App }…
+				}
+			</title>
+			<style>
+				:root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #4f46e5; }
+				@media (prefers-color-scheme: dark) { :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --line: #292524; --accent: #818cf8; } }
+				* { box-sizing: border-box; }
+				body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);
+					font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+				main { width: min(420px, calc(100vw - 48px)); text-align: center; }
+				svg { width: 44px; height: 44px; margin: 0 auto 20px; color: var(--accent); }
+				[data-waker-state=waking] svg { animation: breathe 2.4s ease-in-out infinite; }
+				@keyframes breathe { 50% { opacity: .35; transform: scale(.92); } }
+				@media (prefers-reduced-motion: reduce) { [data-waker-state=waking] svg { animation: none; } }
+				h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
+				p { margin: 0; color: var(--muted); }
+				[data-bar] { height: 3px; margin: 24px auto 0; width: 160px; border-radius: 3px; background: var(--line); overflow: hidden; }
+				[data-bar] span { display: block; height: 100%; width: 40%; background: var(--accent); border-radius: 3px; animation: slide 1.4s ease-in-out infinite; }
+				@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+				@media (prefers-reduced-motion: reduce) { [data-bar] span { animation: none; width: 100%; opacity: .5; } }
+				footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
+				a { color: inherit; }
+			</style>
+		</head>
+		<body>
+			<main data-waker-state={ string(d.State) }>
+				<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					if d.State == wakeBusy {
+						<circle cx="12" cy="12" r="9"></circle>
+						<path d="M12 7v5l3 2"></path>
+					} else {
+						<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+					}
+				</svg>
+				switch d.State {
+					case wakeBusy:
+						<h1>Busy right now</h1>
+					case wakeSlow:
+						<h1>Still starting</h1>
+					default:
+						<h1>Waking up…</h1>
+				}
+				<p>{ d.Sentence }</p>
+				if d.State == wakeStarting {
+					<div data-bar aria-hidden="true"><span></span></div>
+					<p style="margin-top:14px;font-size:13px">This page reloads by itself.</p>
+				} else {
+					<p style="margin-top:14px;font-size:13px">
+						This page tries again in { strconv.Itoa(d.Refresh) } seconds, or <a href="">reload</a> it.
+					</p>
+				}
+				<footer>{ d.App } · hosted on { d.Brand }</footer>
+			</main>
+		</body>
+	</html>
+}

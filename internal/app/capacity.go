@@ -60,14 +60,21 @@ type CapacityPolicy struct {
 	// can provision, and a node's disk is not it.
 	StorageBytes int64
 
+	// WakeReservePercent is how much of each sleeping app is still counted
+	// as committed: room kept for that share of the sleepers to wake at
+	// once. 100 counts a sleeper in full and sells nothing it gave back; 0
+	// sells all of it and leaves waking to luck.
+	WakeReservePercent int
+
 	// UpdatedAt is when it was last saved; zero on the defaults.
 	UpdatedAt time.Time
 }
 
 // DefaultCapacityPolicy is every install's until its operator changes it:
-// not enforced, nothing oversold, nothing reserved, warned at 80%.
+// not enforced, nothing oversold, nothing reserved, warned at 80%, and room
+// kept for a quarter of the sleeping apps to wake at once.
 func DefaultCapacityPolicy() CapacityPolicy {
-	return CapacityPolicy{CPURatio: 1, MemoryRatio: 1, WarnPercent: 80}
+	return CapacityPolicy{CPURatio: 1, MemoryRatio: 1, WarnPercent: 80, WakeReservePercent: 25}
 }
 
 // Validate refuses a policy that cannot be meant. The bounds are the table's
@@ -97,6 +104,8 @@ func (p CapacityPolicy) Validate() error {
 		return errors.New("the warning is a percentage from 1 to 100")
 	case p.StorageBytes < 0:
 		return errors.New("storage capacity cannot be negative — leave it at zero not to count storage")
+	case p.WakeReservePercent < 0 || p.WakeReservePercent > 100:
+		return errors.New("the wake reserve is a percentage of the sleeping apps, from 0 to 100")
 	}
 	return nil
 }
@@ -326,11 +335,11 @@ func (s *Service) withinCapacity(
 	if err != nil || !p.Enforce {
 		return err
 	}
-	now, err := s.installUsageWith(ctx, q, nil)
+	now, err := s.installUsageWith(ctx, q, nil, p.WakeReservePercent)
 	if err != nil {
 		return err
 	}
-	next, err := s.installUsageWith(ctx, q, &c)
+	next, err := s.installUsageWith(ctx, q, &c, p.WakeReservePercent)
 	if err != nil {
 		return err
 	}
@@ -383,26 +392,122 @@ func capacityPolicy(
 	return CapacityPolicy{
 		Enforce: row.Enforce, CPURatio: row.CpuCommitRatio, MemoryRatio: row.MemoryCommitRatio,
 		ReservePercent: int(row.ReservePercent), WarnPercent: int(row.WarnPercent),
-		StorageBytes: row.StorageBytes, UpdatedAt: row.UpdatedAt,
+		StorageBytes: row.StorageBytes, WakeReservePercent: int(row.WakeReservePercent),
+		UpdatedAt: row.UpdatedAt,
 	}, nil
 }
 
 // installUsageWith totals every team's committed use together, as it is or
-// with a change applied — usageWith for the whole install.
-func (s *Service) installUsageWith(ctx context.Context, q *dbgen.Queries, c *quotaChange) (Usage, error) {
+// with a change applied — usageWith for the whole install, with each sleeping
+// app counted at the wake reserve's share of its size.
+func (s *Service) installUsageWith(
+	ctx context.Context, q *dbgen.Queries, c *quotaChange, wakeReserve int,
+) (Usage, error) {
+	apps, storage, err := installFootprints(ctx, q)
+	if err != nil {
+		return Usage{}, err
+	}
+	return tally(apps, storage, c, wakeReserve), nil
+}
+
+// installFootprints is every app on the install, and every volume's bytes.
+func installFootprints(ctx context.Context, q *dbgen.Queries) ([]footprint, int64, error) {
 	rows, err := q.ListInstallFootprints(ctx)
 	if err != nil {
-		return Usage{}, fmt.Errorf("app: read the install's committed resources: %w", err)
+		return nil, 0, fmt.Errorf("app: read the install's committed resources: %w", err)
 	}
 	storage, err := q.SumInstallVolumeBytes(ctx)
 	if err != nil {
-		return Usage{}, fmt.Errorf("app: read the install's committed storage: %w", err)
+		return nil, 0, fmt.Errorf("app: read the install's committed storage: %w", err)
 	}
 	apps := make([]footprint, len(rows))
 	for i, a := range rows {
-		apps[i] = footprint{a.ID, shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
+		apps[i] = footprint{
+			ID:     a.ID,
+			shape:  shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
+			Asleep: a.Asleep,
+		}
 	}
-	return tally(apps, storage, c), nil
+	return apps, storage, nil
+}
+
+// SleepingCapacity is the sleeping apps across the install: what they would
+// take awake, and the share of it still counted as committed so they can wake.
+type SleepingCapacity struct {
+	Apps int64
+
+	// CPUMillis and MemoryBytes are every sleeper's size in full.
+	CPUMillis   int64
+	MemoryBytes int64
+
+	// ReservePercent is the policy's wake reserve, and ReserveCPUMillis and
+	// ReserveMemoryBytes that share of the sleepers, which Committed includes.
+	ReservePercent     int
+	ReserveCPUMillis   int64
+	ReserveMemoryBytes int64
+}
+
+// sleepingCapacity totals the sleepers among apps.
+func sleepingCapacity(apps []footprint, reserve int) SleepingCapacity {
+	sc := SleepingCapacity{ReservePercent: reserve}
+	for _, a := range apps {
+		if !a.Asleep {
+			continue
+		}
+		cpu, mem := a.cost()
+		sc.Apps++
+		sc.CPUMillis += cpu
+		sc.MemoryBytes += mem
+		sc.ReserveCPUMillis += share(cpu, reserve)
+		sc.ReserveMemoryBytes += share(mem, reserve)
+	}
+	return sc
+}
+
+// wakeRoom decides whether the install has room to wake a sleeping app, on
+// the caller's transaction.
+//
+// Against what is sellable, counting every awake app in full and no sleeper
+// at all. The wake reserve is what kept that room: it was held back from
+// every change sold while the app slept, precisely so that this comparison
+// comes out in the app's favour. Past it — more of the sleepers waking at once
+// than the reserve was kept for — the wake is refused, and the app stays
+// asleep until there is room.
+func (s *Service) wakeRoom(ctx context.Context, q *dbgen.Queries, id uuid.UUID) (shortfall, bool, error) {
+	p, err := capacityPolicy(ctx, q.GetCapacityPolicy)
+	if err != nil || !p.Enforce {
+		return shortfall{}, false, err
+	}
+	room := s.room.get(ctx)
+	if !room.Known {
+		return shortfall{}, false, nil
+	}
+	if p, err = capacityPolicy(ctx, q.LockCapacityPolicy); err != nil || !p.Enforce {
+		return shortfall{}, false, err
+	}
+	apps, _, err := installFootprints(ctx, q)
+	if err != nil {
+		return shortfall{}, false, err
+	}
+	var now, next Usage
+	for _, a := range apps {
+		cpu, mem := a.cost()
+		switch {
+		case a.ID == id:
+			next.CPUMillis += cpu
+			next.MemoryBytes += mem
+			continue
+		case a.Asleep:
+			continue
+		}
+		now.CPUMillis += cpu
+		now.MemoryBytes += mem
+		next.CPUMillis += cpu
+		next.MemoryBytes += mem
+	}
+	cpu, memory, _ := p.sellable(room)
+	short, refused := capacityAdmit(cpu, memory, 0, now, next)
+	return short, refused, nil
 }
 
 // CapacityPolicy returns the install's policy.
@@ -422,14 +527,14 @@ func (s *Service) SetCapacityPolicy(ctx context.Context, p CapacityPolicy) error
 	if _, err := s.q.SetCapacityPolicy(ctx, dbgen.SetCapacityPolicyParams{
 		Enforce: p.Enforce, CpuCommitRatio: p.CPURatio, MemoryCommitRatio: p.MemoryRatio,
 		ReservePercent: int32(p.ReservePercent), WarnPercent: int32(p.WarnPercent),
-		StorageBytes: p.StorageBytes,
+		StorageBytes: p.StorageBytes, WakeReservePercent: int32(p.WakeReservePercent),
 	}); err != nil {
 		return fmt.Errorf("app: set capacity policy: %w", err)
 	}
 	s.log.Info("capacity policy set", slog.Bool("enforce", p.Enforce),
 		slog.Float64("cpu_ratio", p.CPURatio), slog.Float64("memory_ratio", p.MemoryRatio),
 		slog.Int("reserve_percent", p.ReservePercent), slog.Int("warn_percent", p.WarnPercent),
-		slog.Int64("storage_bytes", p.StorageBytes))
+		slog.Int64("storage_bytes", p.StorageBytes), slog.Int("wake_reserve_percent", p.WakeReservePercent))
 	return nil
 }
 
@@ -510,6 +615,10 @@ type CapacitySnapshot struct {
 	// Apps is how many apps the install has, across every team.
 	Apps int64
 
+	// Sleeping is the apps asleep among them. Committed counts each at the
+	// wake reserve's share of its size rather than in full.
+	Sleeping SleepingCapacity
+
 	WarnPercent int
 	Level       CapacityLevel
 
@@ -581,7 +690,7 @@ func (s *Service) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	if err != nil {
 		return CapacitySnapshot{}, err
 	}
-	used, err := s.installUsageWith(ctx, s.q, nil)
+	apps, storage, err := installFootprints(ctx, s.q)
 	if err != nil {
 		return CapacitySnapshot{}, err
 	}
@@ -589,7 +698,10 @@ func (s *Service) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	if err != nil {
 		return CapacitySnapshot{}, fmt.Errorf("app: count capacity refusals: %w", err)
 	}
-	return NewCapacitySnapshot(p, s.room.get(ctx), used, int(refused)), nil
+	used := tally(apps, storage, nil, p.WakeReservePercent)
+	snap := NewCapacitySnapshot(p, s.room.get(ctx), used, int(refused))
+	snap.Sleeping = sleepingCapacity(apps, p.WakeReservePercent)
+	return snap, nil
 }
 
 // CapacityRefusal is one change refused for want of room.
