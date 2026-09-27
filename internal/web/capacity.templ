@@ -1,0 +1,164 @@
+package web
+
+import (
+	"fmt"
+	"strconv"
+)
+
+// AdminCapacity puts the cluster's room beside what the teams on it have
+// committed, and says when it is time to add a machine.
+templ AdminCapacity(d CapacityData) {
+	if d.CanAddNode {
+		@pageHead("Capacity", "Whether the cluster has room for what its teams have committed.", addNodeButton())
+	} else {
+		@pageHead("Capacity", "Whether the cluster has room for what its teams have committed.", nil)
+	}
+	if !d.OK {
+		@clusterCallout(d.Error)
+	}
+	for _, p := range d.Pressures() {
+		<div class="callout callout-warn mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">
+					Customers have committed { strconv.Itoa(p.Percent) }% of the cluster's { p.Resource } —
+					if d.CanAddNode {
+						<a class="underline" href="/cluster/nodes/add">add a node</a>
+					} else {
+						add a node
+					}
+				</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Past { strconv.Itoa(capacityWarnPercent) }% there is little room left for a rollout,
+					which briefly runs old and new pods together, or for a drain to move pods into.
+				</p>
+			</div>
+		</div>
+	}
+	if d.Schedulable == 0 && d.OK {
+		<div class="callout mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">No node is taking new work</div>
+				<p class="mt-0.5 text-muted-foreground">
+					Every machine is cordoned, not ready, or there are none — so there is no room to
+					compare the teams' commitments with.
+				</p>
+			</div>
+		</div>
+	}
+	<div class="metrics mb-5">
+		@metric("Nodes", strconv.Itoa(d.Schedulable), fmt.Sprintf("taking work, of %d", d.Nodes))
+		@metric("Allocatable CPU", cpuAmount(d.CPUAllocatable), "on those nodes")
+		@metric("Allocatable memory", byteAmount(d.MemAllocatable), "on those nodes")
+		@metric("Storage", byteAmount(d.Committed.StorageBytes), "reserved by volumes")
+		@metric("Apps", strconv.FormatInt(d.Committed.Apps, 10), fmt.Sprintf("across %d teams", len(d.Teams)))
+	</div>
+	<div class="mb-5 grid gap-5 lg:grid-cols-2">
+		@capacityPanel("CPU", d.Committed.CPUMillis, d.CPUUsed, d.CPUAllocatable, d.UsageKnown, cpuAmount)
+		@capacityPanel("Memory", d.Committed.MemoryBytes, d.MemUsed, d.MemAllocatable, d.UsageKnown, byteAmount)
+	</div>
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">By team</span>
+			<span class="text-[11.5px] text-muted-foreground">largest share of the cluster first</span>
+		</div>
+		if len(d.Teams) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No teams</p>
+				<p>Nothing is committed yet.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[760px]">
+					<thead>
+						<tr>
+							<th>Team</th>
+							<th class="text-right">Apps</th>
+							<th>CPU, of the cluster</th>
+							<th>Memory, of the cluster</th>
+							<th class="text-right">Storage</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, t := range d.Teams {
+							<tr>
+								<td class="max-w-[220px]">
+									<a class="font-medium hover:underline" href={ templ.URL(adminTeamHref(t.TeamID)) }>{ t.TeamName }</a>
+									<div class="mono truncate text-[11.5px] text-muted-foreground">{ t.TeamID }</div>
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ strconv.FormatInt(t.Usage.Apps, 10) }</td>
+								<td class="w-[190px]">
+									@shareCell(t.Usage.CPUMillis, d.CPUAllocatable, cpuAmount(t.Usage.CPUMillis))
+								</td>
+								<td class="w-[190px]">
+									@shareCell(t.Usage.MemoryBytes, d.MemAllocatable, byteAmount(t.Usage.MemoryBytes))
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ byteAmount(t.Usage.StorageBytes) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	<p class="text-[12.5px] text-muted-foreground">
+		Committed is each app's replicas times its limit, counted the way a team's quota is — an
+		app with no limit at the namespace default of { defaultLimitsNote() }. A limit is a ceiling
+		rather than a reservation, so teams can commit more than the cluster has; that is when
+		pods start competing for it.
+	</p>
+}
+
+// capacityPanel is one resource: what the teams have committed and what is in
+// use now, each against the room on the schedulable nodes.
+//
+// Both, because they answer different questions. Committed is what the teams
+// could take at their busiest, and is what decides when to add a node; in use
+// is what they take now, and a large gap between the two is a quota worth
+// revisiting rather than a cluster worth growing.
+templ capacityPanel(label string, committed, used, allocatable int64, usageKnown bool, amount func(int64) string) {
+	<div class="panel">
+		<div class="panel-header"><span class="panel-title">{ label }</span></div>
+		<div class="panel-body flex flex-col gap-4">
+			@capacityBar("Committed by teams", committed, allocatable, true, amount)
+			@capacityBar("In use now", used, allocatable, usageKnown, amount)
+			if allocatable > 0 {
+				<p class="text-[12px] text-muted-foreground">{ headroom(committed, allocatable, amount) } to commit.</p>
+			}
+		</div>
+	</div>
+}
+
+templ capacityBar(label string, value, total int64, known bool, amount func(int64) string) {
+	<div>
+		<div class="flex items-baseline justify-between gap-2">
+			<span class="micro">{ label }</span>
+			if !known {
+				<span class="text-[11.5px] text-muted-foreground">no metrics-server</span>
+			} else if total > 0 {
+				<span class="text-[12px] tabular-nums">
+					{ amount(value) } <span class="text-muted-foreground">of { amount(total) } · { strconv.Itoa(quotaPercent(value, total)) }%</span>
+				</span>
+			} else {
+				<span class="text-[12px] tabular-nums">{ amount(value) }</span>
+			}
+		</div>
+		if known && total > 0 {
+			@meter(quotaPercent(value, total), meterClass(quotaPercent(value, total)))
+		} else {
+			@meter(0, "meter-ok")
+		}
+	</div>
+}
+
+// shareCell is one team's commitment as a share of the cluster.
+templ shareCell(used, total int64, usedLabel string) {
+	<div class="flex items-baseline justify-between gap-2">
+		<span class="text-[12px] tabular-nums">{ usedLabel }</span>
+		if total > 0 {
+			<span class="text-[11.5px] text-muted-foreground tabular-nums">{ strconv.Itoa(quotaPercent(used, total)) }%</span>
+		}
+	</div>
+	if total > 0 {
+		@meter(quotaPercent(used, total), meterClass(quotaPercent(used, total)))
+	}
+}

@@ -253,6 +253,15 @@ type Team struct {
 	UpdatedAt   time.Time
 }
 
+type TeamQuota struct {
+	OwnerID      string
+	MaxApps      int32
+	CpuMillis    int64
+	MemoryBytes  int64
+	StorageBytes int64
+	UpdatedAt    time.Time
+}
+
 type User struct {
 	ID            uuid.UUID
 	Email         string

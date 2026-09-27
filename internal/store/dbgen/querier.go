@@ -249,6 +249,14 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
+	// What a team may commit, and what it has.
+	//
+	// Committed CPU and memory cannot be summed here: a limit is stored as the
+	// quantity string the cluster is given ("500m", "1Gi"), and an app with none
+	// counts at the namespace default, which lives in Go. So these return each
+	// app's replicas and limits and the service does the arithmetic, in one place.
+	GetTeamQuota(ctx context.Context, ownerID string) (TeamQuota, error)
+	GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQuotaSummaryRow, error)
 	GetTeamRow(ctx context.Context, id string) (Team, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
@@ -272,6 +280,14 @@ type Querier interface {
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.
 	ListAdmissiblePushes(ctx context.Context, resultLimit int32) ([]ListAdmissiblePushesRow, error)
+	// Every team's apps at once, for the operator's list of teams.
+	//
+	// The one query here with no owner_id filter, and deliberately: the page it
+	// serves is the install's view across teams, gated to the operator the same
+	// way the cluster's pod list is. One query rather than one per team, because
+	// an install hosting many teams is exactly the install this page is for.
+	ListAllAppFootprints(ctx context.Context) ([]ListAllAppFootprintsRow, error)
+	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
@@ -321,6 +337,9 @@ type Querier interface {
 	// feeds the reconciler, which is the platform settling its own records rather
 	// than a team reading theirs.
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	// Every team with its quota, its storage and how many people are in it. The
+	// operator's list; see ListAllAppFootprints for why it crosses teams.
+	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// Claim counting and selection must share this transaction-wide lock. Row
@@ -345,6 +364,12 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	// Taken at the start of anything that would raise what a team has committed,
+	// inside the transaction that commits it. Two creates racing each other then
+	// run one after the other, and the second reads the first's app before it
+	// decides — without this both read the same total, both fit, and together they
+	// do not. No row means no limit, and nothing to race against.
+	LockTeamQuota(ctx context.Context, ownerID string) (TeamQuota, error)
 	// Moves a proven domain to routed, once the Ingress actually carries it.
 	//
 	// Guarded on the state it is coming from, so a check that has since found drift
@@ -415,6 +440,7 @@ type Querier interface {
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.
 	TakeHookPending(ctx context.Context, appID uuid.UUID) (int64, error)
@@ -471,6 +497,7 @@ type Querier interface {
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go
 	// struct for no reason at all, which is the shortest route to it being logged.
 	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
+	UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error)
 	// Users, sessions and credentials carry no owner_id: a person exists before they
 	// belong to any team, and what proves who they are is not a fact about a tenant.
 	// Memberships and invitations do, and stay scoped by it like everything else.

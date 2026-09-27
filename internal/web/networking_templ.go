@@ -164,7 +164,7 @@ func customDomains(d NetworkingData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.Net.Target == "" {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "  <div class=\"empty\"><p class=\"font-medium text-foreground\">No CNAME target is configured</p><p>A custom domain has to point somewhere. An owner sets that once for the whole install under Infrastructure &rsaquo; DNS.</p></div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "  <div class=\"empty\"><p class=\"font-medium text-foreground\">No CNAME target is configured</p><p>A custom domain has to point somewhere. Whoever runs this install sets that once for all of it, under Admin &rsaquo; DNS.</p></div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -814,7 +814,7 @@ func routingOptions(d NetworkingData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, " rather than publishing this cluster's node addresses as A records.    <span class=\"mt-1 block\">Yacht does not run ExternalDNS and cannot see whether anything does, so it cannot confirm this takes effect. The target itself is set under <a class=\"underline hover:text-foreground\" href=\"/cluster/dns\">Infrastructure &rsaquo; DNS</a>.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, " rather than publishing this cluster's node addresses as A records.    <span class=\"mt-1 block\">Yacht does not run ExternalDNS and cannot see whether anything does, so it cannot confirm this takes effect. The target itself is set under <a class=\"underline hover:text-foreground\" href=\"/cluster/dns\">Admin &rsaquo; DNS</a>.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

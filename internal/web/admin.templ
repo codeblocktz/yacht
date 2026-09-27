@@ -1,0 +1,202 @@
+package web
+
+import "strconv"
+
+// AdminTeams is every team on the install, with what each has committed
+// against what it may.
+//
+// Committed rather than measured: these are the limits the teams' workloads
+// were given, which is what they can take from everyone else at their busiest,
+// not what they happened to use a minute ago.
+templ AdminTeams(d AdminTeamsData) {
+	@pageHead("Teams", "Every team on this install, what it has committed, and what it may.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	<div class="metrics mb-5">
+		@metric("Teams", strconv.Itoa(len(d.Teams)), "")
+		@metric("Apps", strconv.FormatInt(d.Total().Apps, 10), "across every team")
+		@metric("CPU", cpuAmount(d.Total().CPUMillis), "committed limits")
+		@metric("Memory", byteAmount(d.Total().MemoryBytes), "committed limits")
+		@metric("Storage", byteAmount(d.Total().StorageBytes), "reserved by volumes")
+	</div>
+	<div class="panel mb-5">
+		if len(d.Teams) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No teams</p>
+				<p>Nobody has signed in to this install yet.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[880px]">
+					<thead>
+						<tr>
+							<th>Team</th>
+							<th class="text-right">Members</th>
+							<th>Apps</th>
+							<th>CPU</th>
+							<th>Memory</th>
+							<th>Storage</th>
+							<th class="text-right"></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, t := range d.Teams {
+							<tr>
+								<td class="max-w-[220px]">
+									<a class="font-medium hover:underline" href={ templ.URL(adminTeamHref(t.TeamID)) }>{ t.TeamName }</a>
+									<div class="mono truncate text-[11.5px] text-muted-foreground">{ t.TeamID }</div>
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ membersLabel(t, d.Accounts) }</td>
+								<td class="w-[130px]">
+									@quotaCell(t.Usage.Apps, int64(t.Quota.Apps), strconv.FormatInt(t.Usage.Apps, 10), strconv.Itoa(int(t.Quota.Apps)))
+								</td>
+								<td class="w-[150px]">
+									@quotaCell(t.Usage.CPUMillis, t.Quota.CPUMillis, cpuAmount(t.Usage.CPUMillis), cpuAmount(t.Quota.CPUMillis))
+								</td>
+								<td class="w-[150px]">
+									@quotaCell(t.Usage.MemoryBytes, t.Quota.MemoryBytes, byteAmount(t.Usage.MemoryBytes), byteAmount(t.Quota.MemoryBytes))
+								</td>
+								<td class="w-[150px]">
+									@quotaCell(t.Usage.StorageBytes, t.Quota.StorageBytes, byteAmount(t.Usage.StorageBytes), byteAmount(t.Quota.StorageBytes))
+								</td>
+								<td class="text-right">
+									<a class="btn btn-sm" href={ templ.URL(adminTeamHref(t.TeamID)) }>Quota</a>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	<p class="text-[12.5px] text-muted-foreground">
+		CPU and memory are each app's replicas times its limit. An app with no limit of its
+		own is counted at the namespace default, { defaultLimitsNote() }, because that is
+		what the cluster gives it.
+	</p>
+}
+
+// quotaCell is one resource for one team: what is committed, against what.
+//
+// A limited resource gets a meter coloured by pressure, the same as a node's
+// CPU. An unlimited one gets the figure and says so, rather than an empty bar
+// that reads as "nothing used".
+templ quotaCell(used, limit int64, usedLabel, limitLabel string) {
+	if limit > 0 {
+		{{ usedPart, limitPart := usedOf(usedLabel, limitLabel) }}
+		<div class="flex items-baseline justify-between gap-2">
+			<span class="whitespace-nowrap text-[12px] tabular-nums">
+				{ usedPart } <span class="text-muted-foreground">/ { limitPart }</span>
+			</span>
+			<span class="text-[11.5px] text-muted-foreground tabular-nums">{ strconv.Itoa(quotaPercent(used, limit)) }%</span>
+		</div>
+		@meter(quotaPercent(used, limit), meterClass(quotaPercent(used, limit)))
+	} else {
+		<div class="text-[12px] tabular-nums">{ usedLabel }</div>
+		<div class="text-[11.5px] text-muted-foreground">no limit</div>
+	}
+}
+
+// AdminTeam is one team's quota, beside what it has committed now.
+templ AdminTeam(d AdminTeamData) {
+	@pageHead(d.Team.TeamName, "What this team may commit. Empty is no limit.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That was not saved</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	<div class="metrics mb-5">
+		if d.Accounts {
+			@metric("Members", strconv.FormatInt(d.Team.Members, 10), "")
+		}
+		@metric("Apps", strconv.FormatInt(d.Team.Usage.Apps, 10), "")
+		@metric("CPU", cpuAmount(d.Team.Usage.CPUMillis), "committed")
+		@metric("Memory", byteAmount(d.Team.Usage.MemoryBytes), "committed")
+		@metric("Storage", byteAmount(d.Team.Usage.StorageBytes), "reserved")
+	</div>
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Quota</span>
+			if d.Team.Quota.Unlimited() {
+				<span class="status status-ok">no limits</span>
+			} else if overQuota(d.Team) {
+				<span class="status status-err">over quota</span>
+			} else {
+				<span class="status status-warn">limited</span>
+			}
+		</div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL(adminTeamHref(d.Team.TeamID) + "/quota") } class="flex flex-col gap-5">
+				<div class="grid gap-5 sm:grid-cols-2">
+					@quotaField("apps", "Apps", "", d.Form.Apps, "numeric",
+						d.Team.Usage.Apps, int64(d.Team.Quota.Apps), appAmount(d.Team.Usage.Apps))
+					@quotaField("cpu", "CPU", "vCPU", d.Form.CPU, "decimal",
+						d.Team.Usage.CPUMillis, d.Team.Quota.CPUMillis, cpuAmount(d.Team.Usage.CPUMillis))
+					@quotaField("memory", "Memory", "GiB", d.Form.Memory, "decimal",
+						d.Team.Usage.MemoryBytes, d.Team.Quota.MemoryBytes, byteAmount(d.Team.Usage.MemoryBytes))
+					@quotaField("storage", "Storage", "GiB", d.Form.Storage, "decimal",
+						d.Team.Usage.StorageBytes, d.Team.Quota.StorageBytes, byteAmount(d.Team.Usage.StorageBytes))
+				</div>
+				<div class="flex items-center gap-2">
+					<button class="btn btn-primary" type="submit">Save quota</button>
+					<a class="btn btn-ghost" href="/admin/teams">Back to teams</a>
+				</div>
+			</form>
+		</div>
+	</div>
+	<div class="callout mb-5">
+		<div class="min-w-0">
+			<div class="font-medium">Lowering a quota stops nothing</div>
+			<p class="mt-0.5 text-muted-foreground">
+				What is already running keeps running. A team over its quota can still deploy,
+				scale down, lower limits and remove apps; what it cannot do is commit more until
+				it is back under. CPU and memory are each app's replicas times its limit, and an
+				app with no limit counts at the namespace default of { defaultLimitsNote() }.
+			</p>
+		</div>
+	</div>
+	if d.Team.QuotaSetAt != nil {
+		<p class="text-[12.5px] text-muted-foreground">Quota last changed { relativeTime(*d.Team.QuotaSetAt) }.</p>
+	} else {
+		<p class="text-[12.5px] text-muted-foreground">No quota has ever been set for this team.</p>
+	}
+}
+
+// quotaField is one limit, with what is committed now under it. Seeing the
+// two together is what stops an operator setting a limit below current use
+// without meaning to.
+templ quotaField(name, label, unit, value, mode string, used, limit int64, usedLabel string) {
+	<div class="field">
+		<label class="label" for={ "quota-" + name }>{ label }
+			if unit != "" {
+				<span class="text-muted-foreground font-normal">({ unit })</span>
+			}
+		</label>
+		<input
+			class="control"
+			id={ "quota-" + name }
+			name={ name }
+			value={ value }
+			inputmode={ mode }
+			autocomplete="off"
+			placeholder="No limit"
+		/>
+		<div class="mt-2">
+			if limit > 0 {
+				<div class="flex items-baseline justify-between gap-2">
+					<span class="text-[12px] text-muted-foreground">{ committedNow(used, usedLabel) }</span>
+					<span class="text-[11.5px] text-muted-foreground tabular-nums">{ strconv.Itoa(quotaPercent(used, limit)) }%</span>
+				</div>
+				@meter(quotaPercent(used, limit), meterClass(quotaPercent(used, limit)))
+			} else {
+				<span class="text-[12px] text-muted-foreground">{ committedNow(used, usedLabel) }</span>
+			}
+		</div>
+	</div>
+}

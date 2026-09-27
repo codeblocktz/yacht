@@ -111,6 +111,14 @@ func (s *Service) DeployTemplate(
 		return Project{}, err
 	}
 
+	// The whole stack against the quota before any of it exists. Each Create
+	// below checks again, under the lock, and that is what actually holds; this
+	// is so a stack that cannot fit is refused whole rather than discovered
+	// after its database is already running with nothing to talk to it.
+	if err := s.stackFits(ctx, ownerID, tmpl); err != nil {
+		return Project{}, err
+	}
+
 	project, err := s.CreateProject(ctx, ownerID, stack)
 	if err != nil {
 		return Project{}, err
@@ -158,6 +166,20 @@ func (s *Service) DeployTemplate(
 		slog.String("template", slug), slog.String("stack", stack),
 		slog.Int("apps", len(tmpl.Apps)))
 	return project, nil
+}
+
+// stackFits reports whether every app a template makes fits in the team's
+// quota together: each at one replica and the namespace's default limits, as
+// Create will make them, with the storage its source brings.
+func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template) error {
+	var change quotaChange
+	for _, spec := range tmpl.Apps {
+		change.Added = append(change.Added, shape{Replicas: 1})
+		if b, err := BlueprintFor(spec.Source); err == nil && b.Volume != nil {
+			change.Storage += b.Volume.SizeBytes
+		}
+	}
+	return s.withinQuota(ctx, s.q, ownerID, change)
 }
 
 // copyConnection gives one app another's connection string.
