@@ -195,6 +195,8 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 	if len(spec.Volumes) > 0 {
 		strategy = appsv1ac.DeploymentStrategy().
 			WithType(appsv1.RecreateDeploymentStrategyType)
+	} else {
+		podSpec.WithTopologySpreadConstraints(o.spreadConstraints(ctx, spec)...)
 	}
 
 	dep := appsv1ac.Deployment(spec.Name, spec.Namespace).
@@ -240,6 +242,66 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		return fmt.Errorf("k8s: apply deployment %s: %w", spec.Ref, err)
 	}
 	return nil
+}
+
+// spreadConstraints asks the scheduler to keep an app's replicas apart: on
+// different machines, and on different sites once the install has any, so
+// losing one machine — or every machine in one place — takes some of an app's
+// replicas rather than all of them.
+//
+// Both are preferences (ScheduleAnyway), never requirements. An install on one
+// machine, or a site that is full, still runs every replica; it just cannot
+// keep them apart. Apps with volumes get none: they run one pod, which has to
+// go where its volume can be mounted, so there is nothing to spread — and a
+// constraint in the template would only restart the app, with the gap Recreate
+// means, on its next apply.
+//
+// The site constraint is only added once some node carries a site. A node
+// without every key a pod's constraints name is left out of spreading
+// altogether, so a site constraint on an install that has none would switch
+// off the machine spreading too. It does mean the pod template changes when
+// the first site appears, and each app rolls onto it at its next apply — one
+// surge pod at a time, as any rollout.
+//
+// matchLabelKeys keeps a rolling update from counting the pods it is about to
+// replace, which would otherwise pull the new ones toward wherever the old
+// ones are not.
+func (o *Orchestrator) spreadConstraints(
+	ctx context.Context, spec orchestrator.AppSpec,
+) []*corev1ac.TopologySpreadConstraintApplyConfiguration {
+	spread := func(key string) *corev1ac.TopologySpreadConstraintApplyConfiguration {
+		return corev1ac.TopologySpreadConstraint().
+			WithMaxSkew(1).
+			WithTopologyKey(key).
+			WithWhenUnsatisfiable(corev1.ScheduleAnyway).
+			WithLabelSelector(metav1ac.LabelSelector().
+				WithMatchLabels(orchestrator.SelectorLabels(spec.Name))).
+			WithMatchLabelKeys(appsv1.DefaultDeploymentUniqueLabelKey)
+	}
+	constraints := []*corev1ac.TopologySpreadConstraintApplyConfiguration{
+		spread(corev1.LabelHostname),
+	}
+	if o.hasSites(ctx) {
+		constraints = append(constraints, spread(corev1.LabelTopologyZone))
+	}
+	return constraints
+}
+
+// hasSites reports whether any node carries a site.
+//
+// A cluster that cannot be read is treated as having none rather than failing
+// the deploy: the answer only decides a preference, and an app that deploys
+// spread by machine alone is better than one that does not deploy.
+func (o *Orchestrator) hasSites(ctx context.Context) bool {
+	list, err := o.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: corev1.LabelTopologyZone, Limit: 1,
+	})
+	if err != nil {
+		o.log.Warn("could not read node sites; spreading by machine only",
+			slog.String("error", err.Error()))
+		return false
+	}
+	return len(list.Items) > 0
 }
 
 func (o *Orchestrator) markDeploymentConverged(
