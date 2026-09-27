@@ -54,7 +54,8 @@ func TestGallery(t *testing.T) {
 		// page: the gallery is for reviewing every page, and the Admin group
 		// is part of the chrome.
 		opCtx := context.WithValue(context.Background(), surfacesKey{},
-			Surfaces{Operator: true, Quotas: true, DNS: true, Registry: true})
+			Surfaces{Operator: true, Quotas: true, DNS: true, Registry: true,
+				ActingAs: g.actingAs})
 		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
@@ -69,7 +70,10 @@ func TestGallery(t *testing.T) {
 			slots.SidebarTop = nil
 			slots.SidebarFooter = nil
 		}
-		if err := Layout(slots, g.page).Render(context.Background(), f); err != nil {
+		// Rendered with the same surfaces the slots were built from: the layout
+		// reads one of them itself — the acting notice — so a page drawn
+		// against an empty context would review a chrome that never ships.
+		if err := Layout(slots, g.page).Render(opCtx, f); err != nil {
 			f.Close()
 			t.Fatalf("render %s: %v", g.file, err)
 		}
@@ -124,6 +128,9 @@ type galleryPage struct {
 	// bar. Without it the signed-out pages are reviewed wearing chrome they do
 	// not ship with, which is the opposite of what a gallery is for.
 	bare bool
+
+	// actingAs draws the page as an operator acting as this team sees it.
+	actingAs string
 }
 
 // section renders a labelled band so several states can share one image.
@@ -655,6 +662,43 @@ func galleryPages() []galleryPage {
 			}(),
 		},
 		{
+			// Support access, in every shape the team page can be in: offered
+			// with a record behind it, in progress, never used, and off
+			// because nobody is named — where the page says what would turn
+			// it on rather than leaving the section out.
+			file: "states-admin-team-support.html", path: "/admin/teams/acme",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"},
+				{Label: "Teams", Href: "/admin/teams"}, {Label: "Acme Corp"}},
+			page: func() templ.Component {
+				acme := galleryTeams(now)[0]
+				events := galleryImpersonation(now)
+				panel := func(p ActingPanel) templ.Component {
+					return actingSection(AdminTeamData{Team: acme, Accounts: true, Acting: p})
+				}
+				return stack(
+					section("On the team's page", "support access sits under the quota, with the record",
+						AdminTeam(AdminTeamData{Team: acme, Accounts: true, Form: quotaForm(acme.Quota),
+							Acting: ActingPanel{Shown: true, Available: true, Events: events}})),
+					section("Acting now", "the way out is here as well as in the banner",
+						panel(ActingPanel{Shown: true, Available: true, Now: true, Events: events[:1]})),
+					section("Never used", "an install where nobody has acted as this team",
+						panel(ActingPanel{Shown: true, Available: true})),
+					section("No operators named", "every team owner would be an operator, so it is off — and says why",
+						panel(ActingPanel{Shown: true, Available: false})),
+				)
+			}(),
+		},
+		{
+			// A customer's overview, as the operator acting as it sees it:
+			// the notice above everything, with the way out beside it.
+			file: "states-acting.html", path: "/", actingAs: "Acme Corp",
+			crumbs: []Crumb{{Label: "Overview"}},
+			page: Overview(OverviewData{Operator: true,
+				OwnerName: "Acme Corp", ClusterOK: true, AppCount: 6,
+				Summary: summary, Apps: allApps, Activity: activityBusy(),
+			}),
+		},
+		{
 			// Committed past the warning line on CPU and not on memory, with
 			// one node cordoned: the page has to say which, and count the
 			// cordoned machine as no room at all.
@@ -667,6 +711,23 @@ func galleryPages() []galleryPage {
 				return AdminCapacity(d)
 			}(),
 		},
+	}
+}
+
+// galleryImpersonation is a week of support visits to one team, newest first.
+func galleryImpersonation(now time.Time) []account.ImpersonationEvent {
+	ev := func(ago time.Duration, who, action string) account.ImpersonationEvent {
+		return account.ImpersonationEvent{
+			ID: uuid.New(), TeamID: "acme", UserID: uuid.New(),
+			OperatorEmail: who, Action: action, At: now.Add(-ago),
+		}
+	}
+	return []account.ImpersonationEvent{
+		ev(20*time.Minute, "amina@yacht.example", account.ImpersonationStart),
+		ev(26*time.Hour, "amina@yacht.example", account.ImpersonationStop),
+		ev(27*time.Hour, "amina@yacht.example", account.ImpersonationStart),
+		ev(5*24*time.Hour, "joseph@yacht.example", account.ImpersonationStop),
+		ev(5*24*time.Hour+40*time.Minute, "joseph@yacht.example", account.ImpersonationStart),
 	}
 }
 

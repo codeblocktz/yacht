@@ -307,6 +307,20 @@ func (f *fakeAccounts) SetRole(
 	return errNoFakeAccountsBackend
 }
 
+func (f *fakeAccounts) StartActing(context.Context, uuid.UUID, string) (account.Team, error) {
+	return account.Team{}, errors.New("not implemented in this fake")
+}
+
+func (f *fakeAccounts) StopActing(context.Context, uuid.UUID) (string, error) {
+	return "", nil
+}
+
+func (f *fakeAccounts) ImpersonationEvents(
+	context.Context, string, int32,
+) ([]account.ImpersonationEvent, error) {
+	return nil, nil
+}
+
 func (f *fakeAccounts) RemoveMember(context.Context, uuid.UUID, string, uuid.UUID) error {
 	return errNoFakeAccountsBackend
 }
@@ -653,6 +667,11 @@ type liveHarness struct {
 	mailer   *fakeMailer
 	pool     *pgxpool.Pool
 	teamID   string
+
+	// restart builds the dashboard again over the same database with another
+	// list of operators — what changing YACHT_OPERATORS and restarting does,
+	// with every session the first one issued still valid.
+	restart func(operators []string) http.Handler
 }
 
 // newLiveHarness wires the engine against the test database, with teamID
@@ -718,26 +737,29 @@ func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []str
 		app.Options{Manifests: testManifests{}})
 	mailer := &fakeMailer{}
 
-	h := testServer(t, Options{
-		Apps:      apps,
-		Hooks:     apps,
-		Quotas:    apps,
-		Accounts:  accounts,
-		Operators: operators,
-		// The provider under test end to end: the cookie the callback sets is
-		// the cookie the dashboard resolves an owner from.
-		Identity:          accounts.Provider(SessionCookie),
-		Mailer:            mailer,
-		BaseURL:           "https://yacht.test",
-		BootstrapTeamID:   teamID,
-		BootstrapTeamName: "Local",
-		BootstrapEmail:    ownerEmail,
-		SessionTTL:        time.Hour,
-	})
+	build := func(operators []string) http.Handler {
+		return testServer(t, Options{
+			Apps:      apps,
+			Hooks:     apps,
+			Quotas:    apps,
+			Accounts:  accounts,
+			Operators: operators,
+			// The provider under test end to end: the cookie the callback sets
+			// is the cookie the dashboard resolves an owner from. Wired with
+			// the acting check the engine gives it, from the same list.
+			Identity:          accounts.Provider(SessionCookie).WithActingCheck(OperatorCheck(operators)),
+			Mailer:            mailer,
+			BaseURL:           "https://yacht.test",
+			BootstrapTeamID:   teamID,
+			BootstrapTeamName: "Local",
+			BootstrapEmail:    ownerEmail,
+			SessionTTL:        time.Hour,
+		})
+	}
 
 	return &liveHarness{
-		handler: h, accounts: accounts, apps: apps,
-		mailer: mailer, pool: pool, teamID: teamID,
+		handler: build(operators), accounts: accounts, apps: apps,
+		mailer: mailer, pool: pool, teamID: teamID, restart: build,
 	}
 }
 

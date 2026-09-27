@@ -210,6 +210,16 @@ type Accounts interface {
 	// own authority and refuse to leave the team without an owner.
 	SetRole(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID, role account.Role) error
 	RemoveMember(ctx context.Context, actor uuid.UUID, teamID string, target uuid.UUID) error
+
+	// StartActing and StopActing layer a team on a session and take it off
+	// again — an operator acting as a team, for support. The account service
+	// records both; who may start is decided here, and whether they may go on
+	// is decided on every request by the identity provider and roleOf.
+	StartActing(ctx context.Context, sessionID uuid.UUID, teamID string) (account.Team, error)
+	StopActing(ctx context.Context, sessionID uuid.UUID) (string, error)
+
+	// ImpersonationEvents is the durable record for one team, newest first.
+	ImpersonationEvents(ctx context.Context, teamID string, limit int32) ([]account.ImpersonationEvent, error)
 }
 
 // The engine's own implementation, asserted here so that a signature drifting
@@ -348,6 +358,11 @@ type Server struct {
 	wildcard  bool
 	log       *slog.Logger
 
+	// mayAct is whether a person may act as a team other than their own: the
+	// same check the identity provider is wired with, built from the same
+	// list, so the dashboard's gate and the provider cannot disagree.
+	mayAct account.ActingCheck
+
 	// joiner answers how a machine joins this cluster. Nil leaves the add-node
 	// surface off the router entirely, the way Accounts leaves out sign-in: a
 	// page that could never produce a working command is a worse answer than
@@ -450,6 +465,7 @@ func New(opts Options) (*Server, error) {
 		slots:     opts.Slots,
 		extra:     opts.Extra,
 		operators: normaliseEmails(opts.Operators),
+		mayAct:    OperatorCheck(opts.Operators),
 		authn:     opts.Authenticated,
 		ver:       opts.Version,
 		appDomain: opts.AppDomain,
@@ -681,6 +697,13 @@ func (s *Server) Handler() http.Handler {
 			// would let a prefetch or a crawler move somebody into another team.
 			if s.accounts != nil {
 				r.Post("/teams/switch", s.teamSwitch)
+
+				// Stopping acting is any session's, not the operator's: whoever
+				// is acting must always be able to stop, including somebody
+				// taken off the operators a moment ago. Member is what the
+				// acting session holds in the team it is acting as — owner, in
+				// fact — and what it holds in its own once it has stopped.
+				r.Post("/acting/stop", s.actingStop)
 			}
 		})
 
@@ -759,6 +782,15 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/admin/teams/{id}", s.adminTeam)
 				r.Post("/admin/teams/{id}/quota", s.adminTeamQuota)
 				r.Get("/admin/capacity", s.adminCapacity)
+			}
+
+			// Acting as a team. Mounted wherever there are sessions to layer a
+			// team on, including on an install with no operators named — where
+			// the handler refuses it, and says what would make it work, rather
+			// than answering a 404 that reads as a missing feature. See acting.go
+			// for why that mode cannot allow it.
+			if s.accounts != nil {
+				r.Post("/admin/teams/{id}/act", s.adminTeamAct)
 			}
 
 			if s.extra.Operator != nil {

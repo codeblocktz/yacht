@@ -51,6 +51,8 @@ func TestAWrapperComposesTheEngineWithItsOwnChromeAndRoutes(t *testing.T) {
 		Slots: SlotProviderFunc(func(ctx context.Context, r *http.Request) Slots {
 			s := DefaultSlots{}.Slots(ctx, r)
 			s.BrandName, s.BrandHref = "Kilicore", "/"
+			// Its own mark beside its own name, not Yacht's.
+			s.BrandMark = templ.Raw(`<svg id="kilicore-mark" viewBox="0 0 1 1"></svg>`)
 			s.Nav = append(s.Nav, NavGroup{Heading: "Account", Items: []NavItem{
 				{Label: "Billing", Href: "/billing", Active: strings.HasPrefix(r.URL.Path, "/billing")},
 			}})
@@ -105,6 +107,10 @@ func TestAWrapperComposesTheEngineWithItsOwnChromeAndRoutes(t *testing.T) {
 	}
 	if !strings.Contains(home.Body.String(), `href="/billing"`) {
 		t.Error("the wrapper's navigation is not in the sidebar")
+	}
+	if !strings.Contains(home.Body.String(), `id="kilicore-mark"`) ||
+		strings.Contains(home.Body.String(), `aria-label="Yacht"`) {
+		t.Error("the wrapper's brand mark did not replace Yacht's")
 	}
 	// One principal and no accounts: that principal runs the install, so the
 	// Admin group is theirs, with the engine's pages and the wrapper's in it.

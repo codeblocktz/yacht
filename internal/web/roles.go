@@ -71,6 +71,15 @@ func (s *Server) roleOf(r *http.Request) (account.Role, bool) {
 		}
 		return "", false
 	}
+	// An operator acting as a team is its owner for as long as they may act:
+	// support is there to fix what the team cannot, and a read-only visit
+	// fixes nothing. Asked of the install on every request, like the identity
+	// provider asks it, so taking somebody off the operators takes this away
+	// on the same request that puts them back in their own team.
+	if s.actingAs(r.Context(), sess, owner.ID) {
+		return account.RoleOwner, true
+	}
+
 	// The role is only good for the team the request is acting as. The session
 	// proves a role in its own active team; if the request is scoped to another
 	// owner the two are not statements about the same thing, and reading one as
@@ -107,6 +116,11 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // With no operators configured, the owner of the team the request acts as is
 // — the single-team reading, and what every install did before operators
 // existed. Otherwise the signed-in person's email must be one of them.
+//
+// Always the person, never the team they are acting as: an operator acting as
+// a customer's team is still the operator, and keeps the Admin area — which is
+// where they go to stop. The owner role acting grants never reaches here,
+// because with operators named this reads the address rather than the role.
 // Exported so a wrapping application gates its own install-wide pages the
 // same way.
 func (s *Server) IsOperator(r *http.Request) bool {

@@ -41,6 +41,19 @@ type Session struct {
 	// route gates would otherwise re-query it on every request.
 	Role Role
 
+	// ActingTeamID is the team an operator has layered on top of their own,
+	// for support; empty when they are not acting. ActiveTeamID and Role stay
+	// the operator's own throughout — acting grants no membership.
+	//
+	// Being set is not permission. Whether the holder may still act is asked
+	// of the install on every request, by the identity provider and by the
+	// dashboard's role gate, and a session whose holder may not is resolved as
+	// if this were empty.
+	ActingTeamID    string
+	ActingTeamName  string
+	ActingTeamEmail string
+	ActingSince     time.Time
+
 	UserAgent string
 	IP        string
 	ExpiresAt time.Time
@@ -138,6 +151,10 @@ func (s *Service) ResolveSession(ctx context.Context, raw string) (Session, erro
 		ExpiresAt:       row.ExpiresAt,
 		CreatedAt:       row.CreatedAt,
 		AuthenticatedAt: row.AuthenticatedAt,
+		ActingTeamID:    deref(row.ActingTeamID),
+		ActingTeamName:  deref(row.ActingTeamName),
+		ActingTeamEmail: deref(row.ActingTeamEmail),
+		ActingSince:     row.ActingSince.Time,
 	}, nil
 }
 
@@ -145,23 +162,39 @@ func (s *Service) ResolveSession(ctx context.Context, raw string) (Session, erro
 //
 // Membership is checked against the session's own user, not against anything
 // the request supplied, so a crafted team id switches into nothing.
+//
+// Switching also ends any impersonation, and records that it ended. Somebody
+// choosing one of their own teams has said where they mean to be; leaving the
+// acting on top would put them straight back in the customer's team.
 func (s *Service) SwitchTeam(ctx context.Context, sessionID uuid.UUID, teamID string) error {
-	row, err := s.q.GetSession(ctx, sessionID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrSessionInvalid
+	return s.inTx(ctx, func(q *dbgen.Queries) error {
+		row, err := q.GetSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrSessionInvalid
+			}
+			return fmt.Errorf("account: get session: %w", err)
 		}
-		return fmt.Errorf("account: get session: %w", err)
-	}
-	if _, err := s.RoleIn(ctx, row.UserID, teamID); err != nil {
-		return err
-	}
-	if err := s.q.SetSessionTeam(ctx, dbgen.SetSessionTeamParams{
-		ActiveTeamID: &teamID, ID: sessionID,
-	}); err != nil {
-		return fmt.Errorf("account: switch team: %w", err)
-	}
-	return nil
+		if _, err := roleIn(ctx, q, row.UserID, teamID); err != nil {
+			return err
+		}
+		cur, err := q.LockSessionActing(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrSessionInvalid
+			}
+			return fmt.Errorf("account: read session: %w", err)
+		}
+		if _, err := endActing(ctx, q, cur); err != nil {
+			return err
+		}
+		if err := q.SetSessionTeam(ctx, dbgen.SetSessionTeamParams{
+			ActiveTeamID: &teamID, ID: sessionID,
+		}); err != nil {
+			return fmt.Errorf("account: switch team: %w", err)
+		}
+		return nil
+	})
 }
 
 // RevokeSession ends one session — the sign-out on this browser.
@@ -204,6 +237,10 @@ func (s *Service) Provider(cookieName string) *Sessions {
 type Sessions struct {
 	svc    *Service
 	cookie string
+
+	// acting decides, on every request, whether a session that is acting as
+	// a team may still. Nil means none may. See WithActingCheck.
+	acting ActingCheck
 }
 
 var _ identity.Provider = (*Sessions)(nil)
@@ -213,6 +250,10 @@ var _ identity.Provider = (*Sessions)(nil)
 // Everything downstream is scoped by owner_id, and owner_id means team. A
 // session that resolved to the person would silently widen every query to
 // every team they belong to.
+//
+// The one exception is still a team: an operator acting as a team, for
+// support, resolves to the team being acted as — and only while the acting
+// check still approves them. See WithActingCheck.
 func (p *Sessions) Resolve(ctx context.Context, r *http.Request) (identity.Owner, error) {
 	c, err := r.Cookie(p.cookie)
 	if err != nil || c.Value == "" {
@@ -229,6 +270,20 @@ func (p *Sessions) Resolve(ctx context.Context, r *http.Request) (identity.Owner
 	// simply not an owner.
 	if sess.ActiveTeamID == "" {
 		return identity.Owner{}, identity.ErrUnauthenticated
+	}
+
+	// An operator acting as a team resolves to that team — every query the
+	// request makes is scoped to it, exactly as if they had signed in there.
+	// The check is made here, on every request, rather than once when the
+	// acting began: authority that is only checked at the door stays with
+	// whoever got through it, and removing an operator has to end their
+	// impersonation now rather than whenever their session expires.
+	if sess.ActingTeamID != "" && p.actingOwner(ctx, sess) {
+		return identity.Owner{
+			ID:          sess.ActingTeamID,
+			DisplayName: sess.ActingTeamName,
+			Email:       sess.ActingTeamEmail,
+		}, nil
 	}
 
 	return identity.Owner{

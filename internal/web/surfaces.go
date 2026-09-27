@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 )
@@ -24,6 +25,16 @@ type Surfaces struct {
 	// Operator is whether this request's person runs the install, and so
 	// whether the cluster-wide pages are theirs to be offered.
 	Operator bool
+
+	// ActingAs is the name of the team an operator is acting as, for support;
+	// empty when they are not. Every page must say so while it is set.
+	//
+	// DefaultSlots puts ActingBanner in Banner, and the layout draws it above
+	// any Banner a SlotProvider sets instead — so a wrapping application that
+	// fills Banner with its own notice composes with this rather than hiding
+	// it. Read it to decide what else to show: a prompt to top up a balance,
+	// say, is not one to put in front of somebody who is not the customer.
+	ActingAs string
 }
 
 // surfacesKey addresses them on the request. An unexported struct type, so
@@ -51,6 +62,9 @@ func (s *Server) withSurfaces(next http.Handler) http.Handler {
 		// Per request, unlike the rest: it depends on who is asking.
 		here := available
 		here.Operator = s.IsOperator(r)
+		if sess, ok := s.actingSession(r); ok {
+			here.ActingAs = cmp.Or(sess.ActingTeamName, sess.ActingTeamID)
+		}
 		next.ServeHTTP(w, r.WithContext(
 			context.WithValue(r.Context(), surfacesKey{}, here)))
 	})

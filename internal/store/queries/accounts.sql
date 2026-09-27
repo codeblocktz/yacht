@@ -86,11 +86,18 @@ RETURNING *;
 -- INNER JOIN on teams too: a session with no active team resolves to no owner,
 -- and returning a row the caller must then remember to reject is how that
 -- check gets skipped.
+--
+-- The team being acted as is LEFT joined, and deliberately not through
+-- memberships: an operator acting as a team is not a member of it, and must not
+-- become one. Whether they may still act is not a fact in this row at all — the
+-- identity provider asks the install on every request.
 -- name: GetSessionByHash :one
-SELECT s.*, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
+SELECT s.*, t.display_name AS team_name, t.email AS team_email, m.role AS member_role,
+       at.display_name AS acting_team_name, at.email AS acting_team_email
 FROM sessions s
 JOIN teams t ON t.id = s.active_team_id
 JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
+LEFT JOIN teams at ON at.id = s.acting_team_id
 WHERE s.token_hash = @token_hash AND s.expires_at > now();
 
 -- Expiry is filtered here for the reason GetSessionByHash gives: so that an
@@ -102,14 +109,42 @@ WHERE s.token_hash = @token_hash AND s.expires_at > now();
 -- name: GetSession :one
 SELECT * FROM sessions WHERE id = @id AND expires_at > now();
 
+-- Switching team ends any impersonation, in the same statement. Somebody who
+-- picks one of their own teams has said which team they mean to be in; leaving
+-- the acting layered on top would put them back in the customer's team on the
+-- very next page, which is the opposite of what they asked for. The stop is
+-- recorded by the caller, which reads the row under lock first.
 -- name: SetSessionTeam :exec
-UPDATE sessions SET active_team_id = @active_team_id WHERE id = @id;
+UPDATE sessions
+SET active_team_id = @active_team_id, acting_team_id = NULL, acting_since = NULL
+WHERE id = @id;
 
+-- Signing out ends an impersonation with the session, so the durable record
+-- gets its stop in the same statement that removes the row — there is no
+-- moment afterwards at which the session could still be asked what it was
+-- acting as.
 -- name: DeleteSessionByHash :exec
-DELETE FROM sessions WHERE token_hash = @token_hash;
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.token_hash = @token_hash
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL;
 
+-- Records the stop for the same reason DeleteSessionByHash does.
 -- name: DeleteSessionsForUser :exec
-DELETE FROM sessions WHERE user_id = @user_id;
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.user_id = @user_id::uuid
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL;
 
 -- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at <= now();
@@ -310,5 +345,56 @@ WHERE id = @id AND expires_at > now();
 -- failed rather than having worked.
 -- The surviving session is named `keep` rather than `except`, which is a
 -- reserved word the query parser will not take as an identifier.
+--
+-- A session among the others that was acting as a team stops, and the stop is
+-- recorded, for the reason DeleteSessionByHash gives.
 -- name: DeleteOtherSessionsForUser :exec
-DELETE FROM sessions WHERE user_id = @user_id AND id <> @keep::uuid;
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.user_id = @user_id::uuid AND ds.id <> @keep::uuid
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Impersonation: an operator acting as a team
+--
+-- Who may act is not decided here. The account package does not know who runs
+-- the install; the web layer gates starting on that, and the identity provider
+-- re-checks it on every request. What lives here is the state and the record.
+-- ---------------------------------------------------------------------------
+
+-- Scoped by expiry so a session that has ended cannot be made to act; execrows
+-- so the caller can tell that it was not.
+-- name: StartActing :execrows
+UPDATE sessions SET acting_team_id = @team_id::text, acting_since = now()
+WHERE id = @id AND expires_at > now();
+
+-- Reads what a session is acting as, and who holds it, under lock. The lock is
+-- what makes a stop happen once: two requests racing to end the same
+-- impersonation serialise here, and the second finds nothing to end.
+-- name: LockSessionActing :one
+SELECT s.id, s.user_id, s.acting_team_id, u.email
+FROM sessions s
+JOIN users u ON u.id = s.user_id
+WHERE s.id = @id
+FOR UPDATE OF s;
+
+-- name: ClearSessionActing :exec
+UPDATE sessions SET acting_team_id = NULL, acting_since = NULL WHERE id = @id;
+
+-- name: InsertImpersonationEvent :exec
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+VALUES (@owner_id, @user_id::uuid, @operator_email, @action);
+
+-- Newest first, for the team page. Scoped by the team acted as, which is
+-- whose record it is.
+-- name: ListImpersonationEvents :many
+SELECT id, owner_id, user_id, operator_email, action, at
+FROM impersonation_events
+WHERE owner_id = @owner_id
+ORDER BY at DESC, id
+LIMIT @max_rows;

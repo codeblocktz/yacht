@@ -101,9 +101,16 @@ templ appShell(s Slots, page templ.Component) {
 		@sidebar(s)
 		<div class="flex min-w-0 flex-1 flex-col" data-app-shell>
 			@topbar(s)
-			if s.Banner != nil {
+			// The acting notice is composed in here, above whatever Banner the
+			// slots carry, rather than left to the SlotProvider. See
+			// withActingBanner for why this is the one thing the layout reads
+			// from the request.
+			{{ banner := withActingBanner(ctx, s.Banner) }}
+			if isActingBanner(banner) {
+				@banner
+			} else if banner != nil {
 				<div class="border-b border-border px-6 py-3">
-					@slot(s.Banner)
+					@slot(banner)
 				</div>
 			}
 			if s.FullBleed {
@@ -185,7 +192,11 @@ templ sidebar(s Slots) {
 			class="brand relative mb-1 flex items-center gap-2.5 px-2 py-1.5 text-[14px] font-semibold tracking-tight"
 			aria-label={ s.BrandName }
 		>
-			@brandMark("h-[19px] w-auto shrink-0")
+			if s.BrandMark != nil {
+				@s.BrandMark
+			} else {
+				@brandMark("h-[19px] w-auto shrink-0")
+			}
 			<span class="rail-hide truncate">
 				if s.BrandName == DefaultBrandName {
 					@brandWordmark("h-[13px] w-auto")

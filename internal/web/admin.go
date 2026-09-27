@@ -69,12 +69,14 @@ func (d AdminTeamsData) Total() app.Usage {
 	return u
 }
 
-// AdminTeamData is one team's quota, as a form.
+// AdminTeamData is one team's quota, as a form, and support access to it.
 type AdminTeamData struct {
 	Team     app.TeamUsage
 	Accounts bool
 	Form     QuotaForm
 	Error    string
+
+	Acting ActingPanel
 }
 
 // QuotaForm is a quota in the units a person types: apps, vCPU, GiB. Strings,
@@ -181,6 +183,7 @@ func (s *Server) adminTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	s.renderWithCrumb(w, r, AdminTeam(AdminTeamData{
 		Team: t, Accounts: s.accounts != nil, Form: quotaForm(t.Quota),
+		Acting: s.actingPanel(r, t.TeamID),
 	}), t.TeamName)
 }
 
@@ -200,6 +203,7 @@ func (s *Server) adminTeamQuota(w http.ResponseWriter, r *http.Request) {
 		slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: t.TeamName})
 		s.renderWithSlotsStatus(w, r, slots, http.StatusUnprocessableEntity, AdminTeam(AdminTeamData{
 			Team: t, Accounts: s.accounts != nil, Form: form, Error: msg,
+			Acting: s.actingPanel(r, t.TeamID),
 		}))
 	}
 

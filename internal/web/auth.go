@@ -280,6 +280,10 @@ func (s *Server) startSession(
 func (s *Server) signOut(w http.ResponseWriter, r *http.Request) {
 	raw := sessionToken(r)
 	if raw != "" {
+		// Read first only to log it: signing out ends an impersonation with the
+		// session, and the account service records the stop in the same
+		// statement that deletes the row.
+		acting, _ := s.accounts.ResolveSession(r.Context(), raw)
 		if err := s.accounts.RevokeSession(r.Context(), raw); err != nil {
 			s.log.Error("revoke session", slog.String("error", err.Error()))
 			// The cookie is left alone. Clearing it here would make the browser
@@ -288,6 +292,10 @@ func (s *Server) signOut(w http.ResponseWriter, r *http.Request) {
 			// again with.
 			http.Error(w, "could not sign you out", http.StatusInternalServerError)
 			return
+		}
+		if acting.ActingTeamID != "" {
+			s.logActingStopped(r.Context(), "impersonation stopped by signing out",
+				acting.UserID, acting.ActingTeamID)
 		}
 	}
 	s.endSession(w, r)
@@ -325,6 +333,10 @@ func (s *Server) signOutEverywhere(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			s.log.Info("signed out everywhere", slog.String("user", sess.UserID.String()))
+			if sess.ActingTeamID != "" {
+				s.logActingStopped(ctx, "impersonation stopped by signing out everywhere",
+					sess.UserID, sess.ActingTeamID)
+			}
 		}
 	}
 	s.endSession(w, r)

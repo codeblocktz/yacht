@@ -68,6 +68,15 @@ type Slots struct {
 	BrandName string
 	BrandHref string
 
+	// BrandMark is drawn beside BrandName, and alone in the collapsed rail.
+	// Nil is Yacht's mark. A wrapping application passes its own — sized by
+	// its own markup, around 19px tall to sit with the name — or
+	// templ.NopComponent for a wordmark with no mark at all.
+	//
+	// Separate from BrandName because a product renamed but still drawn with
+	// this engine's mark is presenting somebody else's logo as its own.
+	BrandMark templ.Component
+
 	// Nav is the sidebar navigation. A wrapping application may append its
 	// own groups, or replace the set entirely.
 	Nav []NavGroup
@@ -94,6 +103,10 @@ type Slots struct {
 
 	// Banner renders above the page content, full width. Intended for
 	// account-level notices such as a low balance or a pending suspension.
+	//
+	// While an operator is acting as a team the layout draws the acting
+	// notice above whatever is here; see Surfaces.ActingAs. It can be
+	// composed with but not replaced.
 	Banner templ.Component
 
 	// Bare drops the sidebar and the top bar, leaving the page the whole
@@ -176,8 +189,17 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		footer = UserMenu(owner, len(teams) > 0)
 	}
 
+	// The acting notice is the engine's own banner, and it takes the slot: no
+	// other notice the engine draws matters more than being told that what
+	// you are about to change is somebody else's.
+	var banner templ.Component
+	if acting := SurfacesFromContext(ctx).ActingAs; acting != "" {
+		banner = ActingBanner(acting)
+	}
+
 	slots := Slots{
-		Title: "Yacht",
+		Title:  "Yacht",
+		Banner: banner,
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.

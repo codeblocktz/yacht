@@ -166,6 +166,11 @@ templ AdminTeam(d AdminTeamData) {
 	} else {
 		<p class="text-[12.5px] text-muted-foreground">No quota has ever been set for this team.</p>
 	}
+	if d.Acting.Shown {
+		<div class="mt-6">
+			@actingSection(d)
+		</div>
+	}
 }
 
 // quotaField is one limit, with what is committed now under it. Seeing the
