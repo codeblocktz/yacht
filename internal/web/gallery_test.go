@@ -50,9 +50,11 @@ func TestGallery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create %s: %v", path, err)
 		}
-		// Drawn as the operator sees it: the gallery is for reviewing every
-		// page, and the Infrastructure entries are part of the chrome.
-		opCtx := context.WithValue(context.Background(), surfacesKey{}, Surfaces{Operator: true})
+		// Drawn as the operator sees it, on an install with every optional
+		// page: the gallery is for reviewing every page, and the Admin group
+		// is part of the chrome.
+		opCtx := context.WithValue(context.Background(), surfacesKey{},
+			Surfaces{Operator: true, Quotas: true, DNS: true, Registry: true})
 		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
@@ -397,7 +399,7 @@ func galleryPages() []galleryPage {
 			// quickly and neither is reachable by clicking without owning a
 			// domain and breaking it on purpose.
 			file: "states-dns.html", path: "/cluster/dns",
-			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "DNS"}},
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "DNS"}},
 			page: PlatformDNS(PlatformDNSData{
 				DNS: cluster.DNS{
 					CNAMETarget: "edge.example.com",
@@ -425,7 +427,7 @@ func galleryPages() []galleryPage {
 			// clicking means having a spare machine and the patience to break
 			// it, which is why they rot.
 			file: "states-nodes.html", path: "/cluster/nodes/yacht-w1",
-			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "yacht-w1"}},
 			page: stack(
 				section("Joining", "twenty seconds in, in the kubelet's own words",
 					panelWrap(bodyPad(stepList(nodeJoinSteps(orchestrator.NodeInfo{
@@ -497,14 +499,14 @@ func galleryPages() []galleryPage {
 		},
 		{
 			file: "states-cluster.html", path: "/cluster/nodes",
-			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
 				Tab: "nodes", OK: true, Summary: summary, Nodes: nodes,
 			}),
 		},
 		{
 			file: "states-pods.html", path: "/cluster/pods",
-			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
 				Tab: "pods", OK: true, Summary: summary, Pods: pods,
 			}),
@@ -621,6 +623,78 @@ func galleryPages() []galleryPage {
 					"where the eye lands",
 					deployActivity(activityFailing())),
 			),
+		},
+		{
+			// Every pressure a quota can be under at once: comfortable, at
+			// the warning line, full, over a quota the operator lowered, and
+			// no quota at all. The last two are the ones nobody sees until a
+			// customer asks why they cannot deploy.
+			file: "states-admin-teams.html", path: "/admin/teams",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Teams"}},
+			page:   AdminTeams(AdminTeamsData{Accounts: true, Teams: galleryTeams(now)}),
+		},
+		{
+			file: "states-admin-team.html", path: "/admin/teams/acme",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"},
+				{Label: "Teams", Href: "/admin/teams"}, {Label: "Acme Corp"}},
+			page: func() templ.Component {
+				teams := galleryTeams(now)
+				acme, hooli, local := teams[0], teams[3], teams[2]
+				return stack(
+					section("Limited", "each limit beside what is committed under it",
+						AdminTeam(AdminTeamData{Team: acme, Accounts: true, Form: quotaForm(acme.Quota)})),
+					section("Refused", "a value that is not a number, kept exactly as typed",
+						AdminTeam(AdminTeamData{Team: acme, Accounts: true,
+							Form:  QuotaForm{Apps: "10", CPU: "three", Memory: "8", Storage: "50"},
+							Error: `CPU must be a number — "three" is not one`})),
+					section("Over a lowered quota", "nothing stopped; nothing more committed until it is back under",
+						AdminTeam(AdminTeamData{Team: hooli, Accounts: true, Form: quotaForm(hooli.Quota)})),
+					section("Never limited", "a team nobody has set a quota for",
+						AdminTeam(AdminTeamData{Team: local, Accounts: true, Form: quotaForm(local.Quota)})),
+				)
+			}(),
+		},
+		{
+			// Committed past the warning line on CPU and not on memory, with
+			// one node cordoned: the page has to say which, and count the
+			// cordoned machine as no room at all.
+			file: "states-admin-capacity.html", path: "/admin/capacity",
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Capacity"}},
+			page: func() templ.Component {
+				d := CapacityData{OK: true, CanAddNode: true}
+				d.addNodes(nodes)
+				d.addTeams(galleryTeams(now))
+				return AdminCapacity(d)
+			}(),
+		},
+	}
+}
+
+// galleryTeams is an install hosting four teams, each under a different kind
+// of quota pressure. Sized against the gallery's nodes so the capacity page
+// lands just past its warning line on CPU and just short of it on memory.
+func galleryTeams(now time.Time) []app.TeamUsage {
+	set := now.Add(-72 * time.Hour)
+	lowered := now.Add(-2 * time.Hour)
+	return []app.TeamUsage{
+		{
+			TeamID: "acme", TeamName: "Acme Corp", Members: 6, QuotaSetAt: &set,
+			Usage: app.Usage{Apps: 7, CPUMillis: 2400, MemoryBytes: 5<<30 + 512<<20, StorageBytes: 40 << 30},
+			Quota: app.Quota{Apps: 10, CPUMillis: 3000, MemoryBytes: 8 << 30, StorageBytes: 50 << 30},
+		},
+		{
+			TeamID: "northwind", TeamName: "Northwind", Members: 2, QuotaSetAt: &set,
+			Usage: app.Usage{Apps: 3, CPUMillis: 1200, MemoryBytes: 1<<30 + 256<<20, StorageBytes: 2 << 30},
+			Quota: app.Quota{Apps: 3, MemoryBytes: 4 << 30},
+		},
+		{
+			TeamID: "owner-local", TeamName: "Local", Members: 1,
+			Usage: app.Usage{Apps: 4, CPUMillis: 600, MemoryBytes: 1<<30 + 512<<20, StorageBytes: 10 << 30},
+		},
+		{
+			TeamID: "hooli", TeamName: "Hooli", Members: 3, QuotaSetAt: &lowered,
+			Usage: app.Usage{Apps: 2, CPUMillis: 960, MemoryBytes: 1 << 30},
+			Quota: app.Quota{CPUMillis: 500},
 		},
 	}
 }

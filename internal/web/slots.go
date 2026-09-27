@@ -200,29 +200,28 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
 					Active: hasPrefix(path, "/deployments")},
 			}},
-			{Heading: "Infrastructure", Items: append([]NavItem{
-				{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
-					Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")},
-				{Label: "Pods", Href: "/cluster/pods", Icon: "layers",
-					Active: hasPrefix(path, "/cluster/pods")},
-				{Label: "Volumes", Href: "/cluster/volumes", Icon: "disk",
-					Active: hasPrefix(path, "/cluster/volumes")},
-				{Label: "Events", Href: "/cluster/events", Icon: "activity",
-					Active: hasPrefix(path, "/cluster/events")},
-			}, infraNav(ctx, path)...)},
+			// Everything about running the install, in one group: the teams
+			// on it, whether the cluster has room for them, and the machines
+			// and settings underneath. One group rather than tenants here and
+			// machines there, because the line that matters is between the
+			// people who run the install and the people using it, and one
+			// heading is what makes that line visible — and one place is where
+			// a wrapping application's install-wide pages go too.
+			{Heading: AdminNavHeading, Items: adminNav(ctx, path)},
 			{Heading: "System", Items: append(teamNav(ctx, path), NavItem{
 				Label: "Settings", Href: "/settings", Icon: "settings",
 				Active: hasPrefix(path, "/settings"),
 			})},
 		},
 	}
-	// The cluster-wide pages are the operator's. Offered to anyone else they
+	// The Admin area is the operator's. Offered to anyone else its entries
 	// would be links to a 403, which reads as a broken page rather than one
-	// that belongs to somebody else.
+	// that belongs to somebody else — and on an install hosting customers, the
+	// cluster underneath is not theirs to be shown at all.
 	if !SurfacesFromContext(ctx).Operator {
 		kept := slots.Nav[:0]
 		for _, g := range slots.Nav {
-			if g.Heading != "Infrastructure" {
+			if g.Heading != AdminNavHeading {
 				kept = append(kept, g)
 			}
 		}
@@ -244,18 +243,29 @@ func breadcrumbFor(path string) []Crumb {
 		return []Crumb{{Label: "Apps"}}
 	case hasPrefix(path, "/deployments"):
 		return []Crumb{{Label: "Deployments"}}
+	// The cluster's pages keep their /cluster URLs — bookmarks and the
+	// install docs point at them — and sit under Admin in the trail as they
+	// do in the sidebar. Admin links to Nodes from here because Nodes exists
+	// on every install; the teams pages need an app service behind them.
 	case hasPrefix(path, "/cluster/volumes"):
-		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Volumes"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Volumes"}}
 	case hasPrefix(path, "/cluster/events"):
-		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Events"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Events"}}
 	case hasPrefix(path, "/cluster/dns"):
-		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "DNS"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "DNS"}}
 	case hasPrefix(path, "/cluster/registry"):
-		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Registry"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Registry"}}
 	case hasPrefix(path, "/cluster"):
-		return []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Cluster"}}
 	case hasPrefix(path, "/settings"):
 		return []Crumb{{Label: "Settings"}}
+	case path == "/admin/teams":
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Teams"}}
+	case hasPrefix(path, "/admin/teams/"):
+		// The team's name is appended by the handler, which knows it.
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Teams", Href: "/admin/teams"}}
+	case hasPrefix(path, "/admin/capacity"):
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Capacity"}}
 	}
 	return nil
 }
@@ -322,25 +332,46 @@ func teamNav(ctx context.Context, path string) []NavItem {
 	}}
 }
 
-// infraNav lists the install-wide settings pages this install actually has.
+// adminNav lists the Admin pages this install actually has: the teams and
+// whether the cluster has room for them first, because those are what an
+// operator of a shared install checks most; then the machines; then the
+// install-wide settings.
 //
 // Conditional for the reason the Team entry is: an entry whose route was never
 // mounted is a link to a 404, which reads as a broken feature rather than an
 // absent one. DNS had exactly that problem from the day it was written — a
 // page with no way in, and a custom-domain panel telling people to go to it.
-func infraNav(ctx context.Context, path string) []NavItem {
+func adminNav(ctx context.Context, path string) []NavItem {
 	var items []NavItem
 	s := SurfacesFromContext(ctx)
-	if s.DNS {
-		items = append(items, NavItem{
-			Label: "DNS", Href: "/cluster/dns", Icon: "globe",
-			Active: hasPrefix(path, "/cluster/dns"),
-		})
+	if s.Quotas {
+		items = append(items,
+			NavItem{Label: "Teams", Href: "/admin/teams", Icon: "building",
+				Active: hasPrefix(path, "/admin/teams")},
+			NavItem{Label: "Capacity", Href: "/admin/capacity", Icon: "gauge",
+				Active: hasPrefix(path, "/admin/capacity")},
+		)
 	}
+	items = append(items,
+		NavItem{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
+			Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")},
+		NavItem{Label: "Pods", Href: "/cluster/pods", Icon: "layers",
+			Active: hasPrefix(path, "/cluster/pods")},
+		NavItem{Label: "Volumes", Href: "/cluster/volumes", Icon: "disk",
+			Active: hasPrefix(path, "/cluster/volumes")},
+		NavItem{Label: "Events", Href: "/cluster/events", Icon: "activity",
+			Active: hasPrefix(path, "/cluster/events")},
+	)
 	if s.Registry {
 		items = append(items, NavItem{
 			Label: "Registry", Href: "/cluster/registry", Icon: "package",
 			Active: hasPrefix(path, "/cluster/registry"),
+		})
+	}
+	if s.DNS {
+		items = append(items, NavItem{
+			Label: "DNS", Href: "/cluster/dns", Icon: "globe",
+			Active: hasPrefix(path, "/cluster/dns"),
 		})
 	}
 	return items

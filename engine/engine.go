@@ -92,6 +92,15 @@ type (
 	Accounts = account.Service
 	// Apps is the engine's app service: everything about workloads.
 	Apps = app.Service
+
+	// Quota is how much a team may commit — apps, CPU, memory, storage —
+	// which Apps.SetQuota replaces. Named here so a wrapper can set one from
+	// something of its own, a plan say, without the engine knowing what that
+	// is. Zero in a field is unlimited.
+	Quota = app.Quota
+	// TeamUsage is a team's committed use beside its quota, from
+	// Apps.TeamUsage and Apps.TeamUsages.
+	TeamUsage = app.TeamUsage
 	// Server is the engine's dashboard.
 	Server = web.Server
 	// Keeper seals secrets at rest.
@@ -109,9 +118,19 @@ const (
 	// DefaultBrandName is the engine's own name, where its chrome puts it —
 	// what a wrapper replaces.
 	DefaultBrandName = web.DefaultBrandName
+
+	// AdminNavHeading is the sidebar group of the operator's install-wide
+	// pages. A wrapper mounting its own with ExtraRoutes.Operator appends
+	// their entries to this group.
+	AdminNavHeading = web.AdminNavHeading
 )
 
 var (
+	// ErrQuotaExceeded is what Apps refuses a change with when it would take
+	// a team past its quota, for a wrapper that answers it with something of
+	// its own rather than the engine's sentence.
+	ErrQuotaExceeded = app.ErrQuotaExceeded
+
 	// LoadConfig reads the engine's configuration from the environment.
 	LoadConfig = config.Load
 	// Layout draws a page inside the engine's chrome.
@@ -356,6 +375,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Nets:          e.Apps,
 		Hooks:         e.Apps,
 		Logs:          e.Apps,
+		Quotas:        e.Apps,
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.

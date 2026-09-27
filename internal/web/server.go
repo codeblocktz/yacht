@@ -275,6 +275,10 @@ type Options struct {
 	// form for a setting nothing reads is a worse answer than no form.
 	Registries Registries
 
+	// Quotas, when set, puts the Admin area's teams pages on the router: every
+	// team on the install, and what each may commit.
+	Quotas Quotas
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -363,6 +367,10 @@ type Server struct {
 	// registries is where built images go. Nil leaves the Registry surface
 	// off, which is right for an install that cannot build anything.
 	registries Registries
+
+	// quotas is what each team may commit. Nil leaves the Admin area's teams
+	// pages off.
+	quotas Quotas
 
 	// logs reads container output. Nil leaves the log surface off, which is
 	// right for an install whose orchestrator has no containers to read.
@@ -453,6 +461,7 @@ func New(opts Options) (*Server, error) {
 		nets:           opts.Nets,
 		hooks:          opts.Hooks,
 		registries:     opts.Registries,
+		quotas:         opts.Quotas,
 		logs:           opts.Logs,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
@@ -739,6 +748,18 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/cluster/pods", s.clusterPods)
 			r.Get("/cluster/volumes", s.clusterVolumes)
 			r.Get("/cluster/events", s.clusterEvents)
+
+			// The Admin area: every team, how much of the install each may
+			// take, and whether the cluster has room for all of it. Mounted
+			// before the wrapper's routes so that a wrapping application adding
+			// its own pages under /admin — billing, say — sits beside these
+			// rather than having to work around them.
+			if s.quotas != nil {
+				r.Get("/admin/teams", s.adminTeams)
+				r.Get("/admin/teams/{id}", s.adminTeam)
+				r.Post("/admin/teams/{id}/quota", s.adminTeamQuota)
+				r.Get("/admin/capacity", s.adminCapacity)
+			}
 
 			if s.extra.Operator != nil {
 				s.extra.Operator(r)

@@ -25,6 +25,14 @@ type NodeInfo struct {
 	MemCapacityBytes  int64
 	MemUsedBytes      int64
 
+	// CPUAllocatableMillis and MemAllocatableBytes are what the scheduler may
+	// actually place pods into: the machine's capacity less what it keeps back
+	// for the kubelet and the operating system. The honest number for "is
+	// there room", where capacity is the one on the box. Zero where an
+	// orchestrator cannot say, which a caller reads as "use capacity".
+	CPUAllocatableMillis int64
+	MemAllocatableBytes  int64
+
 	Pods          int
 	PodCapacity   int
 	CreatedAt     time.Time

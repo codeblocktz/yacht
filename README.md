@@ -83,6 +83,8 @@ certificates browsers do not trust. Re-run it with
 |---|---|
 | Live workload status read from the cluster | ✅ |
 | Cluster view — nodes, pods, volumes, events, utilisation | ✅ |
+| Per-team quotas on apps, CPU, memory and storage, set by the operator | ✅ |
+| Capacity — the cluster's room beside what every team has committed | ✅ |
 | Add a node, then cordon, drain, or remove one | ✅ |
 | Namespace provisioning with enforced security posture | ✅ |
 | A project canvas apps can be arranged on | ✅ |
@@ -181,7 +183,7 @@ without digging through logs.
 
 Deploying an existing container image needs no registry configuration. Building
 from a Git repository does: Yacht does **not** run a registry, so first provide
-an external OCI registry and push credential under **Cluster → Registry**. For
+an external OCI registry and push credential under **Admin → Registry**. For
 private registries, a token service on an unrelated registrable domain is
 untested and unsupported in this main-based version; current main does not
 proactively reject that topology. The manifest-resolution integration will
@@ -202,7 +204,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_OPERATORS` | — | Emails of the people who run the install: nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams |
+| `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |

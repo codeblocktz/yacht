@@ -86,6 +86,9 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			PodCapacity:       int(n.Status.Capacity.Pods().Value()),
 			CreatedAt:         n.CreationTimestamp.Time,
 			Unschedulable:     n.Spec.Unschedulable,
+
+			CPUAllocatableMillis: n.Status.Allocatable.Cpu().MilliValue(),
+			MemAllocatableBytes:  n.Status.Allocatable.Memory().Value(),
 		}
 		info.Reason, info.Message = nodeNotReadyBecause(n)
 		if u, ok := usage[n.Name]; ok {

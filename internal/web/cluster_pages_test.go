@@ -230,7 +230,7 @@ func TestActivityEmptyState(t *testing.T) {
 // route that does not exist is a 404 the operator finds, not the developer.
 func TestEveryNavTargetResolves(t *testing.T) {
 	apps := newFakeApps(sampleApp("owner-1", "web"))
-	h := testServer(t, Options{Apps: apps, Orchestrator: newInspector()})
+	h := testServer(t, Options{Apps: apps, Orchestrator: newInspector(), Quotas: newFakeQuotas("owner-1")})
 
 	// The operator's menu, which is the full one. The server here has no
 	// accounts, so its one principal is the operator and reaches every page.

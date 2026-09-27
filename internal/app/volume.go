@@ -92,7 +92,18 @@ func (s *Service) AttachVolume(
 			appName, a.Replicas)
 	}
 
-	row, err := s.q.CreateVolumeAndBump(ctx, dbgen.CreateVolumeAndBumpParams{
+	// Checked and written together, like every change the quota counts.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Volume{}, fmt.Errorf("app: begin attach: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	q := s.q.WithTx(tx)
+
+	if err := s.withinQuota(ctx, q, ownerID, quotaChange{Storage: in.SizeBytes}); err != nil {
+		return Volume{}, err
+	}
+	row, err := q.CreateVolumeAndBump(ctx, dbgen.CreateVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: in.Name,
 		MountPath: in.MountPath, SizeBytes: in.SizeBytes, Class: in.Class,
 	})
@@ -103,6 +114,9 @@ func (s *Service) AttachVolume(
 				appName, in.Name, in.MountPath)
 		}
 		return Volume{}, fmt.Errorf("app: attach volume: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Volume{}, fmt.Errorf("app: commit attach: %w", err)
 	}
 	a.ConfigVersion = row.ConfigVersion
 
@@ -128,13 +142,37 @@ func (s *Service) ResizeVolume(
 		return err
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("app: begin resize: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	q := s.q.WithTx(tx)
+
+	// The quota counts the growth, so it needs the size being grown from. Read
+	// after the lock is taken rather than before, or a resize racing this one
+	// could be counted from a size that is no longer there. A volume that does
+	// not exist has no growth to count, and the write below says so.
+	if current, err := q.GetVolume(ctx, dbgen.GetVolumeParams{
+		OwnerID: ownerID, AppID: a.ID, Name: volumeName,
+	}); err == nil {
+		if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+			Storage: sizeBytes - current.SizeBytes,
+		}); err != nil {
+			return err
+		}
+	}
+
 	// The comparison lives in the UPDATE's WHERE clause, so a resize that would
 	// shrink matches no row rather than relying on a check here. Zero rows
 	// means either "no such volume" or "not larger", which the read below tells
 	// apart — and the read is only reached on the failure path.
-	row, err := s.q.GrowVolumeAndBump(ctx, dbgen.GrowVolumeAndBumpParams{
+	row, err := q.GrowVolumeAndBump(ctx, dbgen.GrowVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: volumeName, SizeBytes: sizeBytes,
 	})
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("app: resize volume: %w", err)

@@ -409,7 +409,26 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		}
 	}
 
-	row, err := s.q.UpdateApp(ctx, dbgen.UpdateAppParams{
+	// Limits are what the quota counts, so they are checked and written in one
+	// transaction, the way Scale checks replicas. Only the limits: requests
+	// are what the scheduler reserves, but a limit is what a container may
+	// actually take from its neighbours.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return App{}, fmt.Errorf("app: begin update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	q := s.q.WithTx(tx)
+
+	if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+		Changed: a.ID, Reshape: func(sh shape) shape {
+			sh.CPULimit, sh.MemoryLimit = in.CPULimit, in.MemoryLimit
+			return sh
+		},
+	}); err != nil {
+		return App{}, err
+	}
+	row, err := q.UpdateApp(ctx, dbgen.UpdateAppParams{
 		OwnerID:       ownerID,
 		ID:            a.ID,
 		Image:         image,
@@ -428,6 +447,9 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 			return a, nil
 		}
 		return App{}, fmt.Errorf("app: update: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return App{}, fmt.Errorf("app: commit update: %w", err)
 	}
 	updated := toApp(row)
 
@@ -581,6 +603,20 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	q := s.q.WithTx(tx)
+
+	// First in the transaction, so the quota row stays locked until this app
+	// is committed and a create racing this one counts it. Storage the source
+	// brings is counted with the app: a database refused for its volume after
+	// the app row exists would be half a database.
+	change := quotaChange{Added: []shape{{
+		Replicas: in.Replicas, CPULimit: in.CPULimit, MemoryLimit: in.MemoryLimit,
+	}}}
+	if blueprint.Volume != nil {
+		change.Storage = blueprint.Volume.SizeBytes
+	}
+	if err := s.withinQuota(ctx, q, ownerID, change); err != nil {
+		return App{}, err
+	}
 
 	row, err := q.CreateApp(ctx, dbgen.CreateAppParams{
 		OwnerID:       ownerID,
@@ -1254,7 +1290,23 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 				"detach its volumes to scale it", name)
 	}
 
-	row, err := s.q.SetAppReplicas(ctx, dbgen.SetAppReplicasParams{
+	// The quota check and the write share a transaction, so two scales racing
+	// each other cannot both fit in the room for one. The deploy that follows
+	// is outside it: what the quota counts is the replica count, and that is
+	// committed here.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return App{}, fmt.Errorf("app: begin scale: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+	q := s.q.WithTx(tx)
+
+	if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+		Changed: a.ID, Reshape: func(sh shape) shape { sh.Replicas = replicas; return sh },
+	}); err != nil {
+		return App{}, err
+	}
+	row, err := q.SetAppReplicas(ctx, dbgen.SetAppReplicasParams{
 		OwnerID: ownerID, ID: a.ID, Replicas: replicas,
 	})
 	if err != nil {
@@ -1262,6 +1314,9 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 			return a, nil
 		}
 		return App{}, fmt.Errorf("app: scale: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return App{}, fmt.Errorf("app: commit scale: %w", err)
 	}
 
 	updated := toApp(row)

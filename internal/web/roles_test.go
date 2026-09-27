@@ -57,6 +57,7 @@ func gatedServer(t *testing.T, accounts Accounts, team string) http.Handler {
 		// A route only reachable in some configurations is exactly the one
 		// nobody remembers to gate.
 		Joiner: &fakeJoiner{configured: true},
+		Quotas: newFakeQuotas(team),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -440,13 +441,13 @@ func TestClusterPagesAreTheOperators(t *testing.T) {
 
 	home := rt.getAs(t, "/", rt.member).Body.String()
 	if strings.Contains(home, `href="/cluster/nodes"`) {
-		t.Error("a member is offered the Infrastructure pages")
+		t.Error("a member is offered the cluster's pages")
 	}
 	if strings.Contains(home, ">Nodes<") {
 		t.Error("a member's overview shows the cluster's nodes")
 	}
 	if !strings.Contains(rt.getAs(t, "/", rt.owner).Body.String(), `href="/cluster/nodes"`) {
-		t.Error("the owner, who is the operator here, is not offered the Infrastructure pages")
+		t.Error("the owner, who is the operator here, is not offered the cluster's pages")
 	}
 }
 
