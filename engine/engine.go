@@ -101,6 +101,10 @@ const (
 
 	// SessionCookie is the cookie the engine's sessions live in.
 	SessionCookie = web.SessionCookie
+
+	// DefaultBrandName is the engine's own name, where its chrome puts it —
+	// what a wrapper replaces.
+	DefaultBrandName = web.DefaultBrandName
 )
 
 var (
