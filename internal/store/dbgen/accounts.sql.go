@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const acceptInvitation = `-- name: AcceptInvitation :one
@@ -34,6 +35,15 @@ func (q *Queries) AcceptInvitation(ctx context.Context, tokenHash []byte) (Accep
 	var i AcceptInvitationRow
 	err := row.Scan(&i.OwnerID, &i.Role, &i.Email)
 	return i, err
+}
+
+const clearSessionActing = `-- name: ClearSessionActing :exec
+UPDATE sessions SET acting_team_id = NULL, acting_since = NULL WHERE id = $1
+`
+
+func (q *Queries) ClearSessionActing(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearSessionActing, id)
+	return err
 }
 
 const consumeMagicLink = `-- name: ConsumeMagicLink :one
@@ -107,7 +117,7 @@ func (q *Queries) CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (user_id, token_hash, active_team_id, user_agent, ip, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at
+RETURNING id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at, acting_team_id, acting_since
 `
 
 type CreateSessionParams struct {
@@ -139,6 +149,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.AuthenticatedAt,
+		&i.ActingTeamID,
+		&i.ActingSince,
 	)
 	return i, err
 }
@@ -247,7 +259,15 @@ func (q *Queries) DeleteMembership(ctx context.Context, arg DeleteMembershipPara
 }
 
 const deleteOtherSessionsForUser = `-- name: DeleteOtherSessionsForUser :exec
-DELETE FROM sessions WHERE user_id = $1 AND id <> $2::uuid
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.user_id = $1::uuid AND ds.id <> $2::uuid
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL
 `
 
 type DeleteOtherSessionsForUserParams struct {
@@ -263,6 +283,9 @@ type DeleteOtherSessionsForUserParams struct {
 // failed rather than having worked.
 // The surviving session is named `keep` rather than `except`, which is a
 // reserved word the query parser will not take as an identifier.
+//
+// A session among the others that was acting as a team stops, and the stop is
+// recorded, for the reason DeleteSessionByHash gives.
 func (q *Queries) DeleteOtherSessionsForUser(ctx context.Context, arg DeleteOtherSessionsForUserParams) error {
 	_, err := q.db.Exec(ctx, deleteOtherSessionsForUser, arg.UserID, arg.Keep)
 	return err
@@ -284,18 +307,39 @@ func (q *Queries) DeletePassword(ctx context.Context, userID uuid.UUID) (int64, 
 }
 
 const deleteSessionByHash = `-- name: DeleteSessionByHash :exec
-DELETE FROM sessions WHERE token_hash = $1
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.token_hash = $1
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL
 `
 
+// Signing out ends an impersonation with the session, so the durable record
+// gets its stop in the same statement that removes the row — there is no
+// moment afterwards at which the session could still be asked what it was
+// acting as.
 func (q *Queries) DeleteSessionByHash(ctx context.Context, tokenHash []byte) error {
 	_, err := q.db.Exec(ctx, deleteSessionByHash, tokenHash)
 	return err
 }
 
 const deleteSessionsForUser = `-- name: DeleteSessionsForUser :exec
-DELETE FROM sessions WHERE user_id = $1
+WITH gone AS (
+    DELETE FROM sessions ds WHERE ds.user_id = $1::uuid
+    RETURNING ds.user_id, ds.acting_team_id
+)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+SELECT g.acting_team_id, g.user_id, u.email, 'stop'
+FROM gone g
+JOIN users u ON u.id = g.user_id
+WHERE g.acting_team_id IS NOT NULL
 `
 
+// Records the stop for the same reason DeleteSessionByHash does.
 func (q *Queries) DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteSessionsForUser, userID)
 	return err
@@ -452,7 +496,7 @@ func (q *Queries) GetPasswordByEmail(ctx context.Context, email string) (GetPass
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at FROM sessions WHERE id = $1 AND expires_at > now()
+SELECT id, user_id, token_hash, active_team_id, user_agent, ip, expires_at, created_at, authenticated_at, acting_team_id, acting_since FROM sessions WHERE id = $1 AND expires_at > now()
 `
 
 // Expiry is filtered here for the reason GetSessionByHash gives: so that an
@@ -474,15 +518,19 @@ func (q *Queries) GetSession(ctx context.Context, id uuid.UUID) (Session, error)
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.AuthenticatedAt,
+		&i.ActingTeamID,
+		&i.ActingSince,
 	)
 	return i, err
 }
 
 const getSessionByHash = `-- name: GetSessionByHash :one
-SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, s.authenticated_at, t.display_name AS team_name, t.email AS team_email, m.role AS member_role
+SELECT s.id, s.user_id, s.token_hash, s.active_team_id, s.user_agent, s.ip, s.expires_at, s.created_at, s.authenticated_at, s.acting_team_id, s.acting_since, t.display_name AS team_name, t.email AS team_email, m.role AS member_role,
+       at.display_name AS acting_team_name, at.email AS acting_team_email
 FROM sessions s
 JOIN teams t ON t.id = s.active_team_id
 JOIN memberships m ON m.owner_id = s.active_team_id AND m.user_id = s.user_id
+LEFT JOIN teams at ON at.id = s.acting_team_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
 `
 
@@ -496,9 +544,13 @@ type GetSessionByHashRow struct {
 	ExpiresAt       time.Time
 	CreatedAt       time.Time
 	AuthenticatedAt time.Time
+	ActingTeamID    *string
+	ActingSince     pgtype.Timestamptz
 	TeamName        string
 	TeamEmail       string
 	MemberRole      string
+	ActingTeamName  *string
+	ActingTeamEmail *string
 }
 
 // The team is joined in because the request that carries this cookie needs the
@@ -519,6 +571,11 @@ type GetSessionByHashRow struct {
 // INNER JOIN on teams too: a session with no active team resolves to no owner,
 // and returning a row the caller must then remember to reject is how that
 // check gets skipped.
+//
+// The team being acted as is LEFT joined, and deliberately not through
+// memberships: an operator acting as a team is not a member of it, and must not
+// become one. Whether they may still act is not a fact in this row at all — the
+// identity provider asks the install on every request.
 func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByHash, tokenHash)
 	var i GetSessionByHashRow
@@ -532,9 +589,13 @@ func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSe
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.AuthenticatedAt,
+		&i.ActingTeamID,
+		&i.ActingSince,
 		&i.TeamName,
 		&i.TeamEmail,
 		&i.MemberRole,
+		&i.ActingTeamName,
+		&i.ActingTeamEmail,
 	)
 	return i, err
 }
@@ -606,6 +667,70 @@ func (q *Queries) HasPassword(ctx context.Context, userID uuid.UUID) (bool, erro
 	var has_password bool
 	err := row.Scan(&has_password)
 	return has_password, err
+}
+
+const insertImpersonationEvent = `-- name: InsertImpersonationEvent :exec
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
+VALUES ($1, $2::uuid, $3, $4)
+`
+
+type InsertImpersonationEventParams struct {
+	OwnerID       string
+	UserID        uuid.UUID
+	OperatorEmail string
+	Action        string
+}
+
+func (q *Queries) InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error {
+	_, err := q.db.Exec(ctx, insertImpersonationEvent,
+		arg.OwnerID,
+		arg.UserID,
+		arg.OperatorEmail,
+		arg.Action,
+	)
+	return err
+}
+
+const listImpersonationEvents = `-- name: ListImpersonationEvents :many
+SELECT id, owner_id, user_id, operator_email, action, at
+FROM impersonation_events
+WHERE owner_id = $1
+ORDER BY at DESC, id
+LIMIT $2
+`
+
+type ListImpersonationEventsParams struct {
+	OwnerID string
+	MaxRows int32
+}
+
+// Newest first, for the team page. Scoped by the team acted as, which is
+// whose record it is.
+func (q *Queries) ListImpersonationEvents(ctx context.Context, arg ListImpersonationEventsParams) ([]ImpersonationEvent, error) {
+	rows, err := q.db.Query(ctx, listImpersonationEvents, arg.OwnerID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ImpersonationEvent{}
+	for rows.Next() {
+		var i ImpersonationEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.UserID,
+			&i.OperatorEmail,
+			&i.Action,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listMembersOfTeam = `-- name: ListMembersOfTeam :many
@@ -771,6 +896,36 @@ func (q *Queries) LockPassword(ctx context.Context, userID uuid.UUID) (LockPassw
 	return i, err
 }
 
+const lockSessionActing = `-- name: LockSessionActing :one
+SELECT s.id, s.user_id, s.acting_team_id, u.email
+FROM sessions s
+JOIN users u ON u.id = s.user_id
+WHERE s.id = $1
+FOR UPDATE OF s
+`
+
+type LockSessionActingRow struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	ActingTeamID *string
+	Email        string
+}
+
+// Reads what a session is acting as, and who holds it, under lock. The lock is
+// what makes a stop happen once: two requests racing to end the same
+// impersonation serialise here, and the second finds nothing to end.
+func (q *Queries) LockSessionActing(ctx context.Context, id uuid.UUID) (LockSessionActingRow, error) {
+	row := q.db.QueryRow(ctx, lockSessionActing, id)
+	var i LockSessionActingRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ActingTeamID,
+		&i.Email,
+	)
+	return i, err
+}
+
 const lockTeam = `-- name: LockTeam :one
 SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1 FOR UPDATE
 `
@@ -792,7 +947,9 @@ func (q *Queries) LockTeam(ctx context.Context, id string) (Team, error) {
 }
 
 const setSessionTeam = `-- name: SetSessionTeam :exec
-UPDATE sessions SET active_team_id = $1 WHERE id = $2
+UPDATE sessions
+SET active_team_id = $1, acting_team_id = NULL, acting_since = NULL
+WHERE id = $2
 `
 
 type SetSessionTeamParams struct {
@@ -800,9 +957,42 @@ type SetSessionTeamParams struct {
 	ID           uuid.UUID
 }
 
+// Switching team ends any impersonation, in the same statement. Somebody who
+// picks one of their own teams has said which team they mean to be in; leaving
+// the acting layered on top would put them back in the customer's team on the
+// very next page, which is the opposite of what they asked for. The stop is
+// recorded by the caller, which reads the row under lock first.
 func (q *Queries) SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error {
 	_, err := q.db.Exec(ctx, setSessionTeam, arg.ActiveTeamID, arg.ID)
 	return err
+}
+
+const startActing = `-- name: StartActing :execrows
+
+UPDATE sessions SET acting_team_id = $1::text, acting_since = now()
+WHERE id = $2 AND expires_at > now()
+`
+
+type StartActingParams struct {
+	TeamID string
+	ID     uuid.UUID
+}
+
+// ---------------------------------------------------------------------------
+// Impersonation: an operator acting as a team
+//
+// Who may act is not decided here. The account package does not know who runs
+// the install; the web layer gates starting on that, and the identity provider
+// re-checks it on every request. What lives here is the state and the record.
+// ---------------------------------------------------------------------------
+// Scoped by expiry so a session that has ended cannot be made to act; execrows
+// so the caller can tell that it was not.
+func (q *Queries) StartActing(ctx context.Context, arg StartActingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, startActing, arg.TeamID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchSessionAuthentication = `-- name: TouchSessionAuthentication :execrows

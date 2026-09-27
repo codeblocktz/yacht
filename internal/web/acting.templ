@@ -1,0 +1,120 @@
+package web
+
+// actingBannerView is the strip across the top of every page while an
+// operator is acting as a team, with whatever banner the page would otherwise
+// have had underneath it.
+//
+// Full width and tinted rather than a callout inside the page: it is a fact
+// about the whole session, not about the page, and it has to be the first
+// thing read on every one of them. The way out sits beside the statement so
+// that nobody has to go looking for it.
+templ actingBannerView(team string, below templ.Component) {
+	<div
+		class="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-warning/40 bg-warning/10 px-6 py-2.5 text-[13px]"
+		data-acting-banner
+	>
+		<svg class="size-4 shrink-0 text-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+			<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path>
+			<circle cx="12" cy="12" r="3"></circle>
+		</svg>
+		<p class="min-w-0 flex-1">
+			<span class="font-medium">You are acting as { team }</span>
+			<span class="text-muted-foreground">
+				— everything you do here is done as this team, and recorded.
+			</span>
+		</p>
+		// A form, because stopping changes what every later request is scoped
+		// by — the reason switching team is a POST.
+		<form method="post" action="/acting/stop">
+			<button class="btn btn-sm" type="submit">Stop acting</button>
+		</form>
+	</div>
+	if below != nil {
+		<div class="border-b border-border px-6 py-3">
+			@below
+		</div>
+	}
+}
+
+// actAsTeamButton starts acting, from the team's page in the Admin area.
+//
+// Behind a confirmation that says what is about to happen, because the
+// consequence is not visible from the button: every page after it is the
+// customer's, with the customer's apps, and anything done there is done to
+// them.
+templ actAsTeamButton(d AdminTeamData) {
+	<form method="post" action={ templ.SafeURL(adminTeamHref(d.Team.TeamID) + "/act") }>
+		<button
+			class="btn"
+			type="submit"
+			data-confirm={ "Every page will show " + d.Team.TeamName + "'s apps, and you will be its owner: deploys, settings and deletions you make are made to this team. Your own team is left as it is. The start and the stop are recorded on this page, and a banner stays at the top of every page until you stop." }
+			data-confirm-title={ "Act as " + d.Team.TeamName + "?" }
+			data-confirm-label="Act as this team"
+		>Act as this team</button>
+	</form>
+}
+
+// actingSection is the team page's support access: what acting does, the way
+// to start or stop, and who has done it lately.
+templ actingSection(d AdminTeamData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Support access</span>
+			if d.Acting.Now {
+				<span class="status status-warn">you are acting as this team</span>
+			}
+		</div>
+		<div class="panel-body">
+			if !d.Acting.Available {
+				<p class="text-[12.5px] text-muted-foreground">
+					Acting as a team is off on this install, because no operators are named.
+					Without names, every team's owner counts as an operator — and any of them
+					could act as every other team. Name the people who run the install in
+					<span class="mono">YACHT_OPERATORS</span> to turn it on.
+				</p>
+			} else {
+				<p class="text-[12.5px] text-muted-foreground">
+					Acting as this team puts you in it as an owner, to help it: you see its
+					apps and can deploy, change and remove them. Your own team is left as it
+					is. It ends when you stop, switch team or sign out — and on your next
+					request if you are no longer one of this install's operators.
+				</p>
+				<div class="mt-4 flex items-center gap-2">
+					if d.Acting.Now {
+						<form method="post" action="/acting/stop">
+							<button class="btn" type="submit">Stop acting</button>
+						</form>
+					} else {
+						@actAsTeamButton(d)
+					}
+				</div>
+			}
+		</div>
+		if len(d.Acting.Events) > 0 {
+			<div class="table-scroll border-t border-border">
+				<table class="dtable min-w-[480px]">
+					<thead>
+						<tr>
+							<th>When</th>
+							<th>Operator</th>
+							<th>What</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, ev := range d.Acting.Events {
+							<tr>
+								<td class="whitespace-nowrap text-muted-foreground" title={ ev.At.UTC().Format("2006-01-02 15:04:05 UTC") }>{ relativeTime(ev.At) }</td>
+								<td class="max-w-[260px] truncate">{ ev.OperatorEmail }</td>
+								<td>{ impersonationAction(ev.Action) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		} else if d.Acting.Available {
+			<div class="border-t border-border px-4 py-3 text-[12.5px] text-muted-foreground">
+				Nobody has acted as this team.
+			</div>
+		}
+	</div>
+}

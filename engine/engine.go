@@ -74,8 +74,15 @@ type (
 	ExtraRoutes = web.ExtraRoutes
 	// Surfaces is which optional pages a request is offered, including
 	// whether its person is an operator — what a wrapper's chrome reads to
-	// decide whether to offer its own install-wide pages.
+	// decide whether to offer its own install-wide pages — and ActingAs, the
+	// team an operator is acting as for support. The engine's layout draws
+	// the acting notice above any Banner a wrapper sets, so it cannot be
+	// hidden; a wrapper reads ActingAs to decide what else to show beside it.
 	Surfaces = web.Surfaces
+
+	// ActingCheck decides, on every request, whether a person may act as a
+	// team other than their own. See OperatorCheck.
+	ActingCheck = account.ActingCheck
 
 	// Mailer delivers the engine's messages — seam 4.
 	Mailer  = notify.Mailer
@@ -143,6 +150,15 @@ var (
 	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly
 	// behind the middleware.
 	MustOwnerFromContext = identity.MustFromContext
+	// OperatorCheck is the ActingCheck the engine wires its own sessions
+	// with: the person's address must be in YACHT_OPERATORS, and with none
+	// named nobody may act. A wrapper building its identity on
+	// Accounts.Provider passes it to WithActingCheck to keep impersonation;
+	// without it, no session acts as anything.
+	OperatorCheck = web.OperatorCheck
+	// ActingBanner is the engine's acting notice, for a wrapper drawing its
+	// own chrome that wants it somewhere of its choosing.
+	ActingBanner = web.ActingBanner
 	// NewSingleOwner and NewStaticToken are the engine's own providers, for a
 	// wrapper that wants one of them in some deployments.
 	NewSingleOwner = identity.NewSingleOwner
@@ -539,7 +555,15 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 				"to this log instead of being sent; set YACHT_SMTP_ADDR or " +
 				"YACHT_RESEND_API_KEY to deliver them")
 		}
-		return accounts.Provider(web.SessionCookie), nil
+		// Operators may act as a team for support only where they are named.
+		// With none named every team's owner reads as an operator, and any of
+		// them could act as every other team — so the check approves nobody.
+		if len(cfg.Operators) == 0 {
+			log.Info("acting as a team is off — name the install's operators in " +
+				"YACHT_OPERATORS to let them act as a team for support")
+		}
+		return accounts.Provider(web.SessionCookie).
+			WithActingCheck(web.OperatorCheck(cfg.Operators)), nil
 	}
 
 	owner := Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}

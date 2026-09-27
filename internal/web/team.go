@@ -175,6 +175,11 @@ func (s *Server) teamSwitch(w http.ResponseWriter, r *http.Request) {
 
 	s.log.Info("switched team",
 		slog.String("user", sess.UserID.String()), slog.String("team", team))
+	// Switching ended any impersonation, and the account service recorded it;
+	// the log gets its line like every other stop.
+	if sess.ActingTeamID != "" {
+		s.logActingStopped(ctx, "impersonation stopped by switching team", sess.UserID, sess.ActingTeamID)
+	}
 
 	// Back to the overview rather than to the page they were on: every other page
 	// is scoped by an owner that has just changed, and an app detail page in the
@@ -225,10 +230,21 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An operator acting as this team is its owner for its apps, but not a
+	// member of it, and the people in a team are the team's own business. The
+	// account service refuses them every change here anyway — it checks the
+	// actor's membership — so the page offers none rather than offering
+	// controls that all fail. sess.Role is their role in their own team, and
+	// reading it here would offer exactly that.
+	viewer := sess.Role
+	if sess.ActingTeamID == owner.ID {
+		viewer = account.RoleMember
+	}
+
 	s.render(w, r, TeamPage(TeamPageData{
 		TeamID:      owner.ID,
 		TeamName:    displayName(owner),
-		Viewer:      sess.Role,
+		Viewer:      viewer,
 		ViewerID:    sess.UserID,
 		Members:     members,
 		Invitations: invitations,

@@ -126,6 +126,41 @@ func TestSlotProviderReplacesChrome(t *testing.T) {
 	}
 }
 
+// A wrapping application presents its own mark, or none, rather than a new
+// name beside this engine's logo.
+func TestBrandMarkReplacesYachts(t *testing.T) {
+	// A path from Yacht's own mark, which appears nowhere else in the page.
+	const yachtMark = "M1870.593,1721.574"
+
+	if body := get(t, testServer(t, Options{}), "/").Body.String(); !strings.Contains(body, yachtMark) {
+		t.Fatal("the default chrome does not draw Yacht's mark — the test is measuring nothing")
+	}
+
+	for name, mark := range map[string]templ.Component{
+		"its own mark":   templ.Raw(`<svg id="acme-mark" viewBox="0 0 1 1"></svg>`),
+		"no mark at all": templ.NopComponent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			chrome := SlotProviderFunc(func(ctx context.Context, r *http.Request) Slots {
+				s := DefaultSlots{}.Slots(ctx, r)
+				s.BrandName = "Acme Cloud"
+				s.BrandMark = mark
+				return s
+			})
+			body := get(t, testServer(t, Options{Slots: chrome}), "/").Body.String()
+			if strings.Contains(body, yachtMark) {
+				t.Error("Yacht's mark is drawn beside a wrapper's brand")
+			}
+			if name == "its own mark" && !strings.Contains(body, `id="acme-mark"`) {
+				t.Error("the wrapper's mark is not drawn")
+			}
+			if !strings.Contains(body, "Acme Cloud") {
+				t.Error("the wrapper's name is not drawn")
+			}
+		})
+	}
+}
+
 // Every slot must be optional, or a wrapping application is forced to supply
 // components it does not want.
 func TestSlotsAreOptional(t *testing.T) {

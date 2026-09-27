@@ -46,6 +46,7 @@ type Querier interface {
 	// Forget every saved position in a project, so the next render lays it out
 	// again from the dependencies.
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
+	ClearSessionActing(ctx context.Context, id uuid.UUID) error
 	// Marking consumed and reading the user are one statement, so there is no
 	// window between the two in which a second request can also find the link
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
@@ -123,13 +124,21 @@ type Querier interface {
 	// failed rather than having worked.
 	// The surviving session is named `keep` rather than `except`, which is a
 	// reserved word the query parser will not take as an identifier.
+	//
+	// A session among the others that was acting as a team stops, and the stop is
+	// recorded, for the reason DeleteSessionByHash gives.
 	DeleteOtherSessionsForUser(ctx context.Context, arg DeleteOtherSessionsForUserParams) error
 	// execrows so that "there was nothing to remove" is distinguishable from
 	// success. Reporting a credential withdrawn when none existed is how somebody
 	// stops looking for the one that is still there.
 	DeletePassword(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
+	// Signing out ends an impersonation with the session, so the durable record
+	// gets its stop in the same statement that removes the row — there is no
+	// moment afterwards at which the session could still be asked what it was
+	// acting as.
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
+	// Records the stop for the same reason DeleteSessionByHash does.
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
@@ -246,6 +255,11 @@ type Querier interface {
 	// INNER JOIN on teams too: a session with no active team resolves to no owner,
 	// and returning a row the caller must then remember to reject is how that
 	// check gets skipped.
+	//
+	// The team being acted as is LEFT joined, and deliberately not through
+	// memberships: an operator acting as a team is not a member of it, and must not
+	// become one. Whether they may still act is not a fact in this row at all — the
+	// identity provider asks the install on every request.
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
@@ -277,6 +291,7 @@ type Querier interface {
 	// install-wide, so one settings mutation invalidates each Git app exactly
 	// once without manufacturing release history.
 	IncrementGitAppConfigVersions(ctx context.Context) error
+	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.
 	ListAdmissiblePushes(ctx context.Context, resultLimit int32) ([]ListAdmissiblePushesRow, error)
@@ -321,6 +336,9 @@ type Querier interface {
 	ListDeploymentOperations(ctx context.Context, arg ListDeploymentOperationsParams) ([]DeploymentOperation, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
+	// Newest first, for the team page. Scoped by the team acted as, which is
+	// whose record it is.
+	ListImpersonationEvents(ctx context.Context, arg ListImpersonationEventsParams) ([]ImpersonationEvent, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
 	// The columns are named rather than starred, and token_hash is not among them.
@@ -360,6 +378,10 @@ type Querier interface {
 	// would be check-then-act: both see no password, both insert, one upserts over
 	// the other, and neither revokes.
 	LockPassword(ctx context.Context, userID uuid.UUID) (LockPasswordRow, error)
+	// Reads what a session is acting as, and who holds it, under lock. The lock is
+	// what makes a stop happen once: two requests racing to end the same
+	// impersonation serialise here, and the second finds nothing to end.
+	LockSessionActing(ctx context.Context, id uuid.UUID) (LockSessionActingRow, error)
 	// A role change reads the owner count and then writes; taking the team row
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
@@ -439,7 +461,22 @@ type Querier interface {
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
+	// Switching team ends any impersonation, in the same statement. Somebody who
+	// picks one of their own teams has said which team they mean to be in; leaving
+	// the acting layered on top would put them back in the customer's team on the
+	// very next page, which is the opposite of what they asked for. The stop is
+	// recorded by the caller, which reads the row under lock first.
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	// ---------------------------------------------------------------------------
+	// Impersonation: an operator acting as a team
+	//
+	// Who may act is not decided here. The account package does not know who runs
+	// the install; the web layer gates starting on that, and the identity provider
+	// re-checks it on every request. What lives here is the state and the record.
+	// ---------------------------------------------------------------------------
+	// Scoped by expiry so a session that has ended cannot be made to act; execrows
+	// so the caller can tell that it was not.
+	StartActing(ctx context.Context, arg StartActingParams) (int64, error)
 	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.

@@ -178,6 +178,15 @@ type Domain struct {
 	Verified      bool
 }
 
+type ImpersonationEvent struct {
+	ID            uuid.UUID
+	OwnerID       string
+	UserID        pgtype.UUID
+	OperatorEmail string
+	Action        string
+	At            time.Time
+}
+
 type Invitation struct {
 	ID         uuid.UUID
 	OwnerID    string
@@ -243,6 +252,8 @@ type Session struct {
 	ExpiresAt       time.Time
 	CreatedAt       time.Time
 	AuthenticatedAt time.Time
+	ActingTeamID    *string
+	ActingSince     pgtype.Timestamptz
 }
 
 type Team struct {

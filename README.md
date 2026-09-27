@@ -84,6 +84,7 @@ certificates browsers do not trust. Re-run it with
 | Live workload status read from the cluster | ✅ |
 | Cluster view — nodes, pods, volumes, events, utilisation | ✅ |
 | Per-team quotas on apps, CPU, memory and storage, set by the operator | ✅ |
+| Act as a team for support — named operators only, re-checked every request, bannered on every page, recorded | ✅ |
 | Capacity — the cluster's room beside what every team has committed | ✅ |
 | Add a node, then cordon, drain, or remove one | ✅ |
 | Namespace provisioning with enforced security posture | ✅ |
@@ -204,7 +205,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams |
+| `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
@@ -231,6 +232,16 @@ engine.Run(ctx, cfg, engine.Overrides{
 
 Everything commercial belongs in the wrapper: `make verify` refuses a tenant,
 subscription, invoice or wallet declared in the engine.
+
+Two things in the chrome are worth knowing. `Slots.BrandMark` replaces Yacht's
+mark beside your `BrandName` (`templ.NopComponent` for a wordmark alone). And
+while an operator is acting as a team, the engine draws its acting notice above
+whatever `Slots.Banner` you set — it composes with your banner and cannot be
+replaced by it. `Surfaces.ActingAs` says whether a request is acting, for
+deciding what else to show. A wrapper that builds its own identity on
+`Accounts.Provider` passes `engine.OperatorCheck(cfg.Operators)` to
+`WithActingCheck` to keep impersonation; without it, no session acts as
+anything.
 
 ## Security posture
 
