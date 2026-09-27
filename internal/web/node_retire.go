@@ -27,8 +27,11 @@ func (s *Server) fillRetire(r *http.Request, data *NodeDetailData) {
 	}
 	plan, err := s.retirer.Plan(r.Context(), data.Node.Name)
 	if err != nil {
-		s.log.Error("read retirement plan", slog.String("node", data.Node.Name),
-			slog.String("error", err.Error()))
+		// A poll abandoned mid-read — the tab closed — is not a fault.
+		if r.Context().Err() == nil {
+			s.log.Error("read retirement plan", slog.String("node", data.Node.Name),
+				slog.String("error", err.Error()))
+		}
 		return
 	}
 	data.Retire, data.CanRetire = plan, true
