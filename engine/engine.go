@@ -119,7 +119,7 @@ var (
 	// SurfacesFromContext reads them, in a SlotProvider or a handler behind
 	// the engine's identity middleware.
 	SurfacesFromContext = web.SurfacesFromContext
-		// OwnerFromContext reads the Owner identity middleware resolved.
+	// OwnerFromContext reads the Owner identity middleware resolved.
 	OwnerFromContext = identity.FromContext
 	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly
 	// behind the middleware.
