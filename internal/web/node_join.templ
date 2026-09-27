@@ -32,21 +32,54 @@ templ AddNode(d AddNodeData) {
 					</p>
 				}
 				<form method="get" action="/cluster/nodes/add" class="mt-4 flex flex-wrap items-end gap-3">
-					<div class="field min-w-[200px]">
+					<div class="field min-w-[160px]">
 						<label class="label" for="pool">Pool</label>
 						<input
 							class="control"
 							id="pool"
 							name="pool"
-							value={ d.Pool }
+							value={ d.Machine.Pool }
 							placeholder="web"
+						/>
+					</div>
+					<div class="field min-w-[160px]">
+						<label class="label" for="site">Site</label>
+						<input
+							class="control"
+							id="site"
+							name="site"
+							value={ d.Machine.Site }
+							placeholder="dar-a"
+						/>
+					</div>
+					<div class="field min-w-[200px]">
+						<label class="label" for="public_ip">Public address</label>
+						<input
+							class="control"
+							id="public_ip"
+							name="public_ip"
+							value={ d.Machine.PublicIP }
+							placeholder="only behind NAT"
 						/>
 					</div>
 					<button class="btn" type="submit">Update command</button>
 				</form>
 				<p class="mt-2 text-[12.5px] text-muted-foreground">
-					A pool labels the node so apps can be scheduled onto it. Leave it
-					empty for an ordinary node.
+					A pool labels the node so apps can be scheduled onto it. A site says
+					where the machine is: one short name per place, like
+					<code class="mono">dar-a</code>, and an app's replicas are spread
+					across sites. Give a public address only when the machine's is not on
+					its own network interface, as behind NAT or a floating IP. Leave all
+					three empty for an ordinary node.
+				</p>
+				<p class="mt-2 text-[12.5px] text-muted-foreground">
+					A machine in another place needs
+					<span class="mono">6443/tcp</span> open to the server, and
+					<span class="mono">51820/udp</span> (WireGuard, and
+					<span class="mono">51821/udp</span> over IPv6) and
+					<span class="mono">10250/tcp</span> open between it and every other
+					machine. Traffic between machines is encrypted only on a server
+					installed with <code class="mono">--multi-site</code>.
 				</p>
 			</div>
 		</div>
@@ -93,7 +126,7 @@ templ AddNode(d AddNodeData) {
 	// Polled on its own so the command above is not re-rendered under a cursor
 	// that is halfway through selecting it.
 	<div
-		hx-get={ "/cluster/nodes/add/status?pool=" + d.Pool }
+		hx-get={ d.StatusURL() }
 		hx-trigger="load, every 5s"
 		hx-swap="innerHTML"
 	>
@@ -113,6 +146,10 @@ templ joinSettingsForm(d AddNodeData) {
 				placeholder="https://10.0.0.1:6443"
 				required
 			/>
+			<p class="hint">
+				Where new machines reach the server. If any will be in another place,
+				this must be the server's public address.
+			</p>
 		</div>
 		<div class="field">
 			<label class="label" for="token">Join token</label>

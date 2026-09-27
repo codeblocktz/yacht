@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,7 +29,7 @@ type Joiner interface {
 	DNS(ctx context.Context) (cluster.DNS, error)
 	SetDNS(ctx context.Context, target, prefix string) error
 	SetJoin(ctx context.Context, serverURL, token string, by uuid.UUID) error
-	Command(ctx context.Context, pool string) (string, error)
+	Command(ctx context.Context, m cluster.Machine) (string, error)
 }
 
 // justJoined is how recently a node must have been created to be called new.
@@ -48,7 +50,10 @@ type AddNodeData struct {
 	// Command is the line to run. Empty until settings exist, because a
 	// command with holes in it is worse than a prompt to fill them in.
 	Command string
-	Pool    string
+
+	// Machine is the pool, site and public address the command is built
+	// for, as asked for in the page's query.
+	Machine cluster.Machine
 
 	// Nodes and ClusterOK are the confirmation half.
 	Nodes     []orchestrator.NodeInfo
@@ -60,6 +65,25 @@ type AddNodeData struct {
 // IsNew reports whether a node joined recently enough to be worth pointing at.
 func (d AddNodeData) IsNew(n orchestrator.NodeInfo) bool {
 	return !n.CreatedAt.IsZero() && time.Since(n.CreatedAt) < justJoined
+}
+
+// StatusURL is the polled half of the page, asked for with the same machine.
+//
+// Encoded rather than concatenated: a public address can be IPv6, and a
+// query built by hand is one refused value away from being a different query.
+func (d AddNodeData) StatusURL() string {
+	q := url.Values{}
+	for k, v := range map[string]string{
+		"pool": d.Machine.Pool, "site": d.Machine.Site, "public_ip": d.Machine.PublicIP,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if len(q) == 0 {
+		return "/cluster/nodes/add/status"
+	}
+	return "/cluster/nodes/add/status?" + q.Encode()
 }
 
 // nodeAdd renders the join command and watches for the node arriving.
@@ -82,11 +106,19 @@ func (s *Server) nodeAddFragment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) addNodeData(r *http.Request) AddNodeData {
 	ctx := r.Context()
-	data := AddNodeData{Pool: r.URL.Query().Get("pool")}
+	q := r.URL.Query()
+	data := AddNodeData{Machine: cluster.Machine{
+		Pool:     strings.TrimSpace(q.Get("pool")),
+		Site:     strings.TrimSpace(q.Get("site")),
+		PublicIP: strings.TrimSpace(q.Get("public_ip")),
+	}}
 
-	if err := cluster.ValidatePool(data.Pool); err != nil {
+	// No command at all rather than one built from the values that passed: a
+	// machine joined as something other than what was asked for is harder to
+	// notice than a refusal.
+	if err := data.Machine.Validate(); err != nil {
 		data.Error = err.Error()
-		data.Pool = ""
+		data.Machine = cluster.Machine{}
 	}
 
 	settings, err := s.joiner.Settings(ctx)
@@ -102,7 +134,7 @@ func (s *Server) addNodeData(r *http.Request) AddNodeData {
 	}
 
 	if data.Configured && data.Error == "" {
-		cmd, err := s.joiner.Command(ctx, data.Pool)
+		cmd, err := s.joiner.Command(ctx, data.Machine)
 		if err != nil {
 			// Named rather than swallowed. The usual cause is a rotated key,
 			// and "no command" with no reason sends somebody to read logs.

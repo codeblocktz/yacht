@@ -341,7 +341,7 @@ func podCapacityLabel(s orchestrator.ClusterSummary) string {
 }
 
 func nodeSubtitle(n orchestrator.NodeInfo) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	if n.Address != "" {
 		parts = append(parts, n.Address)
 	}
@@ -350,6 +350,9 @@ func nodeSubtitle(n orchestrator.NodeInfo) string {
 	}
 	if n.OS != "" && n.Architecture != "" {
 		parts = append(parts, n.OS+"/"+n.Architecture)
+	}
+	if n.Site != "" {
+		parts = append(parts, "site: "+n.Site)
 	}
 	if n.Pool != "" {
 		parts = append(parts, "pool: "+n.Pool)
