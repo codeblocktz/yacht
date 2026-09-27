@@ -212,7 +212,7 @@ func (q Quota) admit(now, next Usage) error {
 func (s *Service) usageWith(
 	ctx context.Context, q *dbgen.Queries, ownerID string, c *quotaChange,
 ) (Usage, error) {
-	apps, err := q.ListAppFootprints(ctx, ownerID)
+	rows, err := q.ListAppFootprints(ctx, ownerID)
 	if err != nil {
 		return Usage{}, fmt.Errorf("app: read committed resources: %w", err)
 	}
@@ -220,10 +220,26 @@ func (s *Service) usageWith(
 	if err != nil {
 		return Usage{}, fmt.Errorf("app: read committed storage: %w", err)
 	}
+	apps := make([]footprint, len(rows))
+	for i, a := range rows {
+		apps[i] = footprint{a.ID, shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
+	}
+	return tally(apps, storage, c), nil
+}
 
+// footprint is one existing app's shape, with the id a change names it by.
+type footprint struct {
+	ID uuid.UUID
+	shape
+}
+
+// tally is what a set of apps and volumes commits, with a change applied when
+// there is one. One function for a team and for the whole install, so the two
+// can never count an app differently.
+func tally(apps []footprint, storage int64, c *quotaChange) Usage {
 	u := Usage{Apps: int64(len(apps)), StorageBytes: storage}
 	for _, a := range apps {
-		sh := shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}
+		sh := a.shape
 		if c != nil && c.Reshape != nil && a.ID == c.Changed {
 			sh = c.Reshape(sh)
 		}
@@ -240,7 +256,7 @@ func (s *Service) usageWith(
 		}
 		u.StorageBytes += c.Storage
 	}
-	return u, nil
+	return u
 }
 
 // Quota returns a team's quota. A team with none is unlimited, which is the

@@ -116,6 +116,25 @@ type Build struct {
 	JobName      string
 }
 
+type CapacityPolicy struct {
+	ID                int32
+	Enforce           bool
+	CpuCommitRatio    float64
+	MemoryCommitRatio float64
+	ReservePercent    int32
+	WarnPercent       int32
+	StorageBytes      int64
+	UpdatedAt         time.Time
+}
+
+type CapacityRefusal struct {
+	ID        uuid.UUID
+	OwnerID   string
+	Resource  string
+	Shortfall int64
+	At        time.Time
+}
+
 type ClusterJoin struct {
 	ID          int32
 	ServerUrl   string

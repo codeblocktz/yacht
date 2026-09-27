@@ -197,6 +197,8 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"platform_registry": "one registry holds every team's images, which is " +
 			"why an image's path is derived from the owner rather than chosen — " +
 			"the scoping is in the path, where a per-team row could not put it",
+		"capacity_policy": "how much of the whole install is sold is a limit on " +
+			"every team together — a per-team row is what a quota already is",
 	}
 
 	rows, err := pool.Query(ctx, `

@@ -100,7 +100,7 @@ func (s *Service) AttachVolume(
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 	q := s.q.WithTx(tx)
 
-	if err := s.withinQuota(ctx, q, ownerID, quotaChange{Storage: in.SizeBytes}); err != nil {
+	if err := s.admit(ctx, q, ownerID, quotaChange{Storage: in.SizeBytes}); err != nil {
 		return Volume{}, err
 	}
 	row, err := q.CreateVolumeAndBump(ctx, dbgen.CreateVolumeAndBumpParams{
@@ -156,7 +156,7 @@ func (s *Service) ResizeVolume(
 	if current, err := q.GetVolume(ctx, dbgen.GetVolumeParams{
 		OwnerID: ownerID, AppID: a.ID, Name: volumeName,
 	}); err == nil {
-		if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+		if err := s.admit(ctx, q, ownerID, quotaChange{
 			Storage: sizeBytes - current.SizeBytes,
 		}); err != nil {
 			return err

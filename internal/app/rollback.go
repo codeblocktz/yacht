@@ -82,7 +82,7 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 	// commit more than the app does now — the release from before somebody
 	// scaled down to fit a quota, say. It is held to the quota like any other
 	// change that raises use; going back to a smaller one always fits.
-	if err := s.withinQuota(ctx, q, ownerID, quotaChange{
+	if err := s.admit(ctx, q, ownerID, quotaChange{
 		Changed: a.ID, Reshape: func(shape) shape {
 			return shape{
 				Replicas: release.Replicas, CPULimit: release.CPULimit,

@@ -169,7 +169,7 @@ func (s *Service) DeployTemplate(
 }
 
 // stackFits reports whether every app a template makes fits in the team's
-// quota together: each at one replica and the namespace's default limits, as
+// quota and the install's capacity together: each at one replica and the namespace's default limits, as
 // Create will make them, with the storage its source brings.
 func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template) error {
 	var change quotaChange
@@ -179,7 +179,7 @@ func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template) 
 			change.Storage += b.Volume.SizeBytes
 		}
 	}
-	return s.withinQuota(ctx, s.q, ownerID, change)
+	return s.admit(ctx, s.q, ownerID, change)
 }
 
 // copyConnection gives one app another's connection string.

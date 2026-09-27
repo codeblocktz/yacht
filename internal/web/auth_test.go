@@ -742,6 +742,7 @@ func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []str
 			Apps:      apps,
 			Hooks:     apps,
 			Quotas:    apps,
+			Capacity:  apps,
 			Accounts:  accounts,
 			Operators: operators,
 			// The provider under test end to end: the cookie the callback sets
