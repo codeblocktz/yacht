@@ -153,6 +153,13 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	// Puts the checklist away for the whole team.
+	//
+	// An upsert because a single-owner install has no team row until its first
+	// app is created, and dismissing the checklist before deploying anything is a
+	// reasonable thing to do. The row it creates is the one CreateTeamRow fills in
+	// later.
+	DismissOnboarding(ctx context.Context, ownerID string) error
 	FailQueuedBuildOperation(ctx context.Context, arg FailQueuedBuildOperationParams) (int64, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
@@ -546,6 +553,32 @@ type Querier interface {
 	// caller to know which case they are in.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
 	UpsertVariableAndBump(ctx context.Context, arg UpsertVariableAndBumpParams) (UpsertVariableAndBumpRow, error)
+	// One row per app, with what it takes to say how the app stands without
+	// asking the cluster. deployment_operations holds at most one live row per app
+	// (see deployment_operations_one_live_per_app), so the EXISTS is one index
+	// probe.
+	WorkspaceApps(ctx context.Context, ownerID string) ([]WorkspaceAppsRow, error)
+	// The facts the checklist and the Deployments badge are computed from.
+	//
+	// A deploy counts as having succeeded if it ever did: superseded and active
+	// are older rows' words for the same outcome. A custom domain counts once it
+	// is routed — claimed but unverified is a step started, not a step done.
+	WorkspaceFacts(ctx context.Context, ownerID string) (WorkspaceFactsRow, error)
+	// The team's projects and apps as the dashboard's chrome draws them: the
+	// sidebar's project tree, the command palette's index, the deploys-in-flight
+	// count and the getting-started checklist.
+	//
+	// The chrome renders on every page, so everything here is shaped to be read
+	// from the database in a fixed number of queries whatever the team's size. In
+	// particular nothing asks the cluster: an app's state is what its records say
+	// — a live operation, a release serving, the last attempt failing — rather
+	// than what its pods say, which would cost a round trip to the cluster per app
+	// per page. The app's own page and its canvas still ask the cluster.
+	//
+	// Read-only on purpose. Projects lists the default project into existence
+	// when a team has none; a sidebar that did that would create a project on the
+	// first page a new team ever loads.
+	WorkspaceProjects(ctx context.Context, ownerID string) ([]WorkspaceProjectsRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

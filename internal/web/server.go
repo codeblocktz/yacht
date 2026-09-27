@@ -96,6 +96,15 @@ type Apps interface {
 	// to the team rather than to whoever last dragged something.
 	SetPosition(ctx context.Context, ownerID, name string, x, y int32) error
 	ClearPositions(ctx context.Context, ownerID string, projectID uuid.UUID) error
+
+	// Workspace is the team's projects and apps as the chrome draws them —
+	// the sidebar tree, the palette's index, the deploys-in-flight badge and
+	// the getting-started checklist — read in a fixed number of queries and
+	// without asking the cluster, because the chrome is on every page.
+	Workspace(ctx context.Context, ownerID string) (app.Workspace, error)
+
+	// DismissOnboarding puts the getting-started checklist away for the team.
+	DismissOnboarding(ctx context.Context, ownerID string) error
 }
 
 // Accounts is the sign-in surface's view of the account service.
@@ -596,6 +605,11 @@ func (s *Server) Handler() http.Handler {
 		// this it offers entries whose routes were never mounted.
 		r.Use(s.withSurfaces)
 
+		// The team's projects and apps, for the sidebar tree, the palette and
+		// the Deployments badge. Deferred like the teams above: only a
+		// response that draws the chrome pays for the query.
+		r.Use(s.withWorkspace)
+
 		// The split between these groups is at the line where an action stops
 		// being undoable by redeploying. Each gate is on the group rather than in
 		// the handlers, so a route added to one of them later is protected
@@ -610,6 +624,13 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleMember))
 
 			r.Get("/", s.overview)
+
+			// What the command palette searches: the team's projects and apps.
+			// Member, like every other read, and scoped by the resolved owner.
+			r.Get(searchIndexPath, s.searchIndexHandler)
+			// The checklist is the team's, and putting it away is cosmetic —
+			// any member may, the way any member may arrange the canvas.
+			r.Post("/onboarding/dismiss", s.onboardingDismiss)
 
 			r.Get("/canvas", s.canvasRedirect)
 			r.Get("/projects", s.projectList)
@@ -999,6 +1020,7 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			s.log.Error("deploy activity", slog.String("error", err.Error()))
 		}
 	}
+	data.Checklist = s.checklistFor(r)
 
 	s.render(w, r, Overview(data))
 }

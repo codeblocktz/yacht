@@ -257,11 +257,12 @@ type Session struct {
 }
 
 type Team struct {
-	ID          string
-	DisplayName string
-	Email       string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                    string
+	DisplayName           string
+	Email                 string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	OnboardingDismissedAt pgtype.Timestamptz
 }
 
 type TeamQuota struct {

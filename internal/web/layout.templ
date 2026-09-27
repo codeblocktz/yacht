@@ -1,6 +1,8 @@
 package web
 
 import (
+	"strconv"
+
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/web/ui/checkbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/dialog"
@@ -64,6 +66,12 @@ templ Layout(s Slots, page templ.Component) {
 			<script src={ asset("/assets/js/toasts.js") } defer></script>
 			<script src={ asset("/assets/js/copy.js") } defer></script>
 			<script src={ asset("/assets/js/sliders.js") } defer></script>
+			// The sidebar's menus, project tree and theme choice, and the
+			// command palette. Their own files rather than inline: they are
+			// the largest scripts the chrome has, and only the parts that must
+			// run before paint are worth the inline cost.
+			<script src={ asset("/assets/js/sidebar.js") } defer></script>
+			<script src={ asset("/assets/js/palette.js") } defer></script>
 		</head>
 		<body class="h-full">
 			if s.Bare {
@@ -129,6 +137,10 @@ templ appShell(s Slots, page templ.Component) {
 			}
 		</div>
 	</div>
+	// Outside the shell rather than in it: the shell is made inert while the
+	// phone drawer is open, and a dialog inside an inert subtree cannot take
+	// focus even as a modal.
+	@palette(s.SearchIndex)
 	@confirmationDialog()
 	@toastHost(s.Flash)
 }
@@ -172,143 +184,397 @@ templ toastHost(f *Flash) {
 
 // sidebar renders the navigation panel.
 //
+// Three bands. The top says where you are — the product, the team, and a way
+// to search it. The middle is everywhere you can go, and scrolls when that is
+// more than the window holds. The floor is you. Top and floor stay put while
+// the middle scrolls, because "which team is this" and "sign out" should never
+// be scrolled out of reach.
+//
 // Every label in here is wrapped rather than bare, because the collapsed rail
 // hides labels and shows icons, and CSS can only hide what it can select. The
 // markup therefore has one form in both states: nothing below decides whether
 // the sidebar is collapsed, and neither does the server. See sidebarScript().
 //
-// The aside is deliberately not overflow-hidden. In the rail both menus open
-// beside the sidebar rather than inside it, and a clipping context here erases
-// them. Nothing overflows anyway: the labels are display:none when collapsed
-// rather than merely too wide to fit.
+// The aside is deliberately not overflow-hidden. In the rail the menus and the
+// tooltips open beside the sidebar rather than inside it, and a clipping
+// context here erases them. Only the middle band scrolls, and in the rail it
+// stops scrolling for the same reason (see the collapsed-rail rules in
+// input.css).
 templ sidebar(s Slots) {
+	{{ lead, rest, admin := navSections(s.Nav) }}
+	{{ parent := treeParentHref(s.Projects) }}
 	<aside
 		id="sidebar"
 		class="sidebar"
 		aria-label="Primary navigation"
 	>
-		<a
-			href={ templ.URL(s.BrandHref) }
-			class="brand relative mb-1 flex items-center gap-2.5 px-2 py-1.5 text-[14px] font-semibold tracking-tight"
-			aria-label={ s.BrandName }
-		>
-			if s.BrandMark != nil {
-				@s.BrandMark
-			} else {
-				@brandMark("h-[19px] w-auto shrink-0")
-			}
-			<span class="rail-hide truncate">
-				if s.BrandName == DefaultBrandName {
-					@brandWordmark("h-[13px] w-auto")
+		<div class="sidebar-head">
+			<a
+				href={ templ.URL(s.BrandHref) }
+				class="brand"
+				aria-label={ s.BrandName }
+			>
+				if s.BrandMark != nil {
+					@s.BrandMark
 				} else {
-					{ s.BrandName }
+					@brandMark("h-[19px] w-auto shrink-0")
 				}
-			</span>
-			<span class="nav-tip" aria-hidden="true">{ s.BrandName }</span>
-		</a>
-		if s.SidebarTop != nil {
-			<div class="mb-1">
+				<span class="rail-hide truncate">
+					if s.BrandName == DefaultBrandName {
+						@brandWordmark("h-[13px] w-auto")
+					} else {
+						{ s.BrandName }
+					}
+				</span>
+				<span class="nav-tip" aria-hidden="true">{ s.BrandName }</span>
+			</a>
+			if s.SidebarTop != nil {
 				@slot(s.SidebarTop)
+			}
+			@searchButton()
+		</div>
+		<div class="sidebar-body">
+			<nav class="sidebar-nav" aria-label="Main">
+				for _, g := range lead {
+					@navGroup(g, parent)
+				}
+				if s.Projects != nil {
+					@projectTree(*s.Projects)
+				}
+				for _, g := range rest {
+					@navGroup(g, parent)
+				}
+				// The install's own pages sit apart, at the bottom, whatever
+				// order the groups arrived in: the line that matters is between
+				// the people who run the install and the people using it, and a
+				// wrapping application that reorders its groups keeps it.
+				if len(admin) > 0 {
+					<div class="nav-admin">
+						for _, g := range admin {
+							@navGroup(g, parent)
+						}
+					</div>
+				}
+			</nav>
+		</div>
+		if s.SidebarFooter != nil {
+			<div class="sidebar-foot">
+				@slot(s.SidebarFooter)
 			</div>
 		}
-		<nav class="flex flex-col gap-px">
-			for _, g := range s.Nav {
-				if g.Heading != "" {
-					<div class="nav-group">{ g.Heading }</div>
-				}
-				for _, item := range g.Items {
-					<a
-						href={ templ.URL(item.Href) }
-						class={ "nav-item", templ.KV("nav-active", item.Active) }
-						aria-label={ item.Label }
-					>
-						if item.Icon != "" {
-							@icon(item.Icon)
-						}
-						<span class="rail-hide truncate">{ item.Label }</span>
-						if item.Badge != "" {
-							<span class="rail-hide ml-auto tag">{ item.Badge }</span>
-						}
-						<span class="nav-tip" aria-hidden="true">{ item.Label }</span>
-					</a>
-				}
-			}
-		</nav>
-		<div class="mt-auto pt-3">
-			if s.SidebarFooter != nil {
-				@slot(s.SidebarFooter)
-			}
-		</div>
 	</aside>
+}
+
+// navGroup is one labelled block of links.
+//
+// parent is the href of the link that leads to the project tree, when the
+// tree itself is showing where you are. That link is then drawn as the
+// section you are in rather than as the place: one filled row in the sidebar,
+// not two saying the same thing at different sizes. In the rail, where the
+// tree is hidden, it is filled again.
+templ navGroup(g NavGroup, parent string) {
+	<div class="nav-section">
+		if g.Heading != "" {
+			<div class="nav-group">{ g.Heading }</div>
+		}
+		for _, item := range g.Items {
+			@navItem(item, g.Heading, item.Active && parent != "" && item.Href == parent)
+		}
+	</div>
+}
+
+// navItem is one link. data-nav-item is what the command palette reads its
+// pages from, so every link here — a wrapping application's too — is also
+// somewhere the palette can go, with nothing to register.
+templ navItem(item NavItem, group string, parent bool) {
+	<a
+		href={ templ.URL(item.Href) }
+		class={ "nav-item", templ.KV("nav-active", item.Active), templ.KV("nav-parent", parent) }
+		aria-label={ navItemName(item) }
+		if item.Active {
+			aria-current="page"
+		}
+		data-nav-item
+		data-nav-label={ item.Label }
+		data-nav-group={ group }
+	>
+		if item.Icon != "" {
+			@icon(item.Icon)
+		}
+		<span class="rail-hide min-w-0 flex-1 truncate">{ item.Label }</span>
+		if item.Badge != "" {
+			<span class={ "nav-badge rail-hide", templ.KV("nav-badge-live", item.Live) }>{ item.Badge }</span>
+			// In the rail there is no room for a number, but there is for the
+			// fact that something is happening.
+			<span class={ "nav-dot", templ.KV("nav-dot-live", item.Live) } aria-hidden="true"></span>
+		}
+		<span class="nav-tip" aria-hidden="true">
+			{ item.Label }
+			if item.Badge != "" {
+				<span class="nav-tip-badge">{ item.Badge }</span>
+			}
+		</span>
+	</a>
+}
+
+// searchButton opens the command palette.
+//
+// Drawn like a field rather than an icon, because a field says "type here"
+// and an icon only says "something about search". The shortcut is on it so
+// that the second time, nobody needs the button.
+templ searchButton() {
+	<button
+		type="button"
+		class="sidebar-search"
+		aria-label="Search"
+		aria-haspopup="dialog"
+		aria-controls="palette"
+		aria-keyshortcuts="Meta+K Control+K /"
+		data-palette-open
+	>
+		@icon("search")
+		<span class="rail-hide flex-1 truncate text-left">Search…</span>
+		<kbd class="kbd rail-hide" data-shortcut-label>⌘K</kbd>
+		<span class="nav-tip" aria-hidden="true">Search <span class="nav-tip-badge" data-shortcut-label>⌘K</span></span>
+	</button>
+}
+
+// projectTree is the team's projects, each opening to the apps on its canvas.
+//
+// A tree in the ARIA sense, not just in looks: one tab stop, arrow keys to move
+// and to open and close, the way a file tree in an editor behaves. The rows are
+// links, so a click still goes to the canvas; the chevron beside a row is what
+// opens it, and is left out of the tab order because the arrow keys already do
+// its job.
+//
+// Which projects are open is remembered by the browser, per project, and
+// applied by the inline script at the end before the tree is painted — so a
+// project left open does not visibly snap open on every navigation. The one
+// being looked at is opened by the server regardless.
+//
+// Not drawn in the collapsed rail. A column of project initials is a column of
+// guesses; the Projects entry above it is one click from the whole list.
+templ projectTree(p SidebarProjects) {
+	<div class="nav-section rail-hide">
+		<div class="nav-group" id="nav-projects-heading">Projects</div>
+		if len(p.Items) > 0 {
+			<ul class="tree" role="tree" aria-labelledby="nav-projects-heading" data-tree>
+				for i, pr := range p.Items {
+					<li
+						role="none"
+						class="tree-node"
+						data-tree-node={ pr.Key }
+						if pr.Open {
+							data-open
+						}
+					>
+						<div class="tree-row">
+							<a
+								role="treeitem"
+								href={ templ.URL(pr.Href) }
+								class={ "tree-item", templ.KV("tree-active", pr.Active) }
+								aria-level="1"
+								if len(pr.Apps) > 0 {
+									aria-expanded={ ariaBool(pr.Open) }
+									aria-owns={ "tree-group-" + pr.Key }
+								}
+								if pr.Active {
+									aria-current="page"
+								}
+								tabindex={ treeTabIndex(p.Items, i) }
+							>
+								<span class="tree-avatar" aria-hidden="true">{ initials(pr.Name) }</span>
+								<span class="min-w-0 flex-1 truncate">{ pr.Name }</span>
+								if len(pr.Apps) > 0 {
+									// A deploy in flight shows on the project while it is
+									// closed, so it is not only findable by opening each one.
+									if projectDeploying(pr) {
+										<span class="tree-live status-info" title="Deploying" aria-hidden="true"></span>
+									}
+									<span class="tree-count" aria-hidden="true">{ strconv.Itoa(len(pr.Apps)) }</span>
+								}
+							</a>
+							if len(pr.Apps) > 0 {
+								<button
+									type="button"
+									class="tree-toggle"
+									tabindex="-1"
+									aria-hidden="true"
+									data-tree-toggle
+								>
+									@icon("chevron-right")
+								</button>
+							}
+						</div>
+						if len(pr.Apps) > 0 {
+							<ul role="group" class="tree-group" id={ "tree-group-" + pr.Key }>
+								for _, a := range pr.Apps {
+									<li role="none">
+										<a
+											role="treeitem"
+											href={ templ.URL(a.Href) }
+											class={ "tree-item tree-leaf", templ.KV("tree-active", a.Active) }
+											aria-level="2"
+											if a.Active {
+												aria-current="page"
+											}
+											tabindex="-1"
+											title={ appStateLabel(a.State) }
+										>
+											<span class={ "tree-dot", appStateClass(a.State) } aria-hidden="true"></span>
+											<span class="min-w-0 flex-1 truncate">{ a.Name }</span>
+											<span class="sr-only">— { appStateLabel(a.State) }</span>
+										</a>
+									</li>
+								}
+							</ul>
+						}
+					</li>
+				}
+			</ul>
+			@treeRestore()
+		}
+		if p.More > 0 && p.AllHref != "" {
+			<a href={ templ.URL(p.AllHref) } class="tree-extra">
+				@icon("arrow-right")
+				<span class="flex-1">All projects</span>
+				<span class="tree-count">+{ strconv.Itoa(p.More) }</span>
+			</a>
+		}
+		if p.NewHref != "" {
+			<a href={ templ.URL(p.NewHref) } class="tree-extra">
+				@icon("plus")
+				<span class="flex-1">New project</span>
+			</a>
+		}
+	</div>
+}
+
+// treeRestore re-opens the projects this browser left open, before paint.
+//
+// Inline and synchronous for the reason themeScript is: applied from a deferred
+// script, every open project would draw shut and then snap open on every page.
+templ treeRestore() {
+	<script nonce="">
+		(function() {
+			try {
+				var open = JSON.parse(localStorage.getItem("yacht-tree") || "{}") || {};
+				var nodes = document.querySelectorAll("[data-tree-node]");
+				for (var i = 0; i < nodes.length; i++) {
+					if (open[nodes[i].getAttribute("data-tree-node")] !== true) continue;
+					nodes[i].setAttribute("data-open", "");
+					var item = nodes[i].querySelector("[aria-expanded]");
+					if (item) item.setAttribute("aria-expanded", "true");
+				}
+			} catch (e) {
+				/* Nothing remembered is the right fallback. */
+			}
+		})();
+	</script>
 }
 
 // TeamSwitcher moves the session between the teams a person belongs to.
 //
-// Every entry is a submit button in one POST form. A link would be a GET that
+// Every entry is a submit button for one POST form. A link would be a GET that
 // changes what the whole dashboard is scoped by, and prefetchers and crawlers
 // follow links — being moved into another team by a page you merely hovered
-// over is a confusing way to end up acting somewhere you did not choose.
+// over is a confusing way to end up acting somewhere you did not choose. The
+// form sits outside the menu and the buttons name it, so the menu holds only
+// menu items.
 //
 // The list is only the chrome's copy of what the session already proved.
 // Membership is checked again on the way in, so an entry forged into this form
 // switches into nothing.
 //
-// details/summary rather than a scripted menu: the dashboard's one piece of
+// details/summary underneath the menu behaviour: the dashboard's one piece of
 // state that must work is the control that says which team you are in, and it
-// should not need JavaScript to open.
+// opens without JavaScript. sidebar.js adds what a menu should have on top —
+// arrow keys, Escape, closing when you click away.
 //
-// The bordered box is not decoration. Sitting flush in a column of navigation
-// links, this read as one more link — and the one control on the page that
-// changes what every query is scoped by should not look like a way to go to a
-// page. The border is what says it opens something.
+// It is not a bordered box any more, where it sat at the bottom among the
+// links and needed one to not read as a link. At the top, under the brand,
+// with the viewer's role beneath the name and the up-down chevron beside it,
+// it reads as the thing that says where you are — which is how the tools this
+// borrows from draw it.
 //
 // Shares a name with the user menu so the browser closes one when the other
-// opens. Two panels hanging over the sidebar at once is the kind of thing a
-// scripted menu needs a listener for; native exclusive details does it for
-// free.
+// opens.
 templ TeamSwitcher(teams []TeamChoice) {
-	<details name="sidebar-menu" class="group relative">
-		<summary class="switcher">
-			<span class="avatar">{ initials(activeTeamName(teams)) }</span>
-			<span class="rail-hide min-w-0 flex-1 truncate text-left font-medium">
-				{ activeTeamName(teams) }
+	{{ name := activeTeamName(teams) }}
+	<details name="sidebar-menu" class="group relative" data-menu>
+		<summary class="switcher" aria-haspopup="menu" aria-label={ "Team: " + name + ". Switch team" }>
+			<span class="team-avatar" aria-hidden="true">{ initials(name) }</span>
+			<span class="rail-hide flex min-w-0 flex-1 flex-col text-left">
+				<span class="truncate text-[13px] font-medium leading-[1.25] text-foreground">{ name }</span>
+				<span class="truncate text-[11px] leading-[1.3] text-muted-foreground">{ roleLabel(activeTeamRole(teams)) }</span>
 			</span>
-			<svg
-				class="rail-hide size-3.5 shrink-0 opacity-60 group-open:rotate-180"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.7"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path d="M6 9l6 6 6-6"></path>
-			</svg>
-			<span class="nav-tip" aria-hidden="true">{ activeTeamName(teams) }</span>
+			<span class="rail-hide switcher-chevron">
+				@icon("chevrons-up-down")
+			</span>
+			<span class="nav-tip" aria-hidden="true">{ name }</span>
 		</summary>
-		<form
-			method="post"
-			action="/teams/switch"
-			class="switcher-menu left-0 right-0 top-full mt-1"
-		>
+		<form id="team-switch" method="post" action="/teams/switch" hidden></form>
+		<div class="switcher-menu menu-down" role="menu" aria-label="Teams">
+			<div class="menu-label" aria-hidden="true">Teams</div>
 			for _, team := range teams {
-				<button
-					type="submit"
-					name="team"
-					value={ team.ID }
-					class={ "switcher-item",
-						templ.KV("font-medium text-foreground", team.Active) }
-				>
-					<span class="min-w-0 flex-1 truncate">{ team.Name }</span>
-					if team.Active {
-						<span class="text-[11px] text-muted-foreground">current</span>
-					} else {
-						<span class="text-[11px] text-muted-foreground">{ string(team.Role) }</span>
-					}
-				</button>
+				if team.Active {
+					// Choosing the team you are already in closes the menu
+					// rather than posting a switch to where you already are.
+					<button
+						type="button"
+						role="menuitemradio"
+						aria-checked="true"
+						class="switcher-item"
+						data-team={ team.ID }
+						data-menu-close
+					>
+						<span class="team-avatar team-avatar-sm" aria-hidden="true">{ initials(team.Name) }</span>
+						<span class="min-w-0 flex-1 truncate text-foreground">{ team.Name }</span>
+						<span class="menu-check">
+							@icon("check")
+						</span>
+					</button>
+				} else {
+					<button
+						type="submit"
+						form="team-switch"
+						name="team"
+						value={ team.ID }
+						role="menuitemradio"
+						aria-checked="false"
+						class="switcher-item"
+					>
+						<span class="team-avatar team-avatar-sm" aria-hidden="true">{ initials(team.Name) }</span>
+						<span class="min-w-0 flex-1 truncate">{ team.Name }</span>
+						<span class="text-[11px] text-muted-foreground">{ roleLabel(team.Role) }</span>
+					</button>
+				}
 			}
-		</form>
+			<div class="menu-sep" role="separator"></div>
+			<a href="/team" role="menuitem" class="switcher-item">
+				@icon("users")
+				<span class="flex-1">Team settings</span>
+			</a>
+		</div>
 	</details>
+}
+
+// TeamIdentity is the top of the sidebar where there is nothing to switch
+// between: an install with no accounts, where the one owner is the team, or an
+// operator acting as a team for support, who stops from the banner rather than
+// from here.
+//
+// The same shape as the switcher, so the top of the sidebar answers "where am
+// I" the same way on every install; no chevron, because it opens nothing.
+templ TeamIdentity(name, role string, acting bool) {
+	<div class="switcher switcher-static" aria-label={ name + ", " + role } role="group">
+		<span class={ "team-avatar", templ.KV("team-avatar-acting", acting) } aria-hidden="true">{ initials(name) }</span>
+		<span class="rail-hide flex min-w-0 flex-1 flex-col text-left">
+			<span class="truncate text-[13px] font-medium leading-[1.25] text-foreground">{ name }</span>
+			<span class={ "truncate text-[11px] leading-[1.3]", templ.KV("text-warning", acting), templ.KV("text-muted-foreground", !acting) }>{ role }</span>
+		</span>
+		<span class="nav-tip" aria-hidden="true">{ name }</span>
+	</div>
 }
 
 // UserMenu is the sidebar's floor: who the session belongs to, and the actions
@@ -318,54 +584,66 @@ templ TeamSwitcher(teams []TeamChoice) {
 // signs you out is the last thing that should need JavaScript to open — and it
 // opens upward because it sits on the floor of the panel.
 //
+// The theme lives here rather than as a button in the top bar. It is a
+// preference of the person, not of the page, and a three-way choice — light,
+// dark, or whatever the system says — does not fit on one icon that can only
+// flip between two. The palette's "Toggle theme" is there for the keyboard.
+//
 // canSignOut is false on a token-authenticated install. There is no session to
 // end there and /sign-out is not routed at all, so the buttons would 404;
-// drawing nothing is better than drawing a control that cannot work. It is the
-// same question the switcher answers by having no teams to offer.
+// drawing nothing is better than drawing a control that cannot work. The same
+// holds for /account, which is routed exactly when sign-out is.
 templ UserMenu(owner identity.Owner, canSignOut bool) {
-	<details name="sidebar-menu" class="group relative">
-		<summary class="switcher">
-			<span class="avatar">{ initials(ownerLabel(owner)) }</span>
+	{{ label := ownerLabel(owner) }}
+	<details name="sidebar-menu" class="group relative" data-menu>
+		<summary class="switcher" aria-haspopup="menu" aria-label={ label + ". Account menu" }>
+			<span class="user-avatar" aria-hidden="true">{ initials(label) }</span>
 			<span class="rail-hide flex min-w-0 flex-1 flex-col text-left">
-				<span class="truncate font-medium leading-tight">{ ownerLabel(owner) }</span>
-				if owner.Email != "" && owner.Email != ownerLabel(owner) {
-					<span class="truncate text-[11px] leading-tight text-muted-foreground">
-						{ owner.Email }
-					</span>
+				<span class="truncate text-[13px] font-medium leading-[1.25] text-foreground">{ label }</span>
+				if owner.Email != "" && owner.Email != label {
+					<span class="truncate text-[11px] leading-[1.3] text-muted-foreground">{ owner.Email }</span>
 				}
 			</span>
-			<svg
-				class="rail-hide size-3.5 shrink-0 opacity-60 group-open:rotate-180"
-				viewBox="0 0 24 24"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.7"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path d="M6 9l6 6 6-6"></path>
-			</svg>
-			<span class="nav-tip" aria-hidden="true">{ ownerLabel(owner) }</span>
+			<span class="rail-hide switcher-chevron">
+				@icon("chevrons-up-down")
+			</span>
+			<span class="nav-tip" aria-hidden="true">{ label }</span>
 		</summary>
-		<div class="switcher-menu bottom-full left-0 right-0 mb-1">
-			// Above Settings, and only when there are accounts to have one.
-			// canSignOut is derived from holding a membership, which is true
-			// exactly when /account is on the router — so the link cannot point
-			// at a route that is not mounted.
+		<div class="switcher-menu menu-up" role="menu" aria-label="Account">
 			if canSignOut {
-				<a href="/account" class="switcher-item">
+				<a href="/account" role="menuitem" class="switcher-item">
 					@icon("user")
 					<span class="flex-1">Account</span>
 				</a>
 			}
-			<a href="/settings" class="switcher-item">
-				@icon("settings")
-				<span class="flex-1">Settings</span>
+			<div class="menu-theme" role="group" aria-label="Theme">
+				<span class="menu-theme-label" aria-hidden="true">
+					@icon("sun-moon")
+					Theme
+				</span>
+				<span class="seg">
+					<button type="button" role="menuitemradio" aria-checked="false" class="seg-item" data-theme-set="light" aria-label="Light theme" title="Light">
+						@icon("sun")
+					</button>
+					<button type="button" role="menuitemradio" aria-checked="false" class="seg-item" data-theme-set="dark" aria-label="Dark theme" title="Dark">
+						@icon("moon")
+					</button>
+					<button type="button" role="menuitemradio" aria-checked="false" class="seg-item" data-theme-set="system" aria-label="Match the system theme" title="System">
+						@icon("monitor")
+					</button>
+				</span>
+			</div>
+			<a href="https://github.com/codeblocktz/yacht#readme" role="menuitem" class="switcher-item" target="_blank" rel="noreferrer">
+				@icon("book-open")
+				<span class="flex-1">Docs</span>
+				<span class="menu-trail">
+					@icon("external")
+				</span>
 			</a>
 			if canSignOut {
-				<div class="my-1 h-px bg-border"></div>
-				<form method="post" action="/sign-out">
-					<button type="submit" class="switcher-item switcher-danger">
+				<div class="menu-sep" role="separator"></div>
+				<form method="post" action="/sign-out" role="none">
+					<button type="submit" role="menuitem" class="switcher-item switcher-danger">
 						@icon("log-out")
 						<span class="flex-1">Sign out</span>
 					</button>
@@ -373,10 +651,10 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 				// Separate from Sign out on purpose: it ends sessions on every
 				// other browser too, which is a bigger thing than leaving here,
 				// and the two should not be one slip apart.
-				<form method="post" action="/sign-out-everywhere">
-					<button type="submit" class="switcher-item">
+				<form method="post" action="/sign-out-everywhere" role="none">
+					<button type="submit" role="menuitem" class="switcher-item switcher-quiet">
 						<span class="size-4 shrink-0"></span>
-						<span class="flex-1 text-[11px]">Sign out everywhere</span>
+						<span class="flex-1">Sign out everywhere</span>
 					</button>
 				</form>
 			}
@@ -384,28 +662,88 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 	</details>
 }
 
-templ topbar(s Slots) {
-	<header class="flex h-12 shrink-0 items-center gap-3 border-b border-border px-6">
-		@sidebarToggle()
-		<div class="flex min-w-0 items-center gap-2 text-[12.5px] text-muted-foreground">
-			for i, crumb := range s.Breadcrumb {
-				if i > 0 {
-					<span class="text-border">/</span>
-				}
-				if crumb.Href != "" {
-					<a href={ templ.URL(crumb.Href) } class="truncate hover:text-foreground">
-						{ crumb.Label }
-					</a>
-				} else {
-					<span class="truncate text-foreground">{ crumb.Label }</span>
-				}
+// palette is the command palette: every page the sidebar offers, the team's
+// projects and apps, and a few actions, behind ⌘K.
+//
+// A native modal dialog, so the page behind it is inert and Escape closes it
+// without a line of script; palette.js adds the searching. The pages come from
+// the sidebar's own links rather than a second list, so a wrapping
+// application's navigation is searchable the moment it is drawn.
+//
+// The actions are declared here rather than in the script so the server
+// decides what is offered, and a test can read the list.
+templ palette(index string) {
+	<dialog
+		id="palette"
+		class="palette"
+		aria-label="Search and commands"
+		data-palette
+		data-index={ index }
+	>
+		<div class="palette-bar">
+			@icon("search")
+			<span class="palette-scope" data-palette-scope hidden></span>
+			<input
+				type="text"
+				class="palette-input"
+				role="combobox"
+				aria-expanded="true"
+				aria-controls="palette-list"
+				aria-autocomplete="list"
+				aria-label="Search pages, projects, apps and actions"
+				placeholder="Search pages, projects, apps…"
+				autocomplete="off"
+				spellcheck="false"
+				data-palette-input
+			/>
+			<kbd class="kbd">esc</kbd>
+		</div>
+		<div id="palette-list" class="palette-list" role="listbox" aria-label="Results" data-palette-list></div>
+		<div class="palette-foot" aria-hidden="true">
+			<span><kbd class="kbd">↑</kbd><kbd class="kbd">↓</kbd> to move</span>
+			<span><kbd class="kbd">↵</kbd> to open</span>
+			<span><kbd class="kbd">esc</kbd> to close</span>
+		</div>
+		<div hidden>
+			<i data-palette-action data-label="Deploy an app" data-url="/apps/new" data-icon="rocket" data-keywords="new create service image repository"></i>
+			<i data-palette-action data-label="New project" data-url="/projects?new=1" data-icon="plus" data-keywords="create canvas"></i>
+			<i data-palette-action data-label="Add a custom domain…" data-pick="app" data-url="/apps/{name}/domains" data-needs="domains" data-icon="globe" data-keywords="dns hostname certificate"></i>
+			<i data-palette-action data-label="Toggle theme" data-run="theme" data-icon="sun-moon" data-keywords="dark light mode appearance"></i>
+			for _, name := range paletteIcons {
+				<template data-palette-icon={ name }>
+					@icon(name)
+				</template>
 			}
 		</div>
+	</dialog>
+}
+
+templ topbar(s Slots) {
+	<header class="topbar">
+		@sidebarToggle()
+		<span class="topbar-sep" aria-hidden="true"></span>
+		<nav class="crumbs" aria-label="Breadcrumb">
+			<ol class="flex min-w-0 items-center gap-1.5">
+				for i, crumb := range s.Breadcrumb {
+					if i > 0 {
+						<li class="crumb-sep" aria-hidden="true">/</li>
+					}
+					<li class="min-w-0">
+						if crumb.Href != "" {
+							<a href={ templ.URL(crumb.Href) } class="crumb">{ crumb.Label }</a>
+						} else {
+							<span class="crumb crumb-current" aria-current="page">{ crumb.Label }</span>
+						}
+					</li>
+				}
+			</ol>
+		</nav>
 		<div class="flex-1"></div>
 		if s.HeaderTools != nil {
-			@slot(s.HeaderTools)
+			<div class="flex items-center gap-2">
+				@slot(s.HeaderTools)
+			</div>
 		}
-		@themeToggle()
 	</header>
 }
 
@@ -544,6 +882,8 @@ templ sidebarScript() {
 			/* Escape closes the drawer. It covers the page, so the usual way
 			   out of something covering the page has to work. */
 			document.addEventListener("keydown", function(event) {
+				/* Already answered — by a menu inside the drawer closing. */
+				if (event.defaultPrevented) return;
 				if (
 					event.key === "Escape" &&
 					root.getAttribute("data-nav") === "open"
@@ -613,23 +953,6 @@ templ confirmationDialog() {
 			});
 		})();
 	</script>
-}
-
-templ themeToggle() {
-	<button
-		type="button"
-		class="btn btn-ghost btn-icon"
-		aria-label="Toggle theme"
-		onclick="(function(){var d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('yacht-theme',d?'dark':'light')}catch(e){}})()"
-	>
-		<svg class="size-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-			<circle cx="12" cy="12" r="4"></circle>
-			<path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"></path>
-		</svg>
-		<svg class="hidden size-4 dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-			<path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"></path>
-		</svg>
-	</button>
 }
 
 // icon renders one of a small fixed set of inline glyphs.
@@ -787,6 +1110,47 @@ templ icon(name string) {
 				<rect width="20" height="14" x="2" y="3" rx="2"></rect>
 				<line x1="8" x2="16" y1="21" y2="21"></line>
 				<line x1="12" x2="12" y1="17" y2="21"></line>
+			case "search":
+				<circle cx="11" cy="11" r="8"></circle>
+				<path d="m21 21-4.3-4.3"></path>
+			case "chevrons-up-down":
+				<path d="m7 15 5 5 5-5"></path>
+				<path d="m7 9 5-5 5 5"></path>
+			case "chevron-right":
+				<path d="m9 18 6-6-6-6"></path>
+			case "check":
+				<path d="M20 6 9 17l-5-5"></path>
+			case "sun":
+				<circle cx="12" cy="12" r="4"></circle>
+				<path d="M12 2v2"></path>
+				<path d="M12 20v2"></path>
+				<path d="m4.93 4.93 1.41 1.41"></path>
+				<path d="m17.66 17.66 1.41 1.41"></path>
+				<path d="M2 12h2"></path>
+				<path d="M20 12h2"></path>
+				<path d="m6.34 17.66-1.41 1.41"></path>
+				<path d="m19.07 4.93-1.41 1.41"></path>
+			case "moon":
+				<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+			case "sun-moon":
+				<path d="M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4"></path>
+				<path d="M12 2v2"></path>
+				<path d="M12 20v2"></path>
+				<path d="m4.9 4.9 1.4 1.4"></path>
+				<path d="m17.7 17.7 1.4 1.4"></path>
+				<path d="M2 12h2"></path>
+				<path d="M20 12h2"></path>
+				<path d="m6.3 17.7-1.4 1.4"></path>
+				<path d="m19.1 4.9-1.4 1.4"></path>
+			case "book-open":
+				<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+				<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+			case "arrow-right":
+				<path d="M5 12h14"></path>
+				<path d="m12 5 7 7-7 7"></path>
+			case "corner-down-left":
+				<polyline points="9 10 4 15 9 20"></polyline>
+				<path d="M20 4v7a4 4 0 0 1-4 4H4"></path>
 		}
 	</svg>
 }

@@ -19,6 +19,11 @@ import (
 type ProjectListData struct {
 	Projects []app.Project
 	Error    string
+
+	// Focus puts the cursor in the new-project field: the page was reached
+	// from a "New project" control, which should not then need a second
+	// click to start typing.
+	Focus bool
 }
 
 // projectList shows the projects a team has.
@@ -39,7 +44,9 @@ func (s *Server) projectList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load projects", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, ProjectList(ProjectListData{Projects: projects}))
+	s.render(w, r, ProjectList(ProjectListData{
+		Projects: projects, Focus: r.URL.Query().Get("new") != "",
+	}))
 }
 
 // projectCreate makes a project and opens its canvas.

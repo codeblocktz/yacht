@@ -65,9 +65,14 @@ func TestSidebarFooterShowsTheSignedInOwner(t *testing.T) {
 		"AL", // the initials avatar
 		`action="/sign-out"`,
 		"/sign-out-everywhere",
-		`href="/settings"`,
+		`href="/account"`,
+		`data-theme-set="light"`, // the theme is the person's, and lives here
+		`data-theme-set="dark"`,
+		`data-theme-set="system"`,
+		"github.com/codeblocktz/yacht#readme",
 		`name="sidebar-menu"`, // shares the switcher's exclusive group
-		"switcher",            // the bordered control, not a bare nav row
+		`role="menu"`,
+		"switcher", // the control, not a bare nav row
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("footer is missing %q\n%s", want, html)
@@ -91,6 +96,14 @@ func TestSidebarFooterHidesSignOutWithoutAccounts(t *testing.T) {
 	}
 	if strings.Contains(html, "sign-out") {
 		t.Errorf("footer offers sign-out on an install that does not route it\n%s", html)
+	}
+	// /account is routed exactly where sign-out is.
+	if strings.Contains(html, `href="/account"`) {
+		t.Errorf("footer offers an account page on an install that does not route it\n%s", html)
+	}
+	// The theme is not an account feature: it is offered either way.
+	if !strings.Contains(html, "data-theme-set") {
+		t.Errorf("footer lost the theme choice without accounts\n%s", html)
 	}
 }
 

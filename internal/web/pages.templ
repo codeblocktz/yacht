@@ -95,12 +95,19 @@ type OverviewData struct {
 	// all, which is the state an install has before it can read its own
 	// history — not the same as a window that genuinely had no deploys.
 	Activity app.DeployActivity
+
+	// Checklist is getting started, for a team that has not finished it. Nil
+	// hides it: dismissed, done, or nothing to compute it from.
+	Checklist *Checklist
 }
 
 templ Overview(d OverviewData) {
 	@pageHead("Overview", "Signed in as "+d.OwnerName, deployButton())
 	if !d.ClusterOK {
 		@clusterCallout(d.ClusterError)
+	}
+	if d.Checklist != nil {
+		@checklist(*d.Checklist)
 	}
 	<div class="metrics mb-6">
 		@metric("Apps", strconv.FormatInt(d.AppCount, 10), "")
@@ -224,10 +231,81 @@ templ deployButton() {
 
 templ emptyApps() {
 	<div class="empty">
+		<span class="empty-mark" aria-hidden="true">
+			@icon("box")
+		</span>
 		<p class="font-medium text-foreground">No apps yet</p>
-		<p>Deploy a container image to get started.</p>
+		<p>Connect a repository or run an image you already have.</p>
 		<a class="btn btn-primary mt-3" href="/apps/new">Deploy app</a>
 	</div>
+}
+
+// checklist is getting started: the few things between a new team and one
+// that is actually running something.
+//
+// Every tick is computed from the team's own data (see gettingStarted), so it
+// is a picture of where the team is rather than a to-do list somebody has to
+// keep up to date. The next step is the one primary button on it; the rest
+// are links, because four equally loud buttons is no advice at all.
+//
+// Dismissed with a POST, and for the team rather than for this browser: the
+// teammate invited in step four should not be walked through steps one to
+// three.
+templ checklist(c Checklist) {
+	<section class="panel mb-6" aria-labelledby="onboard-title">
+		<div class="panel-header">
+			<div class="flex min-w-0 items-center gap-3">
+				<h2 id="onboard-title" class="panel-title">Get started</h2>
+				<span class="text-[12px] text-muted-foreground tabular-nums">
+					{ strconv.Itoa(c.Done()) } of { strconv.Itoa(len(c.Steps)) } done
+				</span>
+				<span
+					class="onboard-progress"
+					role="progressbar"
+					aria-label="Getting started"
+					aria-valuemin="0"
+					aria-valuemax={ strconv.Itoa(len(c.Steps)) }
+					aria-valuenow={ strconv.Itoa(c.Done()) }
+				>
+					<i style={ fmt.Sprintf("width:%d%%", c.Done()*100/len(c.Steps)) }></i>
+				</span>
+			</div>
+			<form method="post" action="/onboarding/dismiss">
+				<button type="submit" class="btn btn-ghost btn-sm text-muted-foreground" aria-label="Hide the getting started checklist for this team">
+					Dismiss
+				</button>
+			</form>
+		</div>
+		<ol class="onboard-steps">
+			for i, step := range c.Steps {
+				<li class={ "onboard-step", templ.KV("onboard-done", step.Done), templ.KV("onboard-next", i == c.Next()) }>
+					<span class="onboard-check" aria-hidden="true">
+						if step.Done {
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+						} else {
+							<span class="tabular-nums">{ strconv.Itoa(i + 1) }</span>
+						}
+					</span>
+					<div class="min-w-0 flex-1">
+						<div class="onboard-title">
+							{ step.Title }
+							if step.Done {
+								<span class="sr-only">(done)</span>
+							}
+						</div>
+						<p class="onboard-detail">{ step.Detail }</p>
+					</div>
+					if !step.Done {
+						if i == c.Next() {
+							<a class="btn btn-primary btn-sm shrink-0" href={ templ.URL(step.Href) }>{ step.Action }</a>
+						} else {
+							<a class="btn btn-sm shrink-0" href={ templ.URL(step.Href) }>{ step.Action }</a>
+						}
+					}
+				</li>
+			}
+		</ol>
+	</section>
 }
 
 // ---------------------------------------------------------------- apps list

@@ -257,11 +257,13 @@ templ ProjectList(d ProjectListData) {
 			<span class="panel-title">All projects</span>
 			<form method="post" action="/projects" class="flex items-center gap-2">
 				<input
+					id="new-project"
 					class="control h-8 w-[180px]"
 					name="name"
 					placeholder="New project"
 					aria-label="New project name"
 					required
+					autofocus?={ d.Focus }
 				/>
 				<button class="btn btn-sm" type="submit">Create</button>
 			</form>

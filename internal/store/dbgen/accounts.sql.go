@@ -159,7 +159,7 @@ const createTeam = `-- name: CreateTeam :one
 INSERT INTO teams (id, display_name)
 VALUES ($1, $2)
 ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, updated_at = now()
-RETURNING id, display_name, email, created_at, updated_at
+RETURNING id, display_name, email, created_at, updated_at, onboarding_dismissed_at
 `
 
 type CreateTeamParams struct {
@@ -176,6 +176,7 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OnboardingDismissedAt,
 	)
 	return i, err
 }
@@ -601,7 +602,7 @@ func (q *Queries) GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSe
 }
 
 const getTeam = `-- name: GetTeam :one
-SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1
+SELECT id, display_name, email, created_at, updated_at, onboarding_dismissed_at FROM teams WHERE id = $1
 `
 
 func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
@@ -613,6 +614,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OnboardingDismissedAt,
 	)
 	return i, err
 }
@@ -927,7 +929,7 @@ func (q *Queries) LockSessionActing(ctx context.Context, id uuid.UUID) (LockSess
 }
 
 const lockTeam = `-- name: LockTeam :one
-SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1 FOR UPDATE
+SELECT id, display_name, email, created_at, updated_at, onboarding_dismissed_at FROM teams WHERE id = $1 FOR UPDATE
 `
 
 // A role change reads the owner count and then writes; taking the team row
@@ -942,6 +944,7 @@ func (q *Queries) LockTeam(ctx context.Context, id string) (Team, error) {
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OnboardingDismissedAt,
 	)
 	return i, err
 }

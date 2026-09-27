@@ -17,6 +17,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -25,13 +26,60 @@ import (
 )
 
 // NavItem is one entry in the sidebar.
+//
+// Every item the sidebar draws is also a page in the command palette, found by
+// its Label — a wrapping application's entries included, with nothing to
+// register.
 type NavItem struct {
 	Label string
 	Href  string
 	// Icon names one of the inline glyphs in layout.templ. Unknown names
 	// render nothing rather than a broken image.
-	Icon   string
-	Badge  string
+	Icon  string
+	Badge string
+	// Live marks the badge as counting something in progress — deploys in
+	// flight, say — which draws it in the in-flight colour with a pulse,
+	// and as a dot on the icon in the collapsed rail.
+	Live   bool
+	Active bool
+}
+
+// SidebarProjects is the sidebar's Projects section: the team's projects,
+// each opening to the apps on its canvas.
+type SidebarProjects struct {
+	// Items are the projects listed, in order.
+	Items []SidebarProject
+	// More is how many projects are not listed, which puts an "All projects"
+	// link to AllHref under the list.
+	More    int
+	AllHref string
+	// NewHref is where "New project" goes. Empty leaves it off.
+	NewHref string
+}
+
+// SidebarProject is one project in the tree.
+type SidebarProject struct {
+	// Key identifies the project in the browser's memory of which projects
+	// were left open. Unique across teams, so opening "Default" in one team
+	// does not open it in the next.
+	Key    string
+	Name   string
+	Href   string
+	Active bool
+	// Open draws the project expanded: it is the one being looked at, or holds
+	// the app that is. A project somebody opened by hand stays open too, but
+	// that is remembered by the browser rather than decided here.
+	Open bool
+	Apps []SidebarApp
+}
+
+// SidebarApp is one app under its project.
+type SidebarApp struct {
+	Name string
+	Href string
+	// State is an app.AppState: what the app's records say, drawn as a status
+	// dot. See appStateClass.
+	State  string
 	Active bool
 }
 
@@ -85,12 +133,27 @@ type Slots struct {
 	// commercial layer would put a balance indicator or usage meter.
 	HeaderTools templ.Component
 
-	// SidebarTop renders above the navigation — the natural home for an
-	// organisation or project switcher.
+	// SidebarTop renders under the brand, above search and the navigation:
+	// the answer to "where am I". The engine fills it with the team switcher
+	// (or the owner's name on an install without teams). A wrapping
+	// application that sets its own replaces the engine's switcher entirely —
+	// the natural place for an organisation switcher of its own. Sized for a
+	// 40px row; in the collapsed rail anything inside marked rail-hide is
+	// hidden.
 	SidebarTop templ.Component
 
-	// SidebarFooter renders at the bottom of the sidebar.
+	// SidebarFooter renders at the bottom of the sidebar: the engine puts the
+	// signed-in person's menu here — account, theme, docs, sign out.
 	SidebarFooter templ.Component
+
+	// Projects is the sidebar's Projects section, drawn after the primary
+	// (unheaded) navigation. Nil draws no section.
+	Projects *SidebarProjects
+
+	// SearchIndex is where the command palette reads the team's projects and
+	// apps from. Empty still gives a palette — of the sidebar's pages and the
+	// built-in actions — just without the team's own things in it.
+	SearchIndex string
 
 	// FullBleed drops the centred, padded content wrapper so the page fills
 	// the window and manages its own scrolling.
@@ -161,16 +224,27 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// the same question of it — whether this install has accounts at all.
 	teams := TeamsFromContext(ctx)
 
+	owner, signedIn := identity.FromContext(ctx)
+	surfaces := SurfacesFromContext(ctx)
+
 	// The switcher goes in SidebarTop — the slot documented as the home for an
 	// organisation switcher — rather than into the layout directly. A wrapping
 	// application that fills this slot with its own control replaces the
 	// engine's, which is the point of the seam: the chrome stays data.
 	//
-	// Nothing is drawn on an install with no accounts, where the person belongs
-	// to no teams and there is nothing to switch between.
+	// It answers "where am I", so it says so even where there is nothing to
+	// switch to: an operator acting as a team sees that team, and an install
+	// with no accounts sees its one owner — named, with no menu to open.
 	var switcher templ.Component
-	if len(teams) > 0 {
+	switch {
+	case surfaces.ActingAs != "":
+		// Not a menu: switching team while acting as another would leave the
+		// session in two places at once. The banner is where acting stops.
+		switcher = TeamIdentity(surfaces.ActingAs, "Support access", true)
+	case len(teams) > 0:
 		switcher = TeamSwitcher(teams)
+	case signedIn:
+		switcher = TeamIdentity(ownerLabel(owner), "Owner", false)
 	}
 
 	// The footer fills the slot documented as the bottom of the sidebar, for
@@ -183,7 +257,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// nothing is worse than an empty corner — which is also why this reads the
 	// owner with FromContext rather than MustFromContext.
 	var footer templ.Component
-	if owner, ok := identity.FromContext(ctx); ok {
+	if signedIn {
 		// Sign-out is routed only where accounts are on, and that is the same
 		// condition that gives a session teams to switch between.
 		footer = UserMenu(owner, len(teams) > 0)
@@ -193,8 +267,28 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// other notice the engine draws matters more than being told that what
 	// you are about to change is somebody else's.
 	var banner templ.Component
-	if acting := SurfacesFromContext(ctx).ActingAs; acting != "" {
+	if acting := surfaces.ActingAs; acting != "" {
 		banner = ActingBanner(acting)
+	}
+
+	// The team's projects and the deploys in flight, where there is a team
+	// to read them for.
+	ws, haveWorkspace := workspaceFromContext(ctx)
+	deployments := NavItem{Label: "Deployments", Href: "/deployments", Icon: "rocket",
+		Active: hasPrefix(path, "/deployments")}
+	if haveWorkspace && ws.LiveDeploys > 0 {
+		// Counted, not merely flagged: "3" says whether the deploy you
+		// started is the only one, which a dot cannot.
+		deployments.Badge = strconv.Itoa(ws.LiveDeploys)
+		deployments.Live = true
+	}
+	var projects *SidebarProjects
+	if haveWorkspace {
+		projects = sidebarProjects(ws, path)
+	}
+	var searchIndex string
+	if signedIn {
+		searchIndex = searchIndexPath
 	}
 
 	slots := Slots{
@@ -209,6 +303,8 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		BrandHref:     "/",
 		SidebarTop:    switcher,
 		SidebarFooter: footer,
+		Projects:      projects,
+		SearchIndex:   searchIndex,
 		Nav: []NavGroup{
 			{Items: []NavItem{
 				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
@@ -219,8 +315,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 				{Label: "Projects", Href: "/projects", Icon: "boxes",
 					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/apps") ||
 						hasPrefix(path, "/canvas")},
-				{Label: "Deployments", Href: "/deployments", Icon: "rocket",
-					Active: hasPrefix(path, "/deployments")},
+				deployments,
 			}},
 			// Everything about running the install, in one group: the teams
 			// on it, whether the cluster has room for them, and the machines
@@ -240,7 +335,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	// would be links to a 403, which reads as a broken page rather than one
 	// that belongs to somebody else — and on an install hosting customers, the
 	// cluster underneath is not theirs to be shown at all.
-	if !SurfacesFromContext(ctx).Operator {
+	if !surfaces.Operator {
 		kept := slots.Nav[:0]
 		for _, g := range slots.Nav {
 			if g.Heading != AdminNavHeading {
