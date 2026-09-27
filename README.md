@@ -210,6 +210,25 @@ configured separately to pull from an insecure registry.
 The full list, with the reasoning behind each, is in
 [`.env.example`](.env.example).
 
+## Wrapping the engine
+
+Yacht is an engine with four seams — orchestrator, identity, dashboard chrome,
+notifications — and package [`engine`](engine) is its public surface. An
+application built on it composes the same engine with overrides rather than a
+fork:
+
+```go
+cfg, _ := engine.LoadConfig()
+engine.Run(ctx, cfg, engine.Overrides{
+	Slots:    myChrome{},              // brand, header tools, banner, extra nav
+	Identity: myOrganisations,         // who a request acts as
+	Extra:    engine.ExtraRoutes{Owner: mountBilling},
+})
+```
+
+Everything commercial belongs in the wrapper: `make verify` refuses a tenant,
+subscription, invoice or wallet declared in the engine.
+
 ## Security posture
 
 Workloads are hardened by construction, not by configuration. Every namespace

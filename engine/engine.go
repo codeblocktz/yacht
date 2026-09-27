@@ -1,0 +1,544 @@
+// Package engine composes Yacht for a program to run — this repository's own
+// cmd/yacht, or an application wrapping the engine with its own identity,
+// chrome, notifications and orchestrator.
+//
+// The engine's packages are internal, which is what keeps them free to change.
+// This package is the one public surface: the four seams, as aliases of the
+// internal types so a wrapping application can name and implement them, and
+// the composition that cmd/yacht used to hold, so a wrapper runs the same
+// engine the same way with overrides rather than a copy of main.
+//
+// A wrapping application does:
+//
+//	cfg, _ := engine.LoadConfig()
+//	engine.Run(ctx, cfg, engine.Overrides{
+//		Slots:    myChrome{},          // brand, header tools, banner, extra nav
+//		Identity: myOrganisations,     // who a request acts as
+//		Extra:    engine.ExtraRoutes{Owner: mountBilling},
+//	})
+//
+// Everything the engine does — apps, deploys, builds, domains, certificates,
+// storage, teams — is unchanged underneath.
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/cluster"
+	"github.com/codeblocktz/yacht/internal/config"
+	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/notify"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
+	"github.com/codeblocktz/yacht/internal/registry"
+	"github.com/codeblocktz/yacht/internal/secret"
+	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/codeblocktz/yacht/internal/web"
+)
+
+// The seams, by their engine names. Aliases rather than copies: a value a
+// wrapper builds against these is the same type the engine consumes.
+type (
+	// Config is the engine's configuration, read from YACHT_* variables.
+	Config = config.Config
+
+	// Owner is the principal a request acts as. The engine treats ID as
+	// opaque; a wrapper may make it an organisation's.
+	Owner = identity.Owner
+	// IdentityProvider resolves a request to an Owner — seam 2.
+	IdentityProvider = identity.Provider
+
+	// Slots is the chrome around every page, as data — seam 3.
+	Slots = web.Slots
+	// SlotProvider fills the chrome for one request.
+	SlotProvider = web.SlotProvider
+	// SlotProviderFunc is a SlotProvider from a function.
+	SlotProviderFunc = web.SlotProviderFunc
+	// DefaultSlots is the engine's own chrome, to start from and adjust.
+	DefaultSlots = web.DefaultSlots
+	NavGroup     = web.NavGroup
+	NavItem      = web.NavItem
+	Crumb        = web.Crumb
+	// ExtraRoutes are routes a wrapper mounts inside the engine's role gates.
+	ExtraRoutes = web.ExtraRoutes
+
+	// Mailer delivers the engine's messages — seam 4.
+	Mailer  = notify.Mailer
+	Message = notify.Message
+
+	// Orchestrator runs workloads — seam 1.
+	Orchestrator = orchestrator.Orchestrator
+
+	// Role is a team role, for a wrapper gating pages of its own.
+	Role = account.Role
+
+	// Accounts is the engine's teams, people, invitations and sessions. A
+	// wrapper's organisations build on it rather than beside it.
+	Accounts = account.Service
+	// Apps is the engine's app service: everything about workloads.
+	Apps = app.Service
+	// Server is the engine's dashboard.
+	Server = web.Server
+	// Keeper seals secrets at rest.
+	Keeper = secret.Keeper
+)
+
+const (
+	RoleOwner  = account.RoleOwner
+	RoleAdmin  = account.RoleAdmin
+	RoleMember = account.RoleMember
+
+	// SessionCookie is the cookie the engine's sessions live in.
+	SessionCookie = web.SessionCookie
+
+	// DefaultBrandName is the engine's own name, where its chrome puts it —
+	// what a wrapper replaces.
+	DefaultBrandName = web.DefaultBrandName
+)
+
+var (
+	// LoadConfig reads the engine's configuration from the environment.
+	LoadConfig = config.Load
+	// Layout draws a page inside the engine's chrome.
+	Layout = web.Layout
+	// OwnerFromContext reads the Owner identity middleware resolved.
+	OwnerFromContext = identity.FromContext
+	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly
+	// behind the middleware.
+	MustOwnerFromContext = identity.MustFromContext
+	// NewSingleOwner and NewStaticToken are the engine's own providers, for a
+	// wrapper that wants one of them in some deployments.
+	NewSingleOwner = identity.NewSingleOwner
+	NewStaticToken = identity.NewStaticToken
+)
+
+// Overrides are what a wrapping application supplies. Every field is optional;
+// nil means the engine's own.
+type Overrides struct {
+	// Version is what the dashboard reports. cmd/yacht sets it at build time.
+	Version string
+
+	// Logger, or the engine's own text logger at the configured level.
+	Logger *slog.Logger
+
+	// Slots is the chrome: brand, navigation, header tools, banner.
+	Slots SlotProvider
+
+	// Identity resolves who a request acts as. Given the engine so it can
+	// build on Accounts, which exist by the time it is called.
+	Identity func(e *Engine) (IdentityProvider, error)
+
+	// Mailer delivers sign-in links and invitations.
+	Mailer Mailer
+
+	// Orchestrator runs workloads; nil connects to the configured cluster.
+	Orchestrator Orchestrator
+
+	// Extra is routes mounted inside the engine's role gates.
+	Extra ExtraRoutes
+
+	// AfterMigrate runs once the engine's schema is current, for a wrapper's
+	// own migrations. They share the database; a wrapper keeps its own goose
+	// version table so the two histories never collide.
+	AfterMigrate func(ctx context.Context, pool *pgxpool.Pool) error
+}
+
+// Engine is a composed, not yet running, Yacht.
+type Engine struct {
+	Config Config
+	Log    *slog.Logger
+	Pool   *pgxpool.Pool
+
+	Orchestrator Orchestrator
+	// Accounts is nil when accounts are off (no YACHT_BASE_URL).
+	Accounts *Accounts
+	Mailer   Mailer
+	Identity IdentityProvider
+	// Keeper is non-nil only with YACHT_SECRET_KEY set; Keeper.Configured
+	// reports which, and is safe on nil.
+	Keeper *Keeper
+	Apps   *Apps
+	Server *Server
+
+	resolver domain.Resolver
+}
+
+// Run composes the engine and serves it until ctx ends.
+func Run(ctx context.Context, cfg Config, ov Overrides) error {
+	e, err := New(ctx, cfg, ov)
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+	return e.Serve(ctx)
+}
+
+// New composes the engine: migrates and connects the database, connects the
+// cluster, and builds every service and the dashboard. Nothing runs yet;
+// Start or Serve does that.
+func New(ctx context.Context, cfg Config, ov Overrides) (*Engine, error) {
+	log := ov.Logger
+	if log == nil {
+		log = NewLogger(cfg.Debug)
+	}
+	version := ov.Version
+	if version == "" {
+		version = "dev"
+	}
+	log.Info("starting yacht",
+		slog.String("version", version),
+		slog.String("config", cfg.String()),
+	)
+
+	if err := store.Migrate(ctx, cfg.DatabaseURL, log); err != nil {
+		return nil, err
+	}
+	pool, err := store.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	e := &Engine{Config: cfg, Log: log, Pool: pool}
+	if ov.AfterMigrate != nil {
+		if err := ov.AfterMigrate(ctx, pool); err != nil {
+			pool.Close()
+			return nil, err
+		}
+	}
+
+	if err := e.compose(ctx, ov, version); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return e, nil
+}
+
+func (e *Engine) compose(ctx context.Context, ov Overrides, version string) error {
+	cfg, log := e.Config, e.Log
+
+	e.Orchestrator = ov.Orchestrator
+	if e.Orchestrator == nil {
+		e.Orchestrator = newOrchestrator(ctx, cfg, log)
+	}
+
+	if cfg.AccountsEnabled() {
+		e.Accounts = account.NewService(e.Pool, log)
+		e.Mailer = ov.Mailer
+		if e.Mailer == nil {
+			m, err := newMailer(cfg, log)
+			if err != nil {
+				return err
+			}
+			e.Mailer = m
+		}
+	}
+
+	if ov.Identity != nil {
+		ident, err := ov.Identity(e)
+		if err != nil {
+			return err
+		}
+		e.Identity = ident
+	} else {
+		ident, err := newIdentity(cfg, e.Accounts, log)
+		if err != nil {
+			return err
+		}
+		e.Identity = ident
+	}
+
+	if cfg.SecretKey != "" {
+		keeper, err := secret.NewKeeper(cfg.SecretKey, cfg.SecretKeyPrevious...)
+		if err != nil {
+			return err
+		}
+		e.Keeper = keeper
+		log.Info("secret key loaded",
+			slog.String("key_id", keeper.ActiveKeyID()),
+			slog.Int("retired_keys_held", len(keeper.KeyIDs())-1))
+	} else {
+		log.Warn("no YACHT_SECRET_KEY set — environment variables can be stored, " +
+			"but marking one secret will be refused rather than stored readable; " +
+			"generate a key with `openssl rand -base64 32`")
+	}
+
+	// The registry holds a push credential, so building images needs a key
+	// to seal it with; resolving a manifest needs none.
+	var images app.Images
+	var manifests app.Manifests
+	var builder app.Builder
+	registryStore := registry.New(e.Pool, e.Keeper, log)
+	manifests = registryStore
+	if e.Keeper.Configured() {
+		images = registryStore
+		if b, ok := e.Orchestrator.(orchestrator.Builder); ok {
+			builder = b
+		}
+	}
+
+	e.resolver = domain.AuthoritativeResolver{Fallback: domain.NetResolver{}}
+	if cfg.DNSResolver != "" {
+		e.resolver = domain.NewDirectResolver(cfg.DNSResolver)
+		log.Info("custom domains are resolved by one configured server",
+			slog.String("resolver", domain.ResolverName(e.resolver)))
+	}
+
+	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
+		Builder:             builder,
+		Images:              images,
+		Manifests:           manifests,
+		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
+		AppDomain:           cfg.AppDomain,
+		WildcardTLS:         cfg.WildcardTLS,
+		CertIssuer:          cfg.CertIssuer,
+		Keeper:              e.Keeper,
+		ReservedDomains:     cfg.ReservedDomains,
+		Resolver:            e.resolver,
+	})
+
+	// Yacht cannot check that the ingress controller actually has a default
+	// certificate: there is no API for "what will you serve for an unknown
+	// host". Without one, apps are served the wrong certificate rather than
+	// failing, so the one thing available is to say so plainly at startup.
+	if cfg.WildcardTLS {
+		log.Info("wildcard TLS enabled — platform hostnames are served from the "+
+			"ingress controller's default certificate; Yacht cannot verify one is "+
+			"configured",
+			slog.String("app_domain", cfg.AppDomain))
+	}
+	if cfg.CertIssuer != "" {
+		log.Info("custom domains are issued certificates",
+			slog.String("cluster_issuer", cfg.CertIssuer),
+			slog.String("needs", "public port 80 reaching the cluster, not redirected to HTTPS"))
+	}
+	if cfg.AppDomain != "" {
+		log.Info("per-app hostnames enabled",
+			slog.String("app_domain", cfg.AppDomain),
+			slog.String("dns", "point *."+cfg.AppDomain+" at this cluster"))
+	}
+
+	if err := e.Apps.EnsureOwner(ctx, cfg.OwnerID, cfg.OwnerName, ""); err != nil {
+		return err
+	}
+
+	opts := web.Options{
+		Orchestrator: e.Orchestrator,
+		Identity:     e.Identity,
+		Apps:         e.Apps,
+		Slots:        ov.Slots,
+		Extra:        ov.Extra,
+		// Accounts are a credential of their own, so the settings page must not
+		// report the install as open to anyone merely because no shared token
+		// is set.
+		Authenticated: cfg.AccountsEnabled() || !cfg.Unauthenticated(),
+		Version:       version,
+		AppDomain:     cfg.AppDomain,
+		WildcardTLS:   cfg.WildcardTLS,
+		Logger:        log,
+		Nets:          e.Apps,
+		Hooks:         e.Apps,
+		Logs:          e.Apps,
+	}
+
+	// The add-node surface only exists where a token could actually be sealed.
+	// Without a key the page could store nothing and hand out nothing, so it is
+	// left off the router entirely rather than shown and refused. Stacks and
+	// the registry are off for the same reason: each holds a credential.
+	if e.Keeper.Configured() {
+		opts.Joiner = cluster.New(e.Pool, e.Keeper, log)
+		opts.Stacks = e.Apps
+		opts.Registries = registry.New(e.Pool, e.Keeper, log)
+	} else {
+		log.Info("add-node and the image registry are off — " +
+			"set YACHT_SECRET_KEY to store a cluster join token or registry password")
+	}
+
+	if cfg.AccountsEnabled() {
+		opts.Accounts = e.Accounts
+		opts.Mailer = e.Mailer
+		opts.BaseURL = cfg.BaseURL
+		opts.MagicLinkTTL = cfg.MagicLinkTTL
+		opts.SessionTTL = cfg.SessionTTL
+		// The team the install has been running as. The first person to sign in
+		// inherits it, so the apps already deployed under YACHT_OWNER_ID stay
+		// reachable instead of belonging to an owner nobody can authenticate as.
+		opts.BootstrapTeamID = cfg.OwnerID
+		opts.BootstrapTeamName = cfg.OwnerName
+		opts.MailTransport = cfg.MailTransport()
+		opts.BootstrapEmail = cfg.OwnerEmail
+	}
+
+	srv, err := web.New(opts)
+	if err != nil {
+		return err
+	}
+	e.Server = srv
+	return nil
+}
+
+// Handler is the dashboard, with the wrapper's extra routes mounted.
+func (e *Engine) Handler() http.Handler { return e.Server.Handler() }
+
+// Start runs the engine's background work until ctx ends: the operation
+// worker that admits and executes deploys, the reconcilers, the domain
+// checker, and request logging. Every loop is safe to run in several
+// processes at once, so a wrapper may run replicas.
+func (e *Engine) Start(ctx context.Context) {
+	apps, log := e.Apps, e.Log
+
+	// Settles builds whose process went away — a restart mid-build, or a
+	// replica that stopped. Level-triggered against the Job rather than driven
+	// by anything this process remembers, so it is correct after a restart and
+	// correct when several replicas run it at once.
+	go apps.RunReleaseBackfill(ctx)
+	go apps.RunOperationAdmission(ctx)
+	go apps.RunReconciler(ctx)
+	go apps.RunAppReconciler(ctx)
+
+	// Proves claimed custom domains without anybody pressing anything. What a
+	// name resolves to is a fact any replica can look up.
+	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
+
+	// Request logging on by default: an app whose traffic is not being
+	// recorded is an app nobody can debug. In a goroutine because it talks to
+	// the cluster, and an unreachable API server must delay the dashboard
+	// coming up, not stop it.
+	go apps.EnsureHTTPLogs(ctx)
+}
+
+// Serve starts the background work and serves the dashboard on the configured
+// address until ctx ends, then shuts down within the configured timeout.
+func (e *Engine) Serve(ctx context.Context) error {
+	e.Start(ctx)
+	return ServeHTTP(ctx, e.Config.Addr, e.Handler(), e.Config.ShutdownTimeout, e.Log)
+}
+
+// Close releases the database pool. Run does this itself.
+func (e *Engine) Close() { e.Pool.Close() }
+
+// ServeHTTP serves handler on addr until ctx ends. Exposed for a wrapper that
+// composes the engine's handler into a larger one and serves that instead.
+func ServeHTTP(
+	ctx context.Context, addr string, handler http.Handler, shutdown time.Duration, log *slog.Logger,
+) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		log.Info("listening", slog.String("addr", addr))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		log.Info("shutting down")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdown)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: %w", err)
+	}
+	log.Info("stopped")
+	return nil
+}
+
+// NewLogger is the engine's own logger: text, to stdout, debug when asked.
+func NewLogger(debug bool) *slog.Logger {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+}
+
+// newOrchestrator connects to a cluster, or falls back to an in-memory stub.
+//
+// Falling back rather than exiting is deliberate: a self-hoster should be able
+// to start the dashboard, see a clear "cluster unreachable" state, and fix
+// their kubeconfig from there — rather than face a process that refuses to
+// boot and a log line they have to find.
+func newOrchestrator(ctx context.Context, cfg Config, log *slog.Logger) Orchestrator {
+	orch, err := k8s.New(ctx, k8s.Config{
+		InCluster:  cfg.KubeInCluster,
+		Kubeconfig: cfg.Kubeconfig,
+	}, log)
+	if err == nil {
+		log.Info("connected to cluster")
+		return orch
+	}
+	log.Warn("cluster unreachable — starting with an in-memory orchestrator; "+
+		"deploys will not reach a cluster until this is fixed",
+		slog.String("error", err.Error()),
+	)
+	return orchestrator.NewNoop()
+}
+
+func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProvider, error) {
+	if cfg.AccountsEnabled() {
+		log.Info("accounts enabled — requests are resolved from a session cookie "+
+			"to the team it is acting as",
+			slog.String("base_url", cfg.BaseURL),
+			slog.String("mail_transport", cfg.MailTransport()),
+			slog.Duration("session_ttl", cfg.SessionTTL),
+		)
+		// With no mail transport configured, sign-in links go to the log. That
+		// is the documented break-glass path rather than an accident, but an
+		// operator who does not know it will wait for mail that is never sent.
+		if cfg.MailTransport() == "log" {
+			log.Warn("no mail transport configured — sign-in links will be written " +
+				"to this log instead of being sent; set YACHT_SMTP_ADDR or " +
+				"YACHT_RESEND_API_KEY to deliver them")
+		}
+		return accounts.Provider(web.SessionCookie), nil
+	}
+
+	owner := Owner{ID: cfg.OwnerID, DisplayName: cfg.OwnerName}
+	if cfg.Unauthenticated() {
+		log.Warn("no YACHT_AUTH_TOKEN set — the dashboard is unauthenticated. " +
+			"Only run this way on a trusted network.")
+		return identity.NewSingleOwner(owner), nil
+	}
+	log.Info("shared-token authentication — every caller acts as the single owner",
+		slog.String("owner", cfg.OwnerID))
+	return identity.NewStaticToken(owner, cfg.AuthToken)
+}
+
+func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
+	switch {
+	case cfg.SMTPAddr != "":
+		return notify.NewSMTP(notify.SMTPConfig{
+			Addr:     cfg.SMTPAddr,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+			From:     cfg.SMTPFrom,
+		})
+	case cfg.ResendAPIKey != "":
+		return notify.NewResend(cfg.ResendAPIKey, cfg.ResendFrom)
+	default:
+		log.Warn("no mail transport configured — sign-in links will be written to " +
+			"this log, where anyone who can read it can use them")
+		return notify.NewLog(log), nil
+	}
+}
