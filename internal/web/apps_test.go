@@ -44,6 +44,13 @@ type fakeApps struct {
 	// engine; rollbackErr is what Rollback returns instead.
 	rolledBack  []string
 	rollbackErr error
+
+	// workspace, when set for an owner, is what Workspace returns for them;
+	// otherwise it is built from byOwner. dismissed records who put the
+	// checklist away; workspaceErr fails Workspace alone.
+	workspace    map[string]app.Workspace
+	dismissed    []string
+	workspaceErr error
 }
 
 func newFakeApps(apps ...app.App) *fakeApps {
@@ -813,6 +820,37 @@ func (f *fakeApps) SetPosition(_ context.Context, ownerID, name string, x, y int
 		}
 	}
 	return app.ErrNotFound
+}
+
+func (f *fakeApps) Workspace(_ context.Context, ownerID string) (app.Workspace, error) {
+	if f.workspaceErr != nil {
+		return app.Workspace{}, f.workspaceErr
+	}
+	if w, ok := f.workspace[ownerID]; ok {
+		return w, nil
+	}
+	w := app.Workspace{Onboarding: app.Onboarding{HasApps: len(f.byOwner[ownerID]) > 0}}
+	if len(f.byOwner[ownerID]) > 0 {
+		p := app.WorkspaceProject{ID: fakeProject.ID, Slug: fakeProject.Slug, Name: fakeProject.Name}
+		for _, a := range f.byOwner[ownerID] {
+			p.Apps = append(p.Apps, app.WorkspaceApp{Name: a.Name, State: app.AppServing})
+		}
+		w.Projects = []app.WorkspaceProject{p}
+	}
+	for _, o := range f.dismissed {
+		if o == ownerID {
+			w.Onboarding.Dismissed = true
+		}
+	}
+	return w, nil
+}
+
+func (f *fakeApps) DismissOnboarding(_ context.Context, ownerID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.dismissed = append(f.dismissed, ownerID)
+	return nil
 }
 
 func (f *fakeApps) ClearPositions(_ context.Context, ownerID string, _ uuid.UUID) error {

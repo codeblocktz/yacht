@@ -43,8 +43,9 @@ func TestGallery(t *testing.T) {
 	}
 
 	writeGalleryAssets(t, out)
+	writeGallerySearchIndex(t, out)
 
-	for _, g := range galleryPages() {
+	for _, g := range append(galleryPages(), chromeGalleryPages()...) {
 		path := filepath.Join(out, g.file)
 		f, err := os.Create(path)
 		if err != nil {
@@ -52,10 +53,11 @@ func TestGallery(t *testing.T) {
 		}
 		// Drawn as the operator sees it, on an install with every optional
 		// page: the gallery is for reviewing every page, and the Admin group
-		// is part of the chrome.
-		opCtx := context.WithValue(context.Background(), surfacesKey{},
+		// is part of the chrome. Signed in, in a team, with projects — the
+		// sidebar a real install draws, rather than an empty one.
+		opCtx := galleryChromeContext(context.WithValue(context.Background(), surfacesKey{},
 			Surfaces{Operator: true, Quotas: true, DNS: true, Registry: true,
-				ActingAs: g.actingAs})
+				ActingAs: g.actingAs}), g)
 		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
@@ -76,6 +78,12 @@ func TestGallery(t *testing.T) {
 		if err := Layout(slots, g.page).Render(opCtx, f); err != nil {
 			f.Close()
 			t.Fatalf("render %s: %v", g.file, err)
+		}
+		// A state only a person can put the page in — a menu open, the rail
+		// collapsed — is put there by a script after the page's own have run.
+		if g.boot != "" {
+			fmt.Fprintf(f, "<script>window.addEventListener(\"load\", function () {"+
+				" setTimeout(function () { %s }, 60); });</script>\n", g.boot)
 		}
 		f.Close()
 		t.Logf("wrote %s", path)
@@ -131,6 +139,14 @@ type galleryPage struct {
 
 	// actingAs draws the page as an operator acting as this team sees it.
 	actingAs string
+
+	// boot is script run once the page has loaded, to put the chrome in a
+	// state only interaction reaches: the rail, an open menu, the palette.
+	boot string
+
+	// solo draws the chrome of an install with no accounts: one owner, no
+	// teams to switch between.
+	solo bool
 }
 
 // section renders a labelled band so several states can share one image.

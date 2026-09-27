@@ -63,6 +63,7 @@ func TestTemplatesOnlyUseClassesThatExist(t *testing.T) {
 		"group": true, "peer": true, "sr": true, "antialiased": true,
 		"tabular": true, "nums": true, "mono": true, "invisible": true, "visible": true,
 		"inline-flex": true, "inline-block": true, "inline-grid": true,
+		"sr-only": true,
 	}
 
 	files, err := filepath.Glob(filepath.Join(".", "*.templ"))

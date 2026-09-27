@@ -169,7 +169,7 @@ ON CONFLICT (id) DO UPDATE
     SET display_name = EXCLUDED.display_name,
         email        = EXCLUDED.email,
         updated_at   = now()
-RETURNING id, display_name, email, created_at, updated_at
+RETURNING id, display_name, email, created_at, updated_at, onboarding_dismissed_at
 `
 
 type CreateTeamRowParams struct {
@@ -193,6 +193,7 @@ func (q *Queries) CreateTeamRow(ctx context.Context, arg CreateTeamRowParams) (T
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OnboardingDismissedAt,
 	)
 	return i, err
 }
@@ -424,7 +425,7 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 }
 
 const getTeamRow = `-- name: GetTeamRow :one
-SELECT id, display_name, email, created_at, updated_at FROM teams WHERE id = $1
+SELECT id, display_name, email, created_at, updated_at, onboarding_dismissed_at FROM teams WHERE id = $1
 `
 
 func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
@@ -436,6 +437,7 @@ func (q *Queries) GetTeamRow(ctx context.Context, id string) (Team, error) {
 		&i.Email,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OnboardingDismissedAt,
 	)
 	return i, err
 }

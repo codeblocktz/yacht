@@ -334,56 +334,314 @@
 
   /* ---- navigation -------------------------------------------------- */
 
+  /* One row height for everything a person clicks in the sidebar — links,
+     projects, the switcher's items, the menus — so the column reads as one
+     list at one rhythm rather than several lists of slightly different
+     sizes. 32px rows of 13px type: dense, but each row is still a target
+     you can hit without aiming. */
+  .nav-section {
+    @apply flex flex-col gap-px;
+  }
+  /* Headings are quiet and set apart by space above them rather than by
+     rules or weight: they label a block, they are not a block. */
   .nav-group {
-    @apply px-2 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.09em]
-           text-muted-foreground/70;
+    @apply flex h-7 items-end px-2 pb-1 pt-5 text-[10.5px] font-medium uppercase
+           tracking-[0.08em] text-muted-foreground/70 box-content;
   }
   .nav-item {
-    @apply relative flex items-center gap-2.5 rounded-md px-2 py-1.5
+    @apply relative flex h-8 shrink-0 items-center gap-2.5 rounded-md px-2
            text-[13px] text-muted-foreground transition-colors
-           hover:bg-sidebar-accent hover:text-foreground;
+           hover:bg-sidebar-accent/70 hover:text-foreground
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
   }
+  /* Active is a filled row and a brighter icon, not a border or a bar: the
+     fill is enough to find it, and anything louder competes with the page. */
   .nav-active {
-    @apply bg-sidebar-accent text-foreground font-medium;
+    @apply bg-sidebar-accent text-foreground font-medium hover:bg-sidebar-accent;
+  }
+  /* The section you are in, when the tree below is showing exactly where:
+     bright, but not filled, so the sidebar has one filled row and not two. */
+  .nav-parent {
+    @apply bg-transparent hover:bg-sidebar-accent/70;
+  }
+
+  /* A count beside a link. In the in-flight colour when it counts something
+     happening now, with the same pulse a running deploy has everywhere else. */
+  .nav-badge {
+    @apply ml-auto inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center
+           gap-1 rounded-full bg-muted px-1.5 text-[10.5px] font-semibold tabular-nums
+           text-muted-foreground;
+  }
+  .nav-badge-live {
+    @apply bg-info/15 text-info;
+  }
+  .nav-badge-live::before {
+    content: "";
+    @apply size-[5px] rounded-full bg-current;
+    animation: yacht-pulse 1.8s ease-out infinite;
+  }
+  /* The rail's version of the badge: no room for a number, room for a dot. */
+  .nav-dot {
+    @apply pointer-events-none absolute right-2 top-1.5 hidden size-[7px] rounded-full
+           bg-muted-foreground ring-2 ring-sidebar;
+  }
+  .nav-dot-live { @apply bg-info; }
+
+  /* The operator's pages: apart from the rest, at the foot of the list, under
+     a hairline. margin-top:auto is what pushes them down when there is room
+     and lets them scroll with everything else when there is not. */
+  .nav-admin {
+    @apply mt-auto pt-4;
+  }
+  .nav-admin > .nav-section:first-child {
+    @apply border-t border-sidebar-border;
+  }
+  .nav-admin .nav-group {
+    @apply pt-3;
+  }
+
+  /* ---- the sidebar's three bands ------------------------------------ */
+
+  .sidebar-head {
+    @apply flex shrink-0 flex-col gap-1.5 px-2.5 pb-2 pt-3;
+  }
+  .brand {
+    @apply relative mb-1 flex h-8 items-center gap-2.5 rounded-md px-2 text-[14px]
+           font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-ring/50;
+  }
+  /* The middle band is the only one that scrolls, so the team and the person
+     never leave the screen. min-h-full on the nav is what lets the Admin
+     section sit at the bottom of a short list. */
+  .sidebar-body {
+    @apply min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 pb-5 pt-1;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    /* The list fades at its edges rather than being cut: a row sliced in
+       half at the bottom reads as a rendering fault, a fade reads as "more
+       below". The padding is what the fade covers once scrolled to the end,
+       so the last row is never the one faded. */
+    mask-image: linear-gradient(to bottom, transparent, #000 6px, #000 calc(100% - 20px), transparent);
+  }
+  .sidebar-nav {
+    @apply flex min-h-full flex-col;
+  }
+  .sidebar-foot {
+    @apply shrink-0 border-t border-sidebar-border px-2.5 py-2;
+  }
+
+  /* Search, drawn as a field: it says "type here" in a way an icon cannot. */
+  .sidebar-search {
+    @apply relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border
+           border-sidebar-border bg-background/70 px-2 text-[12.5px] text-muted-foreground
+           transition-colors hover:border-border hover:bg-sidebar-accent/70 hover:text-foreground
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .kbd {
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded border
+           border-border bg-muted/70 px-1 font-sans text-[10.5px] font-medium leading-none
+           text-muted-foreground;
+  }
+
+  /* ---- project tree ------------------------------------------------ */
+
+  .tree {
+    @apply flex flex-col gap-px;
+  }
+  .tree-row {
+    @apply relative flex items-center;
+  }
+  .tree-item {
+    @apply relative flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2
+           text-[13px] text-muted-foreground transition-colors
+           hover:bg-sidebar-accent/70 hover:text-foreground
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  /* Room at the right for the chevron, which sits over the row. */
+  .tree-row > .tree-item {
+    @apply pr-8;
+  }
+  .tree-active {
+    @apply bg-sidebar-accent font-medium text-foreground hover:bg-sidebar-accent;
+  }
+  /* Apps sit under their project on a guide line, indented to the project's
+     name, at a slightly shorter row: they are the detail of the row above. */
+  .tree-group {
+    @apply relative ml-[17px] hidden flex-col gap-px border-l border-sidebar-border py-0.5 pl-1.5;
+  }
+  .tree-node[data-open] > .tree-group {
+    @apply flex;
+  }
+  .tree-leaf {
+    @apply h-7 gap-2 text-[12.5px];
+  }
+  .tree-avatar {
+    @apply grid size-4 shrink-0 place-items-center rounded-[4px] bg-foreground/[0.08]
+           text-[9px] font-semibold uppercase leading-none text-muted-foreground;
+  }
+  .tree-active .tree-avatar {
+    @apply bg-foreground/15 text-foreground;
+  }
+  .tree-dot {
+    @apply mx-[5px] size-[6px] shrink-0 rounded-full bg-current;
+  }
+  .tree-dot.status-live {
+    animation: yacht-pulse 1.8s ease-out infinite;
+  }
+  .tree-count {
+    @apply ml-auto text-[11px] tabular-nums text-muted-foreground/70;
+  }
+  .tree-live {
+    @apply ml-auto size-[6px] shrink-0 rounded-full bg-current;
+    animation: yacht-pulse 1.8s ease-out infinite;
+  }
+  .tree-live + .tree-count { @apply ml-0; }
+  /* An open project is showing its apps; the count of them is noise. */
+  .tree-node[data-open] > .tree-row .tree-count {
+    @apply invisible;
+  }
+  .tree-toggle {
+    @apply absolute right-1 top-1/2 grid size-6 -translate-y-1/2 cursor-pointer
+           place-items-center rounded text-muted-foreground opacity-0 transition
+           hover:bg-foreground/10 hover:text-foreground;
+  }
+  .tree-row:hover .tree-toggle,
+  .tree-row:focus-within .tree-toggle,
+  .tree-node[data-open] > .tree-row .tree-toggle {
+    @apply opacity-100;
+  }
+  .tree-node[data-open] > .tree-row .tree-toggle svg {
+    @apply rotate-90;
+  }
+  .tree-toggle svg {
+    @apply transition-transform duration-150;
+  }
+  .tree-extra {
+    @apply flex h-8 items-center gap-2.5 rounded-md px-2 text-[12.5px]
+           text-muted-foreground/80 transition-colors hover:bg-sidebar-accent/70
+           hover:text-foreground focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-ring/50;
   }
 
   /* ---- sidebar controls -------------------------------------------- */
 
-  /* The team switcher and the user menu are bounded controls rather than
-     nav rows. Both change what the whole dashboard is scoped by, and a
-     control with that much reach should not look like one more link: the
-     border and the lighter fill are what say "this opens something". */
+  /* The team switcher and the user menu: a 40px row with a square (team) or
+     round (person) avatar, a name over a muted second line, and the up-down
+     chevron that says it opens. No border — the chevron and the place it sits
+     are what say this is a control rather than a link. */
   .switcher {
-    @apply relative flex w-full cursor-pointer list-none items-center gap-2
-           rounded-lg border border-sidebar-border bg-background px-2 py-1.5
-           text-[12.5px] transition-colors hover:border-border
-           hover:bg-sidebar-accent [&::-webkit-details-marker]:hidden;
+    @apply relative flex w-full cursor-pointer list-none items-center gap-2.5 rounded-md
+           px-1.5 py-1 min-h-10 text-left transition-colors hover:bg-sidebar-accent/70
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50
+           [&::-webkit-details-marker]:hidden;
+  }
+  .switcher-static {
+    @apply cursor-default hover:bg-transparent;
   }
   /* Open is a held state, not a hover: while the menu is down the control
-     stays lit, so it is obvious which one the panel belongs to. Expressed
-     against the parent's open attribute rather than as a class the template
-     has to remember to add. */
+     stays lit, so it is obvious which one the panel belongs to. */
   details[open] > .switcher {
-    @apply border-border bg-sidebar-accent;
+    @apply bg-sidebar-accent;
+  }
+  .switcher-chevron {
+    @apply shrink-0 text-muted-foreground;
   }
   .switcher-menu {
-    @apply absolute z-30 flex min-w-[210px] flex-col gap-px rounded-lg border
-           border-border bg-popover p-1 shadow-lg;
+    @apply absolute z-30 flex min-w-[232px] flex-col gap-px rounded-lg border
+           border-border bg-popover p-1 text-popover-foreground shadow-lg;
+  }
+  .menu-down { @apply left-0 right-0 top-full mt-1; }
+  .menu-up   { @apply bottom-full left-0 right-0 mb-1; }
+  @keyframes yacht-menu-in {
+    from { opacity: 0; transform: translateY(-3px) scale(0.985); }
+    to   { opacity: 1; transform: none; }
+  }
+  details[open] > .switcher-menu {
+    animation: yacht-menu-in 0.12s ease-out;
   }
   .switcher-item {
-    @apply flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5
-           text-left text-[12.5px] text-muted-foreground transition-colors
-           hover:bg-muted hover:text-foreground;
+    @apply flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2
+           text-left text-[13px] text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground focus-visible:outline-none
+           focus-visible:bg-accent focus-visible:text-foreground;
   }
   /* Sign-out ends sessions, so it is coloured as the destructive thing it
-     is rather than sitting flush with Settings. */
+     is rather than sitting flush with everything else. */
   .switcher-danger {
-    @apply text-destructive hover:bg-destructive/10 hover:text-destructive;
+    @apply text-destructive hover:bg-destructive/10 hover:text-destructive
+           focus-visible:bg-destructive/10 focus-visible:text-destructive;
   }
-  .avatar {
-    @apply grid size-5 shrink-0 place-items-center rounded-[5px] bg-brand/15
-           text-[9px] font-semibold uppercase text-brand ring-1 ring-inset
-           ring-brand/25;
+  .switcher-quiet {
+    @apply h-7 text-[12px] text-muted-foreground/80;
+  }
+  .menu-label {
+    @apply px-2 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground/80;
+  }
+  .menu-sep {
+    @apply -mx-1 my-1 h-px bg-border;
+  }
+  .menu-check { @apply shrink-0 text-foreground; }
+  .menu-trail { @apply shrink-0 text-muted-foreground/70; }
+  .menu-trail svg { @apply size-3.5; }
+
+  /* Light, dark, system: three choices on one row, the chosen one filled. */
+  .menu-theme {
+    @apply flex h-9 items-center justify-between gap-2 px-2 text-[13px] text-muted-foreground;
+  }
+  .menu-theme-label {
+    @apply flex items-center gap-2;
+  }
+  .seg {
+    @apply inline-flex items-center gap-px rounded-md border border-border bg-muted/50 p-0.5;
+  }
+  .seg-item {
+    @apply grid size-6 cursor-pointer place-items-center rounded-[5px] text-muted-foreground
+           transition-colors hover:text-foreground focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .seg-item svg { @apply size-3.5; }
+  .seg-item[aria-checked="true"] {
+    @apply bg-background text-foreground shadow-sm;
+  }
+
+  /* A team is a square, a person is a circle — the shape says which you are
+     looking at before the name does. */
+  .team-avatar {
+    @apply grid size-7 shrink-0 place-items-center rounded-md bg-brand/15 text-[11px]
+           font-semibold uppercase text-brand ring-1 ring-inset ring-brand/25;
+  }
+  .team-avatar-sm {
+    @apply size-5 rounded-[5px] text-[9px];
+  }
+  .team-avatar-acting {
+    @apply bg-warning/15 text-warning ring-warning/30;
+  }
+  .user-avatar {
+    @apply grid size-7 shrink-0 place-items-center rounded-full bg-foreground/10
+           text-[11px] font-semibold uppercase text-foreground;
+  }
+
+  /* ---- top bar ----------------------------------------------------- */
+
+  .topbar {
+    @apply flex h-12 shrink-0 items-center gap-2 border-b border-border px-3 sm:px-4;
+  }
+  .topbar-sep {
+    @apply mx-1 h-4 w-px bg-border;
+  }
+  .crumbs {
+    @apply min-w-0 text-[13px];
+  }
+  .crumb {
+    @apply block truncate rounded px-1 py-0.5 text-muted-foreground transition-colors
+           hover:text-foreground focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-ring/50;
+  }
+  .crumb-current {
+    @apply font-medium text-foreground;
+  }
+  .crumb-sep {
+    @apply select-none text-muted-foreground/40;
   }
 
   /* ---- collapsed rail ---------------------------------------------- */
@@ -399,17 +657,17 @@
      It used to carry `hidden md:flex` in the markup, which is a second place
      deciding the same thing and one a media query here has to fight. */
   .sidebar {
-    @apply flex w-[228px] shrink-0 flex-col gap-px border-r border-sidebar-border
-           bg-sidebar px-2.5 py-3 transition-[width] duration-150 ease-out;
+    @apply flex w-[244px] shrink-0 flex-col border-r border-sidebar-border
+           bg-sidebar transition-[width] duration-150 ease-out;
   }
 
   /* Below md the sidebar is a drawer over the page rather than a column beside
-     it: at 390px a 228px column leaves no room for the thing you came to read.
+     it: at 390px a 244px column leaves no room for the thing you came to read.
      Everything in it — the nav, the switcher, the footer — is the same markup,
      because a second copy for small screens is a second copy to keep correct. */
   @media (max-width: 767px) {
     .sidebar {
-      @apply fixed bottom-0 left-0 top-0 z-50 w-[268px] -translate-x-full
+      @apply fixed bottom-0 left-0 top-0 z-50 w-[284px] max-w-[86vw] -translate-x-full
              transition-transform shadow-xl;
     }
     :root[data-nav="open"] .sidebar { @apply translate-x-0; }
@@ -422,7 +680,11 @@
 
     /* The collapsed rail is a desktop idea. On a drawer it would leave a 56px
        strip of icons over the page, which is neither the drawer nor the page. */
-    :root[data-sidebar="collapsed"] .sidebar { @apply w-[268px]; }
+    :root[data-sidebar="collapsed"] .sidebar { @apply w-[284px]; }
+
+    /* A finger, not a pointer: rows a little taller in the drawer. */
+    .nav-item, .tree-item, .tree-extra { @apply h-9; }
+    .tree-leaf { @apply h-8; }
   }
 
   /* The backdrop does not exist above md, where the sidebar takes its own
@@ -431,14 +693,121 @@
     .nav-backdrop { @apply hidden; }
   }
 
-  /* The rail has no room for a label, so the name has to arrive on hover.
-     A real element rather than title=, which waits a second, cannot be
-     styled, and reads as a browser artefact rather than part of the app. */
+  /* The rail has no room for a label, so the name has to arrive on hover —
+     and on keyboard focus, or the rail is a row of unlabelled icons to
+     somebody tabbing through it. A real element rather than title=, which
+     waits a second, cannot be styled, and reads as a browser artefact. */
   .nav-tip {
-    @apply pointer-events-none absolute left-full top-1/2 z-40 ml-2 hidden
-           -translate-y-1/2 whitespace-nowrap rounded-md border border-border
+    @apply pointer-events-none absolute left-full top-1/2 z-40 ml-3 hidden
+           -translate-y-1/2 items-center gap-2 whitespace-nowrap rounded-md border border-border
            bg-popover px-2 py-1 text-[12px] font-normal text-foreground
            shadow-md;
+  }
+  .nav-tip-badge {
+    @apply text-[11px] text-muted-foreground;
+  }
+
+  /* ---- command palette --------------------------------------------- */
+
+  @keyframes yacht-palette-in {
+    from { opacity: 0; transform: translate(-50%, -6px) scale(0.985); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
+  }
+  .palette {
+    @apply fixed left-1/2 top-[12vh] m-0 flex max-h-[min(560px,76vh)] w-[calc(100%-2rem)]
+           max-w-[620px] -translate-x-1/2 flex-col overflow-hidden rounded-xl border
+           border-border bg-popover p-0 text-popover-foreground shadow-2xl
+           backdrop:bg-black/40;
+  }
+  .palette:not([open]) { @apply hidden; }
+  .palette[open] { animation: yacht-palette-in 0.14s ease-out; }
+  .palette-bar {
+    @apply flex h-12 shrink-0 items-center gap-2.5 border-b border-border px-4 text-muted-foreground;
+  }
+  .palette-input {
+    @apply h-full min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none
+           placeholder:text-muted-foreground/70;
+  }
+  /* The action a pick belongs to, as a chip before the field: "Add a custom
+     domain ›" and then the list of apps to add it to. */
+  .palette-scope {
+    @apply inline-flex shrink-0 items-center gap-1 rounded-md bg-muted px-1.5 py-0.5
+           text-[12px] font-medium text-foreground;
+  }
+  .palette-list {
+    @apply min-h-0 flex-1 overflow-y-auto p-1.5;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .palette-group {
+    @apply px-2.5 pb-1 pt-2.5 text-[11px] font-medium text-muted-foreground/80;
+  }
+  .palette-opt {
+    @apply flex h-9 cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-[13px]
+           text-muted-foreground;
+  }
+  .palette-opt[aria-selected="true"] {
+    @apply bg-accent text-foreground;
+  }
+  .palette-opt > svg { @apply opacity-70; }
+  .palette-opt[aria-selected="true"] > svg { @apply opacity-100; }
+  .palette-name { @apply min-w-0 truncate text-foreground; }
+  .palette-name mark { @apply bg-transparent font-semibold text-foreground underline decoration-foreground/30 underline-offset-2; }
+  .palette-detail { @apply ml-auto shrink-0 truncate pl-3 text-[12px] text-muted-foreground; }
+  .palette-enter { @apply hidden shrink-0 text-muted-foreground; }
+  .palette-opt[aria-selected="true"] .palette-enter { @apply block; }
+  .palette-empty {
+    @apply px-3 py-10 text-center text-[13px] text-muted-foreground;
+  }
+  .palette-foot {
+    @apply flex shrink-0 items-center gap-4 border-t border-border px-4 py-2 text-[11.5px]
+           text-muted-foreground;
+  }
+  .palette-foot > span { @apply inline-flex items-center gap-1; }
+  @media (max-width: 639px) {
+    .palette { @apply top-3; }
+    .palette-foot { @apply hidden; }
+  }
+
+  /* ---- getting started --------------------------------------------- */
+
+  .onboard-progress {
+    @apply hidden h-1 w-24 overflow-hidden rounded-full bg-muted sm:block;
+  }
+  .onboard-progress > i {
+    @apply block h-full rounded-full bg-success;
+  }
+  .onboard-steps {
+    @apply divide-y divide-border;
+  }
+  .onboard-step {
+    @apply flex items-center gap-3.5 px-4 py-3;
+  }
+  .onboard-check {
+    @apply grid size-6 shrink-0 place-items-center rounded-full border border-border
+           text-[11px] font-medium text-muted-foreground;
+  }
+  .onboard-check svg { @apply size-3.5; }
+  .onboard-next .onboard-check {
+    @apply border-foreground/40 text-foreground;
+  }
+  .onboard-done .onboard-check {
+    @apply border-success bg-success text-background;
+  }
+  .onboard-title {
+    @apply text-[13px] font-medium text-foreground;
+  }
+  .onboard-done .onboard-title {
+    @apply text-muted-foreground line-through decoration-muted-foreground/40;
+  }
+  .onboard-detail {
+    @apply mt-0.5 text-[12px] text-muted-foreground;
+  }
+  .onboard-done .onboard-detail { @apply hidden; }
+
+  .empty-mark {
+    @apply mb-2 grid size-10 place-items-center rounded-full border border-border bg-muted/50
+           text-muted-foreground;
   }
 
   /* ---- forms ------------------------------------------------------- */
@@ -650,7 +1019,7 @@
 }
 
 /* The collapsed rail.
-   
+
    In the utilities layer rather than with the rest of the sidebar, because
    each of these overrides a utility written directly on the element it
    targets — display:none against a `flex` on the switcher label, left:100%
@@ -658,40 +1027,95 @@
    utilities come after components, so in the components layer these rules lose
    however specific they are. The symptom is not a broken page: the rail
    collapses to 56px and the label it cannot fit stays visible inside it.
-   
+
    Here they are in the same layer as what they fight, where the extra
    specificity of :root[...] settles it. */
 @layer utilities {
-  :root[data-sidebar="collapsed"] .sidebar { width: 56px; }
-  :root[data-sidebar="collapsed"] .rail-hide { display: none; }
-  :root[data-sidebar="collapsed"] .sidebar .nav-item,
-  :root[data-sidebar="collapsed"] .sidebar .switcher,
-  :root[data-sidebar="collapsed"] .sidebar .brand {
-    justify-content: center;
-    gap: 0;
-    padding-inline: 0;
+  /* Icons are quieter than the words beside them and brighten with the row:
+     the icon column is how the eye finds a row, and at full strength a
+     column of fifteen glyphs is louder than the labels it is there to find.
+     Here rather than in components because icon() carries opacity-70 itself. */
+  .sidebar .nav-item > svg,
+  .sidebar .tree-extra > svg,
+  .sidebar .sidebar-search > svg,
+  .sidebar .switcher-item > svg { opacity: 0.6; transition: opacity 0.15s; }
+  .sidebar .nav-item:hover > svg,
+  .sidebar .nav-active > svg,
+  .sidebar .tree-extra:hover > svg,
+  .sidebar .sidebar-search:hover > svg,
+  .sidebar .switcher-item:hover > svg,
+  .sidebar .switcher-item:focus-visible > svg { opacity: 1; }
+  .sidebar .switcher-chevron > svg { opacity: 0.7; }
+
+  /* Only above md: below it the sidebar is a drawer, and the drawer is the
+     whole sidebar whatever the rail was left as. */
+  @media (min-width: 768px) {
+    :root[data-sidebar="collapsed"] .sidebar { width: 56px; }
+    :root[data-sidebar="collapsed"] .rail-hide { display: none; }
+    :root[data-sidebar="collapsed"] .sidebar .nav-item,
+    :root[data-sidebar="collapsed"] .sidebar .switcher,
+    :root[data-sidebar="collapsed"] .sidebar .sidebar-search,
+    :root[data-sidebar="collapsed"] .sidebar .brand {
+      justify-content: center;
+      gap: 0;
+      padding-inline: 0;
+    }
+    :root[data-sidebar="collapsed"] .sidebar-head,
+    :root[data-sidebar="collapsed"] .sidebar-body,
+    :root[data-sidebar="collapsed"] .sidebar-foot {
+      padding-inline: 0.5rem;
+    }
+    /* The search field becomes a square button the size of a nav row. */
+    :root[data-sidebar="collapsed"] .sidebar .sidebar-search {
+      border-color: transparent;
+      background: transparent;
+    }
+    /* In the rail nothing scrolls, so nothing clips the tooltips and menus
+       that open beside it. The rail's column of icons fits any window a
+       desktop has; the long lists that needed scrolling are hidden in it. */
+    /* No fade either: a mask clips everything painted outside the box. */
+    :root[data-sidebar="collapsed"] .sidebar-body { overflow: visible; mask-image: none; }
+    /* The tree is hidden here, so its section is the place again. */
+    :root[data-sidebar="collapsed"] .sidebar .nav-parent { background-color: var(--sidebar-accent); }
+    :root[data-sidebar="collapsed"] .sidebar .nav-dot { display: block; }
+
+    /* A menu anchored to the sidebar's own width has nowhere to go once that
+       width is 56px, so in the rail both menus open beside it instead. */
+    :root[data-sidebar="collapsed"] .switcher-menu {
+      left: 100%;
+      right: auto;
+      margin-left: 0.75rem;
+      width: 240px;
+    }
+    :root[data-sidebar="collapsed"] .menu-down { top: 0; margin-top: 0; }
+    :root[data-sidebar="collapsed"] .menu-up { bottom: 0; margin-bottom: 0; }
+
+    /* The rail has no room for a group name, but the grouping still carries
+       meaning — so the heading becomes the rule it was already implying. */
+    :root[data-sidebar="collapsed"] .nav-group {
+      margin-inline: auto;
+      margin-block: 0.625rem;
+      height: 1px;
+      width: 1.25rem;
+      overflow: hidden;
+      padding: 0;
+      background-color: var(--border);
+      color: transparent;
+    }
+    :root[data-sidebar="collapsed"] .nav-admin > .nav-section:first-child { border-top-width: 0; }
+    :root[data-sidebar="collapsed"] .sidebar :hover > .nav-tip,
+    :root[data-sidebar="collapsed"] .sidebar :focus-visible > .nav-tip { display: flex; }
+    /* An open menu is its own label. */
+    :root[data-sidebar="collapsed"] .sidebar details[open] > summary > .nav-tip { display: none; }
   }
-  /* A menu anchored to the sidebar's own width has nowhere to go once that
-     width is 56px, so in the rail both menus open beside it instead. */
-  :root[data-sidebar="collapsed"] .switcher-menu {
-    left: 100%;
-    right: auto;
-    margin-left: 0.5rem;
-    width: 220px;
+
+  /* Motion is decoration everywhere in the chrome, and none of it carries
+     meaning a still frame does not. */
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar, .palette[open], details[open] > .switcher-menu,
+    .tree-toggle svg, .nav-backdrop { transition: none; animation: none; }
+    .nav-badge-live::before, .tree-dot.status-live, .tree-live { animation: none; }
   }
-  /* The rail has no room for a group name, but the grouping still carries
-     meaning — so the heading becomes the rule it was already implying. */
-  :root[data-sidebar="collapsed"] .nav-group {
-    margin-inline: auto;
-    margin-block: 0.5rem;
-    height: 1px;
-    width: 1.25rem;
-    overflow: hidden;
-    padding: 0;
-    background-color: var(--border);
-    color: transparent;
-  }
-  :root[data-sidebar="collapsed"] .sidebar :hover > .nav-tip { display: block; }
 }
 
 @layer components {

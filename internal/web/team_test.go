@@ -183,7 +183,10 @@ func TestSwitcherListsOnlyYourTeams(t *testing.T) {
 		t.Fatalf("no team switcher on the page:\n%s", body)
 	}
 	for _, want := range []string{
-		`value="web-switch-list"`, `value="web-switch-list-mine"`, "My Other Team",
+		// The team the session is in is listed, checked, rather than
+		// offered as a switch to where you already are.
+		`data-team="web-switch-list"`, `aria-checked="true"`,
+		`value="web-switch-list-mine"`, "My Other Team",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the switcher is missing %q — a team the person belongs to is "+

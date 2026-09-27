@@ -70,6 +70,14 @@ type (
 	NavGroup     = web.NavGroup
 	NavItem      = web.NavItem
 	Crumb        = web.Crumb
+	// SidebarProjects is the sidebar's project tree, which DefaultSlots fills
+	// from the team's projects; SidebarProject and SidebarApp are its rows.
+	// A wrapper that sets Slots.SidebarTop replaces the engine's team
+	// switcher with its own; every NavItem it adds is also a page in the
+	// command palette, with nothing to register.
+	SidebarProjects = web.SidebarProjects
+	SidebarProject  = web.SidebarProject
+	SidebarApp      = web.SidebarApp
 	// ExtraRoutes are routes a wrapper mounts inside the engine's role gates.
 	ExtraRoutes = web.ExtraRoutes
 	// Surfaces is which optional pages a request is offered, including
