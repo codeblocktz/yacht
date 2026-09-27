@@ -332,6 +332,20 @@ type AppDetailData struct {
 	// Error is a refusal from the action that produced this render, shown with
 	// the form that caused it rather than carried through a redirect.
 	Error string
+
+	// Deploy on push. HooksOn is whether the section is offered at all: a Git
+	// app on an install with the webhook surface mounted.
+	HooksOn bool
+	Hook    app.Hook
+	HookURL string
+
+	// HookURLPublic says HookURL is on the configured public URL rather than
+	// guessed from this request, which may be a tunnel nothing else can reach.
+	HookURLPublic bool
+
+	// HookSecret is set only on the response that issued it. It is never read
+	// back, so this is the one render that can show it.
+	HookSecret string
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -939,6 +953,9 @@ templ appSettings(d AppDetailData) {
 		// findable with the browser's own search.
 		<nav class="settings-nav" aria-label="Settings sections">
 			<a href="#source">Source</a>
+			if d.HooksOn {
+				<a href="#push">Deploy on push</a>
+			}
 			<a href="#networking">Networking</a>
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
@@ -947,9 +964,112 @@ templ appSettings(d AppDetailData) {
 		</nav>
 		<div class="settings-main">
 			@appRuntimeForm(d)
+			// Outside the runtime form: its buttons are forms of their own,
+			// and a form cannot sit inside another.
+			if d.HooksOn {
+				@appPushSection(d)
+			}
 			@appLegacySettings(d)
 		</div>
 	</div>
+}
+
+// appPushSection is deploy on push: the webhook a Git host calls when the
+// branch this app builds moves.
+//
+// Laid out as what the host's form asks for — URL, secret, content type,
+// events — each copyable, for the same reason the DNS record is: these are
+// values retyped into another system's form, and prose is the wrong shape.
+templ appPushSection(d AppDetailData) {
+	{{ a := d.App }}
+	<section id="push" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("rocket")</span>
+			<h2 class="settings-section-title">Deploy on push</h2>
+		</div>
+		<div class="panel mb-5">
+			<div class="panel-body">
+				if !d.Hook.Enabled {
+					<p class="text-[12.5px] text-muted-foreground">
+						Every push to <code class="mono text-foreground">{ a.Repo.Ref() }</code> builds and
+						deploys it, the same as pressing Redeploy. It takes a webhook on the repository,
+						which turning this on gives you the address and secret for.
+					</p>
+					<form class="mt-4" method="post" action={ templ.URL("/apps/" + a.Name + "/hook") }>
+						<button class="btn btn-primary" type="submit">Turn on</button>
+					</form>
+				} else {
+					<p class="text-[12.5px] text-muted-foreground">
+						Add a webhook to the repository with these values. Pushes to
+						<code class="mono text-foreground">{ a.Repo.Ref() }</code> deploy; every other branch
+						and tag is ignored.
+					</p>
+					<div class="record mt-3">
+						@recordRow("URL", d.HookURL)
+						if d.HookSecret != "" {
+							@recordRow("Secret", d.HookSecret)
+						} else {
+							<div class="record-row">
+								<span class="record-k">Secret</span>
+								<span class="min-w-0 flex-1 text-[12px] text-muted-foreground">
+									Shown once, { relativeTime(d.Hook.CreatedAt) }. Issue a new one to see it again.
+								</span>
+							</div>
+						}
+						@recordRow("Type", "application/json")
+						@recordRow("Events", "push")
+					</div>
+					if !d.HookURLPublic {
+						<div class="callout mt-3">
+							<div class="min-w-0 text-[12px] text-muted-foreground">
+								This address is the one your browser used, which the Git host may not be able to
+								reach. Set <code class="mono">YACHT_BASE_URL</code> to the dashboard's public
+								address and it is used here instead.
+							</div>
+						</div>
+					}
+					<p class="mt-3 text-[11.5px] text-muted-foreground">
+						GitHub: Settings → Webhooks → Add webhook, with the secret in Secret.
+						GitLab: Settings → Webhooks, with the secret in Secret token.
+						Gitea and Forgejo: Settings → Webhooks → Gitea.
+					</p>
+					<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
+						if d.Hook.LastDeliveryAt.IsZero() {
+							<span>No deliveries yet.</span>
+						} else {
+							<span title={ absoluteTime(d.Hook.LastDeliveryAt) }>
+								Last delivery { preciseAgo(d.Hook.LastDeliveryAt) }: { d.Hook.LastDelivery }
+							</span>
+						}
+						if d.Hook.Pending {
+							<span class="text-border">&middot;</span>
+							<span>A push is waiting for the deploy in flight.</span>
+						}
+					</div>
+					<div class="mt-4 flex flex-wrap gap-2">
+						<form
+							method="post"
+							action={ templ.URL("/apps/" + a.Name + "/hook") }
+							data-confirm="The current secret stops working at once. Deliveries fail until the new one is pasted into the Git host."
+							data-confirm-title="Issue a new secret?"
+							data-confirm-label="Issue new secret"
+						>
+							<button class="btn btn-sm" type="submit">New secret</button>
+						</form>
+						<form
+							method="post"
+							action={ templ.URL("/apps/" + a.Name + "/hook/delete") }
+							data-confirm="Pushes stop deploying. The webhook on the repository is refused until it is removed or this is turned on again."
+							data-confirm-title="Turn off deploy on push?"
+							data-confirm-label="Turn off"
+						>
+							<button class="btn btn-ghost btn-sm" type="submit">Turn off</button>
+						</form>
+					</div>
+				}
+			</div>
+		</div>
+	</section>
 }
 
 // appLegacySettings is the part of the tab that has not been restructured yet.

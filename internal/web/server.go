@@ -252,6 +252,10 @@ type Options struct {
 	// Nets, when set, puts the per-app Networking surface on the router.
 	Nets Nets
 
+	// Hooks is deploy on push. Nil leaves the webhook endpoint unmounted and
+	// the settings section off.
+	Hooks Hooks
+
 	// Logs, when set, puts the log surface on the router.
 	Logs Logger
 
@@ -340,6 +344,8 @@ type Server struct {
 
 	// nets is an app's routing. Nil leaves the Networking surface off.
 	nets Nets
+
+	hooks Hooks
 
 	// registries is where built images go. Nil leaves the Registry surface
 	// off, which is right for an install that cannot build anything.
@@ -430,6 +436,7 @@ func New(opts Options) (*Server, error) {
 		joiner:         opts.Joiner,
 		stacks:         opts.Stacks,
 		nets:           opts.Nets,
+		hooks:          opts.Hooks,
 		registries:     opts.Registries,
 		logs:           opts.Logs,
 		accounts:       opts.Accounts,
@@ -464,6 +471,14 @@ func (s *Server) Handler() http.Handler {
 	// Health is deliberately outside the authenticated group: a load balancer
 	// has no credentials, and a health check that needs them is not one.
 	r.Get("/healthz", s.health)
+
+	// A Git host calling to say a branch moved. Outside the authenticated group
+	// because it has no session and never will; the signature over the body,
+	// checked against the app's own secret, is its whole authorisation.
+	// csrfProtect lets it through for the same reason — see hookPath.
+	if s.hooks != nil {
+		r.Post(hookPath+"{id}/push", s.hookDeliver)
+	}
 
 	// Static assets are embedded and carry no owner data, so they sit outside
 	// the authenticated group too — otherwise the stylesheet 401s on the login
@@ -663,6 +678,12 @@ func (s *Server) Handler() http.Handler {
 			// that had no way to be changed after create.
 			r.Post("/apps/{name}/runtime", s.appRuntime)
 			r.Post("/apps/{name}/source/disconnect", s.appSourceDisconnect)
+			// Admin, not member: a webhook hands an outside system the power
+			// to deploy, and that is not undone by redeploying.
+			if s.hooks != nil {
+				r.Post("/apps/{name}/hook", s.hookEnable)
+				r.Post("/apps/{name}/hook/delete", s.hookDisable)
+			}
 			r.Post("/apps/{name}/variables", s.variableSet)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
 

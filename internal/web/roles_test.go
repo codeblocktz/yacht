@@ -285,6 +285,15 @@ func TestMemberCanDeployButNotDelete(t *testing.T) {
 	if code := rt.postAs(t, del, rt.member).Code; code != http.StatusForbidden {
 		t.Errorf("POST %s as a member = %d, want 403", del, code)
 	}
+	// A webhook hands an outside system the power to deploy. Not a member's to
+	// give, and not one a redeploy takes back.
+	for _, path := range []string{
+		"/apps/" + rt.appName + "/hook", "/apps/" + rt.appName + "/hook/delete",
+	} {
+		if code := rt.postAs(t, path, rt.member).Code; code != http.StatusForbidden {
+			t.Errorf("POST %s as a member = %d, want 403", path, code)
+		}
+	}
 	// The refusal is not cosmetic: the app is still there afterwards.
 	if !rt.appExists(t, rt.appName) {
 		t.Fatal("the member deleted the app the gate said they could not")

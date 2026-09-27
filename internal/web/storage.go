@@ -446,5 +446,6 @@ func (s *Server) detailWith(
 			d.Net = n
 		}
 	}
+	s.attachHook(r.Context(), r, &d)
 	return d
 }

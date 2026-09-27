@@ -96,6 +96,7 @@ type Querier interface {
 	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
 	CreateVolumeAndBump(ctx context.Context, arg CreateVolumeAndBumpParams) (CreateVolumeAndBumpRow, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
+	DeleteAppHook(ctx context.Context, arg DeleteAppHookParams) (int64, error)
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
@@ -150,6 +151,7 @@ type Querier interface {
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	GetAppForReleaseBackfill(ctx context.Context, arg GetAppForReleaseBackfillParams) (App, error)
+	GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook, error)
 	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
@@ -161,6 +163,9 @@ type Querier interface {
 	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
 	GetDeploymentOperation(ctx context.Context, arg GetDeploymentOperationParams) (DeploymentOperation, error)
 	GetDeploymentOperationByDeployment(ctx context.Context, arg GetDeploymentOperationByDeploymentParams) (DeploymentOperation, error)
+	// By app id alone: a delivery carries no session and no owner. The signature,
+	// checked against the secret read here, is what authorises it.
+	GetHookForDelivery(ctx context.Context, appID uuid.UUID) (GetHookForDeliveryRow, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
 	// for the same reason it is absent from ListPendingInvitations.
@@ -264,6 +269,9 @@ type Querier interface {
 	// install-wide, so one settings mutation invalidates each Git app exactly
 	// once without manufacturing release history.
 	IncrementGitAppConfigVersions(ctx context.Context) error
+	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
+	// still live is left out, rather than tried and refused every half second.
+	ListAdmissiblePushes(ctx context.Context, resultLimit int32) ([]ListAdmissiblePushesRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
@@ -342,6 +350,7 @@ type Querier interface {
 	// Guarded on the state it is coming from, so a check that has since found drift
 	// is not overwritten by an apply that started before it.
 	MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error)
+	MarkHookPending(ctx context.Context, arg MarkHookPendingParams) error
 	// A verified domain becomes routed only after the app reconciler has observed
 	// or produced the matching workload convergence key. This app-scoped form
 	// closes the asynchronous handoff from the DNS checker.
@@ -359,6 +368,7 @@ type Querier interface {
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
+	RecordHookDelivery(ctx context.Context, arg RecordHookDeliveryParams) error
 	RecoverBuiltDeploymentOperation(ctx context.Context, arg RecoverBuiltDeploymentOperationParams) (DeploymentOperation, error)
 	// A cluster outage is not a deployment failure. Give observation recovery
 	// back to the queue without changing its checkpoint or verification budget.
@@ -405,6 +415,9 @@ type Querier interface {
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	// Cleared in the same transaction that admits the deploy, so a push is either
+	// still waiting or has a deployment — never neither.
+	TakeHookPending(ctx context.Context, appID uuid.UUID) (int64, error)
 	// Opens the step-up window. Scoped by expiry so an expired session cannot be
 	// revived into a recently-authenticated one; execrows so the caller can tell
 	// that it was not.
@@ -430,6 +443,10 @@ type Querier interface {
 	// new one and lock them out of an account they had just secured. With it, a
 	// stale rehash matches no rows and nothing happens.
 	UpdatePasswordSecret(ctx context.Context, arg UpdatePasswordSecretParams) (int64, error)
+	// Deploy-on-push webhooks. See migration 00028.
+	// A new secret replaces the old one outright, so regenerating is also how a
+	// leaked secret is revoked.
+	UpsertAppHook(ctx context.Context, arg UpsertAppHookParams) (AppHook, error)
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address
 	// would mean revoking the invitation on screen leaves the other one usable.

@@ -91,6 +91,16 @@ func (s *Server) appDetail(w http.ResponseWriter, r *http.Request) {
 // an app resolves the project from the app rather than from the URL, so a link
 // to an app cannot land on a canvas the app is not drawn on.
 func (s *Server) renderCanvas(w http.ResponseWriter, r *http.Request, slug, appName string) {
+	s.renderCanvasWith(w, r, slug, appName, detailTab(r), nil)
+}
+
+// renderCanvasWith is renderCanvas with the tab chosen by the caller and a
+// chance to add to the open panel — for a response that has to show something
+// once, which a redirect to the ordinary page would lose.
+func (s *Server) renderCanvasWith(
+	w http.ResponseWriter, r *http.Request, slug, appName, tab string,
+	decorate func(*AppDetailData),
+) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 
@@ -111,7 +121,11 @@ func (s *Server) renderCanvas(w http.ResponseWriter, r *http.Request, slug, appN
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		open = s.appPanel(ctx, a, detailTab(r))
+		open = s.appPanel(ctx, a, tab)
+		s.attachHook(ctx, r, open)
+		if decorate != nil {
+			decorate(open)
+		}
 	}
 
 	// An app with no project yet resolves to the default one, which is where

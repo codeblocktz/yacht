@@ -470,6 +470,29 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			// Deploy on push, in each state it can be in. The secret is only
+			// ever on screen in the second; the rest say how to get it again.
+			file: "states-push.html", path: "/apps/api/settings",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "api"}, {Label: "Settings"}},
+			page: stack(
+				section("Off", "what turning it on does, before it is on",
+					appPushSection(pushGallery(gitApp, app.Hook{}, "", true))),
+				section("Just turned on", "the one render that shows the secret",
+					appPushSection(pushGallery(gitApp, app.Hook{Enabled: true, CreatedAt: now},
+						"3f9c2a7be41d05c86e1f7a2b9d4c3e8f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d", true))),
+				section("Working", "the last delivery, and a push waiting for the deploy before it",
+					appPushSection(pushGallery(gitApp, app.Hook{
+						Enabled: true, CreatedAt: now.Add(-72 * time.Hour),
+						LastDelivery:   "Queued 9e41d05 — it deploys when the deploy in flight ends.",
+						LastDeliveryAt: now.Add(-40 * time.Second), Pending: true,
+					}, "", true))),
+				section("No public URL", "the address may be a tunnel the Git host cannot reach",
+					appPushSection(pushGallery(gitApp, app.Hook{
+						Enabled: true, CreatedAt: now.Add(-5 * time.Minute),
+					}, "", false))),
+			),
+		},
+		{
 			file: "states-cluster.html", path: "/cluster/nodes",
 			crumbs: []Crumb{{Label: "Infrastructure", Href: "/cluster/nodes"}, {Label: "Cluster"}},
 			page: Cluster(ClusterData{
@@ -713,6 +736,18 @@ func settingsGallery(a app.App, cpuMax, memMax int64) AppDetailData {
 		CPURequest:    cpuSlider("cpu_request", "CPU", a.CPURequest, cpuMax),
 		MemoryRequest: memSlider("memory_request", "Memory", a.MemoryRequest, memMax),
 	}
+}
+
+// pushGallery is the settings data deploy on push reads.
+func pushGallery(a app.App, hook app.Hook, secret string, public bool) AppDetailData {
+	d := settingsGallery(a, 2000, 2<<30)
+	d.HooksOn, d.Hook, d.HookSecret, d.HookURLPublic = true, hook, secret, public
+	host := "https://yacht.example.com"
+	if !public {
+		host = "http://127.0.0.1:8080"
+	}
+	d.HookURL = host + hookPath + a.ID.String() + "/push"
+	return d
 }
 
 // namedDomain is domainAt with a hostname of its own, for the install-wide

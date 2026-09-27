@@ -158,6 +158,8 @@ func (d Deployment) Source() string {
 		return "Git"
 	case d.Revision == RollbackTrigger:
 		return "rollback"
+	case strings.HasPrefix(d.Revision, PushTriggerPrefix):
+		return "push"
 	case d.Revision == "initial", d.Revision == "":
 		return "image"
 	}

@@ -41,6 +41,7 @@ nothing you build here is locked in.
 | Change the image, port, limits and repository afterwards | ✅ |
 | Build and deploy from a Git repository, using buildpacks and an external registry | ✅ |
 | Branches read from the remote as you type | ✅ |
+| Deploy on push, from GitHub, GitLab, Gitea or Forgejo webhooks | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | Build output streamed to the page while it runs | ✅ |
 | Push build output to an operator-configured OCI registry | ✅ |
