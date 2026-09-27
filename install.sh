@@ -18,6 +18,9 @@
 #   --acme-environment staging|production (staging by default)
 #   --acme-email EMAIL required when production issuance is selected
 #   --database-url URL use an existing Postgres instead of installing one
+#   --multi-site       join machines in other places over WireGuard (new K3s only)
+#   --public-ip IP     this server's public address, with --multi-site
+#   --site NAME        where this server is, e.g. dar-a (new K3s only)
 #   --help             print this and exit
 
 set -eu
@@ -27,6 +30,8 @@ INSTALL_DIR="/usr/local/bin"
 CONF_DIR="/etc/yacht"
 ENV_FILE="${CONF_DIR}/yacht.env"
 K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+K3S_UNIT_FILE="/etc/systemd/system/k3s.service"
+K3S_CONFIG_FILE="/etc/rancher/k3s/config.yaml"
 KUBECONFIG_DST="${CONF_DIR}/kubeconfig"
 UNIT_FILE="/etc/systemd/system/yacht.service"
 SVC_USER="yacht"
@@ -54,6 +59,9 @@ ACME_ENVIRONMENT="staging"
 ACME_ENVIRONMENT_SET="no"
 ACME_EMAIL=""
 DATABASE_URL=""
+MULTI_SITE="no"
+PUBLIC_IP=""
+SITE=""
 
 # ---------------------------------------------------------------- output ----
 
@@ -123,10 +131,19 @@ usage() {
 		  --acme-environment  staging or production (default: staging)
 		  --acme-email EMAIL  required with --acme-environment production
 		  --database-url URL  use an existing Postgres instead of installing one
+		  --multi-site        install K3s so machines in other places can join,
+		                      over WireGuard; only when this run installs K3s
+		  --public-ip IP      this server's public address (with --multi-site);
+		                      default: the address on the default route
+		  --site NAME         where this server is, e.g. dar-a; only when this
+		                      run installs K3s
 		  --help              print this and exit
 
 		HTTP-01 certificate issuance requires public port 80 to reach the cluster.
 		A cluster-wide HTTP-to-HTTPS redirect prevents ACME challenges from working.
+
+		With --multi-site, open 6443/tcp to this server, and 51820/udp (51821/udp
+		over IPv6) and 10250/tcp between every machine.
 	EOF
 }
 
@@ -168,6 +185,9 @@ parse_flags() {
 				shift 2
 				;;
 			--acme-email) require_flag_value "$1" "${2-}"; ACME_EMAIL=$2; shift 2 ;;
+			--multi-site)   MULTI_SITE="yes"; shift ;;
+			--public-ip)    require_flag_value "$1" "${2-}"; PUBLIC_IP=$2; shift 2 ;;
+			--site)         require_flag_value "$1" "${2-}"; SITE=$2; shift 2 ;;
 			--help|-h)      usage; exit 0 ;;
 			*) die "unknown flag '$1'" ;;
 		esac
@@ -185,6 +205,62 @@ parse_flags() {
 	if [ "$ACME_ENVIRONMENT" = "production" ] && [ -z "$ACME_EMAIL" ]; then
 		die "--acme-email is required with --acme-environment production"
 	fi
+	# Both end up on K3s' command line as root, so each is held to the shape
+	# it has to have rather than quoted and hoped over.
+	if [ -n "$SITE" ] && ! valid_site "$SITE"; then
+		die "--site must be lowercase letters, numbers, dashes, dots and underscores, starting and ending with a letter or number, got '$SITE'"
+	fi
+	if [ -n "$PUBLIC_IP" ] && ! valid_ip "$PUBLIC_IP"; then
+		die "--public-ip must be an IP address, got '$PUBLIC_IP'"
+	fi
+	if [ -n "$PUBLIC_IP" ] && [ "$MULTI_SITE" = "no" ]; then
+		die "--public-ip is only used with --multi-site"
+	fi
+	if [ "$SKIP_K3S" = "yes" ] && { [ "$MULTI_SITE" = "yes" ] || [ -n "$SITE" ]; }; then
+		die "--multi-site and --site configure the K3s this installer installs; with --skip-k3s the cluster's network and labels are yours to set"
+	fi
+}
+
+# valid_site is Kubernetes' rule for a label value, the same one the join page
+# applies to a site, which also leaves out every character a shell acts on.
+# The letters are spelled out because a range like a-z can take in capitals,
+# depending on the locale.
+valid_site() {
+	valid_site_lower=abcdefghijklmnopqrstuvwxyz0123456789
+	[ "${#1}" -le 63 ] || return 1
+	case "$1" in
+		''|*[!"$valid_site_lower"._-]*) return 1 ;;
+		[!"$valid_site_lower"]*|*[!"$valid_site_lower"]) return 1 ;;
+	esac
+}
+
+# valid_ip accepts a dotted IPv4 address, or an IPv6 one written in hex and
+# colons. Loose on IPv6 where K3s itself is strict; the point here is that
+# nothing but an address reaches its command line.
+valid_ip() {
+	case "$1" in
+		*.*.*.*.*|*[!0-9.]*) ;;
+		*.*.*.*)
+			valid_ip_rest=$1
+			for _ in 1 2 3 4; do
+				valid_ip_octet=${valid_ip_rest%%.*}
+				valid_ip_rest=${valid_ip_rest#*.}
+				case "$valid_ip_octet" in
+					''|0?*|*[!0-9]*) return 1 ;;
+				esac
+				[ "$valid_ip_octet" -le 255 ] || return 1
+			done
+			return 0
+			;;
+	esac
+	case "$1" in
+		*:*:*) ;;
+		*) return 1 ;;
+	esac
+	case "$1" in
+		*[!0-9a-fA-F:]*) return 1 ;;
+	esac
+	[ "${#1}" -le 39 ]
 }
 
 # ----------------------------------------------------------------- secrets --
@@ -258,6 +334,107 @@ install_binary() {
 
 # -------------------------------------------------------------------- k3s ---
 
+# k3s_server_args is what this server's K3s is installed with, beyond K3s'
+# defaults: nothing at all for an install in one place, so that install is
+# exactly what it always was.
+#
+# --multi-site swaps flannel's VXLAN, which assumes one private network and
+# sends pod traffic in the clear, for WireGuard, which encrypts it between
+# every pair of machines. --flannel-external-ip makes WireGuard dial each
+# machine's public address where it has one, and --node-external-ip and
+# --tls-san give this server one that agents elsewhere can reach and verify.
+# This is K3s' documented recipe for a cluster across networks.
+k3s_server_args() {
+	k3s_args=""
+	if [ "$MULTI_SITE" = "yes" ]; then
+		k3s_args="--flannel-backend=wireguard-native --flannel-external-ip"
+		k3s_args="${k3s_args} --node-external-ip=${PUBLIC_IP} --tls-san=${PUBLIC_IP}"
+	fi
+	if [ -n "$SITE" ]; then
+		k3s_args="${k3s_args:+${k3s_args} }--node-label=topology.kubernetes.io/zone=${SITE}"
+	fi
+	if [ -n "$k3s_args" ]; then
+		printf 'server %s' "$k3s_args"
+	fi
+}
+
+# default_route_ip is the address this machine sends from. `ip route get`
+# only consults the routing table; nothing is sent.
+default_route_ip() {
+	need_cmd ip || return 1
+	ip -4 route get 1.1.1.1 2>/dev/null \
+		| sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1
+}
+
+private_ipv4() {
+	case "$1" in
+		10.*|127.*|169.254.*|192.168.*) return 0 ;;
+		172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+		100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 0 ;;
+	esac
+	return 1
+}
+
+# resolve_public_ip settles the address machines in other places reach this
+# server at. Refused rather than guessed when the only candidate is private:
+# a cluster whose server advertises 10.0.0.5 installs cleanly and then no
+# machine anywhere else can join it, which is the one thing it was for.
+resolve_public_ip() {
+	[ -n "$PUBLIC_IP" ] && return 0
+	PUBLIC_IP=$(default_route_ip) || true
+	if [ -z "$PUBLIC_IP" ] || ! valid_ip "$PUBLIC_IP"; then
+		die "could not find this server's address — pass --public-ip"
+	fi
+	if private_ipv4 "$PUBLIC_IP"; then
+		die "this server's address is ${PUBLIC_IP}, which machines in other places cannot reach. If its public address is not on an interface here (NAT, a floating IP), pass it with --public-ip"
+	fi
+}
+
+# require_wireguard checks for the kernel's WireGuard, which wireguard-native
+# needs on this server and on every machine that joins. Mainline since Linux
+# 5.6, so any supported Debian or Ubuntu has it; without it K3s would start
+# with a pod network that never comes up, and say so only in its log.
+require_wireguard() {
+	[ -d /sys/module/wireguard ] && return 0
+	if need_cmd modprobe && modprobe wireguard 2>/dev/null; then
+		return 0
+	fi
+	die "this kernel has no WireGuard module, which --multi-site needs on every machine"
+}
+
+# k3s_flannel_backend reads the network backend a running K3s was started
+# with, from its unit and its config file — the two places an install puts
+# it. Neither naming one means K3s' default, VXLAN.
+#
+# The unit holds one quoted argument per line, and the flag and its value can
+# be one argument or two, so lines are joined and quotes and continuation
+# backslashes dropped before the value is looked for.
+k3s_flannel_backend() {
+	k3s_backend=""
+	for k3s_backend_file in "$K3S_UNIT_FILE" "$K3S_CONFIG_FILE"; do
+		[ -r "$k3s_backend_file" ] || continue
+		k3s_found=$(tr '\n' ' ' < "$k3s_backend_file" | tr -d "\"'\\\\" \
+			| sed -n 's/.*flannel-backend[=: ][[:space:]]*\([a-z-]*\).*/\1/p')
+		[ -n "$k3s_found" ] && k3s_backend=$k3s_found
+	done
+	printf '%s' "${k3s_backend:-vxlan}"
+}
+
+# existing_k3s_fits refuses to make a running cluster multi-site behind its
+# back. The network backend is fixed for the life of a cluster: changing it
+# means reconfiguring and restarting K3s on every node, and pods on different
+# machines cannot reach each other until the last one is done. That is for
+# an operator to schedule, not a side effect of re-running an installer.
+existing_k3s_fits() {
+	k3s_current_backend=$(k3s_flannel_backend)
+	if [ "$MULTI_SITE" = "yes" ] && [ "$k3s_current_backend" != "wireguard-native" ]; then
+		die "K3s is already running here with the '${k3s_current_backend}' network backend, and --multi-site needs 'wireguard-native'. Changing it means reconfiguring and restarting K3s on every node, and pods on different machines cannot reach each other until all of them are done, so this installer will not change it on a running cluster. Re-run without --multi-site, or change the backend on every node yourself: https://docs.k3s.io/networking/basic-network-options"
+	fi
+	if [ -n "$SITE" ]; then
+		warn "--site is applied only when this run installs K3s; label this node instead: k3s kubectl label node <name> topology.kubernetes.io/zone=${SITE}"
+	fi
+}
+
 install_k3s() {
 	if [ "$SKIP_K3S" = "yes" ]; then
 		step "Skipping K3s (--skip-k3s)"
@@ -267,10 +444,20 @@ install_k3s() {
 
 	if need_cmd k3s && systemctl is-active --quiet k3s; then
 		step "K3s is already running"
+		existing_k3s_fits
 	else
+		if [ "$MULTI_SITE" = "yes" ]; then
+			resolve_public_ip
+			require_wireguard
+		fi
+		k3s_exec=$(k3s_server_args)
 		step "Installing K3s"
+		if [ "$MULTI_SITE" = "yes" ]; then
+			say "multi-site: WireGuard between machines, public address ${PUBLIC_IP}"
+		fi
 		curl -sfL https://get.k3s.io \
 			| INSTALL_K3S_CHANNEL="$K3S_INSTALL_CHANNEL" \
+				INSTALL_K3S_EXEC="$k3s_exec" \
 				INSTALL_K3S_SKIP_SELINUX_RPM=true sh - \
 			|| die "K3s install failed"
 	fi
@@ -901,6 +1088,10 @@ summary() {
 		say "HTTP-01 needs public port 80; do not redirect all HTTP cluster-wide"
 	else
 		warn "custom-domain certificates are unavailable; platform wildcard TLS is unchanged"
+	fi
+	if [ "$MULTI_SITE" = "yes" ]; then
+		say "Multi-site: add machines elsewhere with server address https://${PUBLIC_IP:-<public-ip>}:6443"
+		say "Open 6443/tcp to this server, and 51820/udp (51821/udp over IPv6) and 10250/tcp between every machine"
 	fi
 }
 

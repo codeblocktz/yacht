@@ -100,6 +100,7 @@ certificates browsers do not trust. Re-run it with
 | Act as a team for support — named operators only, re-checked every request, bannered on every page, recorded | ✅ |
 | Capacity — the cluster's room beside what every team has committed | ✅ |
 | Add a node, then cordon, drain, or remove one | ✅ |
+| [Servers in more than one place](#servers-in-more-than-one-place), with app replicas spread across them | ✅ |
 | Namespace provisioning with enforced security posture | ✅ |
 | A project canvas apps can be arranged on | ✅ |
 
@@ -171,6 +172,76 @@ sudo rm -rf /etc/yacht /etc/systemd/system/yacht.service /usr/local/bin/yacht
 sudo /usr/local/bin/k3s-uninstall.sh          # only if you want the cluster gone too
 sudo -u postgres dropdb yacht && sudo -u postgres dropuser yacht
 ```
+
+## Servers in more than one place
+
+One install can run on machines from different hosting companies, or
+different locations of one, and apps keep running across them without their
+owners knowing or caring where.
+
+**A site** is a short name you give a machine when it joins, for where it is:
+`dar-a`, `dar-b`. Use one name per place. Yacht stores it in the standard
+`topology.kubernetes.io/zone` label, so Kubernetes understands it without
+anything extra. A machine with no site is simply a machine; an install in
+one place needs none and nothing about it changes.
+
+**Install the server with `--multi-site`.** It has to be decided when the
+server is first installed:
+
+```bash
+curl -sSL https://codeblocktz.github.io/yacht/install.sh | sudo sh -s -- --multi-site --site dar-a
+```
+
+Pod traffic between machines then goes over WireGuard, so it is encrypted
+wherever it crosses. K3s' default network assumes one private network and
+sends that traffic in the clear. The server's public address is taken from
+its default route. If that address is not on one of its interfaces, as behind
+NAT or a floating IP, pass it with `--public-ip 203.0.113.10`. A private address
+is refused rather than guessed. Every machine needs the kernel's WireGuard,
+which any current Debian or Ubuntu has.
+
+The network backend is fixed for the life of a cluster. On a server where K3s
+already runs with the default backend, `--multi-site` refuses and explains why
+instead of reconfiguring it. Changing it means restarting K3s on every node,
+and pods on different machines can't reach each other until that's done.
+
+**Join a machine at another site** from Admin → Nodes → Add node. Set the
+server address to the server's **public** address
+(`https://203.0.113.10:6443`), fill in the site, and fill in the public address
+only if the new machine's is not on its own interface. Then run the command
+it gives you.
+
+**Open these ports** between sites. The numbers are
+[K3s'](https://docs.k3s.io/installation/requirements#inbound-rules-for-k3s-nodes):
+
+| Port | From | To | For |
+|---|---|---|---|
+| 6443/tcp | every machine | the server | joining, and the Kubernetes API |
+| 51820/udp | every machine | every machine | WireGuard |
+| 51821/udp | every machine | every machine | WireGuard over IPv6 |
+| 10250/tcp | every machine | every machine | the kubelet: logs, exec, metrics |
+
+**Replicas spread out.** An app with more than one replica prefers to have
+them on different machines, and on different sites once any machine has one.
+Losing one machine, or everything in one place, then takes some replicas
+rather than all of them. These are preferences, not rules. A full site, or an
+install on one machine, still runs every replica. Once machines are in more
+than one place, give every machine a site, including the first server:
+Kubernetes leaves a machine with no site out of spreading by site. Label one
+that joined without a site with
+`kubectl label node <name> topology.kubernetes.io/zone=<site>`.
+
+What this doesn't do yet:
+
+- **A volume lives on one machine.** An app with a volume runs where its
+  volume is and doesn't move to another site. Moving volumes between machines
+  is a later piece of work.
+- **Traffic enters where DNS points.** Requests reach the cluster at the
+  machines your DNS names, and cross over WireGuard to wherever the app runs.
+  Entry points at more than one site come later.
+- **One server.** The control plane is the one machine you installed first.
+  If it goes, running apps keep running, but nothing new deploys until it
+  is back. A control plane spread across sites comes later.
 
 ## Quick start
 

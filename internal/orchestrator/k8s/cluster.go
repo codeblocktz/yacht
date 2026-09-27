@@ -76,6 +76,7 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			Ready:             nodeReady(n),
 			Roles:             nodeRoles(n),
 			Pool:              n.Labels[poolLabel],
+			Site:              n.Labels[corev1.LabelTopologyZone],
 			Address:           nodeAddress(n),
 			Version:           n.Status.NodeInfo.KubeletVersion,
 			OS:                n.Status.NodeInfo.OperatingSystem,
