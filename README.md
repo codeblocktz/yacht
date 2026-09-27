@@ -202,6 +202,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `YACHT_OPERATORS` | — | Emails of the people who run the install: nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |

@@ -670,6 +670,13 @@ func newLiveHarness(t *testing.T, teamID string) *liveHarness {
 // owner — the one person a fresh install will admit before anybody exists.
 func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness {
 	t.Helper()
+	return newLiveHarnessWith(t, teamID, ownerEmail, nil)
+}
+
+// newLiveHarnessWith is newLiveHarnessOwnedBy on an install that names its
+// operators.
+func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []string) *liveHarness {
+	t.Helper()
 	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set YACHT_TEST_DATABASE_URL to run the sign-in callback tests")
@@ -712,9 +719,10 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 	mailer := &fakeMailer{}
 
 	h := testServer(t, Options{
-		Apps:     apps,
-		Hooks:    apps,
-		Accounts: accounts,
+		Apps:      apps,
+		Hooks:     apps,
+		Accounts:  accounts,
+		Operators: operators,
 		// The provider under test end to end: the cookie the callback sets is
 		// the cookie the dashboard resolves an owner from.
 		Identity:          accounts.Provider(SessionCookie),

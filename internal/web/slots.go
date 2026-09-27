@@ -176,7 +176,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		footer = UserMenu(owner, len(teams) > 0)
 	}
 
-	return Slots{
+	slots := Slots{
 		Title: "Yacht",
 		// The canvas is a workspace rather than a document: a graph inside a
 		// 1240px column with the window's scrollbar beside it reads as a
@@ -216,6 +216,19 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 			})},
 		},
 	}
+	// The cluster-wide pages are the operator's. Offered to anyone else they
+	// would be links to a 403, which reads as a broken page rather than one
+	// that belongs to somebody else.
+	if !SurfacesFromContext(ctx).Operator {
+		kept := slots.Nav[:0]
+		for _, g := range slots.Nav {
+			if g.Heading != "Infrastructure" {
+				kept = append(kept, g)
+			}
+		}
+		slots.Nav = kept
+	}
+	return slots
 }
 
 func breadcrumbFor(path string) []Crumb {

@@ -80,6 +80,10 @@ templ clusterCallout(msg string) {
 // ---------------------------------------------------------------- overview
 
 type OverviewData struct {
+	// Operator shows the cluster's own numbers — nodes, pods, capacity.
+	// Anyone else sees their team's apps: on an install hosting several
+	// teams, the cluster's capacity is not one team's business.
+	Operator     bool
 	OwnerName    string
 	ClusterOK    bool
 	ClusterError string
@@ -100,13 +104,15 @@ templ Overview(d OverviewData) {
 	}
 	<div class="metrics mb-6">
 		@metric("Apps", strconv.FormatInt(d.AppCount, 10), "")
-		@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
-			fmt.Sprintf("%d ready", d.Summary.NodesReady))
-		@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
-		@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
-			clusterCPUDetail(d.Summary))
-		@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
-			clusterMemDetail(d.Summary))
+		if d.Operator {
+			@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
+				fmt.Sprintf("%d ready", d.Summary.NodesReady))
+			@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
+			@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
+				clusterCPUDetail(d.Summary))
+			@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
+				clusterMemDetail(d.Summary))
+		}
 	</div>
 	if len(d.Activity.Days) > 0 {
 		@deployActivity(d.Activity)

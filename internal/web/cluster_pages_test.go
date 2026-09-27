@@ -232,7 +232,10 @@ func TestEveryNavTargetResolves(t *testing.T) {
 	apps := newFakeApps(sampleApp("owner-1", "web"))
 	h := testServer(t, Options{Apps: apps, Orchestrator: newInspector()})
 
-	slots := DefaultSlots{}.Slots(context.Background(),
+	// The operator's menu, which is the full one. The server here has no
+	// accounts, so its one principal is the operator and reaches every page.
+	opCtx := context.WithValue(context.Background(), surfacesKey{}, Surfaces{Operator: true})
+	slots := DefaultSlots{}.Slots(opCtx,
 		httptest.NewRequest(http.MethodGet, "/", nil))
 
 	var checked int

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -79,4 +80,61 @@ func (s *Server) roleOf(r *http.Request) (account.Role, bool) {
 		return "", false
 	}
 	return sess.Role, true
+}
+
+// requireOperator gates what belongs to the install rather than to a team:
+// nodes, the registry, DNS, every team's quota. See IsOperator.
+func (s *Server) requireOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := identity.FromContext(r.Context()); !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !s.IsOperator(r) {
+			// Plainly forbidden rather than hidden: the person is signed in,
+			// and that the install has pages they cannot reach is no secret.
+			http.Error(w, "forbidden — this is for the people who run the install", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// IsOperator reports whether a request comes from somebody who runs the
+// install itself.
+//
+// With no account service there is one principal, and it is the operator.
+// With no operators configured, the owner of the team the request acts as is
+// — the single-team reading, and what every install did before operators
+// existed. Otherwise the signed-in person's email must be one of them.
+// Exported so a wrapping application gates its own install-wide pages the
+// same way.
+func (s *Server) IsOperator(r *http.Request) bool {
+	if s.accounts == nil {
+		_, ok := identity.FromContext(r.Context())
+		return ok
+	}
+	if len(s.operators) == 0 {
+		role, ok := s.roleOf(r)
+		return ok && role.AtLeast(account.RoleOwner)
+	}
+	sess, err := s.accounts.ResolveSession(r.Context(), sessionToken(r))
+	if err != nil {
+		return false
+	}
+	u, err := s.accounts.User(r.Context(), sess.UserID)
+	if err != nil {
+		return false
+	}
+	return s.operators[strings.ToLower(strings.TrimSpace(u.Email))]
+}
+
+func normaliseEmails(in []string) map[string]bool {
+	out := make(map[string]bool, len(in))
+	for _, e := range in {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			out[e] = true
+		}
+	}
+	return out
 }

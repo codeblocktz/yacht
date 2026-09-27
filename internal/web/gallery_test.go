@@ -50,7 +50,10 @@ func TestGallery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create %s: %v", path, err)
 		}
-		slots := DefaultSlots{}.Slots(context.Background(),
+		// Drawn as the operator sees it: the gallery is for reviewing every
+		// page, and the Infrastructure entries are part of the chrome.
+		opCtx := context.WithValue(context.Background(), surfacesKey{}, Surfaces{Operator: true})
+		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
 		slots.Breadcrumb = g.crumbs
 		slots.Bare = g.bare
@@ -597,7 +600,7 @@ func galleryPages() []galleryPage {
 		{
 			file: "states-overview.html", path: "/",
 			crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(OverviewData{
+			page: Overview(OverviewData{Operator: true,
 				OwnerName: "Eric", ClusterOK: true, AppCount: 6,
 				Summary: summary, Apps: allApps, Activity: activityBusy(),
 			}),
