@@ -99,6 +99,9 @@ type (
 
 	// Orchestrator runs workloads — seam 1.
 	Orchestrator = orchestrator.Orchestrator
+	// NodeInfo is one machine, from Orchestrator.Nodes: its pool, its site —
+	// where it is, empty on an install in one place — and its room.
+	NodeInfo = orchestrator.NodeInfo
 
 	// Role is a team role, for a wrapper gating pages of its own.
 	Role = account.Role

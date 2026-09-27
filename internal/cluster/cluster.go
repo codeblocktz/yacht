@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -41,6 +42,12 @@ var ErrNoSecretKey = errors.New(
 // placing apps by it is the orchestrator's half; named here too because this
 // is where it is written onto a machine.
 const PoolLabel = orchestrator.PoolLabel
+
+// SiteLabel is the node label a site is carried in.
+//
+// Kubernetes' own zone label rather than one of ours: the scheduler already
+// knows how to spread pods by it, so nothing has to teach it what a site is.
+const SiteLabel = orchestrator.SiteLabel
 
 // Joiner stores the join settings and builds the command.
 type Joiner struct {
@@ -124,15 +131,46 @@ func (j *Joiner) SetJoin(ctx context.Context, serverURL, token string, by uuid.U
 	return nil
 }
 
+// Machine is what a join command tells a machine about itself.
+//
+// Every field is optional: an empty Machine is an ordinary node in no pool, at
+// no particular site, reachable at the address on its own interface.
+type Machine struct {
+	// Pool labels the node so apps can be scheduled onto it.
+	Pool string
+
+	// Dedicated taints the node for its pool, so only that pool's apps are
+	// scheduled on it. Meaningless without a pool, and ignored there.
+	Dedicated bool
+
+	// Site is where the machine is: a short name the operator chooses, the
+	// same for every machine in one place.
+	Site string
+
+	// PublicIP is the address machines at other sites reach this one at,
+	// when that is not an address on its own interface — behind NAT, or on a
+	// cloud that routes a floating address to a private one. Empty otherwise.
+	PublicIP string
+}
+
+// Validate checks everything that will be pasted into a root shell.
+func (m Machine) Validate() error {
+	if err := ValidatePool(m.Pool); err != nil {
+		return err
+	}
+	if err := ValidateSite(m.Site); err != nil {
+		return err
+	}
+	return ValidatePublicIP(m.PublicIP)
+}
+
 // Command returns the line to run on a machine to join it to this cluster.
 //
 // The returned string contains the join token in the clear, because that is
 // what the person running it needs. It is the only thing in this package that
 // carries the token, and the only caller is the page an owner asked for.
-//
-// dedicated keeps the machine for its pool's apps; see BuildCommand.
-func (j *Joiner) Command(ctx context.Context, pool string, dedicated bool) (string, error) {
-	if err := ValidatePool(pool); err != nil {
+func (j *Joiner) Command(ctx context.Context, m Machine) (string, error) {
+	if err := m.Validate(); err != nil {
 		return "", err
 	}
 
@@ -158,32 +196,44 @@ func (j *Joiner) Command(ctx context.Context, pool string, dedicated bool) (stri
 		return "", fmt.Errorf("cluster: opening the join token: %w", err)
 	}
 
-	return BuildCommand(row.ServerUrl, token, pool, dedicated), nil
+	return BuildCommand(row.ServerUrl, token, m), nil
 }
 
 // BuildCommand assembles the join line.
 //
 // Split out from Command so the interesting half — turning these values into
 // something that will be pasted into a root shell — is a pure function with no
-// database and no cluster behind it.
+// database and no cluster behind it. The machine is expected to have passed
+// Validate.
 //
 // A pool labels the machine, and a team placed on that pool runs there; any
 // other team's apps may still land on it, which is right for a pool that is
-// shared. dedicated also taints it, so the scheduler keeps everything off it
+// shared. Dedicated also taints it, so the scheduler keeps everything off it
 // except the apps that tolerate the taint — those of teams placed on the pool.
 // Dedicated means nothing without a pool, and is ignored there.
 //
-// The pool goes in unquoted, twice when dedicated, and that is safe only
-// because ValidatePool has refused anything a shell would read as more than a
-// name. Command checks it; a caller building the line itself must too.
-func BuildCommand(serverURL, token, pool string, dedicated bool) string {
+// Every value goes in unquoted, the pool twice when dedicated, and that is
+// safe only because Validate has refused anything a shell would read as more
+// than one word. Command checks it; a caller building the line itself must too.
+func BuildCommand(serverURL, token string, m Machine) string {
 	cmd := "curl -sfL https://get.k3s.io | K3S_URL=" + serverURL +
 		" K3S_TOKEN=" + token + " sh -s -"
-	if pool != "" {
-		cmd += " --node-label " + PoolLabel + "=" + pool
-		if dedicated {
-			cmd += " --node-taint " + PoolLabel + "=" + pool + ":NoSchedule"
+	if m.Pool != "" {
+		cmd += " --node-label " + PoolLabel + "=" + m.Pool
+		if m.Dedicated {
+			cmd += " --node-taint " + PoolLabel + "=" + m.Pool + ":NoSchedule"
 		}
+	}
+	if m.Site != "" {
+		// Set by the kubelet on its own node. The zone label is one of the few
+		// in the kubernetes.io namespace that NodeRestriction lets it set.
+		cmd += " --node-label " + SiteLabel + "=" + m.Site
+	}
+	if m.PublicIP != "" {
+		// What WireGuard peers at other sites dial. Without it a machine
+		// behind NAT advertises the private address on its interface, which
+		// nothing elsewhere can reach, and its pods are cut off from theirs.
+		cmd += " --node-external-ip " + m.PublicIP
 	}
 	return cmd
 }
@@ -224,4 +274,25 @@ func ValidateServerURL(raw string) error {
 // the one a machine is labelled with.
 func ValidatePool(pool string) error {
 	return orchestrator.ValidatePool(pool)
+}
+
+// ValidateSite checks a site name, by the same rule and for the same reason as
+// a pool.
+func ValidateSite(site string) error { return orchestrator.ValidateLabelValue("site", site) }
+
+// ValidatePublicIP checks a machine's public address.
+//
+// Parsed rather than pattern-matched, and required to read back exactly as
+// given, so there is no spelling of it a shell would take as a second word. A
+// zone ("fe80::1%eth0") names an interface on the machine typing it, which
+// means nothing to a machine anywhere else.
+func ValidatePublicIP(ip string) error {
+	if ip == "" {
+		return nil
+	}
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || addr.Zone() != "" || addr.String() != ip {
+		return errors.New("public address must be an IP address, for example 203.0.113.7")
+	}
+	return nil
 }
