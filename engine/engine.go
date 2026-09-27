@@ -72,6 +72,10 @@ type (
 	Crumb        = web.Crumb
 	// ExtraRoutes are routes a wrapper mounts inside the engine's role gates.
 	ExtraRoutes = web.ExtraRoutes
+	// Surfaces is which optional pages a request is offered, including
+	// whether its person is an operator — what a wrapper's chrome reads to
+	// decide whether to offer its own install-wide pages.
+	Surfaces = web.Surfaces
 
 	// Mailer delivers the engine's messages — seam 4.
 	Mailer  = notify.Mailer
@@ -112,7 +116,10 @@ var (
 	LoadConfig = config.Load
 	// Layout draws a page inside the engine's chrome.
 	Layout = web.Layout
-	// OwnerFromContext reads the Owner identity middleware resolved.
+	// SurfacesFromContext reads them, in a SlotProvider or a handler behind
+	// the engine's identity middleware.
+	SurfacesFromContext = web.SurfacesFromContext
+		// OwnerFromContext reads the Owner identity middleware resolved.
 	OwnerFromContext = identity.FromContext
 	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly
 	// behind the middleware.
