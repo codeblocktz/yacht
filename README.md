@@ -101,6 +101,7 @@ certificates browsers do not trust. Re-run it with
 | Capacity — the cluster's room beside what every team has committed | ✅ |
 | Add a node, then cordon, drain, or remove one | ✅ |
 | [Servers in more than one place](#servers-in-more-than-one-place), with app replicas spread across them | ✅ |
+| [Regions](#regions): each app lives in one, with its volumes and data | ✅ |
 | Namespace provisioning with enforced security posture | ✅ |
 | A project canvas apps can be arranged on | ✅ |
 
@@ -247,6 +248,100 @@ What this doesn't do yet:
   If it goes, running apps keep running, but nothing new deploys until it
   is back. A control plane spread across sites comes later.
 
+## Regions
+
+A site is where a machine is. **A region is where an app lives**: a broader
+place holding one or more sites, like `fsn` holding `fsn-a` and `fsn-b`. An
+app is placed in a region when it is created, and its pods, its volumes and
+its databases stay there. An install whose machines carry no region has
+none of this: no field on any form, nothing written on any pod, and nothing
+about it changes.
+
+**Label the machines.** A region is the standard
+`topology.kubernetes.io/region` label. Fill in *Region* beside *Site* on the
+add-node page, pass `--region fsn` to the installer for the server (it also
+becomes the install's default region), or label a machine already running
+with `kubectl label node <name> topology.kubernetes.io/region=fsn`. Once
+there is more than one region, give every machine one.
+
+**Configure each region** under Admin → Regions. The machines say which
+regions exist; the page keeps what they can't:
+
+| | |
+|---|---|
+| Display name | what people choosing a region see |
+| Edge | the hostname, and the addresses behind it, where the region's ingress answers |
+| StorageClass | what volumes made in the region are provisioned from; empty is the cluster's default |
+| Open | whether new apps may be placed there; closing moves nothing |
+
+A region the machines carry and nobody configured is listed as unconfigured
+and takes no apps. A configured region with no machine ready can't be chosen
+either. The page shows each region's machines, sites, apps and how much of
+its room is sold.
+
+**Placing apps.** Every deploy form, a template included, offers the open
+regions with a ready machine, defaulting to `YACHT_DEFAULT_REGION`, or else
+the first open region. Every pod an app runs carries a *required* node
+affinity on its region, beside its team's pool: both have to hold. That
+covers its Deployment awake, asleep and waking, and a database, which is an
+app like any other. Replicas still spread across the region's sites. Builds
+run wherever there is room, since nothing of the app stays where it was
+built. The app list and the app's page say where each app lives.
+
+**Volumes.** A volume made in a region is provisioned from the region's
+StorageClass, and the class is recorded on the volume, so changing the
+region's class later reaches new volumes and never an existing claim (whose
+class Kubernetes won't change). The pod's affinity is enough for storage on
+the machine the pod runs on, like `local-path`: the volume is created where
+the pod is placed. It is not enough for replicated storage like Longhorn,
+whose copies are placed by the storage system and not by the scheduler, on
+any machine in the cluster. Give such storage one class per region that
+keeps its replicas on that region's machines, and name it here.
+
+**Capacity.** Admission holds a change to the room in its own region: the
+region's machines, under the capacity policy, against the apps that live
+there. A full region refuses, however much room another has. A sleeping app
+wakes in its region, into the room the wake reserve kept there. Storage stays
+counted for the whole install, because the figure for it is the install's.
+Admin → Capacity shows each region.
+
+**Moving an app.** An app without storage can move to another open region
+from its settings. It is redeployed there, a new pod ready before the old
+one stops, and admitted as if it were new in the target region. An app with
+a volume, which every database has, is refused, with the reason: its data is
+on the old region's machines. Back it up and restore it into a new app.
+
+**Apps made before regions** are recorded once regions exist, by a pass that
+runs at startup and every five minutes until none are left. An app running in
+exactly one region is recorded there. One with nothing running and no storage
+is recorded in the default region (`YACHT_DEFAULT_REGION`, or the only region
+there is). One with storage that isn't running waits, because its volume may
+be in any region. Recording restarts nothing: the affinity reaches an app's
+pods at its next deploy or settings change. Until it is recorded, an app runs
+exactly where it did.
+
+**Traffic and DNS.** Traffic for an app should enter at its region's edge.
+Yacht writes no DNS. A custom domain on an app is told to CNAME to its
+region's edge (else to the install's target, as before), and a wrapping
+application gets what it needs to send everything else there:
+`Engine.Routes` lists every hostname — each app's issued address and every
+custom domain — with the app's region and that region's edge, and
+`Overrides.Routes` is told when an app's hostnames or region change, or a
+region's edge does. The notification is a hint; reconcile from `Routes` on a
+timer too.
+
+What this doesn't do:
+
+- **An ingress controller per region.** Yacht assumes ingress answers at each
+  region's edge; deploying it there is the installer's or the wrapper's job.
+- **A waker per region.** A sleeping app's request goes to the engine's one
+  waker (`YACHT_WAKER_ADDR`), wherever that is, so waking an app in a far
+  region crosses to the waker and back.
+- **Moving volumes between regions.** An app with storage stays where it was
+  made.
+- **Pools in admission.** A change is admitted against its region's room, not
+  against its team's pool within it.
+
 ## Quick start
 
 For development, or to run against a cluster you already have.
@@ -302,6 +397,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
 | `YACHT_WAKER_ADDR` | — | `ip:port` the cluster reaches the waker at. **Setting it lets idle apps sleep.** The waker listens on its own port, never the dashboard's |
 | `YACHT_WAKE_TIMEOUT` | `60s` | How long a wake may take before the app goes back to sleep |
+| `YACHT_DEFAULT_REGION` | — | The [region](#regions) new apps go to when nobody chooses, and that apps made before regions are recorded in. Empty leaves it to the open regions. Ignored while no node carries a region |
 | `YACHT_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
@@ -346,6 +442,13 @@ each app was awake in a window — charge replicas × awake time. `Serve` runs
 the waker beside the dashboard; a wrapper serving its own handler serves
 `Engine.Waker()` on `Config.WakerListenAddr()` too, and
 `Overrides.WakerBrand` names it on the waking-up page.
+
+Regions are on `Engine.Apps` too: `Regions` and `Region` list them with their
+machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
+`AppRegion` says where an app lives, `MoveApp` moves one, and
+`CreateInput.Region` and `DeployTemplateIn` place new apps. For DNS,
+`Engine.Routes(ctx)` is every hostname with its region and edge, and
+`Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
 ## Security posture
 
