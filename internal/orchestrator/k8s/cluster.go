@@ -12,9 +12,6 @@ import (
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
-// poolLabel marks a node as belonging to a scheduling pool.
-const poolLabel = "yacht/pool"
-
 // ClusterSummary returns headline capacity and utilisation.
 func (o *Orchestrator) ClusterSummary(ctx context.Context) (orchestrator.ClusterSummary, error) {
 	nodes, err := o.Nodes(ctx)
@@ -75,7 +72,7 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			Name:              n.Name,
 			Ready:             nodeReady(n),
 			Roles:             nodeRoles(n),
-			Pool:              n.Labels[poolLabel],
+			Pool:              n.Labels[orchestrator.PoolLabel],
 			Address:           nodeAddress(n),
 			Version:           n.Status.NodeInfo.KubeletVersion,
 			OS:                n.Status.NodeInfo.OperatingSystem,

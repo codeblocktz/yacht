@@ -7,10 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/codeblocktz/yacht/internal/account"
@@ -104,8 +106,16 @@ func withFloor(d time.Duration, fn func()) {
 
 // signInPage serves the form. It sits outside the authenticated group: someone
 // with no session is exactly who needs it.
+// signInPage is the sign-in form, with ?email= put in the link form: a
+// product's website can take an address and hand the person here to finish,
+// one press from a link in their inbox. Only an address is put back; anything
+// else in the parameter is dropped.
 func (s *Server) signInPage(w http.ResponseWriter, r *http.Request) {
-	s.renderSignedOut(w, r, http.StatusOK, "Sign in", SignIn(SignInData{}))
+	var d SignInData
+	if email, err := parseEmail(r.URL.Query().Get("email")); err == nil {
+		d.Email = email
+	}
+	s.renderSignedOut(w, r, http.StatusOK, "Sign in", s.signInForm(d))
 }
 
 // signInRequest mails a link to the address, if it belongs to anyone.
@@ -119,7 +129,7 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Answered without the floor on purpose: malformed input is a mistake
 		// the visitor can already see, not a fact about who has an account.
-		s.renderSignedOut(w, r, http.StatusUnprocessableEntity, "Sign in", SignIn(SignInData{
+		s.renderSignedOut(w, r, http.StatusUnprocessableEntity, "Sign in", s.signInForm(SignInData{
 			Email: r.FormValue("email"),
 			Error: err.Error(),
 		}))
@@ -135,7 +145,7 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	if !addressOK || !clientOK {
 		// Refusal depends on the attempt count and never on whether the address
 		// exists, so saying so plainly leaks nothing.
-		s.renderSignedOut(w, r, http.StatusTooManyRequests, "Sign in", SignIn(SignInData{
+		s.renderSignedOut(w, r, http.StatusTooManyRequests, "Sign in", s.signInForm(SignInData{
 			Email: email,
 			Error: "Too many sign-in attempts. Try again in a few minutes.",
 		}))
@@ -144,7 +154,7 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 
 	withFloor(signInFloor, func() { s.mailSignInLink(r.Context(), email) })
 
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup))
 }
 
 // mailSignInLink issues a link and delivers it, or does neither.
@@ -166,6 +176,9 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 		return
 	}
 	if !existed {
+		if s.openSignup {
+			s.mailSignupLink(ctx, email)
+		}
 		return
 	}
 
@@ -176,12 +189,60 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 
 	if err := s.mailer.Send(ctx, notify.Message{
 		To:       user.Email,
-		Subject:  "Your Yacht sign-in link",
-		TextBody: signInBody(link, s.magicTTL),
+		Subject:  "Your " + s.wakerBrand + " sign-in link",
+		TextBody: signInBody(s.wakerBrand, link, s.magicTTL),
 	}); err != nil {
 		s.log.Error("send sign-in link",
 			slog.String("to", user.Email), slog.String("error", err.Error()))
 	}
+}
+
+// mailSignupLink mails an address nobody holds a link that creates its
+// account. Open sign-up only, and inside the same floor as a sign-in link: both
+// do one insert and send one mail, so the two paths cost the same, and which
+// mail arrives is visible only to whoever reads the mailbox.
+func (s *Server) mailSignupLink(ctx context.Context, email string) {
+	raw, err := s.accounts.IssueSignupLink(ctx, email, s.magicTTL)
+	if err != nil {
+		s.log.Error("issue sign-up link", slog.String("error", err.Error()))
+		return
+	}
+	link := s.baseURL + "/sign-up/" + raw
+	if err := s.mailer.Send(ctx, notify.Message{
+		To:       email,
+		Subject:  "Create your " + s.wakerBrand + " account",
+		TextBody: signUpBody(s.wakerBrand, link, s.magicTTL),
+	}); err != nil {
+		s.log.Error("send sign-up link",
+			slog.String("to", email), slog.String("error", err.Error()))
+	}
+}
+
+// signUpCallback spends a sign-up link: the account is created, and signed in
+// to, by whoever could read the mail. The new person has no team, so
+// startSession gives them one of their own.
+func (s *Server) signUpCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if !s.openSignup {
+		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
+			Error: "That sign-in link is no longer valid. Ask for a new one.",
+		}))
+		return
+	}
+	user, err := s.accounts.ConsumeSignupLink(ctx, chi.URLParam(r, "token"))
+	if err != nil {
+		if !errors.Is(err, account.ErrTokenInvalid) {
+			s.log.Error("consume sign-up link", slog.String("error", err.Error()))
+		}
+		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
+			Error: "That sign-up link is no longer valid. Ask for a new one.",
+		}))
+		return
+	}
+	if !s.startSession(w, r, user, account.MethodMagicLink) {
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // signInCallback spends a magic link and opens a session on it.
@@ -200,13 +261,35 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 		// Unknown, expired and already-spent links are answered alike, because
 		// "this link has already been used" tells whoever is holding a guessed
 		// token that they guessed a real one.
-		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", SignIn(SignInData{
+		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
 			Error: "That sign-in link is no longer valid. Ask for a new one.",
 		}))
 		return
 	}
 
-	if !s.startSession(w, r, user, account.MethodMagicLink) {
+	// A link sent for an invitation carries it. The link has just proved the
+	// address, which is all accepting asks, so it is accepted now, before the
+	// session picks a team: somebody new then belongs to the inviting team
+	// alone and opens onto it, rather than onto an empty team of their own
+	// with the invitation still waiting to be opened again.
+	//
+	// AcceptInvitation still checks the invitation names this address, so a
+	// link of one person's carrying another's invitation joins nobody. A
+	// failure signs them in anyway: the invitation is the extra, not the way in.
+	invitedTo := ""
+	if inv := r.URL.Query().Get("invitation"); inv != "" {
+		team, role, err := s.accounts.AcceptInvitation(ctx, inv, user.ID)
+		switch {
+		case err == nil:
+			invitedTo = team
+			s.log.Info("invitation accepted on sign-in",
+				slog.String("team", team), slog.String("role", string(role)))
+		case !errors.Is(err, account.ErrTokenInvalid):
+			s.log.Error("accept invitation on sign-in", slog.String("error", err.Error()))
+		}
+	}
+
+	if !s.startSessionIn(w, r, user, account.MethodMagicLink, invitedTo) {
 		return
 	}
 
@@ -235,12 +318,22 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 func (s *Server) startSession(
 	w http.ResponseWriter, r *http.Request, user account.User, method account.Method,
 ) bool {
+	return s.startSessionIn(w, r, user, method, "")
+}
+
+// startSessionIn is startSession opening onto prefer, where the person is a
+// member of it: the team an invitation they have just accepted is for.
+// Anywhere else, or with prefer empty, the session opens where startSession's
+// would.
+func (s *Server) startSessionIn(
+	w http.ResponseWriter, r *http.Request, user account.User, method account.Method, prefer string,
+) bool {
 	ctx := r.Context()
 
 	failed := func(what string, err error) bool {
 		s.log.Error(what,
 			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
-		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", SignIn(SignInData{
+		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", s.signInForm(SignInData{
 			Error: "Something went wrong signing you in. Try again in a moment.",
 		}))
 		return false
@@ -249,6 +342,15 @@ func (s *Server) startSession(
 	team, err := s.activeTeam(ctx, user)
 	if err != nil {
 		return failed("find a team to sign in to", err)
+	}
+	if prefer != "" && prefer != team {
+		if teams, err := s.accounts.TeamsFor(ctx, user.ID); err == nil {
+			for _, m := range teams {
+				if m.TeamID == prefer {
+					team = prefer
+				}
+			}
+		}
 	}
 
 	raw, err := s.accounts.CreateSession(
@@ -377,8 +479,16 @@ func (s *Server) activeTeam(ctx context.Context, user account.User) (string, err
 		return "", err
 	}
 	if len(teams) == 0 {
+		// With sign-up open anybody can arrive here with no team, so the team
+		// the install runs as goes only to the address configured to own it.
+		// Everyone else gets one of their own, which BootstrapOwner gives for
+		// an empty id.
+		teamID, teamName := s.bootstrapID, s.bootstrapName
+		if s.openSignup && !strings.EqualFold(user.Email, s.bootstrapEmail) {
+			teamID, teamName = "", ""
+		}
 		if err := s.accounts.BootstrapOwner(
-			ctx, s.bootstrapID, s.bootstrapName, user); err != nil {
+			ctx, teamID, teamName, user); err != nil {
 			return "", err
 		}
 		if teams, err = s.accounts.TeamsFor(ctx, user.ID); err != nil {
@@ -394,12 +504,43 @@ func (s *Server) activeTeam(ctx context.Context, user account.User) (string, err
 	return teams[0].TeamID, nil
 }
 
-func signInBody(link string, ttl time.Duration) string {
-	return "Someone asked to sign in to Yacht with this address.\n\n" +
+func signInBody(brand, link string, ttl time.Duration) string {
+	return "Someone asked to sign in to " + brand + " with this address.\n\n" +
 		"Follow this link to sign in:\n\n" +
 		link + "\n\n" +
 		"The link works once and expires in " + ttl.String() + ".\n" +
 		"If it was not you, nothing has happened and you can ignore this message.\n"
+}
+
+// signInForm is the sign-in page with the install's own facts filled in, so no
+// handler can render it describing a different install from the one it is.
+func (s *Server) signInForm(d SignInData) templ.Component {
+	d.OpenSignup = s.openSignup
+	return SignIn(d)
+}
+
+func signInLead(openSignup bool) string {
+	if openSignup {
+		return "Use your password, or have a link emailed to you. New here? The link creates your account."
+	}
+	return "Use your password, or have a link emailed to you."
+}
+
+func checkMailLead(openSignup bool) string {
+	if openSignup {
+		return "A link to sign in is on its way."
+	}
+	return "If that address has an account, a sign-in link is on its way."
+}
+
+func signUpBody(brand, link string, ttl time.Duration) string {
+	return "Someone asked to sign in to " + brand + " with this address, " +
+		"which has no account yet.\n\n" +
+		"Follow this link to create your account and sign in:\n\n" +
+		link + "\n\n" +
+		"The link works once and expires in " + ttl.String() + ".\n" +
+		"If it was not you, nothing has happened and you can ignore this message: " +
+		"no account is made unless the link is followed.\n"
 }
 
 // parseEmail accepts what a person types into the form and returns the address.
@@ -541,6 +682,17 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Somebody new is given their account now, at the invited address. The
+	// sign-in form never registers an address, so as not to say which ones
+	// exist; an invitation is different. A team's owner named this address,
+	// and the link goes only to its mailbox, so the person holding the
+	// invitation learns nothing and gains nothing they could not already.
+	// Without it, inviting anybody who had no account sent them nothing.
+	if _, err := s.accounts.EnsureUser(ctx, inv.Email, ""); err != nil {
+		s.log.Error("make an account for an invitation", slog.String("error", err.Error()))
+		http.Error(w, "could not send a sign-in link", http.StatusInternalServerError)
+		return
+	}
 	raw, _, existed, err := s.accounts.IssueMagicLink(ctx, inv.Email, s.magicTTL)
 	if err != nil {
 		s.log.Error("issue sign-in link for an invitation", slog.String("error", err.Error()))
@@ -548,12 +700,15 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existed || raw != "" {
+		// The link carries the invitation, and following it both signs the
+		// person in and accepts it: one link, not a sign-in and then the
+		// invitation opened a second time.
 		msg := notify.Message{
 			To:      inv.Email,
-			Subject: "Sign in to Yacht to accept your invitation",
-			TextBody: "Sign in to accept your invitation:\n\n" +
-				s.baseURL + "/auth/" + raw + "\n\n" +
-				"Then open the invitation link again.\n" +
+			Subject: "Sign in to " + s.wakerBrand + " to accept your invitation",
+			TextBody: "Follow this link to sign in and join the team you were invited to:\n\n" +
+				s.baseURL + "/auth/" + raw + "?invitation=" + url.QueryEscape(token) + "\n\n" +
+				"The link works once and expires in " + s.magicTTL.String() + ".\n" +
 				"If you were not expecting this, ignore it.",
 		}
 		if err := s.mailer.Send(ctx, msg); err != nil {
@@ -564,7 +719,7 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	// The address is not echoed back. Whoever is holding this link may not be
 	// the person it was sent to, and telling them which mailbox to watch would
 	// be the disclosure the binding exists to prevent.
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail())
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup))
 }
 
 // invitationFailed answers a link that cannot be spent.

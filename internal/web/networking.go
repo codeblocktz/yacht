@@ -100,7 +100,7 @@ func (s *Server) domainAdd(w http.ResponseWriter, r *http.Request) {
 	// The next step is theirs, so it is said. What is no longer said is "then
 	// verify it" — nothing has to be pressed now, and telling somebody to come
 	// back and click is how the old flow wasted their time.
-	s.flashOK(w, r, "Domain added. Create the record shown and Yacht will pick it up on its own.")
+	s.flashOK(w, r, "Domain added. Create the record shown; it is checked for on its own.")
 	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
 }
 

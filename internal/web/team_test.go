@@ -643,6 +643,83 @@ func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) 
 	}
 }
 
+// Somebody new follows the invitation, then the one sign-in link it sends,
+// and is in the inviting team: the link that proves the address accepts the
+// invitation too. Before, it only signed them in, onto an empty team of their
+// own, and the invitation waited to be opened a second time.
+func TestASignedOutInviteeJoinsWithTheOneSignInLink(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-onelink")
+	owner := h.user(t, "owner-inv-one@web.test")
+	h.team(t, "web-inv-onelink", "Kibo", owner, "")
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-one@web.test"))
+
+	before := len(h.mailer.messages())
+	h.invite(t, ownerCookie, "juma-one@web.test", "member")
+	token := invitationToken(t, h.lastMail(t, before))
+
+	before = len(h.mailer.messages())
+	if rec := h.follow(t, "/invitations/"+token); rec.Code != http.StatusOK {
+		t.Fatalf("following the invitation signed out = %d, want 200", rec.Code)
+	}
+	body := h.lastMail(t, before)
+	link := regexp.MustCompile(`https?://[^/\s]+(/auth/\S+)`).FindStringSubmatch(body)
+	if link == nil || !strings.Contains(link[1], "invitation=") {
+		t.Fatalf("the sign-in mail carries no link with the invitation:\n%s", body)
+	}
+	if strings.Contains(body, "again") {
+		t.Errorf("the mail still asks for the invitation to be opened again:\n%s", body)
+	}
+
+	rec := h.follow(t, link[1])
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the sign-in link = %d, want 303", rec.Code)
+	}
+	ctx := context.Background()
+	juma, _ := h.accounts.EnsureUser(ctx, "juma-one@web.test", "")
+	if role, err := h.accounts.RoleIn(ctx, juma.ID, "web-inv-onelink"); err != nil || role != account.RoleMember {
+		t.Fatalf("after the one link, role in the team = %q, %v; want member", role, err)
+	}
+	teams, err := h.accounts.TeamsFor(ctx, juma.ID)
+	if err != nil || len(teams) != 1 {
+		t.Fatalf("teams = %+v, %v; want only the inviting team, no empty one of their own", teams, err)
+	}
+	sess, err := h.accounts.ResolveSession(ctx, sessionCookie(rec).Value)
+	if err != nil || sess.ActiveTeamID != "web-inv-onelink" {
+		t.Fatalf("the session opens onto %q, %v; want the inviting team", sess.ActiveTeamID, err)
+	}
+}
+
+// An owner names the team; an admin may not, and a name that cannot be shown
+// is said on the page. A team made by signing up is named after its email
+// address until somebody does.
+func TestAnOwnerRenamesTheTeam(t *testing.T) {
+	h := newLiveHarness(t, "web-rename")
+	owner := h.user(t, "owner-rename@web.test")
+	h.team(t, "web-rename", "amina@kibo.test", owner, "")
+	ownerCookie := sessionCookie(h.signIn(t, "owner-rename@web.test"))
+	ctx := context.Background()
+
+	if rec := h.postFormAs(t, "/team/name", ownerCookie, url.Values{"name": {"  Kibo Studio  "}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("rename = %d, want 303", rec.Code)
+	}
+	if teams, _ := h.accounts.TeamsFor(ctx, owner.ID); len(teams) == 0 || teams[0].TeamName != "Kibo Studio" {
+		t.Fatalf("teams after rename = %+v, want Kibo Studio", teams)
+	}
+	rec := h.postFormAs(t, "/team/name", ownerCookie, url.Values{"name": {"   "}})
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "error=") {
+		t.Errorf("a blank name was answered %d to %q, not with the reason on the page", rec.Code, loc)
+	}
+
+	admin := h.user(t, "admin-rename@web.test")
+	if err := h.accounts.SetRole(ctx, owner.ID, "web-rename", admin.ID, account.RoleAdmin); err != nil {
+		t.Fatalf("make admin: %v", err)
+	}
+	adminCookie := sessionCookie(h.signIn(t, "admin-rename@web.test"))
+	if rec := h.postFormAs(t, "/team/name", adminCookie, url.Values{"name": {"Taken over"}}); rec.Code != http.StatusForbidden {
+		t.Errorf("an admin renaming the team = %d, want 403", rec.Code)
+	}
+}
+
 // A stranger who gets hold of the link cannot use it, because acceptance is
 // bound to the invited address rather than to whoever presents the token.
 func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {

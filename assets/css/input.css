@@ -10,6 +10,34 @@
 @source "../../internal/web/**/*.templ";
 @source "../../internal/web/**/*_templ.go";
 
+/* Inter, bundled rather than fetched from a font CDN: the dashboard is
+   self-hosted, often on a network with no route to a third party, and a page
+   that waits on one renders in a fallback face and then jumps. The variable
+   files cover every weight in two requests; latin-ext is only fetched for a
+   name that needs it. The feature settings on body (cv02, cv11, …) are Inter's
+   own alternates, which is why the face has to be Inter for them to mean
+   anything. Licensed under the SIL OFL, which ships beside the files. */
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/assets/fonts/inter-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Inter Variable";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/assets/fonts/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
 /* Token system from templUI / shadcn, so components copied from
    `templui add <component>` inherit this theme with no changes.
 
@@ -44,20 +72,30 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-border: var(--sidebar-border);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  --color-canvas: var(--canvas);
+  /* shadcn's radius scale, so a templUI component and a page of ours agree
+     on what "rounded-lg" means. */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
 }
 
 :root {
-  /* Tighter than the shadcn default of 0.625rem. Large radii read as
-     friendly; small ones read as precise, which suits an infrastructure
-     tool. */
-  --radius: 0.375rem;
+  /* The shadcn default, shared with every other Codeblock dashboard: controls
+     and nav rows at rounded-lg (8px), panels at rounded-xl (12px). */
+  --radius: 0.5rem;
 
+  /* Pure neutral greys (Tailwind's neutral scale, chroma 0): no blue tint, so
+     the only colour on a page is the colour that means something. */
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
+  /* The soft surface the content column sits on. Panels, tables and forms
+     keep the white card on top of it, which is what lets a page read as a
+     few objects instead of one sheet of hairlines. */
+  --canvas: oklch(0.985 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
@@ -67,7 +105,7 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.505 0 0);
+  --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -78,48 +116,56 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --sidebar: oklch(0.988 0 0);
+  /* The sidebar is the page's own white, set against the canvas beside it
+     by its border rather than by a second grey. */
+  --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-accent: oklch(0.955 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
   --sidebar-border: oklch(0.922 0 0);
 }
 
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.185 0 0);
+  --canvas: oklch(0.165 0 0);
+  --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.245 0 0);
+  --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.245 0 0);
-  --muted-foreground: oklch(0.66 0 0);
-  --accent: oklch(0.255 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.68 0.17 22.2);
   --success: oklch(0.74 0.15 158);
   --warning: oklch(0.79 0.14 76);
   --info: oklch(0.7 0.14 258);
   --brand: oklch(0.6711 0.0916 182.3); /* #4AA89A, the mark's lighter teal */
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 13%);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.165 0 0);
+  --sidebar: oklch(0.145 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.235 0 0);
-  --sidebar-border: oklch(1 0 0 / 9%);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
 }
 
 @layer base {
   * {
     @apply border-border;
   }
+  /* 14px body, the shadcn text-sm, for prose, labels and controls; the dense
+     parts — tables, sidebar rows, logs — set their own smaller sizes. */
   body {
-    @apply bg-background text-foreground text-[13px] leading-relaxed antialiased;
+    @apply bg-background font-sans text-foreground text-sm leading-normal antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
   }
 
   .skip-link {
@@ -135,6 +181,11 @@
   }
   ::selection {
     @apply bg-foreground/15;
+  }
+  /* A ticked box or a chosen radio is a selection, and selections are
+     neutral: the browser's own blue would be the only hue on the page. */
+  input[type="checkbox"], input[type="radio"] {
+    accent-color: var(--primary);
   }
 }
 
@@ -154,17 +205,161 @@
 
   /* ---- surfaces ---------------------------------------------------- */
 
+  /* The one card: a white surface on the canvas, a hairline, rounded-xl and no
+     shadow. Its title is a sentence-case heading, not a micro-label — the
+     panel is about what it holds, and an uppercase caption made every panel
+     look like the same form field. */
   .panel {
-    @apply bg-card border border-border rounded-md;
+    @apply bg-card border border-border rounded-xl;
   }
   .panel-header {
-    @apply flex items-center justify-between gap-3 px-4 h-11 border-b border-border;
+    @apply flex min-h-12 items-center justify-between gap-3 px-5 py-3 border-b border-border;
   }
   .panel-title {
-    @apply text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
+    @apply text-sm font-semibold text-foreground;
+  }
+  .panel-desc {
+    @apply mt-0.5 text-xs text-muted-foreground;
   }
   .panel-body {
-    @apply p-4;
+    @apply p-5;
+  }
+  .panel-foot {
+    @apply flex items-center justify-between gap-3 border-t border-border px-5 py-3 text-xs
+           text-muted-foreground;
+  }
+
+  /* ---- page and section headings ----------------------------------- */
+
+  /* One per page. The actions share the title's row and the description runs
+     the full width beneath them, so a long line of explanation never squeezes
+     the buttons or is squeezed by them. */
+  .page-head {
+    @apply mb-6;
+  }
+  .page-head-row {
+    @apply flex flex-wrap items-center justify-between gap-x-6 gap-y-3;
+  }
+  .page-title {
+    @apply min-w-0 text-2xl font-semibold leading-tight tracking-tight;
+  }
+  .page-sub {
+    @apply mt-1.5 max-w-3xl text-sm text-muted-foreground;
+  }
+  .page-actions {
+    @apply flex flex-wrap items-center gap-2;
+  }
+  /* A small line above the title: the area a page belongs to, or the id of
+     the record it shows. */
+  .page-eyebrow {
+    @apply mb-1.5 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground;
+  }
+  /* A labelled group, heading above its card rather than inside it. */
+  .section {
+    @apply mt-8 first:mt-0;
+  }
+  .section-head {
+    @apply mb-3 flex items-end justify-between gap-4;
+  }
+  .section-title {
+    @apply text-[15px] font-semibold tracking-tight;
+  }
+  .section-sub {
+    @apply mt-0.5 text-xs text-muted-foreground;
+  }
+  /* A page that is a form reads best at a measure, not the full width. */
+  .page-narrow {
+    @apply max-w-3xl;
+  }
+
+  /* ---- list toolbar, active filters, pager ------------------------- */
+
+  /* The row above a list: a search field, then fixed-width selects, then an
+     Apply button for a browser that runs no script. No visible labels — the
+     placeholder or the "All …" option says what each control is, and each
+     keeps an aria-label. One bottom-aligned row that wraps on a phone. */
+  .toolbar {
+    @apply mb-3 flex flex-wrap items-center gap-2;
+  }
+  .toolbar-search {
+    @apply relative w-72 max-w-full;
+  }
+  .toolbar-search > svg {
+    @apply pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2
+           text-muted-foreground;
+  }
+  .toolbar-search > .control {
+    @apply bg-card pl-8 dark:bg-input/30;
+  }
+  /* Two classes deep so it outranks .control's w-full, which comes later. */
+  .toolbar .toolbar-select {
+    @apply w-40 bg-card pr-7 dark:bg-input/30;
+  }
+  .toolbar-check {
+    @apply inline-flex h-8 cursor-pointer items-center gap-2 rounded-lg border border-input
+           bg-card px-2.5 text-sm text-muted-foreground transition-colors
+           hover:text-foreground has-[:checked]:text-foreground dark:bg-input/30;
+  }
+  .toolbar-reset {
+    @apply inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium
+           text-muted-foreground transition-colors hover:text-foreground;
+  }
+
+  /* The filters in force, as pills that each remove themselves, with the
+     count they leave and a way to clear them all. */
+  .filters {
+    @apply mb-3 flex flex-wrap items-center gap-2 text-xs;
+  }
+  .filters-count {
+    @apply mr-1 tabular-nums text-muted-foreground;
+  }
+  .filter-chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-border bg-card py-0.5
+           pl-2.5 pr-1.5 text-foreground transition-colors hover:border-foreground/30;
+  }
+  .filter-chip > span:first-child {
+    @apply text-muted-foreground;
+  }
+  .filter-chip > svg {
+    @apply size-3 text-muted-foreground;
+  }
+  .filters-clear {
+    @apply px-1 font-medium text-muted-foreground hover:text-foreground;
+  }
+
+  /* Under a list: where you are in it, and the way to the next page. The
+     chevrons are links, so paging is a URL; the one at an end is drawn but
+     inert. */
+  .pager {
+    @apply flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3;
+  }
+  .pager-info {
+    @apply text-xs text-muted-foreground;
+  }
+  .pager-info b {
+    @apply font-medium tabular-nums text-foreground;
+  }
+  .pager-nav {
+    @apply flex items-center gap-2;
+  }
+  .pager-page {
+    @apply mr-2 text-xs tabular-nums text-muted-foreground;
+  }
+  .pager-btn {
+    @apply inline-flex size-8 items-center justify-center rounded-lg border border-border bg-card
+           transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-3
+           focus-visible:ring-ring/50;
+  }
+  .pager-btn > svg {
+    @apply size-4;
+  }
+  .pager-btn[aria-disabled="true"] {
+    @apply pointer-events-none opacity-35;
+  }
+
+  /* No rows for a filter: say so, and offer the way back. */
+  .empty-icon {
+    @apply mb-2 size-6 text-muted-foreground/60;
   }
 
   /* ---- dense rows -------------------------------------------------- */
@@ -173,43 +368,55 @@
     @apply divide-y divide-border;
   }
   .row-item {
-    @apply flex items-center gap-4 px-4 py-3 transition-colors;
+    @apply flex items-center gap-4 px-5 py-3 transition-colors;
   }
   /* Utilities are repeated rather than @apply-ing .row-item: Tailwind v4 only
      resolves real utilities inside @apply, not other custom classes. */
   .row-link {
-    @apply flex cursor-pointer items-center gap-4 px-4 py-3 transition-colors hover:bg-accent/60;
+    @apply flex cursor-pointer items-center gap-4 px-5 py-3 transition-colors hover:bg-muted/40;
   }
 
   /* ---- tables ------------------------------------------------------ */
 
+  /* 13px rows under a quiet header band. The header is sentence case in the
+     muted colour on a faint muted fill: it labels the columns without
+     competing with what is in them. */
   .dtable {
-    @apply w-full text-[13px];
+    @apply w-full border-collapse text-[13px];
   }
+  /* Cells are px-3 between columns and px-5 at the edges, so the first and
+     last columns line up with the panel's header while a wide table still
+     fits its columns. */
   .dtable thead th {
-    @apply text-left text-[10.5px] font-semibold uppercase tracking-[0.07em]
-           text-muted-foreground px-4 py-2 border-b border-border whitespace-nowrap;
+    @apply text-left text-xs font-medium text-muted-foreground bg-muted/45
+           px-3 py-2.5 border-b border-border whitespace-nowrap;
   }
   .dtable tbody td {
-    @apply px-4 py-2.5 border-b border-border align-middle;
+    @apply px-3 py-3 border-b border-border align-middle;
   }
+  .dtable :is(th, td):first-child { @apply pl-5; }
+  .dtable :is(th, td):last-child { @apply pr-5; }
   .dtable tbody tr:last-child td {
     @apply border-b-0;
   }
   .dtable tbody tr {
-    @apply transition-colors hover:bg-accent/50;
+    @apply transition-colors hover:bg-muted/30;
   }
 
   /* ---- status ------------------------------------------------------ */
 
-  /* A dot plus a word, not a filled pill. At the density of an
-     infrastructure list, a page of coloured pills becomes noise and the one
-     that matters stops standing out. */
+  /* A dot and a word in a soft pill of the same colour. The pill is tinted
+     from currentColor, so every status-* class — and anything else that sets
+     a colour — gets a matching background and rim without a second set of
+     rules, and a tone keeps meaning the same thing as text, dot and tint. */
   .status {
-    @apply inline-flex items-center gap-1.5 text-[12px] whitespace-nowrap;
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-px text-[11px]
+           font-medium leading-[18px] whitespace-nowrap;
+    background-color: color-mix(in oklab, currentColor 9%, transparent);
+    border-color: color-mix(in oklab, currentColor 22%, transparent);
   }
   .status::before {
-    @apply content-[''] size-[6px] rounded-full bg-current shrink-0;
+    @apply content-[''] size-1.5 rounded-full bg-current shrink-0;
   }
   .status-ok      { @apply text-success; }
   .status-warn    { @apply text-warning; }
@@ -227,51 +434,42 @@
 
   /* ---- metric strip ----------------------------------------------- */
 
-  /* Replaces a grid of stat cards. Same numbers, one border, a quarter of the
-     vertical space — which means the actual content is above the fold. */
+  /* The readout strip, which replaces a grid of stat cards. Same numbers, one
+     hairline grid, a quarter of the vertical space — which means the actual
+     content is above the fold. Square, not rounded: it is an instrument panel
+     ruled into cells, not a row of objects.
+
+     A grid that fills itself: each reading is at least 150px and the columns
+     share what is left, so three readings or six lay out without the page
+     saying how many, and a phone gets two columns. Every cell draws its own
+     right and bottom rule and the strip draws the top and left, so the rules
+     stay single however the grid wraps. */
   .metrics {
-    @apply flex flex-wrap items-stretch divide-x divide-border border border-border
-           rounded-md overflow-hidden bg-card;
+    @apply grid border-t border-l border-border;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
   .metric {
-    @apply flex-1 min-w-[128px] px-4 py-3;
+    @apply flex min-w-0 flex-col border-r border-b border-border bg-background px-4 py-3.5;
   }
   .metric-k {
-    @apply text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
+    @apply truncate font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground;
   }
   .metric-v {
-    @apply text-[19px] font-semibold tracking-tight mt-0.5 tabular-nums;
+    @apply mt-2.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums;
   }
   .metric-sub {
-    @apply text-[11.5px] text-muted-foreground mt-px;
+    @apply mt-2 text-[11px] leading-snug text-muted-foreground;
   }
 
-  /* On a phone, wrapping a five-item flex strip produces a 3+2 layout with
-     unequal card widths and dividers in the wrong places. Make the compact
-     layout explicit: two equal columns and an odd final metric spanning the
-     full strip. The desktop flex strip remains unchanged. */
+  /* On a phone, two equal columns whatever the count, and an odd last
+     reading takes the whole row rather than leaving half of it empty. Each
+     cell draws its own right and bottom rule, so spanning needs no fix-up. */
   @media (max-width: 639px) {
     .metrics {
-      display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .metrics > .metric {
-      min-width: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    :where(.metrics > :not(:last-child)) {
-      border-right-width: 0;
-    }
-    .metrics > .metric:nth-child(even) {
-      border-left: 1px solid var(--border);
     }
     .metrics > .metric:last-child:nth-child(odd) {
       grid-column: 1 / -1;
-      border-bottom-width: 0;
-      border-left-width: 0;
-    }
-    .metrics:has(> .metric:last-child:nth-child(even)) > .metric:nth-last-child(-n + 2) {
-      border-bottom-width: 0;
     }
   }
 
@@ -289,24 +487,28 @@
 
   /* ---- buttons ----------------------------------------------------- */
 
+  /* The outline button is the default: filters, cancel, secondary actions —
+     most of what a page offers. .btn-primary is the neutral solid one, for
+     the action the page exists for. */
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 h-8 px-3 rounded-md
-           border border-border bg-card text-[12.5px] font-medium
+    @apply inline-flex items-center justify-center gap-1.5 h-8 px-2.5 rounded-lg
+           border border-border bg-card text-sm font-medium shadow-xs
            whitespace-nowrap transition-colors cursor-pointer
-           hover:bg-accent focus-visible:outline-none focus-visible:ring-2
-           focus-visible:ring-ring/50 disabled:opacity-50;
+           hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-3
+           focus-visible:ring-ring/50 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply bg-primary text-primary-foreground border-transparent hover:bg-primary/90;
+    @apply bg-primary text-primary-foreground border-transparent shadow-none hover:bg-primary/90;
   }
   .btn-danger {
     @apply text-destructive hover:bg-destructive/10 hover:border-destructive/40;
   }
   .btn-ghost {
-    @apply border-transparent bg-transparent hover:bg-accent;
+    @apply border-transparent bg-transparent shadow-none text-foreground/75
+           hover:bg-foreground/5 hover:text-foreground;
   }
   .btn-sm {
-    @apply h-7 px-2 text-[12px];
+    @apply h-7 px-2.5 text-[13px];
   }
   .btn-icon {
     @apply size-8 p-0 shrink-0;
@@ -348,12 +550,12 @@
   /* Headings are quiet and set apart by space above them rather than by
      rules or weight: they label a block, they are not a block. */
   .nav-group {
-    @apply flex h-7 items-end px-2 pb-1 pt-5 text-[10.5px] font-medium uppercase
-           tracking-[0.08em] text-muted-foreground/70 box-content;
+    @apply flex h-7 items-end px-2.5 pb-1 pt-4 text-[11px] font-semibold uppercase
+           tracking-[0.12em] text-muted-foreground box-content;
   }
   .nav-item {
-    @apply relative flex h-8 shrink-0 items-center gap-2.5 rounded-md px-2
-           text-[13px] text-muted-foreground transition-colors
+    @apply relative flex h-8 shrink-0 items-center gap-2.5 rounded-lg px-2.5
+           text-[13.5px] text-muted-foreground transition-colors
            hover:bg-sidebar-accent/70 hover:text-foreground
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
   }
@@ -409,7 +611,7 @@
     @apply flex shrink-0 flex-col gap-1.5 px-2.5 pb-2 pt-3;
   }
   .brand {
-    @apply relative mb-1 flex h-8 items-center gap-2.5 rounded-md px-2 text-[14px]
+    @apply relative mb-1 flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[15px]
            font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2
            focus-visible:ring-ring/50;
   }
@@ -435,8 +637,8 @@
 
   /* Search, drawn as a field: it says "type here" in a way an icon cannot. */
   .sidebar-search {
-    @apply relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-md border
-           border-sidebar-border bg-background/70 px-2 text-[12.5px] text-muted-foreground
+    @apply relative flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg border
+           border-sidebar-border bg-canvas px-2.5 text-[13px] text-muted-foreground
            transition-colors hover:border-border hover:bg-sidebar-accent/70 hover:text-foreground
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
   }
@@ -455,8 +657,8 @@
     @apply relative flex items-center;
   }
   .tree-item {
-    @apply relative flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2
-           text-[13px] text-muted-foreground transition-colors
+    @apply relative flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5
+           text-[13.5px] text-muted-foreground transition-colors
            hover:bg-sidebar-accent/70 hover:text-foreground
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
   }
@@ -470,7 +672,7 @@
   /* Apps sit under their project on a guide line, indented to the project's
      name, at a slightly shorter row: they are the detail of the row above. */
   .tree-group {
-    @apply relative ml-[17px] hidden flex-col gap-px border-l border-sidebar-border py-0.5 pl-1.5;
+    @apply relative ml-[19px] hidden flex-col gap-px border-l border-sidebar-border py-0.5 pl-1.5;
   }
   .tree-node[data-open] > .tree-group {
     @apply flex;
@@ -520,7 +722,7 @@
     @apply transition-transform duration-150;
   }
   .tree-extra {
-    @apply flex h-8 items-center gap-2.5 rounded-md px-2 text-[12.5px]
+    @apply flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px]
            text-muted-foreground/80 transition-colors hover:bg-sidebar-accent/70
            hover:text-foreground focus-visible:outline-none focus-visible:ring-2
            focus-visible:ring-ring/50;
@@ -533,7 +735,7 @@
      chevron that says it opens. No border — the chevron and the place it sits
      are what say this is a control rather than a link. */
   .switcher {
-    @apply relative flex w-full cursor-pointer list-none items-center gap-2.5 rounded-md
+    @apply relative flex w-full cursor-pointer list-none items-center gap-2.5 rounded-lg
            px-1.5 py-1 min-h-10 text-left transition-colors hover:bg-sidebar-accent/70
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50
            [&::-webkit-details-marker]:hidden;
@@ -660,7 +862,7 @@
      It used to carry `hidden md:flex` in the markup, which is a second place
      deciding the same thing and one a media query here has to fight. */
   .sidebar {
-    @apply flex w-[244px] shrink-0 flex-col border-r border-sidebar-border
+    @apply flex w-[260px] shrink-0 flex-col border-r border-sidebar-border
            bg-sidebar transition-[width] duration-150 ease-out;
   }
 
@@ -819,23 +1021,50 @@
     @apply flex flex-col gap-1.5;
   }
   .label {
-    @apply text-[12px] font-medium;
+    @apply text-[13px] font-medium leading-none;
   }
   .hint {
-    @apply text-[11.5px] text-muted-foreground;
+    @apply text-xs text-muted-foreground;
   }
+  /* shadcn's input: transparent on the card in light, a faint fill in dark,
+     and a focus ring that widens rather than a border that changes colour. */
   .control {
-    @apply w-full h-8 rounded-md border border-input bg-background px-2.5
-           text-[13px] transition-shadow placeholder:text-muted-foreground/60
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+    @apply w-full h-8 rounded-lg border border-input bg-transparent px-2.5
+           text-sm transition-[color,box-shadow,border-color] placeholder:text-muted-foreground
+           focus-visible:outline-none focus-visible:border-ring focus-visible:ring-3
+           focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50
+           aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30;
+  }
+  /* A form's fields in a row with its button, the button level with the
+     inputs. A hint under one field would push the button down to meet it, so
+     a row's explanation goes beneath the row in .form-note instead. */
+  .form-row {
+    @apply flex flex-wrap items-end gap-3;
+  }
+  .form-note {
+    @apply mt-2 text-xs text-muted-foreground;
+  }
+  .form-grid {
+    @apply grid gap-4 sm:grid-cols-2;
   }
 
   .table-scroll {
     @apply w-full overflow-x-auto;
   }
+  /* The signed-out pages: the product's name above one card, centred on the
+     canvas, and nothing else. */
+  .auth-brand {
+    @apply mb-6 flex h-8 items-center justify-center gap-2.5 rounded-lg px-2 text-[17px]
+           font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2
+           focus-visible:ring-ring/50;
+  }
+  .auth-card {
+    @apply rounded-xl border border-border bg-card p-6 shadow-sm;
+  }
+
   .confirm-dialog {
     @apply fixed left-1/2 top-1/2 z-50 m-0 w-[calc(100%-2rem)] max-w-md
-           -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border
+           -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border
            bg-background p-5 text-foreground shadow-lg backdrop:bg-black/50;
   }
   textarea.control {
@@ -850,13 +1079,15 @@
   .micro {
     @apply text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground;
   }
+  /* An inline notice: a tinted banner in its tone, not a card with a coloured
+     edge. The text stays in the foreground colour so it reads at any tint. */
   .callout {
-    @apply flex gap-3 rounded-md border border-border border-l-2 bg-card px-4 py-3 text-[12.5px];
+    @apply flex gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3 text-[13px];
   }
-  .callout-warn { @apply border-l-warning; }
-  .callout-err  { @apply border-l-destructive; }
+  .callout-warn { @apply border-warning/35 bg-warning/10; }
+  .callout-err  { @apply border-destructive/30 bg-destructive/[0.06]; }
   .empty {
-    @apply flex flex-col items-center gap-1 px-6 py-12 text-center text-muted-foreground;
+    @apply flex flex-col items-center gap-1 px-6 py-14 text-center text-[13px] text-muted-foreground;
   }
   .kv {
     @apply grid grid-cols-[minmax(120px,180px)_1fr] gap-x-6 gap-y-2.5 text-[13px];
@@ -1542,7 +1773,7 @@
            max-w-sm flex-col gap-2;
   }
   .toast {
-    @apply pointer-events-auto flex items-start gap-3 rounded-md border border-border
+    @apply pointer-events-auto flex items-start gap-3 rounded-lg border border-border
            border-l-2 bg-popover px-4 py-3 text-[12.5px] shadow-lg;
     animation: yacht-toast-in 0.18s ease-out;
   }

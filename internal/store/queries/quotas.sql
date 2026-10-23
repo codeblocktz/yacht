@@ -48,8 +48,8 @@ SELECT owner_id, replicas, cpu_limit, memory_limit
 FROM apps
 ORDER BY owner_id;
 
--- Every team with its quota, its storage and how many people are in it. The
--- operator's list; see ListAllAppFootprints for why it crosses teams.
+-- Every team with its quota, its pool, its storage and how many people are in
+-- it. The operator's list; see ListAllAppFootprints for why it crosses teams.
 -- name: ListTeamQuotas :many
 SELECT t.id, t.display_name,
        (SELECT count(*) FROM memberships m WHERE m.owner_id = t.id)::bigint AS members,
@@ -58,9 +58,11 @@ SELECT t.id, t.display_name,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
-       q.updated_at                            AS quota_updated_at
+       q.updated_at                            AS quota_updated_at,
+       coalesce(p.pool, '')::text              AS pool
 FROM teams t
 LEFT JOIN team_quotas q ON q.owner_id = t.id
+LEFT JOIN team_pools p ON p.owner_id = t.id
 ORDER BY lower(t.display_name), t.id;
 
 -- name: GetTeamQuotaSummary :one
@@ -71,7 +73,9 @@ SELECT t.id, t.display_name,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
-       q.updated_at                            AS quota_updated_at
+       q.updated_at                            AS quota_updated_at,
+       coalesce(p.pool, '')::text              AS pool
 FROM teams t
 LEFT JOIN team_quotas q ON q.owner_id = t.id
+LEFT JOIN team_pools p ON p.owner_id = t.id
 WHERE t.id = @id;

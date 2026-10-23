@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -297,6 +298,33 @@ func (s *Service) SetRole(
 			UserID: target, OwnerID: teamID, Role: string(role),
 		}); err != nil {
 			return fmt.Errorf("account: set role: %w", err)
+		}
+		return nil
+	})
+}
+
+// ErrTeamName is a team name that cannot be shown: empty, more than sixty
+// characters, or more than one line.
+var ErrTeamName = errors.New("account: a team's name is 1 to 60 characters, on one line")
+
+// RenameTeam changes the name a team is shown by: in the switcher, on its
+// invitations, and to the people who run the install. Only an owner may — the
+// name is the team's own, and it is what an invitation says somebody joins.
+func (s *Service) RenameTeam(ctx context.Context, actor uuid.UUID, teamID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 60 || strings.ContainsAny(name, "\r\n") {
+		return ErrTeamName
+	}
+	return s.inTeam(ctx, teamID, func(q *dbgen.Queries) error {
+		role, err := roleIn(ctx, q, actor, teamID)
+		if err != nil {
+			return err
+		}
+		if !role.CanOwn() {
+			return ErrForbidden
+		}
+		if _, err := q.RenameTeam(ctx, dbgen.RenameTeamParams{ID: teamID, DisplayName: name}); err != nil {
+			return fmt.Errorf("account: rename team: %w", err)
 		}
 		return nil
 	})

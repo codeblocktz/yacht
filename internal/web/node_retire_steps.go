@@ -143,7 +143,7 @@ func retirePinnedStep(p orchestrator.RetirePlan) Step {
 	}
 	st.Detail = strings.Join(names, ", ") + " " + pick(n, "stays", "stay") +
 		" until " + pick(n, "its", "their") + " volume is moved. " +
-		"Yacht does not copy volumes between machines yet, so " +
+		"This install does not copy volumes between machines, so " +
 		pick(n, "it is", "they are") + " left running here, untouched."
 	return st
 }

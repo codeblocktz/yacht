@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,29 @@ var (
 	ErrReleaseImageGone = errors.New(
 		"app: the image this release ran is no longer in the registry, so it cannot be restored")
 )
+
+// MissingSecretsError refuses a rollback to a release that ran with secrets
+// since deleted. A release keeps its secrets' names, not their values, and
+// restores the values the app has now — so a secret that is gone would leave
+// the release running without something it was built to read, and failing in
+// a way nothing on the page explains. Adding the secret back is the fix, and
+// only the person can do it: the value was never kept.
+type MissingSecretsError struct {
+	Keys []string
+}
+
+func (e MissingSecretsError) Error() string {
+	return "app: that release used " + plural(len(e.Keys), "the secret", "the secrets") + " " +
+		strings.Join(e.Keys, ", ") + ", which no longer " + plural(len(e.Keys), "exists", "exist") +
+		" — add " + plural(len(e.Keys), "it", "them") + " back under Variables, then roll back"
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
 
 // RollbackTrigger is the deployment trigger, and revision, a rollback records.
 const RollbackTrigger = "rollback"
@@ -68,6 +92,9 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 			"so it runs one — detach its volumes to roll back to it", release.Replicas, a.Name)
 	}
 	if err := s.checkReleaseImage(ctx, release); err != nil {
+		return err
+	}
+	if err := s.checkReleaseSecrets(ctx, a, release); err != nil {
 		return err
 	}
 
@@ -186,6 +213,34 @@ func (s *Service) restoreVariables(
 		if err := s.recordLinks(ctx, q, ownerID, a, key, value); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkReleaseSecrets refuses a release whose secrets are not all still set.
+// See MissingSecretsError.
+func (s *Service) checkReleaseSecrets(ctx context.Context, a App, release Release) error {
+	if len(release.SecretKeys) == 0 {
+		return nil
+	}
+	vars, err := s.variablesFor(ctx, s.q, a.ID)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, v := range vars {
+		if v.Secret {
+			have[v.Key] = true
+		}
+	}
+	var missing []string
+	for _, k := range release.SecretKeys {
+		if !have[k] {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		return MissingSecretsError{Keys: missing}
 	}
 	return nil
 }

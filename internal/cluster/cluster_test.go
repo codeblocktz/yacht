@@ -90,7 +90,7 @@ func TestAServerAddressCannotBeUnsafe(t *testing.T) {
 // The command has to be the one K3s actually documents, or it fails on a
 // machine somebody has already gone to the trouble of provisioning.
 func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
-	got := BuildCommand("https://10.0.0.1:6443", "K10secret::server:pw", "web")
+	got := BuildCommand("https://10.0.0.1:6443", "K10secret::server:pw", "web", false)
 
 	for _, want := range []string{
 		"curl -sfL https://get.k3s.io",
@@ -108,12 +108,37 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 	if strings.Index(got, "sh -s -") > strings.Index(got, "--node-label") {
 		t.Errorf("the label is not passed to the agent:\n%s", got)
 	}
+	// A pool on its own is shared: labelled, and open to anyone's apps.
+	if strings.Contains(got, "--node-taint") {
+		t.Errorf("a shared pool's node was tainted:\n%s", got)
+	}
 }
 
-// No pool is a normal node, not a node labelled with the empty string.
+// A dedicated node is labelled and tainted with the same pool, so only the
+// apps placed on that pool — which tolerate the taint — are scheduled there.
+func TestADedicatedNodeIsTaintedForItsPool(t *testing.T) {
+	got := BuildCommand("https://10.0.0.1:6443", "t", "gpu", true)
+	for _, want := range []string{
+		"--node-label yacht/pool=gpu",
+		"--node-taint yacht/pool=gpu:NoSchedule",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("command is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "sh -s -") > strings.Index(got, "--node-taint") {
+		t.Errorf("the taint is not passed to the agent:\n%s", got)
+	}
+}
+
+// No pool is a normal node, not a node labelled with the empty string — nor
+// one tainted with it, whatever the dedicated box said.
 func TestNoPoolMeansNoLabel(t *testing.T) {
-	if got := BuildCommand("https://10.0.0.1:6443", "t", ""); strings.Contains(got, "node-label") {
-		t.Errorf("a node with no pool was given a label:\n%s", got)
+	for _, dedicated := range []bool{false, true} {
+		got := BuildCommand("https://10.0.0.1:6443", "t", "", dedicated)
+		if strings.Contains(got, "node-label") || strings.Contains(got, "node-taint") {
+			t.Errorf("a node with no pool was given a label or taint (dedicated=%v):\n%s", dedicated, got)
+		}
 	}
 }
 
@@ -186,7 +211,7 @@ func TestTheStoredTokenIsNotReadable(t *testing.T) {
 	}
 
 	// And it still comes back out, so sealing is not merely mangling it.
-	cmd, err := j.Command(ctx, "web")
+	cmd, err := j.Command(ctx, "web", false)
 	if err != nil {
 		t.Fatalf("command: %v", err)
 	}
@@ -237,7 +262,7 @@ func TestThereCanOnlyBeOneJoinRow(t *testing.T) {
 	if s.ServerURL != "https://10.0.0.2:6443" {
 		t.Fatalf("server address is %q, want the one stored second", s.ServerURL)
 	}
-	cmd, err := j.Command(ctx, "")
+	cmd, err := j.Command(ctx, "", false)
 	if err != nil {
 		t.Fatalf("command: %v", err)
 	}
@@ -253,7 +278,7 @@ func TestNoSettingsIsItsOwnAnswer(t *testing.T) {
 	if _, err := j.Settings(context.Background()); err != ErrNotConfigured {
 		t.Fatalf("Settings error = %v, want ErrNotConfigured", err)
 	}
-	if _, err := j.Command(context.Background(), "web"); err != ErrNotConfigured {
+	if _, err := j.Command(context.Background(), "web", false); err != ErrNotConfigured {
 		t.Fatalf("Command error = %v, want ErrNotConfigured", err)
 	}
 }

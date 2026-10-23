@@ -19,6 +19,10 @@ type SignInData struct {
 	// Derived only from the route that was posted to — a fact the submitter
 	// chose — so it says nothing whatever about the account.
 	Method SignInMethod
+
+	// OpenSignup says the emailed link also creates an account. A fact about
+	// the install, the same for every visitor, so it discloses nothing.
+	OpenSignup bool
 }
 
 // SignInMethod is which form a submission came from.
@@ -38,7 +42,7 @@ const (
 // does not matter whether such a probe is a round trip, a fetch or a status
 // code: the only safe design is one where the server is never asked.
 templ SignIn(d SignInData) {
-	@authCard("Sign in", "Use your password, or have a link emailed to you.") {
+	@authCard("Sign in", signInLead(d.OpenSignup)) {
 		if d.Error != "" {
 			<div class="callout callout-err mb-4">
 				<div>{ d.Error }</div>
@@ -106,22 +110,28 @@ templ SignIn(d SignInData) {
 			<button class="btn" type="submit">Email me a sign-in link</button>
 		</form>
 		<p class="mt-5 text-[12.5px] text-muted-foreground">
-			No password yet, or forgotten it? Ask for a link, then set one from
-			your account page.
+			if d.OpenSignup {
+				New here? Ask for a link with your address and it creates your
+				account. No password yet, or forgotten it? Ask for a link, then
+				set one from your account page.
+			} else {
+				No password yet, or forgotten it? Ask for a link, then set one from
+				your account page.
+			}
 		</p>
 	}
 }
 
-// CheckMail takes no data on purpose.
+// CheckMail takes nothing about the visitor on purpose.
 //
 // It carries neither the address nor anything derived from it, so the response
 // to a registered address and to an unregistered one is the same bytes. A page
 // that said "we sent a link to alice@example.com" would only need to say it
 // once, for an address that exists, to become the disclosure this whole flow
-// avoids.
-templ CheckMail() {
-	@authCard("Check your mail",
-		"If that address has an account, a sign-in link is on its way.") {
+// avoids. openSignup is the install's, the same for everybody: with it every
+// address is mailed a link, so the page can say so plainly.
+templ CheckMail(openSignup bool) {
+	@authCard("Check your mail", checkMailLead(openSignup)) {
 		<p class="text-[12.5px] text-muted-foreground">
 			The link works once and expires shortly. You can close this page.
 		</p>
@@ -136,17 +146,13 @@ templ CheckMail() {
 // authCard is the frame the signed-out pages share: centred, narrow, and
 // without the chrome of a dashboard nobody has been let into yet.
 templ authCard(title, subtitle string) {
-	<div class="mx-auto w-full max-w-[380px] py-12">
-		<div class="mb-5">
-			<h1 class="text-[19px] font-semibold tracking-tight">{ title }</h1>
+	<div class="auth-card">
+		<div class="mb-6">
+			<h1 class="text-xl font-semibold tracking-tight">{ title }</h1>
 			if subtitle != "" {
-				<p class="mt-1 text-[12.5px] text-muted-foreground">{ subtitle }</p>
+				<p class="mt-1.5 text-sm text-muted-foreground">{ subtitle }</p>
 			}
 		</div>
-		<div class="panel">
-			<div class="panel-body">
-				{ children... }
-			</div>
-		</div>
+		{ children... }
 	</div>
 }

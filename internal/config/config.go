@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 var appDomainRE = regexp.MustCompile(
@@ -82,6 +84,12 @@ type Config struct {
 	// has an account of its own.
 	OwnerEmail string
 
+	// OpenSignup lets anybody make an account: the sign-in form mails an
+	// address nobody holds a link that creates it, with a team of its own.
+	// Off by default, which keeps an install to its owner and the people
+	// they invite.
+	OpenSignup bool
+
 	// Operators are the people who run the install itself, as opposed to a
 	// team on it: nodes, the registry, DNS, every team's quota. Email
 	// addresses, matched case-insensitively against the signed-in person.
@@ -150,6 +158,18 @@ type Config struct {
 	// internet would.
 	DNSResolver string
 
+	// NetworkIsolation is how far teams are kept apart on the cluster's
+	// network: "team" (the default) refuses every connection into a team's
+	// workloads from another team's or from a build; "strict" also limits
+	// what workloads and builds may connect out to — DNS, their own team and
+	// public addresses — so the nodes' network and anything else private is
+	// out of reach; "off" writes no policy at all.
+	NetworkIsolation string
+
+	// EgressAllow are private ranges, as CIDRs, that strict isolation still
+	// lets workloads and builds reach: an image registry on the LAN, say.
+	EgressAllow string
+
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://yacht.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
@@ -217,12 +237,15 @@ func Load() (Config, error) {
 		OwnerID:             env("YACHT_OWNER_ID", "owner-local"),
 		OwnerName:           env("YACHT_OWNER_NAME", "Local"),
 		OwnerEmail:          strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		OpenSignup:          envBool("YACHT_OPEN_SIGNUP", false),
 		SecretKey:           strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		SecretKeyPrevious:   envList("YACHT_SECRET_KEY_PREVIOUS"),
 		AppDomain:           env("YACHT_APP_DOMAIN", ""),
 		WildcardTLS:         envBool("YACHT_WILDCARD_TLS", false),
 		CertIssuer:          strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
 		DNSResolver:         env("YACHT_DNS_RESOLVER", ""),
+		NetworkIsolation:    env("YACHT_NETWORK_ISOLATION", ""),
+		EgressAllow:         env("YACHT_EGRESS_ALLOW", ""),
 		ReservedDomains:     envList("YACHT_RESERVED_DOMAINS"),
 		Operators:           envList("YACHT_OPERATORS"),
 		BaseURL:             strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
@@ -250,6 +273,10 @@ func Load() (Config, error) {
 
 func (c Config) validate() error {
 	var errs []error
+
+	if _, err := c.Isolation(); err != nil {
+		errs = append(errs, fmt.Errorf("YACHT_NETWORK_ISOLATION or YACHT_EGRESS_ALLOW: %w", err))
+	}
 
 	if c.DatabaseURL == "" {
 		errs = append(errs, errors.New("YACHT_DATABASE_URL is required"))
@@ -382,6 +409,10 @@ func (c Config) WakerListenAddr() string {
 // being broken rather than as a setting they got wrong.
 func (c Config) accountFaults() []error {
 	if !c.AccountsEnabled() {
+		if c.OpenSignup {
+			return []error{errors.New(
+				"YACHT_OPEN_SIGNUP is set without YACHT_BASE_URL — nobody can sign in, so nobody can sign up")}
+		}
 		return nil
 	}
 
@@ -412,6 +443,35 @@ func (c Config) accountFaults() []error {
 	}
 	if c.MagicLinkTTL <= 0 {
 		errs = append(errs, errors.New("YACHT_MAGIC_LINK_TTL must be positive"))
+	}
+	return append(errs, c.signupFaults()...)
+}
+
+// signupFaults refuses open sign-up on an install that would hand strangers
+// more than an account.
+func (c Config) signupFaults() []error {
+	if !c.OpenSignup {
+		return nil
+	}
+	var errs []error
+	// With no operators named, the owner of whichever team a request acts as
+	// is the operator — and every stranger who signs up owns a team, so every
+	// one of them would have the Admin area: every team, every node.
+	if len(c.Operators) == 0 {
+		errs = append(errs, errors.New(
+			"YACHT_OPEN_SIGNUP requires YACHT_OPERATORS — without it everybody who signs up "+
+				"owns a team, and so runs the install"))
+	}
+	// The team the install runs as goes to the configured owner only. With no
+	// owner named it goes to nobody, and its apps with it.
+	if c.OwnerEmail == "" {
+		errs = append(errs, errors.New(
+			"YACHT_OPEN_SIGNUP requires YACHT_OWNER_EMAIL — the install's own team is kept for that address"))
+	}
+	// Links in the log reach the operator, not the stranger asking for one.
+	if c.MailTransport() == "log" {
+		errs = append(errs, errors.New(
+			"YACHT_OPEN_SIGNUP requires a mail transport — set YACHT_SMTP_ADDR or YACHT_RESEND_API_KEY"))
 	}
 	return errs
 }
@@ -485,17 +545,26 @@ func envInt32(key string, fallback int32) int32 {
 }
 
 // String redacts secrets so a Config can be logged safely.
+// Isolation is the network isolation the settings ask for.
+func (c Config) Isolation() (orchestrator.Isolation, error) {
+	return orchestrator.ParseIsolation(c.NetworkIsolation, c.EgressAllow)
+}
+
 func (c Config) String() string {
 	token := "unset"
 	if c.AuthToken != "" {
 		token = "set"
 	}
+	isolation := "invalid"
+	if iso, err := c.Isolation(); err == nil {
+		isolation = string(iso.Mode)
+	}
 	return fmt.Sprintf(
 		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
-			"accounts=%t mail=%s waker=%s debug=%t",
+			"accounts=%t mail=%s waker=%s isolation=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
 		c.KubeInCluster, token, c.OwnerID,
-		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), c.Debug,
+		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation, c.Debug,
 	)
 }
 

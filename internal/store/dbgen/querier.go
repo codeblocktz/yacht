@@ -54,6 +54,9 @@ type Querier interface {
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
 	// has just expired must fail here rather than in whatever checks it later.
 	ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User, error)
+	// Spent in one statement for the reason ConsumeMagicLink is: no window in
+	// which a second request also finds it unconsumed.
+	ConsumeSignupLink(ctx context.Context, tokenHash []byte) (string, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
 	CountCapacityRefusalsSince(ctx context.Context, since time.Time) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
@@ -86,6 +89,7 @@ type Querier interface {
 	// the check, not a duplicate of one.
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
+	CreateSignupLink(ctx context.Context, arg CreateSignupLinkParams) (SignupLink, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//
@@ -283,6 +287,8 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
+	// Which pool of machines a team's apps are placed on. No row is anywhere.
+	GetTeamPool(ctx context.Context, ownerID string) (TeamPool, error)
 	// What a team may commit, and what it has.
 	//
 	// Committed CPU and memory cannot be summed here: a limit is stored as the
@@ -313,6 +319,12 @@ type Querier interface {
 	// install-wide, so one settings mutation invalidates each Git app exactly
 	// once without manufacturing release history.
 	IncrementGitAppConfigVersions(ctx context.Context) error
+	// A team's pool is a live overlay on every one of its apps: rendered into each
+	// pod template, owned by no release. One change invalidates each of the team's
+	// apps exactly once, and the reconciler rolls them onto the pool without
+	// manufacturing release history. A sleeping app is re-applied at zero
+	// replicas and wakes onto the pool.
+	IncrementTeamAppConfigVersions(ctx context.Context, ownerID string) (int64, error)
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.
@@ -395,8 +407,8 @@ type Querier interface {
 	ListSleepingApps(ctx context.Context) ([]App, error)
 	// Wakes whose process went away: a restart, or a replica that stopped.
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
-	// Every team with its quota, its storage and how many people are in it. The
-	// operator's list; see ListAllAppFootprints for why it crosses teams.
+	// Every team with its quota, its pool, its storage and how many people are in
+	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
 	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
@@ -431,6 +443,9 @@ type Querier interface {
 	// first serialises those pairs, so two concurrent demotions cannot both see
 	// two owners and both proceed.
 	LockTeam(ctx context.Context, id string) (Team, error)
+	// Taken before a pool is changed, inside the transaction that changes it, so
+	// two changes racing each other each compare against what the other wrote.
+	LockTeamPool(ctx context.Context, ownerID string) (TeamPool, error)
 	// Taken at the start of anything that would raise what a team has committed,
 	// inside the transaction that commits it. Two creates racing each other then
 	// run one after the other, and the second reads the first's app before it
@@ -485,6 +500,7 @@ type Querier interface {
 	// back to the queue without changing its checkpoint or verification budget.
 	ReleaseRecoverableDeploymentOperation(ctx context.Context, arg ReleaseRecoverableDeploymentOperationParams) (int64, error)
 	RenameProject(ctx context.Context, arg RenameProjectParams) (Project, error)
+	RenameTeam(ctx context.Context, arg RenameTeamParams) (int64, error)
 	RenewDeploymentOperationLease(ctx context.Context, arg RenewDeploymentOperationLeaseParams) (int64, error)
 	ReplaceAppLinks(ctx context.Context, arg ReplaceAppLinksParams) error
 	// Brings a domain's next check forward. What the "Check now" button does.
@@ -609,6 +625,7 @@ type Querier interface {
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go
 	// struct for no reason at all, which is the shortest route to it being logged.
 	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
+	UpsertTeamPool(ctx context.Context, arg UpsertTeamPoolParams) (TeamPool, error)
 	UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error)
 	UpsertTeamSleepDefault(ctx context.Context, arg UpsertTeamSleepDefaultParams) (TeamSleepDefault, error)
 	// Users, sessions and credentials carry no owner_id: a person exists before they

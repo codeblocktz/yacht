@@ -327,6 +327,57 @@ func TestApplyAppIsStable(t *testing.T) {
 	}
 }
 
+// A team placed on a pool has its pods selected onto the pool's nodes and
+// allowed onto those dedicated to it; taking the pool away takes both off, so
+// the pods may land anywhere again.
+func TestAPoolPlacesThePodsAndTolerates(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	spec := testSpec()
+	spec.Pool = "pro"
+
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	pod := dep.Spec.Template.Spec
+	if got := pod.NodeSelector[orchestrator.PoolLabel]; got != "pro" || len(pod.NodeSelector) != 1 {
+		t.Errorf("node selector = %v, want only %s=pro", pod.NodeSelector, orchestrator.PoolLabel)
+	}
+	want := corev1.Toleration{
+		Key: orchestrator.PoolLabel, Operator: corev1.TolerationOpEqual,
+		Value: "pro", Effect: corev1.TaintEffectNoSchedule,
+	}
+	if len(pod.Tolerations) != 1 || pod.Tolerations[0] != want {
+		t.Errorf("tolerations = %+v, want only %+v", pod.Tolerations, want)
+	}
+
+	spec.Pool = ""
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp without a pool: %v", err)
+	}
+	dep, err = client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if pod := dep.Spec.Template.Spec; len(pod.NodeSelector) != 0 || len(pod.Tolerations) != 0 {
+		t.Errorf("pool removed, still placed: selector %v, tolerations %+v", pod.NodeSelector, pod.Tolerations)
+	}
+}
+
+// A pool that is not a label value never reaches the cluster.
+func TestAnInvalidPoolIsRefused(t *testing.T) {
+	o, _ := testOrchestrator(t)
+	spec := testSpec()
+	spec.Pool = "Pro Pool"
+	if err := o.ApplyApp(context.Background(), spec); err == nil {
+		t.Fatal("a pool that is not a label value was applied")
+	}
+}
+
 func TestSpecHash(t *testing.T) {
 	base := testSpec()
 
@@ -343,6 +394,18 @@ func TestSpecHash(t *testing.T) {
 		other.Image = "ghcr.io/example/web:v2"
 		if specHash(base) == specHash(other) {
 			t.Error("hash must change when the image changes")
+		}
+	})
+
+	t.Run("changes with pool, and not for no pool", func(t *testing.T) {
+		other := testSpec()
+		other.Pool = "pro"
+		if specHash(base) == specHash(other) {
+			t.Error("hash must change when the pool changes")
+		}
+		other.Pool = ""
+		if specHash(base) != specHash(other) {
+			t.Error("no pool must hash as it did before pools existed")
 		}
 	})
 

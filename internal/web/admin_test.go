@@ -132,6 +132,25 @@ func TestTheAdminAreaWorksWithoutAccounts(t *testing.T) {
 	}
 }
 
+// A team placed on a pool says so wherever the operator sees its quota, and a
+// team on none says nothing: anywhere is every team's until somebody chooses.
+func TestTheOperatorSeesATeamsPool(t *testing.T) {
+	quotas := newFakeQuotas("anywhere")
+	quotas.add(app.TeamUsage{TeamID: "placed", TeamName: "Team placed", Pool: "pro-pool"})
+	h := testServer(t, Options{Apps: newFakeApps(), Quotas: quotas})
+
+	if body := get(t, h, "/admin/teams").Body.String(); !strings.Contains(body, "pool: pro-pool") ||
+		strings.Count(body, "pool: ") != 1 {
+		t.Error("the teams list does not show the one team's pool, and only that one")
+	}
+	if body := get(t, h, "/admin/teams/placed").Body.String(); !strings.Contains(body, "pro-pool") {
+		t.Error("the team's own page does not show its pool")
+	}
+	if body := get(t, h, "/admin/teams/anywhere").Body.String(); strings.Contains(body, "where its apps run") {
+		t.Error("a team on no pool is shown with one")
+	}
+}
+
 // Nothing in the Admin group is offered to somebody who does not run the
 // install. On an install hosting customers, the cluster under them is not
 // theirs to be shown at all.

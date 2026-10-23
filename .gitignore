@@ -33,3 +33,6 @@ kubeconfig
 # Authoring-time only. The built bundle in internal/web/assets/js is committed,
 # so building and running Yacht need neither Node nor these.
 /node_modules/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

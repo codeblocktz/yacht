@@ -48,6 +48,11 @@ templ AdminTeams(d AdminTeamsData) {
 								<td class="max-w-[220px]">
 									<a class="font-medium hover:underline" href={ templ.URL(adminTeamHref(t.TeamID)) }>{ t.TeamName }</a>
 									<div class="mono truncate text-[11.5px] text-muted-foreground">{ t.TeamID }</div>
+									// Only when set: a team on no pool runs anywhere, which
+									// is every team on an install that has never named one.
+									if t.Pool != "" {
+										<div class="mono truncate text-[11.5px] text-muted-foreground">pool: { t.Pool }</div>
+									}
 								</td>
 								<td class="text-right tabular-nums text-muted-foreground">{ membersLabel(t, d.Accounts) }</td>
 								<td class="w-[130px]">
@@ -119,6 +124,9 @@ templ AdminTeam(d AdminTeamData) {
 		@metric("CPU", cpuAmount(d.Team.Usage.CPUMillis), "committed")
 		@metric("Memory", byteAmount(d.Team.Usage.MemoryBytes), "committed")
 		@metric("Storage", byteAmount(d.Team.Usage.StorageBytes), "reserved")
+		if d.Team.Pool != "" {
+			@metric("Pool", d.Team.Pool, "where its apps run")
+		}
 	</div>
 	<div class="panel mb-5">
 		<div class="panel-header">

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -293,7 +294,7 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 	// invitation the page can offer to revoke rather than a token nobody holds.
 	msg := notify.Message{
 		To:      email,
-		Subject: "You have been invited to " + displayName(owner) + " on Yacht",
+		Subject: "You have been invited to " + displayName(owner) + " on " + s.wakerBrand,
 		TextBody: "You have been invited to join " + displayName(owner) +
 			" as " + string(role) + ".\n\n" +
 			s.baseURL + "/invitations/" + raw + "\n\n" +
@@ -354,6 +355,30 @@ func (s *Server) teamRemoveMember(w http.ResponseWriter, r *http.Request) {
 		s.teamActionFailed(w, r, err, "remove member")
 		return
 	}
+	http.Redirect(w, r, "/team", http.StatusSeeOther)
+}
+
+// teamRename changes the name the team is shown by. A name that cannot be
+// used is said on the page, beside the form, rather than as a bare error.
+func (s *Server) teamRename(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+
+	sess, err := s.accounts.ResolveSession(ctx, sessionToken(r))
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	err = s.accounts.RenameTeam(ctx, sess.UserID, owner.ID, r.FormValue("name"))
+	switch {
+	case errors.Is(err, account.ErrTeamName):
+		http.Redirect(w, r, "/team?error="+url.QueryEscape("A team's name is 1 to 60 characters, on one line."), http.StatusSeeOther)
+		return
+	case err != nil:
+		s.teamActionFailed(w, r, err, "rename the team")
+		return
+	}
+	s.flashOK(w, r, "Team renamed.")
 	http.Redirect(w, r, "/team", http.StatusSeeOther)
 }
 

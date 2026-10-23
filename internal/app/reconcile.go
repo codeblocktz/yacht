@@ -247,7 +247,7 @@ func (s *Service) settleBuild(
 		message = state.Reason
 	default:
 		message = "the build stopped without finishing, and the job that was " +
-			"running it is gone — this usually means Yacht was restarted mid-build"
+			"running it is gone — this usually means the platform was restarted mid-build"
 	}
 	return s.failInterruptedBuild(ctx, row, message)
 }

@@ -112,7 +112,7 @@ templ nodeActions(d NodeDetailData) {
 					Retiring stops scheduling here, then moves each app with a rolling
 					restart, one at a time: the replacement starts on another node and is
 					ready before the original stops, so nobody using the app sees a gap.
-					Pods Yacht does not manage are evicted afterwards, as a drain would, and
+					Pods the platform does not manage are evicted afterwards, as a drain would, and
 					pods that run on every node stay.
 				</p>
 			}

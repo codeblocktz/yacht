@@ -175,7 +175,9 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("k8s: create build service account: %w", err)
 	}
-	return nil
+	// A build runs a customer's Dockerfile: nothing may connect to it, and,
+	// under strict isolation, it reaches only DNS and public addresses.
+	return o.isolate(ctx, buildIsolation)
 }
 
 // buildRegistrySecret is the name of the push credential in the build

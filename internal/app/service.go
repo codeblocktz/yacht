@@ -884,6 +884,10 @@ func (s *Service) applyRelease(
 	if err != nil {
 		return err
 	}
+	pool, err := teamPool(ctx, q, a.OwnerID)
+	if err != nil {
+		return err
+	}
 	spec := release.AppSpec(ReleaseOverlays{
 		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
@@ -893,6 +897,7 @@ func (s *Service) applyRelease(
 		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
 		Asleep:      a.Sleep.State == SleepAsleep,
 		Waker:       s.wakerFor(a, hosts),
+		Pool:        pool,
 	})
 	return s.orch.ApplyApp(ctx, spec)
 }

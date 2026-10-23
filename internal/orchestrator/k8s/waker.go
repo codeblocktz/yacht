@@ -41,8 +41,9 @@ var (
 func wakerServiceName(name string) string { return name + "-waker" }
 
 // endpointSliceManagedBy tells the EndpointSlice controller the slice is not
-// its own, so it neither adopts nor deletes it.
-const endpointSliceManagedBy = "yacht.codeblock.tz/waker"
+// its own, so it neither adopts nor deletes it. A label value: no slash, so
+// in the form of a domain, as the controller's own endpointslice-controller.k8s.io.
+const endpointSliceManagedBy = "waker.yacht.codeblock.tz"
 
 // applyWakerRoute writes the waker's Service and its endpoint.
 func (o *Orchestrator) applyWakerRoute(ctx context.Context, spec orchestrator.AppSpec) error {

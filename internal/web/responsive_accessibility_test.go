@@ -76,7 +76,7 @@ func TestMetricStripDefinesAnIntentionalMobileGrid(t *testing.T) {
 	for _, want := range []string{
 		`.metrics > .metric:last-child:nth-child(odd)`,
 		`grid-column: 1 / -1`,
-		`.metrics > .metric:nth-child(even)`,
+		`grid-template-columns: repeat(2, minmax(0, 1fr))`,
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("mobile metric layout is missing %q", want)

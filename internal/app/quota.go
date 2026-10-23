@@ -87,6 +87,10 @@ type TeamUsage struct {
 	// QuotaSetAt is when the operator last saved a quota, nil when nobody ever
 	// has — which is not the same as having saved one that limits nothing.
 	QuotaSetAt *time.Time
+
+	// Pool is the pool of machines the team's apps are placed on, empty for
+	// anywhere; see SetTeamPool.
+	Pool string
 }
 
 // shape is what an app commits before it is multiplied out: the fields of an
@@ -366,7 +370,7 @@ func (s *Service) TeamUsage(ctx context.Context, ownerID string) (TeamUsage, err
 
 func teamUsage(r dbgen.GetTeamQuotaSummaryRow) TeamUsage {
 	t := TeamUsage{
-		TeamID: r.ID, TeamName: r.DisplayName, Members: r.Members,
+		TeamID: r.ID, TeamName: r.DisplayName, Members: r.Members, Pool: r.Pool,
 		Usage: Usage{StorageBytes: r.StorageBytes},
 		Quota: Quota{
 			Apps: r.QuotaApps, CPUMillis: r.QuotaCpuMillis,

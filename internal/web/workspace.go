@@ -340,7 +340,7 @@ func gettingStarted(f checklistFacts) *Checklist {
 		}
 		c.Steps = append(c.Steps, ChecklistStep{
 			Title:  "Add a custom domain",
-			Detail: "Point a hostname you own at an app. Yacht verifies it and issues the certificate.",
+			Detail: "Point a hostname you own at an app. It is verified, and given a certificate, on its own.",
 			Href:   href, Action: "Add a domain",
 			Done: f.Onboarding.HasCustomDomain,
 		})

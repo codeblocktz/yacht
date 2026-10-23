@@ -290,7 +290,7 @@ func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
 func TestTheHTTPTabOffersNothingToTurnOn(t *testing.T) {
 	logs := &recordingLogs{http: &app.HTTPLogs{
 		Hosts: []string{"web.apps.example.com"},
-		Note:  "Yacht switches it on at startup and the controller restarts",
+		Note:  "It is switched on at startup and the controller restarts",
 	}}
 	h := testServer(t, Options{Logs: logs})
 
@@ -302,7 +302,7 @@ func TestTheHTTPTabOffersNothingToTurnOn(t *testing.T) {
 	if strings.Contains(body, "/logs/http/enable") {
 		t.Error("the removed route is still linked")
 	}
-	if !strings.Contains(body, "switches it on at startup") {
+	if !strings.Contains(body, "switched on at startup") {
 		t.Error("nothing says why the pane is empty")
 	}
 }

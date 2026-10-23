@@ -187,11 +187,32 @@ func (f *fakeAccounts) asking() []string {
 // that a test which reaches the callback through it fails loudly instead of
 // quietly proving nothing. The callback is exercised against the real service,
 // where consuming a link and claiming a team mean something.
+func (f *fakeAccounts) RenameTeam(context.Context, uuid.UUID, string, string) error {
+	return errNoFakeAccountsBackend
+}
+
 func (f *fakeAccounts) EnsureUser(context.Context, string, string) (account.User, error) {
 	return account.User{}, errNoFakeAccountsBackend
 }
 
 func (f *fakeAccounts) ConsumeMagicLink(context.Context, string) (account.User, error) {
+	return account.User{}, account.ErrTokenInvalid
+}
+
+// IssueSignupLink does an insert in the real service, as IssueMagicLink does
+// for a known address, so it sleeps the same issueDelay.
+func (f *fakeAccounts) IssueSignupLink(_ context.Context, email string, _ time.Duration) (string, error) {
+	f.mu.Lock()
+	err, delay := f.err, f.issueDelay
+	f.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	time.Sleep(delay)
+	return "signup-token-for-" + email, nil
+}
+
+func (f *fakeAccounts) ConsumeSignupLink(context.Context, string) (account.User, error) {
 	return account.User{}, account.ErrTokenInvalid
 }
 
@@ -391,6 +412,22 @@ func TestSignInPageRendersOutsideAuth(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("sign-in page missing %q", want)
 		}
+	}
+}
+
+// A website that took an address hands the person here with ?email=, and
+// the link form has it, one press from the mail. Anything but an address is
+// not put back on the page.
+func TestSignInPageTakesTheAddressItWasHanded(t *testing.T) {
+	h := signInServer(t, &fakeAccounts{}, &fakeMailer{})
+
+	body := get(t, h, "/sign-in?email=amina%40example.test").Body.String()
+	if !strings.Contains(body, `value="amina@example.test"`) {
+		t.Error("the link form does not carry the address it was handed")
+	}
+	body = get(t, h, "/sign-in?email=%22%3E%3Cscript%3Ealert(1)%3C/script%3E").Body.String()
+	if strings.Contains(body, "<script>alert") || strings.Contains(body, `value="&#34;&gt;`) {
+		t.Error("something that is not an address was put back on the page")
 	}
 }
 
@@ -694,7 +731,9 @@ func newLiveHarnessOwnedBy(t *testing.T, teamID, ownerEmail string) *liveHarness
 
 // newLiveHarnessWith is newLiveHarnessOwnedBy on an install that names its
 // operators.
-func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []string) *liveHarness {
+func newLiveHarnessWith(
+	t *testing.T, teamID, ownerEmail string, operators []string, more ...func(*Options),
+) *liveHarness {
 	t.Helper()
 	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -738,7 +777,7 @@ func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []str
 	mailer := &fakeMailer{}
 
 	build := func(operators []string) http.Handler {
-		return testServer(t, Options{
+		opts := Options{
 			Apps:      apps,
 			Hooks:     apps,
 			Quotas:    apps,
@@ -755,7 +794,11 @@ func newLiveHarnessWith(t *testing.T, teamID, ownerEmail string, operators []str
 			BootstrapTeamName: "Local",
 			BootstrapEmail:    ownerEmail,
 			SessionTTL:        time.Hour,
-		})
+		}
+		for _, f := range more {
+			f(&opts)
+		}
+		return testServer(t, opts)
 	}
 
 	return &liveHarness{

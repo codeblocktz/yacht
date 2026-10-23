@@ -156,8 +156,8 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 		},
 		{
 			Source:      SourceGit,
-			Label:       "GitHub Repository",
-			Description: "Build from a repository and deploy the result.",
+			Label:       "Git repository",
+			Description: "Build from a repository on GitHub, GitLab, Gitea or Forgejo, and deploy the result.",
 			Available:   c.CanBuild,
 			Because:     "no image registry is configured for this install",
 			// No image: a build produces one. No port either — that is the

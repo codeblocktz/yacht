@@ -37,6 +37,9 @@ templ Layout(s Slots, page templ.Component) {
 			<meta property="og:image" content={ asset("/assets/brand/social.png") }/>
 			<meta name="twitter:card" content="summary_large_image"/>
 			<link rel="stylesheet" href={ asset("/assets/css/app.css") }/>
+			for _, href := range s.Stylesheets {
+				<link rel="stylesheet" href={ href }/>
+			}
 			@themeScript()
 			@sidebarScript()
 			<script src={ asset("/assets/js/htmx.min.js") } defer></script>
@@ -83,8 +86,18 @@ templ Layout(s Slots, page templ.Component) {
 				// empty screen looking like the page failed to finish loading.
 				// The dynamic viewport unit also survives a mobile browser's
 				// address bar sliding away.
-				<main id="main-content" class="flex min-h-dvh flex-col justify-center overflow-y-auto px-4 py-10">
-					@page
+				//
+				// The product's name sits above the card, so the page people
+				// arrive at says whose it is — the provider's brand, which the
+				// signed-out slots keep. The column is the card's width; the
+				// card itself is the page's (see authCard).
+				<main id="main-content" class="flex min-h-dvh flex-col justify-center overflow-y-auto bg-canvas px-4 py-10">
+					<div class="mx-auto w-full max-w-sm">
+						<a href={ templ.URL(s.BrandHref) } class="auth-brand" aria-label={ s.BrandName }>
+							@brandLockup(s, "h-6 w-auto shrink-0", "h-4 w-auto")
+						</a>
+						@page
+					</div>
 				</main>
 				@confirmationDialog()
 				@toastHost(s.Flash)
@@ -107,7 +120,9 @@ templ appShell(s Slots, page templ.Component) {
 	<div class="flex h-full">
 		<button type="button" tabindex="-1" class="nav-backdrop" data-nav-backdrop onclick="yachtSidebarToggle()" aria-label="Close navigation"></button>
 		@sidebar(s)
-		<div class="flex min-w-0 flex-1 flex-col" data-app-shell>
+		// The content column sits on the canvas, a step off the sidebar's
+		// white, so the cards on it read as objects rather than as more page.
+		<div class="flex min-w-0 flex-1 flex-col bg-canvas" data-app-shell>
 			@topbar(s)
 			// The acting notice is composed in here, above whatever Banner the
 			// slots carry, rather than left to the SlotProvider. See
@@ -117,7 +132,7 @@ templ appShell(s Slots, page templ.Component) {
 			if isActingBanner(banner) {
 				@banner
 			} else if banner != nil {
-				<div class="border-b border-border px-6 py-3">
+				<div class="border-b border-border px-4 py-3 sm:px-6 xl:px-8">
 					@slot(banner)
 				</div>
 			}
@@ -130,7 +145,7 @@ templ appShell(s Slots, page templ.Component) {
 				</main>
 			} else {
 				<main id="main-content" tabindex="-1" class="min-h-0 flex-1 overflow-y-auto">
-					<div class="mx-auto w-full max-w-[1240px] px-4 py-6 sm:px-6">
+					<div class="mx-auto w-full max-w-[1500px] px-4 py-6 sm:px-6 xl:px-8 xl:py-8">
 						@page
 					</div>
 				</main>
@@ -263,6 +278,22 @@ templ sidebar(s Slots) {
 			</div>
 		}
 	</aside>
+}
+
+// brandLockup is the mark and the name, for the signed-out pages: the
+// provider's own mark when it set one, Yacht's otherwise, and Yacht's drawn
+// wordmark only when the name is Yacht's.
+templ brandLockup(s Slots, markClass, wordClass string) {
+	if s.BrandMark != nil {
+		@s.BrandMark
+	} else {
+		@brandMark(markClass)
+	}
+	if s.BrandName == DefaultBrandName {
+		@brandWordmark(wordClass)
+	} else if s.BrandName != "" {
+		<span class="truncate">{ s.BrandName }</span>
+	}
 }
 
 // navGroup is one labelled block of links.
@@ -593,7 +624,7 @@ templ TeamIdentity(name, role string, acting bool) {
 // end there and /sign-out is not routed at all, so the buttons would 404;
 // drawing nothing is better than drawing a control that cannot work. The same
 // holds for /account, which is routed exactly when sign-out is.
-templ UserMenu(owner identity.Owner, canSignOut bool) {
+templ UserMenu(owner identity.Owner, canSignOut bool, docsHref string) {
 	{{ label := ownerLabel(owner) }}
 	<details name="sidebar-menu" class="group relative" data-menu>
 		<summary class="switcher" aria-haspopup="menu" aria-label={ label + ". Account menu" }>
@@ -633,7 +664,7 @@ templ UserMenu(owner identity.Owner, canSignOut bool) {
 					</button>
 				</span>
 			</div>
-			<a href="https://github.com/codeblocktz/yacht#readme" role="menuitem" class="switcher-item" target="_blank" rel="noreferrer">
+			<a href={ templ.SafeURL(docsHref) } role="menuitem" class="switcher-item" target="_blank" rel="noreferrer">
 				@icon("book-open")
 				<span class="flex-1">Docs</span>
 				<span class="menu-trail">
