@@ -16,16 +16,18 @@ import (
 
 type fakeStacks struct {
 	deployed []string
+	regions  []string
 	err      error
 }
 
-func (f *fakeStacks) DeployTemplate(
-	_ context.Context, _, slug, stack string,
+func (f *fakeStacks) DeployTemplateIn(
+	_ context.Context, _, slug, stack, region string,
 ) (app.Project, error) {
 	if f.err != nil {
 		return app.Project{}, f.err
 	}
 	f.deployed = append(f.deployed, slug+"/"+stack)
+	f.regions = append(f.regions, region)
 	return app.Project{Slug: stack, Name: stack}, nil
 }
 

@@ -22,6 +22,9 @@ type Surfaces struct {
 	// Quotas is the Admin area's list of teams and what each may commit.
 	Quotas bool
 
+	// Regions is the Admin area's regions page.
+	Regions bool
+
 	// Operator is whether this request's person runs the install, and so
 	// whether the cluster-wide pages are theirs to be offered.
 	Operator bool
@@ -57,6 +60,7 @@ func (s *Server) withSurfaces(next http.Handler) http.Handler {
 		DNS:      s.joiner != nil,
 		Registry: s.registries != nil,
 		Quotas:   s.quotas != nil,
+		Regions:  s.regions != nil,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Per request, unlike the rest: it depends on who is asking.

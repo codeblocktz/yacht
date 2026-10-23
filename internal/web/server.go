@@ -330,6 +330,13 @@ type Options struct {
 	// before there was a policy.
 	Capacity Capacity
 
+	// Regions, when set, puts regions on the dashboard wherever the install
+	// has them: the Admin area's Regions page, a region on the deploy forms,
+	// and the region an app lives in on its page. An install whose nodes carry
+	// no region draws none of it beyond the Regions page, which says how to
+	// add one.
+	Regions Regions
+
 	// Accounts, when set, puts the sign-in surface on the router. Left nil the
 	// engine serves no sign-in page at all, which is right for an install
 	// resolved by a shared token: a form that could never issue a session is a
@@ -442,6 +449,9 @@ type Server struct {
 	// the operator's alert and the customers' notice off.
 	capacity Capacity
 
+	// regions is where apps live; nil leaves every region surface off.
+	regions Regions
+
 	// sleep puts apps to sleep and wakes them; nil leaves it off. wakerBrand
 	// is what the waking-up page says an app is hosted on.
 	sleep      Sleeper
@@ -545,6 +555,7 @@ func New(opts Options) (*Server, error) {
 		registries:     opts.Registries,
 		quotas:         opts.Quotas,
 		capacity:       opts.Capacity,
+		regions:        opts.Regions,
 		sleep:          opts.Sleep,
 		wakerBrand:     cmp.Or(opts.WakerBrand, DefaultBrandName),
 		logs:           opts.Logs,
@@ -815,6 +826,11 @@ func (s *Server) Handler() http.Handler {
 			// Image, port, resources, reachability, repository — the fields
 			// that had no way to be changed after create.
 			r.Post("/apps/{name}/runtime", s.appRuntime)
+			// Moving an app to another region redeploys it somewhere else,
+			// and a redeploy does not bring it back.
+			if s.regions != nil {
+				r.Post("/apps/{name}/region", s.appRegionMove)
+			}
 			r.Post("/apps/{name}/source/disconnect", s.appSourceDisconnect)
 			// Admin, not member: a webhook hands an outside system the power
 			// to deploy, and that is not undone by redeploying.
@@ -882,6 +898,11 @@ func (s *Server) Handler() http.Handler {
 				if s.capacity != nil {
 					r.Post("/admin/capacity/policy", s.adminCapacityPolicy)
 				}
+			}
+			if s.regions != nil {
+				r.Get("/admin/regions", s.adminRegions)
+				r.Get("/admin/regions/{name}", s.adminRegion)
+				r.Post("/admin/regions/{name}", s.adminRegionSet)
 			}
 
 			// Acting as a team. Mounted wherever there are sessions to layer a
@@ -1131,7 +1152,10 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
-	data := NewAppData{Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context())}
+	data := NewAppData{
+		Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
+		Regions: s.regionChoice(r.Context()),
+	}
 
 	// Only somebody the registry page would actually admit is offered a link
 	// to it. A control that leads to a 403 tells the viewer they have a
@@ -1192,6 +1216,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		RepoURL:    strings.TrimSpace(r.FormValue("repo_url")),
 		RepoBranch: strings.TrimSpace(r.FormValue("repo_branch")),
 		RepoSubdir: strings.TrimSpace(r.FormValue("repo_subdir")),
+		Region:     strings.TrimSpace(r.FormValue("region")),
 	}
 
 	port, err := parseIntField(form.Port, 0)
@@ -1220,6 +1245,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Repo: app.Repo{
 			URL: form.RepoURL, Branch: form.RepoBranch, Subdir: form.RepoSubdir,
 		},
+		Region: form.Region,
 	})
 	if err != nil {
 		s.log.Warn("create app failed",
@@ -1238,6 +1264,7 @@ func (s *Server) renderErrFor(
 ) {
 	data := NewAppData{
 		Error: msg, Form: form, Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
+		Regions: s.regionChoice(r.Context()),
 	}
 	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b

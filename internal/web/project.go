@@ -211,6 +211,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	}
 	s.attachSliders(ctx, d)
 	s.attachSleep(ctx, d)
+	s.attachRegion(ctx, d)
 	return d
 }
 

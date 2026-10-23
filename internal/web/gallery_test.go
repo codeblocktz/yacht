@@ -46,7 +46,8 @@ func TestGallery(t *testing.T) {
 	writeGalleryAssets(t, out)
 	writeGallerySearchIndex(t, out)
 
-	for _, g := range append(galleryPages(), chromeGalleryPages()...) {
+	pages := append(galleryPages(), chromeGalleryPages()...)
+	for _, g := range append(pages, regionGalleryPages()...) {
 		path := filepath.Join(out, g.file)
 		f, err := os.Create(path)
 		if err != nil {
@@ -66,7 +67,7 @@ func TestGallery(t *testing.T) {
 		// is part of the chrome. Signed in, in a team, with projects — the
 		// sidebar a real install draws, rather than an empty one.
 		opCtx := galleryChromeContext(context.WithValue(context.Background(), surfacesKey{},
-			Surfaces{Operator: !g.customer, Quotas: true, DNS: true, Registry: true,
+			Surfaces{Operator: !g.customer, Quotas: true, Regions: true, DNS: true, Registry: true,
 				ActingAs: g.actingAs}), g)
 		slots := DefaultSlots{}.Slots(opCtx,
 			httptest.NewRequest("GET", g.path, nil))
