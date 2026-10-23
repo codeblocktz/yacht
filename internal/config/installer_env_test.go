@@ -192,6 +192,58 @@ func TestInstallerOffersTheCertIssuerOnlyWhenReady(t *testing.T) {
 	}
 }
 
+// --region offers the install's default region, and a re-run never changes
+// one already written: the apps made before regions existed were recorded in
+// it, and an installer re-run with another --region must not move where new
+// apps go behind the operator's back.
+func TestInstallerKeepsTheDefaultRegion(t *testing.T) {
+	lib := sourceableInstaller(t)
+	envFile := filepath.Join(t.TempDir(), "yacht.env")
+
+	if got := renderEnvRegion(t, lib, envFile, ""); !strings.Contains(got, "\n#YACHT_DEFAULT_REGION=\n") ||
+		valueOf(got, "YACHT_DEFAULT_REGION") != "" {
+		t.Fatalf("without --region the default region is not offered commented out:\n%s", got)
+	}
+
+	first := renderEnvRegion(t, lib, envFile, "fsn")
+	if got := valueOf(first, "YACHT_DEFAULT_REGION"); got != "fsn" {
+		t.Fatalf("--region fsn wrote YACHT_DEFAULT_REGION=%q", got)
+	}
+	if err := os.WriteFile(envFile, []byte(first), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"", "dar"} {
+		if got := valueOf(renderEnvRegion(t, lib, envFile, flag), "YACHT_DEFAULT_REGION"); got != "fsn" {
+			t.Errorf("a re-run with --region %q changed the default region to %q", flag, got)
+		}
+	}
+}
+
+// renderEnvRegion is renderEnv with the installer's --region set.
+func renderEnvRegion(t *testing.T, lib, envFile, region string) string {
+	t.Helper()
+	script := `
+set -eu
+. "$1"
+ENV_FILE="$2"
+DATABASE_URL='postgres://yacht:pw@127.0.0.1:5432/yacht?sslmode=disable'
+KUBECONFIG_DST='/etc/yacht/kubeconfig'
+PORT=8080
+ROTATE_TOKEN=no
+CERT_MANAGER_AVAILABLE=no
+REGION="$3"
+render_env
+`
+	var out, errb bytes.Buffer
+	cmd := exec.Command("sh", "-c", script, "sh", lib, envFile, region)
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("render_env: %v\n%s", err, errb.String())
+	}
+	return out.String()
+}
+
 // renderEnv runs the installer's render_env against one env file.
 func renderEnv(t *testing.T, lib, envFile string) string {
 	t.Helper()

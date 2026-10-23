@@ -49,6 +49,10 @@ const PoolLabel = orchestrator.PoolLabel
 // knows how to spread pods by it, so nothing has to teach it what a site is.
 const SiteLabel = orchestrator.SiteLabel
 
+// RegionLabel is the node label a region is carried in: Kubernetes' own
+// region label, which is what places an app's pods in its region.
+const RegionLabel = orchestrator.RegionLabel
+
 // Joiner stores the join settings and builds the command.
 type Joiner struct {
 	pool   *pgxpool.Pool
@@ -147,6 +151,11 @@ type Machine struct {
 	// same for every machine in one place.
 	Site string
 
+	// Region is the broader place the machine is in, the same for every
+	// machine whose apps should stay together: an app lives in one region,
+	// on any of its sites.
+	Region string
+
 	// PublicIP is the address machines at other sites reach this one at,
 	// when that is not an address on its own interface — behind NAT, or on a
 	// cloud that routes a floating address to a private one. Empty otherwise.
@@ -159,6 +168,9 @@ func (m Machine) Validate() error {
 		return err
 	}
 	if err := ValidateSite(m.Site); err != nil {
+		return err
+	}
+	if err := ValidateRegion(m.Region); err != nil {
 		return err
 	}
 	return ValidatePublicIP(m.PublicIP)
@@ -229,6 +241,11 @@ func BuildCommand(serverURL, token string, m Machine) string {
 		// in the kubernetes.io namespace that NodeRestriction lets it set.
 		cmd += " --node-label " + SiteLabel + "=" + m.Site
 	}
+	if m.Region != "" {
+		// The region label is the zone label's sibling, and NodeRestriction
+		// lets the kubelet set it on its own node the same way.
+		cmd += " --node-label " + RegionLabel + "=" + m.Region
+	}
 	if m.PublicIP != "" {
 		// What WireGuard peers at other sites dial. Without it a machine
 		// behind NAT advertises the private address on its interface, which
@@ -279,6 +296,10 @@ func ValidatePool(pool string) error {
 // ValidateSite checks a site name, by the same rule and for the same reason as
 // a pool.
 func ValidateSite(site string) error { return orchestrator.ValidateLabelValue("site", site) }
+
+// ValidateRegion checks a region name, by the same rule and for the same
+// reason as a pool and a site.
+func ValidateRegion(region string) error { return orchestrator.ValidateRegion(region) }
 
 // ValidatePublicIP checks a machine's public address.
 //

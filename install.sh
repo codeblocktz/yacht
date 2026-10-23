@@ -24,6 +24,7 @@
 #   --multi-site       join machines in other places over WireGuard (new K3s only)
 #   --public-ip IP     this server's public address, with --multi-site
 #   --site NAME        where this server is, e.g. dar-a (new K3s only)
+#   --region NAME      the region this server is in, e.g. dar (new K3s only)
 #   --help             print this and exit
 
 set -eu
@@ -66,6 +67,7 @@ DATABASE_URL=""
 MULTI_SITE="no"
 PUBLIC_IP=""
 SITE=""
+REGION=""
 
 # ---------------------------------------------------------------- output ----
 
@@ -142,6 +144,9 @@ usage() {
 		                      default: the address on the default route
 		  --site NAME         where this server is, e.g. dar-a; only when this
 		                      run installs K3s
+		  --region NAME       the region this server is in, e.g. dar; labels it
+		                      when this run installs K3s, and becomes the
+		                      install's default region for new apps
 		  --help              print this and exit
 
 		HTTP-01 certificate issuance requires public port 80 to reach the cluster.
@@ -194,6 +199,7 @@ parse_flags() {
 			--multi-site)   MULTI_SITE="yes"; shift ;;
 			--public-ip)    require_flag_value "$1" "${2-}"; PUBLIC_IP=$2; shift 2 ;;
 			--site)         require_flag_value "$1" "${2-}"; SITE=$2; shift 2 ;;
+			--region)       require_flag_value "$1" "${2-}"; REGION=$2; shift 2 ;;
 			--help|-h)      usage; exit 0 ;;
 			*) die "unknown flag '$1'" ;;
 		esac
@@ -217,8 +223,11 @@ parse_flags() {
 	fi
 	# Both end up on K3s' command line as root, so each is held to the shape
 	# it has to have rather than quoted and hoped over.
-	if [ -n "$SITE" ] && ! valid_site "$SITE"; then
+	if [ -n "$SITE" ] && ! valid_label "$SITE"; then
 		die "--site must be lowercase letters, numbers, dashes, dots and underscores, starting and ending with a letter or number, got '$SITE'"
+	fi
+	if [ -n "$REGION" ] && ! valid_label "$REGION"; then
+		die "--region must be lowercase letters, numbers, dashes, dots and underscores, starting and ending with a letter or number, got '$REGION'"
 	fi
 	if [ -n "$PUBLIC_IP" ] && ! valid_ip "$PUBLIC_IP"; then
 		die "--public-ip must be an IP address, got '$PUBLIC_IP'"
@@ -226,21 +235,21 @@ parse_flags() {
 	if [ -n "$PUBLIC_IP" ] && [ "$MULTI_SITE" = "no" ]; then
 		die "--public-ip is only used with --multi-site"
 	fi
-	if [ "$SKIP_K3S" = "yes" ] && { [ "$MULTI_SITE" = "yes" ] || [ -n "$SITE" ]; }; then
-		die "--multi-site and --site configure the K3s this installer installs; with --skip-k3s the cluster's network and labels are yours to set"
+	if [ "$SKIP_K3S" = "yes" ] && { [ "$MULTI_SITE" = "yes" ] || [ -n "$SITE" ] || [ -n "$REGION" ]; }; then
+		die "--multi-site, --site and --region configure the K3s this installer installs; with --skip-k3s the cluster's network and labels are yours to set"
 	fi
 }
 
-# valid_site is Kubernetes' rule for a label value, the same one the join page
-# applies to a site, which also leaves out every character a shell acts on.
-# The letters are spelled out because a range like a-z can take in capitals,
-# depending on the locale.
-valid_site() {
-	valid_site_lower=abcdefghijklmnopqrstuvwxyz0123456789
+# valid_label is Kubernetes' rule for a label value, the same one the join
+# page applies to a site and a region, which also leaves out every character a
+# shell acts on. The letters are spelled out because a range like a-z can take
+# in capitals, depending on the locale.
+valid_label() {
+	valid_label_lower=abcdefghijklmnopqrstuvwxyz0123456789
 	[ "${#1}" -le 63 ] || return 1
 	case "$1" in
-		''|*[!"$valid_site_lower"._-]*) return 1 ;;
-		[!"$valid_site_lower"]*|*[!"$valid_site_lower"]) return 1 ;;
+		''|*[!"$valid_label_lower"._-]*) return 1 ;;
+		[!"$valid_label_lower"]*|*[!"$valid_label_lower"]) return 1 ;;
 	esac
 }
 
@@ -388,6 +397,9 @@ k3s_server_args() {
 	if [ -n "$SITE" ]; then
 		k3s_args="${k3s_args:+${k3s_args} }--node-label=topology.kubernetes.io/zone=${SITE}"
 	fi
+	if [ -n "$REGION" ]; then
+		k3s_args="${k3s_args:+${k3s_args} }--node-label=topology.kubernetes.io/region=${REGION}"
+	fi
 	if [ -n "$k3s_args" ]; then
 		printf 'server %s' "$k3s_args"
 	fi
@@ -467,6 +479,9 @@ existing_k3s_fits() {
 	fi
 	if [ -n "$SITE" ]; then
 		warn "--site is applied only when this run installs K3s; label this node instead: k3s kubectl label node <name> topology.kubernetes.io/zone=${SITE}"
+	fi
+	if [ -n "$REGION" ]; then
+		warn "--region labels this node only when this run installs K3s; label it instead: k3s kubectl label node <name> topology.kubernetes.io/region=${REGION}"
 	fi
 }
 
@@ -961,6 +976,18 @@ render_env() {
 		waker_line="#YACHT_WAKER_ADDR=${node_ip:-<this-node-ip>}:8090"
 	fi
 
+	# The region new apps go to when nobody chooses one, and the one every app
+	# made before regions existed is recorded in. Kept once written, so an
+	# install whose apps already live somewhere is never moved by a re-run;
+	# offered from --region until then.
+	if default_region=$(env_get YACHT_DEFAULT_REGION); then
+		region_line="YACHT_DEFAULT_REGION=${default_region}"
+	elif [ -n "${REGION:-}" ]; then
+		region_line="YACHT_DEFAULT_REGION=${REGION}"
+	else
+		region_line="#YACHT_DEFAULT_REGION="
+	fi
+
 	cat <<-EOF
 		# Written by the Yacht installer. Re-running preserves every value here
 		# except the port and the binary; edit freely and restart the service.
@@ -994,6 +1021,10 @@ render_env() {
 		# node's address and a port open to the cluster's pods. Set, idle apps
 		# can scale to zero and wake on their next request; unset, none sleeps.
 		${waker_line}
+
+		# The region new apps are placed in when nobody chooses one: a value of
+		# the topology.kubernetes.io/region label on this cluster's nodes.
+		${region_line}
 	EOF
 }
 

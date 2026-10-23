@@ -46,6 +46,10 @@ templ NodeDetail(d NodeDetailData) {
 				<dd class="mono">{ d.Node.Version }</dd>
 				<dt>Platform</dt>
 				<dd class="mono">{ d.Node.OS }/{ d.Node.Architecture }</dd>
+				if d.Node.Region != "" {
+					<dt>Region</dt>
+					<dd class="mono">{ d.Node.Region }</dd>
+				}
 				if d.Node.Site != "" {
 					<dt>Site</dt>
 					<dd class="mono">{ d.Node.Site }</dd>

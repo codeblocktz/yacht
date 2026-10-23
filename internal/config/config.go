@@ -217,6 +217,13 @@ type Config struct {
 	// one of them being ready. A request is held that long at most.
 	WakeTimeout time.Duration
 
+	// DefaultRegion is the region a new app is placed in when nobody chooses
+	// one, and the one every app made before regions existed is recorded in.
+	// A value of the topology.kubernetes.io/region label on the cluster's
+	// nodes. Empty leaves it to the regions that are open: the only one, or
+	// the first. Ignored on a cluster whose nodes carry no region.
+	DefaultRegion string
+
 	// MaxConcurrentBuilds is the install-wide admission ceiling. It is paired
 	// with per-container bounds in the build namespace so the count represents
 	// a bounded amount of node capacity rather than an arbitrary pod count.
@@ -262,6 +269,7 @@ func Load() (Config, error) {
 		WakerAddr:           strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
 		WakerListen:         strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
 		WakeTimeout:         envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
+		DefaultRegion:       strings.TrimSpace(env("YACHT_DEFAULT_REGION", "")),
 		Debug:               envBool("YACHT_DEBUG", false),
 	}
 
@@ -280,6 +288,9 @@ func (c Config) validate() error {
 
 	if c.DatabaseURL == "" {
 		errs = append(errs, errors.New("YACHT_DATABASE_URL is required"))
+	}
+	if err := orchestrator.ValidateRegion(c.DefaultRegion); err != nil {
+		errs = append(errs, fmt.Errorf("YACHT_DEFAULT_REGION: %w", err))
 	}
 	if c.Addr == "" {
 		errs = append(errs, errors.New("YACHT_ADDR must not be empty"))
