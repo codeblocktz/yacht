@@ -105,10 +105,10 @@ templ RegistryPage(d RegistryData) {
 				</div>
 				@checkOption("insecure", "1", "This registry is served over plain HTTP",
 					d.Registry.Insecure, !d.HasKey) {
-					Normal for a registry on an internal network. Yacht can only act on
-					half of it: builds will push over HTTP, but the cluster's container
+					Normal for a registry on an internal network. Only half of it is
+					done here: builds will push over HTTP, but the cluster's container
 					runtime has to be configured to pull that way too, and that is node
-					configuration Yacht does not touch. Without it the build succeeds and
+					configuration this install does not touch. Without it the build succeeds and
 					the deploy fails to pull.
 				}
 				<div class="flex items-center gap-2">

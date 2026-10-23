@@ -121,13 +121,25 @@ type Accounts interface {
 		ctx context.Context, email string, ttl time.Duration,
 	) (raw string, user account.User, existed bool, err error)
 
-	// EnsureUser creates a person, or returns the one already there. Used only
-	// to bootstrap the configured owner of a fresh install.
+	// RenameTeam changes a team's name, for one of its owners.
+	RenameTeam(ctx context.Context, actor uuid.UUID, teamID, name string) error
+
+	// EnsureUser creates a person, or returns the one already there. Used to
+	// bootstrap the configured owner of a fresh install, and to give somebody
+	// invited the account their invitation's address names.
 	EnsureUser(ctx context.Context, email, displayName string) (account.User, error)
 
 	// ConsumeMagicLink spends a link and returns the person it proves. Unknown,
 	// expired and already-spent links all come back as account.ErrTokenInvalid.
 	ConsumeMagicLink(ctx context.Context, raw string) (account.User, error)
+
+	// IssueSignupLink mints a link that creates an account for an address
+	// nobody holds yet. Only with open sign-up; it creates nobody itself.
+	IssueSignupLink(ctx context.Context, email string, ttl time.Duration) (string, error)
+
+	// ConsumeSignupLink spends a sign-up link and returns the person it
+	// creates, or the one the address already belongs to.
+	ConsumeSignupLink(ctx context.Context, raw string) (account.User, error)
 
 	// AuthenticatePassword verifies an address and a password. Every failure —
 	// unknown address, no password set, wrong password — is the single
@@ -305,8 +317,10 @@ type Options struct {
 	// no app.
 	Sleep Sleeper
 
-	// WakerBrand is the name the waking-up page says an app is hosted on.
-	// Empty is the engine's own.
+	// WakerBrand is the product's name where there is no chrome to ask: the
+	// waking-up page, which says an app is hosted on it, and the mail the
+	// engine sends — sign-in, sign-up and invitation links. Empty is the
+	// engine's own.
 	WakerBrand string
 
 	// Capacity, when set with Quotas, puts the capacity policy on the Admin
@@ -359,6 +373,12 @@ type Options struct {
 	// reachable once accounts are switched on. Required with Accounts.
 	BootstrapTeamID   string
 	BootstrapTeamName string
+
+	// OpenSignup lets anybody with a mailbox make an account: the sign-in form
+	// mails an address nobody holds a link that creates its account, and the
+	// person who follows it gets a team of their own. Off, only the configured
+	// owner and invited people get in. Either way the form answers alike.
+	OpenSignup bool
 
 	Logger *slog.Logger
 }
@@ -439,6 +459,7 @@ type Server struct {
 	bootstrapID    string
 	bootstrapName  string
 	bootstrapEmail string
+	openSignup     bool
 
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
@@ -535,6 +556,7 @@ func New(opts Options) (*Server, error) {
 		bootstrapID:    opts.BootstrapTeamID,
 		bootstrapName:  opts.BootstrapTeamName,
 		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
+		openSignup:     opts.OpenSignup,
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		signInLimit:    newAttemptLimiter(signInWindow),
 		flashKey:       flashKey,
@@ -599,6 +621,10 @@ func (s *Server) Handler() http.Handler {
 		// single-use and short-lived: a mail client that prefetches links spends
 		// one its own recipient asked for, and a crawler has nothing to guess.
 		r.Get("/auth/{token}", s.signInCallback)
+		// The same, for a link that creates the account it signs in to. Only
+		// mailed with open sign-up, and refused like a spent link once sign-up
+		// is closed, so closing it also closes the links already in mailboxes.
+		r.Get("/sign-up/{token}", s.signUpCallback)
 
 		// Outside the authenticated group because the point of an invitation is
 		// that the person following it may not have an account yet. The handler
@@ -951,6 +977,7 @@ func (s *Server) Handler() http.Handler {
 				r.Use(s.requireRole(account.RoleOwner))
 
 				r.Post("/team/members/{id}/role", s.teamSetRole)
+				r.Post("/team/name", s.teamRename)
 
 				// Deleting a team is deliberately absent rather than stubbed. It
 				// cascades to every app row the team owns while leaving the
@@ -1108,10 +1135,9 @@ func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 
 	// Only somebody the registry page would actually admit is offered a link
 	// to it. A control that leads to a 403 tells the viewer they have a
-	// permission they do not.
-	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
-		data.CanConfigureRegistry = s.registries != nil
-	}
+	// permission they do not. The page is the operator's — one registry
+	// serves every team — so a team's owner is not offered it.
+	data.CanConfigureRegistry = s.registries != nil && s.IsOperator(r)
 
 	src := app.Source(r.URL.Query().Get("source"))
 	if src == "" {
@@ -1288,6 +1314,9 @@ func (s *Server) appRollback(w http.ResponseWriter, r *http.Request) {
 			s.flashOK(w, r, "That release is already the one running.")
 		case errors.Is(err, app.ErrOperationInFlight):
 			s.flashErr(w, r, "A deploy is already in flight — stop it or let it finish, then roll back.")
+		case errors.As(err, new(app.MissingSecretsError)):
+			// The person's to fix, not the install's: said plainly, not logged.
+			s.flashErr(w, r, strings.TrimPrefix(err.Error(), "app: "))
 		case err != nil:
 			s.log.Error("rollback", slog.String("app", name), slog.String("error", err.Error()))
 			s.flashErr(w, r, err.Error())

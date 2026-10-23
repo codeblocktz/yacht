@@ -53,11 +53,11 @@ func (f *fakeJoiner) SetDNS(_ context.Context, target, prefix string) error {
 	return nil
 }
 
-func (f *fakeJoiner) Command(_ context.Context, pool string) (string, error) {
+func (f *fakeJoiner) Command(_ context.Context, pool string, dedicated bool) (string, error) {
 	if !f.configured {
 		return "", cluster.ErrNotConfigured
 	}
-	return cluster.BuildCommand("https://10.0.0.1:6443", probeToken, pool), nil
+	return cluster.BuildCommand("https://10.0.0.1:6443", probeToken, pool, dedicated), nil
 }
 
 // joinServer builds a server whose viewer holds role in the team.
@@ -198,6 +198,18 @@ func TestThePoolRidesInTheCommandAndIsChecked(t *testing.T) {
 	body := do(h, signedIn(http.MethodGet, "/cluster/nodes/add?pool=gpu")).Body.String()
 	if !strings.Contains(body, "--node-label yacht/pool=gpu") {
 		t.Error("the chosen pool is not in the command")
+	}
+	if strings.Contains(body, "--node-taint") {
+		t.Error("a pool nobody asked to dedicate was tainted")
+	}
+
+	body = do(h, signedIn(http.MethodGet, "/cluster/nodes/add?pool=gpu&dedicated=1")).Body.String()
+	if !strings.Contains(body, "--node-taint yacht/pool=gpu:NoSchedule") {
+		t.Error("a dedicated pool's node is not tainted for it")
+	}
+	body = do(h, signedIn(http.MethodGet, "/cluster/nodes/add?dedicated=1")).Body.String()
+	if strings.Contains(body, "--node-taint") {
+		t.Error("a node with no pool was tainted")
 	}
 
 	body = do(h, signedIn(http.MethodGet, "/cluster/nodes/add?pool=web%3Bcurl+evil.sh")).Body.String()

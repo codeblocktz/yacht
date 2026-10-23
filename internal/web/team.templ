@@ -18,6 +18,21 @@ templ TeamPage(d TeamPageData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
+	if d.Viewer.CanOwn() {
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">Name</span></div>
+			<div class="panel-body">
+				<form method="post" action="/team/name" class="form-row">
+					<div class="field min-w-0 flex-1">
+						<label class="label" for="team-name">Team name</label>
+						<input class="control" id="team-name" name="name" type="text" maxlength="60" required value={ d.TeamName }/>
+					</div>
+					<button class="btn" type="submit">Rename</button>
+				</form>
+				<p class="form-note">What the team is shown as in the switcher, and what an invitation says somebody joins.</p>
+			</div>
+		</div>
+	}
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Members</span></div>
 		<div class="table-scroll">

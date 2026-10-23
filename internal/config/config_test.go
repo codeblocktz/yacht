@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"regexp"
 	"strings"
@@ -296,6 +297,40 @@ func TestMalformedBaseURLFails(t *testing.T) {
 	setEnv(t, map[string]string{"YACHT_BASE_URL": "not a url"})
 	if _, err := Load(); err == nil {
 		t.Fatal("Load accepted a malformed base URL")
+	}
+}
+
+// Open sign-up loads only on an install that keeps strangers out of the Admin
+// area, keeps its own team for its owner, and can mail them their link.
+func TestOpenSignupNeedsOperatorsAnOwnerAndMail(t *testing.T) {
+	complete := map[string]string{
+		"YACHT_BASE_URL":       "https://yacht.example.test",
+		"YACHT_OPEN_SIGNUP":    "true",
+		"YACHT_OPERATORS":      "ops@example.test",
+		"YACHT_OWNER_EMAIL":    "owner@example.test",
+		"YACHT_RESEND_API_KEY": "re_123",
+		"YACHT_RESEND_FROM":    "yacht@example.test",
+	}
+	setEnv(t, complete)
+	c, err := Load()
+	if err != nil || !c.OpenSignup {
+		t.Fatalf("Load = %v, OpenSignup %v; want a complete open install to load", err, c.OpenSignup)
+	}
+
+	for _, missing := range []string{
+		"YACHT_OPERATORS", "YACHT_OWNER_EMAIL", "YACHT_RESEND_API_KEY", "YACHT_BASE_URL",
+	} {
+		t.Run(missing, func(t *testing.T) {
+			env := maps.Clone(complete)
+			env[missing] = ""
+			if missing == "YACHT_RESEND_API_KEY" {
+				env["YACHT_RESEND_FROM"] = ""
+			}
+			setEnv(t, env)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_OPEN_SIGNUP") {
+				t.Fatalf("Load with open sign-up and no %s = %v, want it refused", missing, err)
+			}
+		})
 	}
 }
 

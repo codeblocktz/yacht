@@ -15,6 +15,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"strconv"
@@ -125,6 +126,12 @@ type Slots struct {
 	// this engine's mark is presenting somebody else's logo as its own.
 	BrandMark templ.Component
 
+	// Stylesheets are a wrapping application's own, linked after the
+	// engine's so they can restate its colour tokens: a product's own
+	// primary colour, say. Paths on the dashboard's own origin; the content
+	// security policy refuses any other. Nil adds nothing.
+	Stylesheets []string
+
 	// Nav is the sidebar navigation. A wrapping application may append its
 	// own groups, or replace the set entirely.
 	Nav []NavGroup
@@ -213,11 +220,19 @@ func (f SlotProviderFunc) Slots(ctx context.Context, r *http.Request) Slots {
 
 // DefaultSlots is the engine's own chrome: the navigation a single-owner
 // self-hosted install needs, and nothing else.
-type DefaultSlots struct{}
+type DefaultSlots struct {
+	// DocsHref is where the account menu's Docs leads. Empty is the engine's
+	// own README; a wrapping application points it at its product's docs,
+	// since its customers have no use for the engine's.
+	DocsHref string
+}
+
+// DefaultDocsHref is the engine's own documentation.
+const DefaultDocsHref = "https://github.com/codeblocktz/yacht#readme"
 
 var _ SlotProvider = DefaultSlots{}
 
-func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
+func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	path := r.URL.Path
 
 	// Read once and shared: the switcher offers this list, and the footer asks
@@ -260,7 +275,7 @@ func (DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 	if signedIn {
 		// Sign-out is routed only where accounts are on, and that is the same
 		// condition that gives a session teams to switch between.
-		footer = UserMenu(owner, len(teams) > 0)
+		footer = UserMenu(owner, len(teams) > 0, cmp.Or(d.DocsHref, DefaultDocsHref))
 	}
 
 	// The acting notice is the engine's own banner, and it takes the slot: no

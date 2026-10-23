@@ -114,8 +114,9 @@ type (
 	// something of its own, a plan say, without the engine knowing what that
 	// is. Zero in a field is unlimited.
 	Quota = app.Quota
-	// TeamUsage is a team's committed use beside its quota, from
-	// Apps.TeamUsage and Apps.TeamUsages.
+	// TeamUsage is a team's committed use beside its quota, and the pool
+	// Apps.SetTeamPool placed its apps on, from Apps.TeamUsage and
+	// Apps.TeamUsages.
 	TeamUsage = app.TeamUsage
 
 	// CapacitySnapshot is the whole install's room at one moment, from
@@ -163,6 +164,11 @@ type (
 	Server = web.Server
 	// Keeper seals secrets at rest.
 	Keeper = secret.Keeper
+
+	// Isolation is how far teams are kept apart on the cluster's network,
+	// which Engine.SetNetworkIsolation changes while the engine runs.
+	Isolation     = orchestrator.Isolation
+	IsolationMode = orchestrator.IsolationMode
 )
 
 const (
@@ -202,6 +208,11 @@ const (
 	// where nobody says otherwise, and never under 5.
 	DefaultSleepAfter = app.DefaultSleepAfter
 	MinSleepAfter     = app.MinSleepAfter
+
+	// The isolation modes; see the orchestrator's for what each lets through.
+	IsolationTeam   = orchestrator.IsolationTeam
+	IsolationStrict = orchestrator.IsolationStrict
+	IsolationOff    = orchestrator.IsolationOff
 )
 
 var (
@@ -230,6 +241,28 @@ var (
 	// AwakeWithin is how long an app was awake in [from, to), given the
 	// intervals Apps.SleepIntervals returned for that window.
 	AwakeWithin = app.AwakeWithin
+
+	// ValidatePool is the rule a pool name is held to — a Kubernetes label
+	// value — by Apps.SetTeamPool, which places a team's apps on the nodes
+	// joined to that pool, and by the add-node page that labels them. For a
+	// wrapper that reads pool names from configuration of its own and would
+	// rather refuse a bad one at start than on every placement.
+	ValidatePool = orchestrator.ValidatePool
+
+	// ContainerLimits is the most any one container of an app may ask for,
+	// and what one that asks for nothing is given: the LimitRange in every
+	// team's namespace, whatever the team's quota. For a wrapper describing
+	// its plans by what the cluster will actually run.
+	ContainerLimits = orchestrator.DefaultLimits
+
+	// ParseIsolation reads a mode and a comma-separated list of CIDRs, as
+	// YACHT_NETWORK_ISOLATION and YACHT_EGRESS_ALLOW give them.
+	ParseIsolation = orchestrator.ParseIsolation
+
+	// ErrNoNetworkIsolation is SetNetworkIsolation on an orchestrator that
+	// enforces none: the in-memory one an install falls back to when the
+	// cluster is unreachable, say.
+	ErrNoNetworkIsolation = errors.New("this orchestrator enforces no network isolation")
 
 	// LoadConfig reads the engine's configuration from the environment.
 	LoadConfig = config.Load
@@ -283,10 +316,10 @@ type Overrides struct {
 	// Extra is routes mounted inside the engine's role gates.
 	Extra ExtraRoutes
 
-	// WakerBrand is the name the waking-up page says a sleeping app is
-	// hosted on. The page is served on the app's own hostname to its
-	// visitors, outside any chrome, so it cannot ask Slots. Empty is the
-	// engine's own name.
+	// WakerBrand is the product's name where Slots cannot be asked: the
+	// waking-up page, served on a sleeping app's own hostname to its
+	// visitors, and the mail the engine sends — sign-in, sign-up and
+	// invitation links. Empty is the engine's own name.
 	WakerBrand string
 
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
@@ -529,6 +562,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.BootstrapTeamName = cfg.OwnerName
 		opts.MailTransport = cfg.MailTransport()
 		opts.BootstrapEmail = cfg.OwnerEmail
+		opts.OpenSignup = cfg.OpenSignup
 	}
 
 	srv, err := web.New(opts)
@@ -549,6 +583,30 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 // RoomShort is the one field fit to turn into something a customer is shown.
 func (e *Engine) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	return e.Apps.Capacity(ctx)
+}
+
+// NetworkIsolation is the network isolation in force. False when the
+// orchestrator enforces none.
+func (e *Engine) NetworkIsolation() (Isolation, bool) {
+	iso, ok := e.Orchestrator.(orchestrator.NetworkIsolator)
+	if !ok {
+		return Isolation{}, false
+	}
+	return iso.Isolation(), true
+}
+
+// SetNetworkIsolation changes the network isolation while the engine runs,
+// and brings every namespace into line with it before returning. For a
+// wrapper whose operator sets it from a page: YACHT_NETWORK_ISOLATION and
+// YACHT_EGRESS_ALLOW are then only where it starts, and with several
+// replicas the wrapper keeps the setting where each of them reads it and
+// calls this on every one.
+func (e *Engine) SetNetworkIsolation(ctx context.Context, i Isolation) error {
+	iso, ok := e.Orchestrator.(orchestrator.NetworkIsolator)
+	if !ok {
+		return ErrNoNetworkIsolation
+	}
+	return iso.SetIsolation(ctx, i)
 }
 
 // Handler is the dashboard, with the wrapper's extra routes mounted.
@@ -584,6 +642,17 @@ func (e *Engine) Start(ctx context.Context) {
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.
 	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
+
+	// Every namespace made before isolation existed, or before its mode
+	// changed, is brought into line now rather than at its next deploy. In a
+	// goroutine for the same reason as the request log below.
+	if iso, ok := e.Orchestrator.(orchestrator.NetworkIsolator); ok {
+		go func() {
+			if err := iso.EnsureIsolation(ctx); err != nil {
+				log.Error("could not put network isolation in place", slog.String("error", err.Error()))
+			}
+		}()
+	}
 
 	// Request logging on by default: an app whose traffic is not being
 	// recorded is an app nobody can debug. In a goroutine because it talks to
@@ -685,9 +754,12 @@ func NewLogger(debug bool) *slog.Logger {
 // their kubeconfig from there — rather than face a process that refuses to
 // boot and a log line they have to find.
 func newOrchestrator(ctx context.Context, cfg Config, log *slog.Logger) Orchestrator {
+	// Validated with the rest of the configuration, so this cannot fail here.
+	iso, _ := cfg.Isolation()
 	orch, err := k8s.New(ctx, k8s.Config{
 		InCluster:  cfg.KubeInCluster,
 		Kubeconfig: cfg.Kubeconfig,
+		Isolation:  iso,
 	}, log)
 	if err == nil {
 		log.Info("connected to cluster")

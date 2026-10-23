@@ -10,18 +10,21 @@ import (
 )
 
 // ---------------------------------------------------------------- shared
+// pageHead is the one heading a page has. The actions share the title's row
+// and the subtitle runs the full width beneath them; the classes are in
+// input.css so a wrapping application's own pages can draw the same heading.
 templ pageHead(title, subtitle string, actions templ.Component) {
-	<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
-		<div class="min-w-0">
-			<h1 class="text-[19px] font-semibold tracking-tight">{ title }</h1>
-			if subtitle != "" {
-				<p class="mt-0.5 text-[12.5px] text-muted-foreground">{ subtitle }</p>
+	<div class="page-head">
+		<div class="page-head-row">
+			<h1 class="page-title">{ title }</h1>
+			if actions != nil {
+				<div class="page-actions">
+					@actions
+				</div>
 			}
 		</div>
-		if actions != nil {
-			<div class="flex flex-wrap items-center gap-2">
-				@actions
-			</div>
+		if subtitle != "" {
+			<p class="page-sub">{ subtitle }</p>
 		}
 	</div>
 }
@@ -531,7 +534,7 @@ templ appDetailHeader(d AppDetailData) {
 	<div class="mb-4 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<div class="flex items-center gap-2.5">
-				<h1 class="text-[19px] font-semibold tracking-tight">{ a.Name }</h1>
+				<h1 class="page-title">{ a.Name }</h1>
 				@appStatus(a)
 			</div>
 			// The URL sits above the image and in foreground colour: it is the

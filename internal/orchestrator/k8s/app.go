@@ -170,6 +170,7 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 			},
 			volumeSources(spec)...,
 		)...)
+	podSpec = placeInPool(podSpec, spec.Pool)
 
 	// A rolling update starts the replacement before the original stops. With a
 	// ReadWriteOnce claim the replacement cannot mount what the original still
@@ -240,6 +241,30 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		return fmt.Errorf("k8s: apply deployment %s: %w", spec.Ref, err)
 	}
 	return nil
+}
+
+// placeInPool keeps a workload's pods on its pool's nodes: a node selector on
+// the pool's label, which is what places them, and a toleration of the pool's
+// taint, which is what lets them onto a node dedicated to the pool. Nothing
+// for no pool.
+//
+// Both rather than either. The selector alone could not use a dedicated node,
+// and the toleration alone would only permit the pool, never require it — the
+// pods would land wherever there was room, the pool's nodes among them.
+//
+// Removing the pool removes both: they are owned by this field manager, so an
+// apply that omits them takes them off, and the pods roll back to anywhere.
+func placeInPool(pod *corev1ac.PodSpecApplyConfiguration, pool string) *corev1ac.PodSpecApplyConfiguration {
+	if pool == "" {
+		return pod
+	}
+	return pod.
+		WithNodeSelector(map[string]string{orchestrator.PoolLabel: pool}).
+		WithTolerations(corev1ac.Toleration().
+			WithKey(orchestrator.PoolLabel).
+			WithOperator(corev1.TolerationOpEqual).
+			WithValue(pool).
+			WithEffect(corev1.TaintEffectNoSchedule))
 }
 
 func (o *Orchestrator) markDeploymentConverged(
@@ -477,6 +502,11 @@ func specHash(spec orchestrator.AppSpec) string {
 	fmt.Fprintf(h, "cpu=%s/%s\n", spec.CPURequest, spec.CPULimit)
 	fmt.Fprintf(h, "mem=%s/%s\n", spec.MemoryRequest, spec.MemoryLimit)
 	fmt.Fprintf(h, "rootfs-writable=%s\n", strconv.FormatBool(spec.WritableRootFilesystem))
+	// Only when set, so every workload that has never had a pool keeps the
+	// fingerprint it had before pools existed and is not rolled for nothing.
+	if spec.Pool != "" {
+		fmt.Fprintf(h, "pool=%s\n", spec.Pool)
+	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}

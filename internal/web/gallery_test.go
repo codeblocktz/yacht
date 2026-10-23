@@ -370,7 +370,7 @@ func galleryPages() []galleryPage {
 					httpLogState(deployments[0], app.HTTPLogs{
 						Hosts: []string{"web.apps.example.com"},
 						Note: "The ingress controller is not writing an access log yet. " +
-							"Yacht switches it on at startup and the controller restarts to " +
+							"It is switched on at startup and the controller restarts to " +
 							"pick that up, so requests should start appearing within a minute.",
 					})),
 				section("Somebody else's controller", "not installed by k3s, so the configuration is handed over instead",
@@ -613,7 +613,7 @@ func galleryPages() []galleryPage {
 						}),
 					)),
 				section("Check your mail", "the same page whether or not the address is registered",
-					CheckMail()),
+					CheckMail(false)),
 			),
 		},
 		{

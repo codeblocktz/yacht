@@ -42,11 +42,14 @@ templ AddNode(d AddNodeData) {
 							placeholder="web"
 						/>
 					</div>
+					@checkField("dedicated", "1", "Dedicated", d.Dedicated)
 					<button class="btn" type="submit">Update command</button>
 				</form>
 				<p class="mt-2 text-[12.5px] text-muted-foreground">
-					A pool labels the node so apps can be scheduled onto it. Leave it
-					empty for an ordinary node.
+					A pool labels the node, and the apps of teams placed on that pool run
+					there. Other teams' apps may land on it too unless it is dedicated,
+					which keeps it for its pool's apps alone. Leave the pool empty for an
+					ordinary node.
 				</p>
 			</div>
 		</div>
@@ -57,7 +60,7 @@ templ AddNode(d AddNodeData) {
 			</div>
 			<div class="panel-body">
 				<p class="mb-4 text-[12.5px] text-muted-foreground">
-					Yacht needs the address agents connect back to and this cluster's
+					Adding nodes needs the address agents connect back to and this cluster's
 					join token. On a K3s server the token is in
 					<code class="mono">/var/lib/rancher/k3s/server/node-token</code>.
 					It is sealed before it is stored.

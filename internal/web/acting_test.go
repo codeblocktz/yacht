@@ -403,3 +403,25 @@ func TestAWrappersBannerCannotHideActing(t *testing.T) {
 		t.Errorf("the acting banner is drawn %d times, want once", n)
 	}
 }
+
+// PersonEmail names the person, not the team: acting as a customer, the
+// operator is still who a wrapper records as having changed something.
+func TestPersonEmailIsThePersonWhileActing(t *testing.T) {
+	a := newActingSetup(t, "web-act-person", []string{operatorEmail})
+	s := &Server{accounts: a.accounts}
+	req := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.AddCookie(a.operator)
+		return r
+	}
+	if got := s.PersonEmail(req()); got != operatorEmail {
+		t.Errorf("PersonEmail before acting = %q, want %q", got, operatorEmail)
+	}
+	a.act(t)
+	if got := s.PersonEmail(req()); got != operatorEmail {
+		t.Errorf("PersonEmail while acting = %q, want %q", got, operatorEmail)
+	}
+	if got := (&Server{}).PersonEmail(req()); got != "" {
+		t.Errorf("PersonEmail with sign-in off = %q, want none", got)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -29,6 +30,10 @@ type Config struct {
 	// Kubeconfig is a path to a kubeconfig file. Empty falls back to the
 	// standard client-go loading rules (KUBECONFIG, then ~/.kube/config).
 	Kubeconfig string
+
+	// Isolation is the network isolation enforced between teams. The zero
+	// value is team isolation.
+	Isolation orchestrator.Isolation
 }
 
 // Orchestrator applies workloads to a single Kubernetes cluster.
@@ -44,6 +49,17 @@ type Orchestrator struct {
 	// cluster, and utilisation percentages are a nice-to-have rather than a
 	// prerequisite for managing workloads.
 	metrics metricsv.Interface
+
+	// isolation is the network isolation every namespace is given; team
+	// isolation unless WithIsolation or SetIsolation says otherwise. Read
+	// through Isolation: SetIsolation changes it while the engine runs.
+	isolationMu sync.RWMutex
+	isolation   orchestrator.Isolation
+	// isolating keeps EnsureIsolation apart from the single policies a deploy
+	// writes: those may run together, but never during a pass over every
+	// namespace, so a deploy that read the mode before a change cannot write
+	// it after the pass that brought everything into line with the new one.
+	isolating sync.RWMutex
 
 	log *slog.Logger
 }
@@ -66,7 +82,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 		return nil, fmt.Errorf("k8s: build clientset: %w", err)
 	}
 
-	o := NewWithClient(client, log)
+	o := NewWithClient(client, log).WithIsolation(cfg.Isolation)
 
 	// Best effort, like the metrics client: a cluster this cannot build a
 	// dynamic client for is still perfectly usable, it just cannot be asked to
@@ -99,7 +115,7 @@ func NewWithClient(client kubernetes.Interface, log *slog.Logger) *Orchestrator 
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Orchestrator{client: client, log: log}
+	return &Orchestrator{client: client, log: log, isolation: orchestrator.Isolation{}.OrDefault()}
 }
 
 // WithMetrics attaches a metrics client, enabling utilisation reporting.

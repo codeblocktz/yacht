@@ -40,6 +40,15 @@ func (s *Server) requireRole(min account.Role) func(http.Handler) http.Handler {
 	}
 }
 
+// Allows reports whether the person behind r holds at least role in the team
+// the request is acting as: the same answer the routes' role gates give. For
+// a wrapping application's pages, so they offer only the controls the person
+// will be let use; a button that answers 403 says they may when they may not.
+func (s *Server) Allows(r *http.Request, role account.Role) bool {
+	got, ok := s.roleOf(r)
+	return ok && got.AtLeast(role)
+}
+
 // roleOf reports the role the request's own session carries in the team the
 // request is acting as.
 //
@@ -141,6 +150,25 @@ func (s *Server) IsOperator(r *http.Request) bool {
 		return false
 	}
 	return s.operators[strings.ToLower(strings.TrimSpace(u.Email))]
+}
+
+// PersonEmail is the signed-in person's address — the person, not the team
+// the request acts as, which is all the resolved Owner says — or "" with
+// sign-in off. For a wrapping application recording who changed something
+// on a page of its own: an operator acting as a customer is still named.
+func (s *Server) PersonEmail(r *http.Request) string {
+	if s.accounts == nil {
+		return ""
+	}
+	sess, err := s.accounts.ResolveSession(r.Context(), sessionToken(r))
+	if err != nil {
+		return ""
+	}
+	u, err := s.accounts.User(r.Context(), sess.UserID)
+	if err != nil {
+		return ""
+	}
+	return u.Email
 }
 
 func normaliseEmails(in []string) map[string]bool {

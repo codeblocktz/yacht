@@ -11,6 +11,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	restclient "k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -61,6 +62,18 @@ func TestASleepingAppIsRoutedToTheWaker(t *testing.T) {
 	}
 	if slice.Labels[discoveryv1.LabelManagedBy] == "endpointslice-controller.k8s.io" {
 		t.Fatalf("the waker's endpoint is labelled as the controller's, which would delete it")
+	}
+	// The fake client takes any label; the API server refuses the slice,
+	// and the app with it, unless every label is valid.
+	for _, obj := range []metav1.Object{svc, slice} {
+		for k, v := range obj.GetLabels() {
+			if errs := validation.IsQualifiedName(k); len(errs) > 0 {
+				t.Errorf("%s label %q: %v", obj.GetName(), k, errs)
+			}
+			if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+				t.Errorf("%s label %s=%q: %v", obj.GetName(), k, v, errs)
+			}
+		}
 	}
 
 	dep, err := client.AppsV1().Deployments(spec.Namespace).Get(ctx, spec.Name, metav1.GetOptions{})

@@ -133,6 +133,10 @@ Debian or Ubuntu, amd64 or arm64. It installs K3s, Postgres, and Yacht as a
 systemd service, then prints the dashboard URL and a token to sign in with.
 About ninety seconds on a fresh box.
 
+To install a binary you built — from source, or an application wrapping the
+engine — instead of a release, pass it with `--binary` (after `sh -s --` when
+piped). It must be a Linux build for the machine's architecture.
+
 To upgrade later:
 
 ```bash
@@ -216,8 +220,11 @@ configured separately to pull from an insecure registry.
 | `YACHT_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
 | `YACHT_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
+| `YACHT_OPEN_SIGNUP` | `false` | Anybody may make an account: a stranger is mailed a link that creates it, with a team of their own. Requires `YACHT_OPERATORS`, `YACHT_OWNER_EMAIL` and a mail transport |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
+| `YACHT_NETWORK_ISOLATION` | `team` | Keep teams apart on the network: `team` refuses connections between teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
+| `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
@@ -288,6 +295,31 @@ explicit, visible escape hatch (`WritableRootFilesystem`).
 
 An important consequence: **images that run as root will not start.** That is
 the intended behaviour. Most official images already ship a non-root user.
+
+### Network isolation
+
+Every app's namespace also gets a `NetworkPolicy`. It accepts connections
+from the same team's apps and from the platform — the ingress controller, the
+engine's waker, anything in a namespace Yacht did not make for a team — and
+refuses them from every other team's apps and from builds, which run
+customers' Dockerfiles. Nothing connects to a build at all.
+
+`YACHT_NETWORK_ISOLATION=strict` limits the way out as well: apps and builds
+reach DNS, their own team's apps and public addresses, and no private
+address — not the nodes' network, not cloud metadata, not anything else on
+the LAN — except ranges named in `YACHT_EGRESS_ALLOW`. Use it wherever teams
+are strangers to each other. Namespaces made before a change of mode are
+brought into line at startup.
+
+A wrapping application can change the mode while the engine runs, with
+`Engine.SetNetworkIsolation`: every namespace is rewritten before it
+returns, and a deploy racing the change never leaves one on the old mode.
+The settings are then only where it starts. With several replicas, the
+wrapper keeps the setting where each replica reads it, and calls this on
+every replica.
+
+This needs a network plugin that enforces NetworkPolicy. K3s's does, through
+its embedded policy controller; flannel alone does not.
 
 ### Signing in
 
@@ -396,10 +428,21 @@ inherits this theme unchanged. Deliberate departures:
 
 - **Monochrome primary.** A saturated primary button reads as consumer
   software. Colour is reserved for state, where it carries information.
-- **Denser than stock.** 13px base, tighter rows, borders instead of shadows,
-  a metric strip instead of a grid of stat cards.
-- **Status is a dot and a word**, not a filled pill. A page of coloured pills
-  is noise, and the one that matters stops standing out.
+- **Pure neutral greys and Inter.** Chroma-zero greys, so the only colour on a
+  page means something, and Inter bundled in the binary (no font CDN), with
+  tabular figures wherever numbers line up.
+- **Cards on a canvas.** The content column sits on a soft canvas; panels,
+  tables and forms are white `rounded-xl` cards with a hairline and no shadow.
+  Controls and nav rows are `rounded-lg`, at 8px radius.
+- **Denser than stock where it counts.** 14px prose and controls, 13px table
+  rows, h-8 controls, and a square readout strip (`.metrics`) instead of a
+  grid of stat cards.
+- **Status is a dot and a word in a soft pill of its own colour**, tinted from
+  `currentColor` so a tone means the same as text, dot and fill.
+- **Shared page parts.** `.page-head` / `.page-title` / `.page-sub`, `.panel`,
+  `.form-row`, and the list `.toolbar`, `.filters` and `.pager` are classes
+  rather than templates, so an application wrapping the engine draws its own
+  pages with the same parts.
 
 Light and dark both ship, resolved before first paint so there is no flash on
 navigation.

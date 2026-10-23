@@ -297,6 +297,15 @@ type Session struct {
 	ActingSince     pgtype.Timestamptz
 }
 
+type SignupLink struct {
+	ID         uuid.UUID
+	Email      string
+	TokenHash  []byte
+	ExpiresAt  time.Time
+	ConsumedAt pgtype.Timestamptz
+	CreatedAt  time.Time
+}
+
 type Team struct {
 	ID                    string
 	DisplayName           string
@@ -304,6 +313,12 @@ type Team struct {
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	OnboardingDismissedAt pgtype.Timestamptz
+}
+
+type TeamPool struct {
+	OwnerID   string
+	Pool      string
+	UpdatedAt time.Time
 }
 
 type TeamQuota struct {

@@ -314,7 +314,7 @@ func (s *Service) DeploymentHTTPLogs(
 		// nothing Yacht does will change it.
 		if s.canApplyHTTPLogs(ctx, logger) {
 			out.Note = "The ingress controller is not writing an access log yet. " +
-				"Yacht switches it on at startup and the controller restarts to " +
+				"It is switched on at startup and the controller restarts to " +
 				"pick that up, so requests should start appearing within a minute."
 			break
 		}

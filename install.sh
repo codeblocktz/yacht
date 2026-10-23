@@ -11,6 +11,9 @@
 #
 # Flags (when piped, pass them after `sh -s --`):
 #   --version vX.Y.Z   install a specific release rather than the latest
+#   --binary FILE      install this binary instead of downloading a release —
+#                      one built from source, or an application wrapping the
+#                      engine; it must serve the engine's configuration
 #   --port N           listen port, default 8080
 #   --rotate-token     issue a new dashboard token instead of keeping the old one
 #   --skip-k3s         do not install K3s; use the kubeconfig already present
@@ -46,6 +49,7 @@ ACME_STAGING_SERVER="https://acme-staging-v02.api.letsencrypt.org/directory"
 ACME_PRODUCTION_SERVER="https://acme-v02.api.letsencrypt.org/directory"
 
 VERSION=""
+BINARY=""
 PORT="8080"
 ROTATE_TOKEN="no"
 SKIP_K3S="no"
@@ -116,6 +120,7 @@ usage() {
 
 		Flags (when piped, pass them after 'sh -s --'):
 		  --version vX.Y.Z    install a specific release rather than the latest
+		  --binary FILE       install this binary instead of downloading a release
 		  --port N            listen port, default 8080
 		  --rotate-token      issue a new dashboard token instead of keeping it
 		  --skip-k3s          use the kubeconfig already present
@@ -156,6 +161,7 @@ parse_flags() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--version)      require_flag_value "$1" "${2-}"; VERSION=$2; shift 2 ;;
+			--binary)       require_flag_value "$1" "${2-}"; BINARY=$2; shift 2 ;;
 			--port)         require_flag_value "$1" "${2-}"; PORT=$2; shift 2 ;;
 			--database-url) require_flag_value "$1" "${2-}"; DATABASE_URL=$2; shift 2 ;;
 			--rotate-token) ROTATE_TOKEN="yes"; shift ;;
@@ -175,6 +181,10 @@ parse_flags() {
 	case "$PORT" in
 		''|*[!0-9]*) die "--port must be a number, got '$PORT'" ;;
 	esac
+	if [ -n "$BINARY" ]; then
+		[ -z "$VERSION" ] || die "--binary and --version both name what to install — pass one"
+		[ -f "$BINARY" ] || die "--binary ${BINARY} is not a file"
+	fi
 	case "$ACME_ENVIRONMENT" in
 		staging|production) ;;
 		*) die "--acme-environment must be 'staging' or 'production', got '$ACME_ENVIRONMENT'" ;;
@@ -213,6 +223,10 @@ rand_b64() { head -c "${1:-32}" /dev/urandom | base64 | tr -d '\n'; }
 
 resolve_version() {
 	[ -n "$VERSION" ] && return 0
+	if [ -n "$BINARY" ]; then
+		VERSION="(local build)"
+		return 0
+	fi
 	step "Resolving the latest release"
 	VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
 		| sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
@@ -222,6 +236,10 @@ resolve_version() {
 }
 
 install_binary() {
+	if [ -n "$BINARY" ]; then
+		install_local_binary
+		return 0
+	fi
 	step "Installing yacht ${VERSION} (${ARCH})"
 
 	num="${VERSION#v}"
@@ -254,6 +272,23 @@ install_binary() {
 
 	rm -rf "$tmp"
 	trap - EXIT INT TERM
+}
+
+# install_local_binary installs the file --binary named, in place of a release.
+#
+# Nothing is downloaded, so there is no published checksum to hold it to: the
+# operator vouches for the file by naming it. What is checked is that it is a
+# Linux executable at all, so a binary built for the wrong system is refused
+# before it replaces a working one. It is not run to find out: a wrapper that
+# ignores its arguments would start serving, as root, in the installer.
+install_local_binary() {
+	step "Installing ${BINARY} (${ARCH})"
+	if ! head -c 4 "$BINARY" | grep -q 'ELF'; then
+		die "${BINARY} is not a Linux executable — build it with GOOS=linux GOARCH=${ARCH}"
+	fi
+	install -m 0755 "$BINARY" "${INSTALL_DIR}/yacht.new"
+	mv -f "${INSTALL_DIR}/yacht.new" "${INSTALL_DIR}/yacht"
+	say "${INSTALL_DIR}/yacht"
 }
 
 # -------------------------------------------------------------------- k3s ---

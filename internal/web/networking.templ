@@ -126,8 +126,8 @@ templ customDomains(d NetworkingData) {
 				// and a div inside a p makes the browser close the paragraph
 				// early — which drops the trigger onto its own line.
 				<div class="mt-3 text-[12.5px] text-muted-foreground">
-					Add the name and Yacht shows you the record to create, then proves it
-					itself — there is nothing to come back and press.
+					Add the name and you are shown the record to create, then it is proved
+					without you — there is nothing to come back and press.
 					@helpNote("how verification works") {
 						<p>
 							Nothing is routed until the record resolves. Until then the
@@ -295,7 +295,7 @@ templ routingOptions(d NetworkingData) {
 					// and Yacht has no way to tell them — so it says that instead
 					// of implying they should already know.
 					<span class="mt-1 block">
-						Yacht does not run ExternalDNS and cannot see whether anything
+						This install does not run ExternalDNS and cannot see whether anything
 						does, so it cannot confirm this takes effect. The target itself is
 						set under <a class="underline hover:text-foreground" href="/cluster/dns">Admin &rsaquo; DNS</a>.
 					</span>
@@ -411,7 +411,7 @@ templ PlatformDNS(d PlatformDNSData) {
 						<div class="min-w-0">
 							<div class="font-medium">Recorded here, not applied</div>
 							<p class="mt-0.5 text-muted-foreground">
-								Yacht does not deploy ExternalDNS and cannot set a flag on it.
+								This install does not deploy ExternalDNS and cannot set a flag on it.
 								This is written down so the two can be kept in step — changing
 								it here changes nothing in the cluster.
 							</p>

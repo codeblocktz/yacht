@@ -45,9 +45,11 @@ SELECT t.id, t.display_name,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
-       q.updated_at                            AS quota_updated_at
+       q.updated_at                            AS quota_updated_at,
+       coalesce(p.pool, '')::text              AS pool
 FROM teams t
 LEFT JOIN team_quotas q ON q.owner_id = t.id
+LEFT JOIN team_pools p ON p.owner_id = t.id
 WHERE t.id = $1
 `
 
@@ -61,6 +63,7 @@ type GetTeamQuotaSummaryRow struct {
 	QuotaMemoryBytes  int64
 	QuotaStorageBytes int64
 	QuotaUpdatedAt    pgtype.Timestamptz
+	Pool              string
 }
 
 func (q *Queries) GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQuotaSummaryRow, error) {
@@ -76,6 +79,7 @@ func (q *Queries) GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQu
 		&i.QuotaMemoryBytes,
 		&i.QuotaStorageBytes,
 		&i.QuotaUpdatedAt,
+		&i.Pool,
 	)
 	return i, err
 }
@@ -170,9 +174,11 @@ SELECT t.id, t.display_name,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
-       q.updated_at                            AS quota_updated_at
+       q.updated_at                            AS quota_updated_at,
+       coalesce(p.pool, '')::text              AS pool
 FROM teams t
 LEFT JOIN team_quotas q ON q.owner_id = t.id
+LEFT JOIN team_pools p ON p.owner_id = t.id
 ORDER BY lower(t.display_name), t.id
 `
 
@@ -186,10 +192,11 @@ type ListTeamQuotasRow struct {
 	QuotaMemoryBytes  int64
 	QuotaStorageBytes int64
 	QuotaUpdatedAt    pgtype.Timestamptz
+	Pool              string
 }
 
-// Every team with its quota, its storage and how many people are in it. The
-// operator's list; see ListAllAppFootprints for why it crosses teams.
+// Every team with its quota, its pool, its storage and how many people are in
+// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
 func (q *Queries) ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error) {
 	rows, err := q.db.Query(ctx, listTeamQuotas)
 	if err != nil {
@@ -209,6 +216,7 @@ func (q *Queries) ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, erro
 			&i.QuotaMemoryBytes,
 			&i.QuotaStorageBytes,
 			&i.QuotaUpdatedAt,
+			&i.Pool,
 		); err != nil {
 			return nil, err
 		}

@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	networkingv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -19,11 +20,13 @@ const limitRangeName = "yacht-defaults"
 
 // EnsureNamespace creates or converges an owner's namespace.
 //
-// Two things always happen together here, and that coupling is intentional:
-// the namespace gets Pod Security Admission labels, and it gets a LimitRange.
-// A namespace without PSA labels has no enforced security floor; a namespace
-// without a LimitRange lets a workload that specifies no resources run
-// unbounded and evict its neighbours. Neither is offered as an option.
+// Three things always happen together here, and that coupling is
+// intentional: the namespace gets Pod Security Admission labels, a
+// LimitRange, and its network isolation. A namespace without PSA labels has
+// no enforced security floor; one without a LimitRange lets a workload that
+// specifies no resources run unbounded and evict its neighbours; one without
+// isolation can be connected to by every other team's workloads. Only the
+// last can be switched off, by whoever runs the install.
 func (o *Orchestrator) EnsureNamespace(ctx context.Context, spec orchestrator.NamespaceSpec) error {
 	if err := spec.Validate(); err != nil {
 		return err
@@ -42,6 +45,11 @@ func (o *Orchestrator) EnsureNamespace(ctx context.Context, spec orchestrator.Na
 	}
 
 	if err := o.ensureLimitRange(ctx, spec.Name, limits); err != nil {
+		return err
+	}
+	if err := o.isolate(ctx, func(iso orchestrator.Isolation) *networkingv1ac.NetworkPolicyApplyConfiguration {
+		return teamIsolation(spec.Name, string(spec.Owner), iso)
+	}); err != nil {
 		return err
 	}
 

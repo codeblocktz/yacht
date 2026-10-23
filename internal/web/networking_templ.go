@@ -186,7 +186,7 @@ func customDomains(d NetworkingData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" class=\"mt-4 flex flex-wrap items-end gap-3\"><div class=\"field min-w-[260px] flex-1\"><label class=\"label\" for=\"host\">Add custom domain</label> <input class=\"control\" id=\"host\" name=\"host\" placeholder=\"shop.example.com\" required></div><button class=\"btn btn-primary\" type=\"submit\">Add</button></form>   <div class=\"mt-3 text-[12.5px] text-muted-foreground\">Add the name and Yacht shows you the record to create, then proves it itself — there is nothing to come back and press.")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "\" class=\"mt-4 flex flex-wrap items-end gap-3\"><div class=\"field min-w-[260px] flex-1\"><label class=\"label\" for=\"host\">Add custom domain</label> <input class=\"control\" id=\"host\" name=\"host\" placeholder=\"shop.example.com\" required></div><button class=\"btn btn-primary\" type=\"submit\">Add</button></form>   <div class=\"mt-3 text-[12.5px] text-muted-foreground\">Add the name and you are shown the record to create, then it is proved without you — there is nothing to come back and press.")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -814,7 +814,7 @@ func routingOptions(d NetworkingData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, " rather than publishing this cluster's node addresses as A records.    <span class=\"mt-1 block\">Yacht does not run ExternalDNS and cannot see whether anything does, so it cannot confirm this takes effect. The target itself is set under <a class=\"underline hover:text-foreground\" href=\"/cluster/dns\">Admin &rsaquo; DNS</a>.</span>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 65, " rather than publishing this cluster's node addresses as A records.    <span class=\"mt-1 block\">This install does not run ExternalDNS and cannot see whether anything does, so it cannot confirm this takes effect. The target itself is set under <a class=\"underline hover:text-foreground\" href=\"/cluster/dns\">Admin &rsaquo; DNS</a>.</span>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1059,7 +1059,7 @@ func PlatformDNS(d PlatformDNSData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 89, "</div><div class=\"callout callout-warn mt-2\"><div class=\"min-w-0\"><div class=\"font-medium\">Recorded here, not applied</div><p class=\"mt-0.5 text-muted-foreground\">Yacht does not deploy ExternalDNS and cannot set a flag on it. This is written down so the two can be kept in step — changing it here changes nothing in the cluster.</p></div></div></div><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 89, "</div><div class=\"callout callout-warn mt-2\"><div class=\"min-w-0\"><div class=\"font-medium\">Recorded here, not applied</div><p class=\"mt-0.5 text-muted-foreground\">This install does not deploy ExternalDNS and cannot set a flag on it. This is written down so the two can be kept in step — changing it here changes nothing in the cluster.</p></div></div></div><div><button class=\"btn btn-primary\" type=\"submit\">Save</button></div></form></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

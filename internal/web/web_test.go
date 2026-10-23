@@ -161,6 +161,21 @@ func TestBrandMarkReplacesYachts(t *testing.T) {
 	}
 }
 
+// A wrapping application's stylesheets come after the engine's, so its
+// tokens win.
+func TestWrapperStylesheetsFollowTheEngines(t *testing.T) {
+	chrome := SlotProviderFunc(func(ctx context.Context, r *http.Request) Slots {
+		s := DefaultSlots{}.Slots(ctx, r)
+		s.Stylesheets = []string{"/brand/theme.css"}
+		return s
+	})
+	body := get(t, testServer(t, Options{Slots: chrome}), "/").Body.String()
+	engine, wrapper := strings.Index(body, "/assets/css/app.css"), strings.Index(body, `<link rel="stylesheet" href="/brand/theme.css">`)
+	if engine < 0 || wrapper < 0 || wrapper < engine {
+		t.Fatalf("engine stylesheet at %d, wrapper's at %d; want the wrapper's after", engine, wrapper)
+	}
+}
+
 // Every slot must be optional, or a wrapping application is forced to supply
 // components it does not want.
 func TestSlotsAreOptional(t *testing.T) {

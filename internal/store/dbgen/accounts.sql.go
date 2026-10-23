@@ -77,6 +77,24 @@ func (q *Queries) ConsumeMagicLink(ctx context.Context, tokenHash []byte) (User,
 	return i, err
 }
 
+const consumeSignupLink = `-- name: ConsumeSignupLink :one
+UPDATE signup_links
+SET consumed_at = now()
+WHERE token_hash = $1
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING email
+`
+
+// Spent in one statement for the reason ConsumeMagicLink is: no window in
+// which a second request also finds it unconsumed.
+func (q *Queries) ConsumeSignupLink(ctx context.Context, tokenHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, consumeSignupLink, tokenHash)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}
+
 const countOwnersOfTeam = `-- name: CountOwnersOfTeam :one
 SELECT count(*) FROM memberships WHERE owner_id = $1 AND role = 'owner'
 `
@@ -151,6 +169,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.AuthenticatedAt,
 		&i.ActingTeamID,
 		&i.ActingSince,
+	)
+	return i, err
+}
+
+const createSignupLink = `-- name: CreateSignupLink :one
+INSERT INTO signup_links (email, token_hash, expires_at)
+VALUES (lower($1::text), $2, $3)
+RETURNING id, email, token_hash, expires_at, consumed_at, created_at
+`
+
+type CreateSignupLinkParams struct {
+	Email     string
+	TokenHash []byte
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreateSignupLink(ctx context.Context, arg CreateSignupLinkParams) (SignupLink, error) {
+	row := q.db.QueryRow(ctx, createSignupLink, arg.Email, arg.TokenHash, arg.ExpiresAt)
+	var i SignupLink
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.TokenHash,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -947,6 +991,23 @@ func (q *Queries) LockTeam(ctx context.Context, id string) (Team, error) {
 		&i.OnboardingDismissedAt,
 	)
 	return i, err
+}
+
+const renameTeam = `-- name: RenameTeam :execrows
+UPDATE teams SET display_name = $1 WHERE id = $2
+`
+
+type RenameTeamParams struct {
+	DisplayName string
+	ID          string
+}
+
+func (q *Queries) RenameTeam(ctx context.Context, arg RenameTeamParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameTeam, arg.DisplayName, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setSessionTeam = `-- name: SetSessionTeam :exec

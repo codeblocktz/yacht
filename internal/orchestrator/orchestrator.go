@@ -301,6 +301,16 @@ type AppSpec struct {
 	// it wakes, with Replicas back — the route returns only once pods are
 	// ready to take it, so nobody is sent to a Service with nothing behind it.
 	Waker *WakerEndpoint
+
+	// Pool places the workload's pods on the nodes labelled PoolLabel=Pool,
+	// and lets them onto those of the nodes that are tainted to keep the pool
+	// for its own apps. Empty is anywhere the scheduler likes, which is every
+	// install that has never named a pool.
+	//
+	// The pods only. A build runs wherever there is room: it is the install's
+	// work on the team's behalf, and a pool sized for the team's apps is not
+	// sized for a compiler.
+	Pool string
 }
 
 // VolumeSpec is one piece of storage attached to a workload.
@@ -325,6 +335,9 @@ func (s AppSpec) Validate() error {
 	}
 	if s.Image == "" {
 		return errors.New("app spec: image is required")
+	}
+	if err := ValidatePool(s.Pool); err != nil {
+		return fmt.Errorf("app spec: %w", err)
 	}
 	if s.Replicas < 0 {
 		return fmt.Errorf("app spec: replicas must be >= 0, got %d", s.Replicas)

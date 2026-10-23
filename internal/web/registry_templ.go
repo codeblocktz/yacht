@@ -202,7 +202,7 @@ func RegistryPage(d RegistryData) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "Normal for a registry on an internal network. Yacht can only act on half of it: builds will push over HTTP, but the cluster's container runtime has to be configured to pull that way too, and that is node configuration Yacht does not touch. Without it the build succeeds and the deploy fails to pull.")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 22, "Normal for a registry on an internal network. Only half of it is done here: builds will push over HTTP, but the cluster's container runtime has to be configured to pull that way too, and that is node configuration this install does not touch. Without it the build succeeds and the deploy fails to pull.")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

@@ -35,7 +35,7 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"Hosts": true, "Secrets": true, "Volumes": true,
 		"TLSHosts": true, "CNAMETarget": true, "HTTPSOnly": true,
 		"RegistryAuth": true, "IssuedHosts": true, "CertIssuer": true,
-		"Waker": true,
+		"Waker": true, "Pool": true,
 	}
 
 	typ := reflect.TypeOf(orchestrator.AppSpec{})
@@ -77,7 +77,7 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		Hosts:       []string{"web.example.test", "shop.customer.test"},
 		TLSHosts:    []string{"web.example.test"},
 		IssuedHosts: []string{"shop.customer.test"}, CertIssuer: "yacht-acme",
-		HTTPSOnly: true, CNAMETarget: "edge.example.test",
+		HTTPSOnly: true, CNAMETarget: "edge.example.test", Pool: "pro",
 	}
 	want := orchestrator.AppSpec{
 		Ref: ref, ReleaseID: release.ID.String(), ConfigVersion: 7,
@@ -93,7 +93,7 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		Hosts:       []string{"web.example.test", "shop.customer.test"},
 		TLSHosts:    []string{"web.example.test"},
 		IssuedHosts: []string{"shop.customer.test"}, CertIssuer: "yacht-acme",
-		HTTPSOnly: true, CNAMETarget: "edge.example.test",
+		HTTPSOnly: true, CNAMETarget: "edge.example.test", Pool: "pro",
 	}
 	if got := release.AppSpec(overlays); !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppSpec mismatch\n got: %#v\nwant: %#v", got, want)

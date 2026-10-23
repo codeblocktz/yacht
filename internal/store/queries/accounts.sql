@@ -28,6 +28,9 @@ RETURNING *;
 -- name: GetTeam :one
 SELECT * FROM teams WHERE id = @id;
 
+-- name: RenameTeam :execrows
+UPDATE teams SET display_name = @display_name WHERE id = @id;
+
 -- A role change reads the owner count and then writes; taking the team row
 -- first serialises those pairs, so two concurrent demotions cannot both see
 -- two owners and both proceed.
@@ -171,6 +174,21 @@ SELECT u.* FROM users u JOIN consumed ON consumed.user_id = u.id;
 
 -- name: DeleteExpiredMagicLinks :exec
 DELETE FROM magic_links WHERE expires_at <= now();
+
+-- name: CreateSignupLink :one
+INSERT INTO signup_links (email, token_hash, expires_at)
+VALUES (lower(@email::text), @token_hash, @expires_at)
+RETURNING *;
+
+-- Spent in one statement for the reason ConsumeMagicLink is: no window in
+-- which a second request also finds it unconsumed.
+-- name: ConsumeSignupLink :one
+UPDATE signup_links
+SET consumed_at = now()
+WHERE token_hash = @token_hash
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING email;
 
 -- Re-inviting replaces the pending invitation rather than adding a second one,
 -- so the token in the older mail stops working. Two live tokens for one address

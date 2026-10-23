@@ -82,6 +82,12 @@ type ReleaseOverlays struct {
 	// zero, and wakes to it unchanged.
 	Asleep bool
 	Waker  *orchestrator.WakerEndpoint
+
+	// Pool is the team's, read at every apply: where a team's apps run is
+	// the operator's decision about the team now, not a fact of the release,
+	// and a rollback must not carry an app back onto machines its team has
+	// been moved off. See pool.go.
+	Pool string
 }
 
 // AppSpec reconstructs the exact orchestrator input from a release and the
@@ -126,6 +132,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		HTTPSOnly:              overlays.HTTPSOnly,
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
 		Waker:                  waker,
+		Pool:                   overlays.Pool,
 	}
 }
 

@@ -27,7 +27,7 @@ type Joiner interface {
 	DNS(ctx context.Context) (cluster.DNS, error)
 	SetDNS(ctx context.Context, target, prefix string) error
 	SetJoin(ctx context.Context, serverURL, token string, by uuid.UUID) error
-	Command(ctx context.Context, pool string) (string, error)
+	Command(ctx context.Context, pool string, dedicated bool) (string, error)
 }
 
 // justJoined is how recently a node must have been created to be called new.
@@ -49,6 +49,11 @@ type AddNodeData struct {
 	// command with holes in it is worse than a prompt to fill them in.
 	Command string
 	Pool    string
+
+	// Dedicated taints the node for its pool, so only that pool's apps are
+	// scheduled on it. Meaningless without a pool, and cleared there so the
+	// box is not drawn ticked beside a command that ignores it.
+	Dedicated bool
 
 	// Nodes and ClusterOK are the confirmation half.
 	Nodes     []orchestrator.NodeInfo
@@ -82,11 +87,17 @@ func (s *Server) nodeAddFragment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) addNodeData(r *http.Request) AddNodeData {
 	ctx := r.Context()
-	data := AddNodeData{Pool: r.URL.Query().Get("pool")}
+	data := AddNodeData{
+		Pool:      r.URL.Query().Get("pool"),
+		Dedicated: r.URL.Query().Get("dedicated") == "1",
+	}
 
 	if err := cluster.ValidatePool(data.Pool); err != nil {
 		data.Error = err.Error()
 		data.Pool = ""
+	}
+	if data.Pool == "" {
+		data.Dedicated = false
 	}
 
 	settings, err := s.joiner.Settings(ctx)
@@ -102,7 +113,7 @@ func (s *Server) addNodeData(r *http.Request) AddNodeData {
 	}
 
 	if data.Configured && data.Error == "" {
-		cmd, err := s.joiner.Command(ctx, data.Pool)
+		cmd, err := s.joiner.Command(ctx, data.Pool, data.Dedicated)
 		if err != nil {
 			// Named rather than swallowed. The usual cause is a rotated key,
 			// and "no command" with no reason sends somebody to read logs.

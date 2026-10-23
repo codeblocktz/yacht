@@ -299,7 +299,7 @@ func nodeActions(d NodeDetailData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.CanRetire {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<p class=\"mt-3 text-[12.5px] text-muted-foreground\">Retiring stops scheduling here, then moves each app with a rolling restart, one at a time: the replacement starts on another node and is ready before the original stops, so nobody using the app sees a gap. Pods Yacht does not manage are evicted afterwards, as a drain would, and pods that run on every node stay.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 29, "<p class=\"mt-3 text-[12.5px] text-muted-foreground\">Retiring stops scheduling here, then moves each app with a rolling restart, one at a time: the replacement starts on another node and is ready before the original stops, so nobody using the app sees a gap. Pods the platform does not manage are evicted afterwards, as a drain would, and pods that run on every node stay.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

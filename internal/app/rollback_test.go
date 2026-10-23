@@ -256,3 +256,50 @@ func TestRollbackRefusesTheRunningReleaseAndAnother(t *testing.T) {
 		t.Errorf("rollback to an unknown release = %v, want ErrNotFound", err)
 	}
 }
+
+// A release that ran with a secret since deleted is refused, naming it, and
+// nothing changes; once the secret is back, the rollback goes ahead.
+func TestRollbackRefusesAReleaseWhoseSecretIsGone(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, ownerID, a, _ := rollbackFixture(t, "rollback-secret-gone")
+	// A secret is an overlay and makes no release of its own; the next plain
+	// change makes one that records its name.
+	if err := s.SetVariable(ctx, ownerID, a.Name, VariableInput{Key: "STEP", Value: "with-token"}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	mustExecute(t, s, ownerID, a.Name)
+	withToken := activeRelease(t, s, ownerID, a.Name)
+	if len(withToken.SecretKeys) != 1 || withToken.SecretKeys[0] != "TOKEN" {
+		t.Fatalf("release secret keys = %v, want [TOKEN]", withToken.SecretKeys)
+	}
+	if err := s.DeleteVariable(ctx, ownerID, a.Name, "TOKEN"); err != nil {
+		t.Fatalf("DeleteVariable: %v", err)
+	}
+	if err := s.SetVariable(ctx, ownerID, a.Name, VariableInput{Key: "STEP", Value: "without"}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	mustExecute(t, s, ownerID, a.Name)
+	before, err := s.Get(ctx, ownerID, a.Name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	err = s.Rollback(ctx, ownerID, a.Name, withToken.ID)
+	var missing MissingSecretsError
+	if !errors.As(err, &missing) || len(missing.Keys) != 1 || missing.Keys[0] != "TOKEN" {
+		t.Fatalf("Rollback = %v, want MissingSecretsError naming TOKEN", err)
+	}
+	if !strings.Contains(err.Error(), "add it back under Variables") {
+		t.Errorf("the refusal does not say what to do: %v", err)
+	}
+	if after, _ := s.Get(ctx, ownerID, a.Name); after.ConfigVersion != before.ConfigVersion {
+		t.Errorf("settings moved on a refused rollback: v%d -> v%d", before.ConfigVersion, after.ConfigVersion)
+	}
+
+	if err := s.SetVariable(ctx, ownerID, a.Name, VariableInput{Key: "TOKEN", Value: "back", Secret: true}); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	if err := s.Rollback(ctx, ownerID, a.Name, withToken.ID); err != nil {
+		t.Fatalf("Rollback with the secret back = %v, want it to go ahead", err)
+	}
+}

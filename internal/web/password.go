@@ -128,7 +128,7 @@ func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) refusePassword(
 	w http.ResponseWriter, r *http.Request, status int, email string, msg signInError,
 ) {
-	s.renderSignedOut(w, r, status, "Sign in", SignIn(SignInData{
+	s.renderSignedOut(w, r, status, "Sign in", s.signInForm(SignInData{
 		Email:  email,
 		Error:  string(msg),
 		Method: SignInByPassword,
