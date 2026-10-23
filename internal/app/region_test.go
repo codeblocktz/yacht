@@ -61,7 +61,7 @@ func regionService(t *testing.T, opts Options) (*Service, *convergenceOrchestrat
 	setNodes(s, twoRegions())
 	ctx := context.Background()
 	for _, r := range []Region{
-		{Name: "fsn", DisplayName: "Falkenstein", Open: true, StorageClass: "replicated-fsn",
+		{Name: "fsn", DisplayName: "North", Open: true, StorageClass: "replicated-fsn",
 			Edge: Edge{Host: "edge-fsn.example.test", Addresses: []string{"203.0.113.10"}}},
 		{Name: "dar", Open: true},
 	} {
@@ -519,7 +519,7 @@ func TestAdmissionIsHeldToTheRegion(t *testing.T) {
 		byName[rc.Region] = rc
 	}
 	fsn, dar := byName["fsn"], byName["dar"]
-	if fsn.Label != "Falkenstein" || fsn.Nodes != 1 || fsn.CPU.Allocatable != 1000 || fsn.CPU.Committed != 600 {
+	if fsn.Label != "North" || fsn.Nodes != 1 || fsn.CPU.Allocatable != 1000 || fsn.CPU.Committed != 600 {
 		t.Fatalf("fsn's capacity = %+v, want its one core and the 600m in it", fsn)
 	}
 	if dar.CPU.Committed != 600 || !dar.Open {
@@ -782,7 +782,7 @@ func TestARegionIsValidated(t *testing.T) {
 			t.Errorf("SetRegion(%+v) was accepted", r)
 		}
 	}
-	ok := Region{Name: "fsn", DisplayName: "Falkenstein", Open: true, StorageClass: "longhorn-fsn",
+	ok := Region{Name: "fsn", DisplayName: "North", Open: true, StorageClass: "longhorn-fsn",
 		Edge: Edge{Host: "edge-fsn.example.test", Addresses: []string{" 2001:db8::10 ", "203.0.113.10", "203.0.113.10"}}}
 	if err := s.SetRegion(ctx, ok); err != nil {
 		t.Fatalf("SetRegion: %v", err)
@@ -791,7 +791,7 @@ func TestARegionIsValidated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Region: %v", err)
 	}
-	if !r.Configured || r.Label() != "Falkenstein" || r.Nodes != 1 || r.Ready != 1 ||
+	if !r.Configured || r.Label() != "North" || r.Nodes != 1 || r.Ready != 1 ||
 		!slices.Equal(r.Sites, []string{"fsn-a"}) || !slices.Equal(r.Edge.Addresses, []string{"2001:db8::10", "203.0.113.10"}) {
 		t.Fatalf("Region = %+v", r)
 	}

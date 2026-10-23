@@ -23,12 +23,12 @@ func galleryRegionInfos() []app.RegionInfo {
 			Nodes:  1, Ready: 1, Sites: []string{"ams-a"}, Apps: 0,
 		},
 		{
-			Region: app.Region{Name: "dar", DisplayName: "Dar es Salaam", Open: true,
+			Region: app.Region{Name: "dar", DisplayName: "South", Open: true,
 				Edge: app.Edge{Host: "edge-dar.example.test", Addresses: []string{"198.51.100.40"}}},
 			Configured: true, Nodes: 2, Ready: 2, Sites: []string{"dar-a", "dar-b"}, Apps: 6, Choosable: true,
 		},
 		{
-			Region: app.Region{Name: "fsn", DisplayName: "Falkenstein", Open: true, StorageClass: "replicated-fsn",
+			Region: app.Region{Name: "fsn", DisplayName: "North", Open: true, StorageClass: "replicated-fsn",
 				Edge: app.Edge{Host: "edge-fsn.example.test", Addresses: []string{"203.0.113.10", "2001:db8::10"}}},
 			Configured: true, Nodes: 3, Ready: 2, Sites: []string{"fsn-a"}, Apps: 14,
 			Default: true, Choosable: true,
@@ -77,8 +77,8 @@ func regionCapacity(nodes []orchestrator.NodeInfo, now time.Time) app.CapacitySn
 	dar := app.NewCapacitySnapshot(regional, app.RoomOf(in("dar")),
 		app.Usage{Apps: 6, CPUMillis: 2100, MemoryBytes: 3 << 30, StorageBytes: 12 << 30}, 0)
 	snap.Regions = []app.RegionCapacity{
-		{Region: "dar", Label: "Dar es Salaam", Open: true, CapacitySnapshot: dar},
-		{Region: "fsn", Label: "Falkenstein", Open: true, CapacitySnapshot: fsn},
+		{Region: "dar", Label: "South", Open: true, CapacitySnapshot: dar},
+		{Region: "fsn", Label: "North", Open: true, CapacitySnapshot: fsn},
 	}
 	return snap
 }
@@ -208,7 +208,7 @@ func regionGalleryPages() []galleryPage {
 		{
 			// One region's settings: configured, and one not configured yet.
 			file: "states-admin-region.html", path: "/admin/regions/fsn",
-			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Regions", Href: "/admin/regions"}, {Label: "Falkenstein"}},
+			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Regions", Href: "/admin/regions"}, {Label: "North"}},
 			page: stack(
 				section("Configured", "", AdminRegion(regionForm(galleryRegionInfos()[2]))),
 				section("Unconfigured, refused", "a scheme in the edge",

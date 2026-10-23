@@ -88,13 +88,13 @@ func (f *fakeRegions) MoveApp(_ context.Context, _, name, region string) error {
 // open; and ams, which machines carry and nobody configured.
 func twoRegionsFake() *fakeRegions {
 	fsn := app.RegionInfo{
-		Region: app.Region{Name: "fsn", DisplayName: "Falkenstein", Open: true, StorageClass: "replicated-fsn",
+		Region: app.Region{Name: "fsn", DisplayName: "North", Open: true, StorageClass: "replicated-fsn",
 			Edge: app.Edge{Host: "edge-fsn.example.test"}},
 		Configured: true, Nodes: 2, Ready: 2, Sites: []string{"fsn-a", "fsn-b"}, Apps: 3,
 		Default: true, Choosable: true,
 	}
 	dar := app.RegionInfo{
-		Region:     app.Region{Name: "dar", DisplayName: "Dar es Salaam", Open: true},
+		Region:     app.Region{Name: "dar", DisplayName: "South", Open: true},
 		Configured: true, Nodes: 1, Ready: 1, Apps: 1, Choosable: true,
 	}
 	ams := app.RegionInfo{Region: app.Region{Name: "ams"}, Nodes: 1, Ready: 1}
@@ -118,7 +118,7 @@ func TestTheDeployFormOffersRegionsOnlyWhereThereAreSome(t *testing.T) {
 	regions := twoRegionsFake()
 	h := regionServer(t, apps, regions, nil)
 	body = do(h, signedIn(http.MethodGet, "/apps/new?source=image")).Body.String()
-	for _, want := range []string{`name="region"`, "Falkenstein", "Dar es Salaam", `value="fsn"`} {
+	for _, want := range []string{`name="region"`, "North", "South", `value="fsn"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the form is missing %q", want)
 		}
@@ -167,7 +167,7 @@ func TestTheRegionsPageListsEveryRegion(t *testing.T) {
 	h := regionServer(t, newFakeApps(), twoRegionsFake(), nil)
 	body := do(h, signedIn(http.MethodGet, "/admin/regions")).Body.String()
 	for _, want := range []string{
-		"Falkenstein", "Dar es Salaam", "unconfigured", "default",
+		"North", "South", "unconfigured", "default",
 		"edge-fsn.example.test", "replicated-fsn", "fsn-a, fsn-b",
 		`href="/admin/regions/ams"`, ">Configure<",
 	} {
@@ -198,7 +198,7 @@ func TestARegionIsSavedFromItsPage(t *testing.T) {
 	}
 
 	form := url.Values{
-		"display_name": {"Amsterdam"}, "edge_host": {"edge-ams.example.test"},
+		"display_name": {"West"}, "edge_host": {"edge-ams.example.test"},
 		"edge_addresses": {"203.0.113.20\n2001:db8::20"}, "storage_class": {"replicated-ams"}, "open": {"1"},
 	}
 	rec := do(h, signedInForm(http.MethodPost, "/admin/regions/ams", form.Encode()))
@@ -209,7 +209,7 @@ func TestARegionIsSavedFromItsPage(t *testing.T) {
 		t.Fatalf("saved %+v", regions.set)
 	}
 	got := regions.set[0]
-	if got.Name != "ams" || got.DisplayName != "Amsterdam" || !got.Open || got.StorageClass != "replicated-ams" ||
+	if got.Name != "ams" || got.DisplayName != "West" || !got.Open || got.StorageClass != "replicated-ams" ||
 		got.Edge.Host != "edge-ams.example.test" || len(got.Edge.Addresses) != 2 {
 		t.Fatalf("saved %+v", got)
 	}
@@ -235,7 +235,7 @@ func TestTheAppPageShowsItsRegion(t *testing.T) {
 	h := regionServer(t, newFakeApps(a), regions, nil)
 
 	body := do(h, signedIn(http.MethodGet, "/apps/web/settings")).Body.String()
-	for _, want := range []string{"Lives in Falkenstein", `href="#region"`, `action="/apps/web/region"`, "Dar es Salaam"} {
+	for _, want := range []string{"Lives in North", `href="#region"`, `action="/apps/web/region"`, "South"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the settings page is missing %q", want)
 		}
