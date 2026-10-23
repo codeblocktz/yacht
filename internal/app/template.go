@@ -101,6 +101,16 @@ func TemplateFor(slug string) (Template, error) {
 func (s *Service) DeployTemplate(
 	ctx context.Context, ownerID, slug, stack string,
 ) (Project, error) {
+	return s.DeployTemplateIn(ctx, ownerID, slug, stack, "")
+}
+
+// DeployTemplateIn is DeployTemplate in a region: every app of the stack is
+// placed there, so a database and the app that talks to it are never a world
+// apart. Empty is the default region, and on an install with no regions the
+// only answer.
+func (s *Service) DeployTemplateIn(
+	ctx context.Context, ownerID, slug, stack, region string,
+) (Project, error) {
 	tmpl, err := TemplateFor(slug)
 	if err != nil {
 		return Project{}, err
@@ -115,7 +125,17 @@ func (s *Service) DeployTemplate(
 	// below checks again, under the lock, and that is what actually holds; this
 	// is so a stack that cannot fit is refused whole rather than discovered
 	// after its database is already running with nothing to talk to it.
-	if err := s.stackFits(ctx, ownerID, tmpl); err != nil {
+	//
+	// The region is settled first, once, so a default that changed halfway
+	// through could not split the stack.
+	views, err := s.regionView(ctx, s.q)
+	if err != nil {
+		return Project{}, err
+	}
+	if region, err = views.resolveNew(region); err != nil {
+		return Project{}, err
+	}
+	if err := s.stackFits(ctx, ownerID, tmpl, region); err != nil {
 		return Project{}, err
 	}
 
@@ -137,6 +157,7 @@ func (s *Service) DeployTemplate(
 			Port:      spec.Port,
 			Replicas:  1,
 			Env:       spec.Env,
+			Region:    region,
 		}
 
 		created, err := s.Create(ctx, ownerID, in)
@@ -171,8 +192,8 @@ func (s *Service) DeployTemplate(
 // stackFits reports whether every app a template makes fits in the team's
 // quota and the install's capacity together: each at one replica and the namespace's default limits, as
 // Create will make them, with the storage its source brings.
-func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template) error {
-	var change quotaChange
+func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template, region string) error {
+	change := quotaChange{Region: region}
 	for _, spec := range tmpl.Apps {
 		change.Added = append(change.Added, shape{Replicas: 1})
 		if b, err := BlueprintFor(spec.Source); err == nil && b.Volume != nil {

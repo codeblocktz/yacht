@@ -38,8 +38,16 @@ RETURNING *;
 -- arithmetic is in Go. Asleep is whether the app is counted at the wake
 -- reserve rather than in full: a waking app's pods are already asked for.
 -- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep
+SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep, region
 FROM apps;
+
+-- Volume bytes by the region of the app holding them, for the capacity page's
+-- regions. Null is the apps not placed in a region yet.
+-- name: SumVolumeBytesByRegion :many
+SELECT a.region, coalesce(sum(v.size_bytes), 0)::bigint AS total
+FROM volumes v
+JOIN apps a ON a.id = v.app_id
+GROUP BY a.region;
 
 -- name: SumInstallVolumeBytes :one
 SELECT coalesce(sum(size_bytes), 0)::bigint AS total

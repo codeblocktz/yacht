@@ -200,6 +200,9 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 			"the scoping is in the path, where a per-team row could not put it",
 		"capacity_policy": "how much of the whole install is sold is a limit on " +
 			"every team together — a per-team row is what a quota already is",
+		"regions": "a region is a place the install's machines are in — what it " +
+			"is called and where its traffic enters is the same for every team " +
+			"placed there, and a per-team row would let one team rename it for all",
 	}
 
 	rows, err := pool.Query(ctx, `

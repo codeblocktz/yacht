@@ -180,9 +180,10 @@ type roomSource struct {
 
 	// mu is held across a reading, so that a burst of changes arriving on a
 	// stale cache reads the cluster once rather than once each.
-	mu   sync.Mutex
-	room Room
-	at   time.Time
+	mu    sync.Mutex
+	room  Room
+	nodes []orchestrator.NodeInfo
+	at    time.Time
 
 	// unknown is whether the last reading failed, so that a cluster that
 	// stays unreadable is logged when it becomes so and not every 30 seconds.
@@ -201,10 +202,19 @@ func newRoomSource(orch orchestrator.Orchestrator, log *slog.Logger) *roomSource
 
 // get returns the room, reading the cluster when the last reading is stale.
 func (r *roomSource) get(ctx context.Context) Room {
+	room, _ := r.snapshot(ctx)
+	return room
+}
+
+// snapshot returns the room and the machines it was read from, on the same
+// reading — regions are a grouping of the machines, and a region's room has
+// to be the same machines the install's is. Nil machines when the cluster
+// could not be read.
+func (r *roomSource) snapshot(ctx context.Context) (Room, []orchestrator.NodeInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.at.IsZero() && r.now().Sub(r.at) < roomTTL {
-		return r.room
+		return r.room, r.nodes
 	}
 
 	readCtx, cancel := context.WithTimeout(ctx, roomReadTimeout)
@@ -212,15 +222,15 @@ func (r *roomSource) get(ctx context.Context) Room {
 	nodes, err := r.read(readCtx)
 	room := RoomOf(nodes)
 	if err != nil {
-		room = Room{Reason: err.Error()}
+		room, nodes = Room{Reason: err.Error()}, nil
 	}
 
 	// A reading cut short by the caller going away says nothing about the
 	// cluster, and caching it would answer "unknown" to everyone for 30s.
 	if ctx.Err() != nil {
-		return room
+		return room, nodes
 	}
-	r.room, r.at = room, r.now()
+	r.room, r.nodes, r.at = room, nodes, r.now()
 
 	switch {
 	case !room.Known && !r.unknown:
@@ -231,7 +241,7 @@ func (r *roomSource) get(ctx context.Context) Room {
 		r.unknown = false
 		r.log.Info("cluster capacity can be read again")
 	}
-	return room
+	return room, nodes
 }
 
 // sellable is what the policy sells of a room: allocatable, times the ratio,
@@ -323,7 +333,7 @@ func (s *Service) withinCapacity(
 	if err != nil || !p.Enforce {
 		return err
 	}
-	room := s.room.get(ctx)
+	room, nodes := s.room.snapshot(ctx)
 	if !room.Known {
 		// Open rather than closed. An install whose API server is briefly
 		// unreachable must not stop every customer deploying; the source has
@@ -335,14 +345,24 @@ func (s *Service) withinCapacity(
 	if err != nil || !p.Enforce {
 		return err
 	}
-	now, err := s.installUsageWith(ctx, q, nil, p.WakeReservePercent)
+	apps, storage, err := installFootprints(ctx, q)
 	if err != nil {
 		return err
 	}
-	next, err := s.installUsageWith(ctx, q, &c, p.WakeReservePercent)
+
+	// On an install with regions, the room a change needs is in its own
+	// region: machines in another one cannot run it. CPU and memory are
+	// counted on the region's machines against the apps that live there.
+	// Storage stays the install's, because the operator's figure for it is.
+	v, err := s.regionViewOf(ctx, q, room, nodes)
 	if err != nil {
 		return err
 	}
+	if region := changeRegion(v, apps, c); region != "" {
+		room, apps = v.roomIn(region), inRegion(v, apps, region)
+	}
+	now := tally(apps, storage, nil, p.WakeReservePercent)
+	next := tally(apps, storage, &c, p.WakeReservePercent)
 	cpu, memory, storage := p.sellable(room)
 	short, refused := capacityAdmit(cpu, memory, storage, now, next)
 	if !refused {
@@ -410,6 +430,40 @@ func (s *Service) installUsageWith(
 	return tally(apps, storage, c, wakeReserve), nil
 }
 
+// changeRegion is the region a change is admitted in: the one it names, or
+// the region of the app it changes. Empty on an install with no regions, and
+// for an app whose region cannot be told yet — which is then admitted against
+// the whole install, as before regions existed.
+func changeRegion(v regionView, apps []footprint, c quotaChange) string {
+	if !v.inUse() {
+		return ""
+	}
+	if c.Region != "" {
+		return c.Region
+	}
+	if c.Changed == uuid.Nil {
+		return ""
+	}
+	for _, a := range apps {
+		if a.ID == c.Changed {
+			return v.effective(a.Region)
+		}
+	}
+	return ""
+}
+
+// inRegion is the apps that live in region, counting an unrecorded one where
+// it will be recorded.
+func inRegion(v regionView, apps []footprint, region string) []footprint {
+	out := make([]footprint, 0, len(apps))
+	for _, a := range apps {
+		if v.effective(a.Region) == region {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // installFootprints is every app on the install, and every volume's bytes.
 func installFootprints(ctx context.Context, q *dbgen.Queries) ([]footprint, int64, error) {
 	rows, err := q.ListInstallFootprints(ctx)
@@ -426,6 +480,7 @@ func installFootprints(ctx context.Context, q *dbgen.Queries) ([]footprint, int6
 			ID:     a.ID,
 			shape:  shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
 			Asleep: a.Asleep,
+			Region: a.Region,
 		}
 	}
 	return apps, storage, nil
@@ -478,7 +533,7 @@ func (s *Service) wakeRoom(ctx context.Context, q *dbgen.Queries, id uuid.UUID) 
 	if err != nil || !p.Enforce {
 		return shortfall{}, false, err
 	}
-	room := s.room.get(ctx)
+	room, nodes := s.room.snapshot(ctx)
 	if !room.Known {
 		return shortfall{}, false, nil
 	}
@@ -488,6 +543,15 @@ func (s *Service) wakeRoom(ctx context.Context, q *dbgen.Queries, id uuid.UUID) 
 	apps, _, err := installFootprints(ctx, q)
 	if err != nil {
 		return shortfall{}, false, err
+	}
+	// A sleeper wakes in its own region, into the room the reserve kept on
+	// that region's machines.
+	v, err := s.regionViewOf(ctx, q, room, nodes)
+	if err != nil {
+		return shortfall{}, false, err
+	}
+	if region := changeRegion(v, apps, quotaChange{Changed: id}); region != "" {
+		room, apps = v.roomIn(region), inRegion(v, apps, region)
 	}
 	var now, next Usage
 	for _, a := range apps {
@@ -631,6 +695,27 @@ type CapacitySnapshot struct {
 	// sellable. The one thing here a customer may be told, as a notice that
 	// a change may be refused — never as a number.
 	RoomShort bool
+
+	// Regions is the same, region by region, on an install with regions:
+	// each region's machines against the apps that live there, which is what
+	// admission holds a change to. Empty on an install with none.
+	//
+	// Storage in a region is shown and never counted: the operator's storage
+	// figure is the install's, and admission holds it there. Level and
+	// RoomShort above take the worst of the regions in, since a full region
+	// refuses its changes however much room the others have.
+	Regions []RegionCapacity
+}
+
+// RegionCapacity is one region's room.
+type RegionCapacity struct {
+	Region string
+	Label  string
+
+	// Open is whether new apps may be placed in the region now.
+	Open bool
+
+	CapacitySnapshot
 }
 
 // NewCapacitySnapshot puts a policy, a room and the install's commitments
@@ -699,9 +784,52 @@ func (s *Service) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 		return CapacitySnapshot{}, fmt.Errorf("app: count capacity refusals: %w", err)
 	}
 	used := tally(apps, storage, nil, p.WakeReservePercent)
-	snap := NewCapacitySnapshot(p, s.room.get(ctx), used, int(refused))
+	room, nodes := s.room.snapshot(ctx)
+	snap := NewCapacitySnapshot(p, room, used, int(refused))
 	snap.Sleeping = sleepingCapacity(apps, p.WakeReservePercent)
+
+	v, err := s.regionViewOf(ctx, s.q, room, nodes)
+	if err != nil {
+		return CapacitySnapshot{}, err
+	}
+	if !v.inUse() {
+		return snap, nil
+	}
+	volumes, err := s.q.SumVolumeBytesByRegion(ctx)
+	if err != nil {
+		return CapacitySnapshot{}, fmt.Errorf("app: sum storage by region: %w", err)
+	}
+	storageIn := map[string]int64{}
+	for _, row := range volumes {
+		storageIn[v.effective(row.Region)] += row.Total
+	}
+	// Storage is the install's to count, so a region's is shown as committed
+	// beside nothing sellable.
+	regional := p
+	regional.StorageBytes = 0
+	for _, name := range v.names() {
+		in := inRegion(v, apps, name)
+		r := NewCapacitySnapshot(regional, v.roomIn(name),
+			tally(in, storageIn[name], nil, p.WakeReservePercent), 0)
+		r.Sleeping = sleepingCapacity(in, p.WakeReservePercent)
+		snap.Regions = append(snap.Regions, RegionCapacity{
+			Region: name, Label: v.region(name).Label(), Open: v.choosable(name),
+			CapacitySnapshot: r,
+		})
+		snap.Level = worseLevel(snap.Level, r.Level)
+		snap.RoomShort = snap.RoomShort || (r.RoomShort && v.choosable(name))
+	}
 	return snap, nil
+}
+
+// worseLevel is the fuller of two levels. Unknown is not worse than full: a
+// region that cannot be read is not refusing anything.
+func worseLevel(a, b CapacityLevel) CapacityLevel {
+	rank := map[CapacityLevel]int{CapacityOK: 0, CapacityUnknown: 1, CapacityWarn: 2, CapacityFull: 3}
+	if rank[b] > rank[a] {
+		return b
+	}
+	return a
 }
 
 // CapacityRefusal is one change refused for want of room.

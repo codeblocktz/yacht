@@ -58,7 +58,7 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 		Managed:   a.Host,
 		HTTPSOnly: a.HTTPSOnly,
 		CNAMEOnly: a.CNAMEOnly,
-		Target:    s.cnameTarget(ctx),
+		Target:    s.domainTarget(ctx, a),
 		Namespace: a.Ref().Namespace,
 	}
 	if out.Custom, err = domain.ListCustom(ctx, s.q, ownerID, a.ID); err != nil {
@@ -131,7 +131,7 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 		return err
 	}
 	if _, err := domain.AddCustom(ctx, s.q, ownerID, a.ID, host,
-		s.cnameTarget(ctx), s.opts.AppDomain, s.opts.ReservedDomains); err != nil {
+		s.domainTarget(ctx, a), s.opts.AppDomain, s.opts.ReservedDomains); err != nil {
 		return err
 	}
 	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
@@ -140,7 +140,24 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 		return fmt.Errorf("app: version domain claim: %w", err)
 	}
 	s.log.Info("custom domain claimed", slog.String("app", name), slog.String("host", host))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	return nil
+}
+
+// domainTarget is what a custom domain on an app is told to CNAME to: its
+// region's edge, so the traffic for it enters where the app lives, or the
+// install's target where the region names none.
+//
+// Recorded on each domain when it is claimed and proven against that. A
+// domain claimed before its app moved region, or before the region had an
+// edge, keeps the target it was proven against: it goes on working, since an
+// ingress anywhere in the cluster routes it, and the page shows the record it
+// was told to create.
+func (s *Service) domainTarget(ctx context.Context, a App) string {
+	if edge := s.regionEdge(ctx, s.q, a.Region); edge.Host != "" {
+		return edge.Host
+	}
+	return s.cnameTarget(ctx)
 }
 
 // ApplyRouting records that one app's routing projection changed.
@@ -160,6 +177,7 @@ func (s *Service) ApplyRouting(ctx context.Context, ownerID string, appID uuid.U
 		return fmt.Errorf("app: version routing change: %w", err)
 	}
 	s.log.Info("routing convergence requested", slog.String("app_id", appID.String()))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: appID})
 	return nil
 }
 
@@ -190,6 +208,7 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 		return fmt.Errorf("app: version verified domain: %w", err)
 	}
 	s.log.Info("custom domain verified", slog.String("app", name))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	return nil
 }
 
@@ -281,5 +300,6 @@ func (s *Service) RemoveDomain(ctx context.Context, ownerID, name string, id uui
 		return fmt.Errorf("app: version removed domain: %w", err)
 	}
 	s.log.Info("custom domain removed", slog.String("app", name))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	return nil
 }

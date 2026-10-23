@@ -311,6 +311,17 @@ type AppSpec struct {
 	// work on the team's behalf, and a pool sized for the team's apps is not
 	// sized for a compiler.
 	Pool string
+
+	// Region keeps the workload's pods on the nodes labelled RegionLabel=
+	// Region — a requirement, not a preference, since a region is where an
+	// app's data and its customers' traffic are meant to stay. Combined with
+	// Pool when both are set: a pod has to land on a node that is both in
+	// the region and in the pool. Empty is no requirement, which is every
+	// app on an install whose nodes carry no region.
+	//
+	// The pods only, like Pool. A build may run in any region: it produces an
+	// image in a registry, and nothing of the app's stays where it ran.
+	Region string
 }
 
 // VolumeSpec is one piece of storage attached to a workload.
@@ -337,6 +348,9 @@ func (s AppSpec) Validate() error {
 		return errors.New("app spec: image is required")
 	}
 	if err := ValidatePool(s.Pool); err != nil {
+		return fmt.Errorf("app spec: %w", err)
+	}
+	if err := ValidateRegion(s.Region); err != nil {
 		return fmt.Errorf("app spec: %w", err)
 	}
 	if s.Replicas < 0 {

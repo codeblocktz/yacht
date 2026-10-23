@@ -88,6 +88,11 @@ type ReleaseOverlays struct {
 	// and a rollback must not carry an app back onto machines its team has
 	// been moved off. See pool.go.
 	Pool string
+
+	// Region is the app's, read at every apply for the same reason as Pool:
+	// a rollback runs an earlier release in the region the app lives in now,
+	// never in the one it lived in when that release was made.
+	Region string
 }
 
 // AppSpec reconstructs the exact orchestrator input from a release and the
@@ -133,6 +138,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
 		Waker:                  waker,
 		Pool:                   overlays.Pool,
+		Region:                 overlays.Region,
 	}
 }
 
