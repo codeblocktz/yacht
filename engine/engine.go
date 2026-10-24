@@ -412,6 +412,8 @@ type Engine struct {
 	Server *Server
 
 	resolver domain.Resolver
+	// registry is Settings › Registry's store, which SetRegistry writes too.
+	registry *registry.Store
 }
 
 // Run composes the engine and serves it until ctx ends.
@@ -518,6 +520,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	var manifests app.Manifests
 	var builder app.Builder
 	registryStore := registry.New(e.Pool, e.Keeper, log)
+	e.registry = registryStore
 	manifests = registryStore
 	if e.Keeper.Configured() {
 		images = registryStore
@@ -612,7 +615,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if e.Keeper.Configured() {
 		opts.Joiner = cluster.New(e.Pool, e.Keeper, log)
 		opts.Stacks = e.Apps
-		opts.Registries = registry.New(e.Pool, e.Keeper, log)
+		opts.Registries = registryStore
 	} else {
 		log.Info("add-node and the image registry are off — " +
 			"set YACHT_SECRET_KEY to store a cluster join token or registry password")
