@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -61,6 +62,11 @@ type App struct {
 	// Repo is where the source comes from, for an app built rather than
 	// pulled. Zero on an image-sourced app.
 	Repo Repo
+
+	// GitHubPaused is why builds from a repository chosen through the GitHub
+	// App have stopped — one of the GitHubPaused* reasons — and empty while
+	// they have not. The app keeps running on its last image either way.
+	GitHubPaused string
 
 	// RunAsUser is the numeric uid a built image runs as, discovered by the
 	// build. Zero means unknown, which is every app not built from source.
@@ -288,6 +294,11 @@ type Options struct {
 	// Routes is told when an app's hostnames or region change, or a region's
 	// edge does. Nil tells nobody.
 	Routes RouteObserver
+
+	// GitHub is the install's GitHub App. Nil means there is none: a
+	// repository is a pasted URL, cloned anonymously, and nothing about
+	// connecting GitHub is offered.
+	GitHub *github.App
 }
 
 // Service manages app lifecycle.
@@ -301,6 +312,9 @@ type Service struct {
 	builder   Builder
 	images    Images
 	manifests Manifests
+
+	// gh is the install's GitHub App, nil when it has none.
+	gh *github.App
 
 	// resolver proves a custom domain points here. Nil leaves verification
 	// unavailable rather than failing oddly — an install with no DNS access
@@ -364,6 +378,7 @@ func NewService(
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests,
+		gh:   opts.GitHub,
 		room: newRoomSource(orch, log), wakes: map[uuid.UUID]*wakeCall{},
 	}
 }
@@ -482,6 +497,19 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		}
 	}
 
+	// A repository chosen through the GitHub App is stored at the URL its
+	// name gives: the one already stored when the choice has not changed,
+	// and GitHub's answer when it has, which is also where the team's access
+	// to it is checked.
+	if in.Repo.GitHub.Set() {
+		if in.Repo.GitHub == a.Repo.GitHub {
+			in.Repo.URL = a.Repo.URL
+		} else if in.Repo, err = s.resolveGitHubRepo(ctx, ownerID, in.Repo.Normalise()); err != nil {
+			return App{}, err
+		}
+	}
+	sourceChanged := in.Repo.GitHub != a.Repo.GitHub
+
 	// Limits are what the quota counts, so they are checked and written in one
 	// transaction, the way Scale checks replicas. Only the limits: requests
 	// are what the scheduler reserves, but a limit is what a container may
@@ -515,11 +543,27 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		RepoBranch:    in.Repo.Branch,
 		RepoSubdir:    in.Repo.Subdir,
 	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return a, nil
-		}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return App{}, fmt.Errorf("app: update: %w", err)
+	}
+	unchanged := err != nil
+	if sourceChanged {
+		// Its own write, because the choice can change while the URL stays
+		// the same — the same repository through another installation — and
+		// because choosing again is what resumes a paused app.
+		ref := in.Repo.GitHub
+		params := dbgen.SetAppGitHubSourceParams{OwnerID: ownerID, ID: a.ID}
+		if ref.Set() {
+			params.InstallationID, params.RepoID = &ref.InstallationID, &ref.RepoID
+		}
+		if err := q.SetAppGitHubSource(ctx, params); err != nil {
+			return App{}, fmt.Errorf("app: record the GitHub repository: %w", err)
+		}
+		if row, err = q.GetAppByID(ctx, dbgen.GetAppByIDParams{OwnerID: ownerID, ID: a.ID}); err != nil {
+			return App{}, fmt.Errorf("app: update: %w", err)
+		}
+	} else if unchanged {
+		return a, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit update: %w", err)
@@ -643,6 +687,13 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	// form rather than several minutes into a build.
 	if in.Source == SourceGit {
 		in.Repo = in.Repo.Normalise()
+		// A repository chosen through the GitHub App is stored by the URL
+		// GitHub gives its name, whatever was typed beside it.
+		if in.Repo.GitHub.Set() {
+			if in.Repo, err = s.resolveGitHubRepo(ctx, ownerID, in.Repo); err != nil {
+				return App{}, err
+			}
+		}
 		if !in.Repo.Set() {
 			return App{}, errors.New("app: a repository URL is required")
 		}
@@ -734,6 +785,16 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		return App{}, fmt.Errorf("app: create: %w", err)
 	}
 
+	if in.Repo.GitHub.Set() {
+		ref := in.Repo.GitHub
+		if err := q.SetAppGitHubSource(ctx, dbgen.SetAppGitHubSourceParams{
+			OwnerID: ownerID, ID: row.ID,
+			InstallationID: &ref.InstallationID, RepoID: &ref.RepoID,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: record the GitHub repository: %w", err)
+		}
+		row.GithubInstallationID, row.GithubRepoID = &ref.InstallationID, &ref.RepoID
+	}
 	created := toApp(row)
 
 	// The source's own settings first, so anything the person typed with the
@@ -1599,6 +1660,7 @@ func toApp(row dbgen.App) App {
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
+		GitHubPaused:  row.GithubPaused,
 		Internal:      row.Internal,
 		HealthPath:    row.HealthPath,
 		Liveness:      row.HealthLiveness,
@@ -1617,6 +1679,11 @@ func toApp(row dbgen.App) App {
 	}
 	if row.Region != nil {
 		a.Region = *row.Region
+	}
+	if row.GithubInstallationID != nil && row.GithubRepoID != nil {
+		a.Repo.GitHub = GitHubRef{
+			InstallationID: *row.GithubInstallationID, RepoID: *row.GithubRepoID,
+		}
 	}
 	if row.ActiveReleaseID.Valid {
 		id := uuid.UUID(row.ActiveReleaseID.Bytes)

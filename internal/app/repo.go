@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +32,46 @@ type Repo struct {
 	// Subdir is the directory inside the repository to build from, for a
 	// monorepo. Empty is the root.
 	Subdir string
+
+	// GitHub is the repository as the install's GitHub App reaches it, for
+	// one chosen from a connected installation rather than pasted. Zero on a
+	// pasted URL, which is cloned anonymously.
+	GitHub GitHubRef
+}
+
+// GitHubRef names a repository through an installation of the GitHub App, by
+// the ids GitHub keeps through a rename.
+type GitHubRef struct {
+	InstallationID int64
+	RepoID         int64
+}
+
+// Set reports whether a repository was chosen through the App.
+func (g GitHubRef) Set() bool { return g.InstallationID > 0 && g.RepoID > 0 }
+
+// String is how a picker's option carries it: installation:repository.
+func (g GitHubRef) String() string {
+	if !g.Set() {
+		return ""
+	}
+	return strconv.FormatInt(g.InstallationID, 10) + ":" + strconv.FormatInt(g.RepoID, 10)
+}
+
+// ParseGitHubRef reads what String wrote. Empty is the zero ref, a pasted
+// URL; anything else malformed is refused rather than read as one.
+func ParseGitHubRef(s string) (GitHubRef, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return GitHubRef{}, nil
+	}
+	inst, repo, ok := strings.Cut(s, ":")
+	i, err1 := strconv.ParseInt(inst, 10, 64)
+	r, err2 := strconv.ParseInt(repo, 10, 64)
+	ref := GitHubRef{InstallationID: i, RepoID: r}
+	if !ok || err1 != nil || err2 != nil || !ref.Set() {
+		return GitHubRef{}, fmt.Errorf("app: %q is not a repository from GitHub", s)
+	}
+	return ref, nil
 }
 
 // Set reports whether this app builds from source.
@@ -101,5 +142,6 @@ func (r Repo) Normalise() Repo {
 		URL:    strings.TrimSpace(r.URL),
 		Branch: strings.TrimSpace(r.Branch),
 		Subdir: strings.Trim(strings.TrimSpace(r.Subdir), "/"),
+		GitHub: r.GitHub,
 	}
 }

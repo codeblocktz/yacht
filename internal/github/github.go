@@ -536,3 +536,47 @@ func shorten(s string) string {
 	}
 	return s
 }
+
+// Entry is one thing in a repository directory.
+type Entry struct {
+	Name string `json:"name"`
+	// Type is "dir", "file", "symlink" or "submodule".
+	Type string `json:"type"`
+}
+
+// Contents lists a directory of a repository's default branch, read with the
+// repository's own scoped token. path is relative to the root, empty for the
+// root itself.
+func (a *App) Contents(ctx context.Context, installationID, repoID int64, path string) ([]Entry, error) {
+	tok, err := a.RepoToken(ctx, installationID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	var full string
+	for _, r := range tok.Repositories {
+		if r.ID == repoID {
+			full = r.FullName
+		}
+	}
+	if full == "" {
+		return nil, ErrRepoNotAccessible
+	}
+	endpoint := a.cfg.APIURL + "/repos/" + full + "/contents"
+	if path = strings.Trim(path, "/"); path != "" {
+		parts := strings.Split(path, "/")
+		for i, p := range parts {
+			parts[i] = url.PathEscape(p)
+		}
+		endpoint += "/" + strings.Join(parts, "/")
+	}
+	// A path naming a file answers with an object rather than an array, and
+	// fails to decode here: a file has no directories in it.
+	var out []Entry
+	if _, err := a.do(ctx, http.MethodGet, endpoint, "token "+tok.Value, nil, &out); err != nil {
+		if errors.Is(err, errNotFound) {
+			return nil, ErrRepoNotAccessible
+		}
+		return nil, err
+	}
+	return out, nil
+}

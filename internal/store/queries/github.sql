@@ -49,14 +49,14 @@ WHERE owner_id = @owner_id AND installation_id = @installation_id;
 -- Whatever paused them already stays the reason.
 UPDATE apps
 SET github_paused = 'disconnected', updated_at = now()
-WHERE owner_id = @owner_id AND github_installation_id = @installation_id
+WHERE owner_id = @owner_id AND github_installation_id = @installation_id::bigint
   AND github_paused = '';
 
 -- name: ResumeTeamGitHubApps :execrows
 -- And connecting it again resumes what disconnecting paused, nothing else.
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE owner_id = @owner_id AND github_installation_id = @installation_id
+WHERE owner_id = @owner_id AND github_installation_id = @installation_id::bigint
   AND github_paused = 'disconnected';
 
 -- name: SetGitHubInstallationSuspended :execrows
@@ -75,26 +75,26 @@ WHERE id = @id AND removed_at IS NULL;
 -- all of them. Removal is final and wins over any other reason.
 UPDATE apps
 SET github_paused = @reason, updated_at = now()
-WHERE github_installation_id = @installation_id
+WHERE github_installation_id = @installation_id::bigint
   AND github_paused NOT IN (@reason, 'installation_removed');
 
 -- name: ResumeGitHubInstallationApps :execrows
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE github_installation_id = @installation_id AND github_paused = @reason;
+WHERE github_installation_id = @installation_id::bigint AND github_paused = @reason;
 
 -- name: PauseGitHubRepoApps :execrows
 -- Repositories the installation no longer reaches, by id.
 UPDATE apps
 SET github_paused = 'repo_removed', updated_at = now()
-WHERE github_installation_id = @installation_id
+WHERE github_installation_id = @installation_id::bigint
   AND github_repo_id = ANY(@repo_ids::bigint[])
   AND github_paused = '';
 
 -- name: ResumeGitHubRepoApps :execrows
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE github_installation_id = @installation_id
+WHERE github_installation_id = @installation_id::bigint
   AND github_repo_id = ANY(@repo_ids::bigint[])
   AND github_paused = 'repo_removed';
 
@@ -117,8 +117,8 @@ SELECT a.*
 FROM apps a
 JOIN team_github_installations t
   ON t.owner_id = a.owner_id AND t.installation_id = a.github_installation_id
-WHERE a.github_installation_id = @installation_id
-  AND a.github_repo_id = @repo_id
+WHERE a.github_installation_id = @installation_id::bigint
+  AND a.github_repo_id = @repo_id::bigint
 ORDER BY a.owner_id, a.name;
 
 -- name: RefreshGitHubRepoURL :execrows
@@ -126,8 +126,8 @@ ORDER BY a.owner_id, a.name;
 -- clones from its old address, but the page should show the new one.
 UPDATE apps
 SET repo_url = @repo_url
-WHERE github_installation_id = @installation_id
-  AND github_repo_id = @repo_id
+WHERE github_installation_id = @installation_id::bigint
+  AND github_repo_id = @repo_id::bigint
   AND repo_url <> @repo_url;
 
 -- name: RecordGitHubDelivery :execrows

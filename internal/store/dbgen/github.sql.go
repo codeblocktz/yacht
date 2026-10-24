@@ -119,14 +119,14 @@ SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu
 FROM apps a
 JOIN team_github_installations t
   ON t.owner_id = a.owner_id AND t.installation_id = a.github_installation_id
-WHERE a.github_installation_id = $1
-  AND a.github_repo_id = $2
+WHERE a.github_installation_id = $1::bigint
+  AND a.github_repo_id = $2::bigint
 ORDER BY a.owner_id, a.name
 `
 
 type ListAppsForGitHubPushParams struct {
-	InstallationID *int64
-	RepoID         *int64
+	InstallationID int64
+	RepoID         int64
 }
 
 // Every app built from one repository through one installation, across teams
@@ -262,13 +262,13 @@ func (q *Queries) MarkGitHubInstallationRemoved(ctx context.Context, id int64) (
 const pauseGitHubInstallationApps = `-- name: PauseGitHubInstallationApps :execrows
 UPDATE apps
 SET github_paused = $1, updated_at = now()
-WHERE github_installation_id = $2
+WHERE github_installation_id = $2::bigint
   AND github_paused NOT IN ($1, 'installation_removed')
 `
 
 type PauseGitHubInstallationAppsParams struct {
 	Reason         string
-	InstallationID *int64
+	InstallationID int64
 }
 
 // Across every team: an installation suspended or removed on GitHub is so for
@@ -284,13 +284,13 @@ func (q *Queries) PauseGitHubInstallationApps(ctx context.Context, arg PauseGitH
 const pauseGitHubRepoApps = `-- name: PauseGitHubRepoApps :execrows
 UPDATE apps
 SET github_paused = 'repo_removed', updated_at = now()
-WHERE github_installation_id = $1
+WHERE github_installation_id = $1::bigint
   AND github_repo_id = ANY($2::bigint[])
   AND github_paused = ''
 `
 
 type PauseGitHubRepoAppsParams struct {
-	InstallationID *int64
+	InstallationID int64
 	RepoIds        []int64
 }
 
@@ -306,13 +306,13 @@ func (q *Queries) PauseGitHubRepoApps(ctx context.Context, arg PauseGitHubRepoAp
 const pauseTeamGitHubApps = `-- name: PauseTeamGitHubApps :execrows
 UPDATE apps
 SET github_paused = 'disconnected', updated_at = now()
-WHERE owner_id = $1 AND github_installation_id = $2
+WHERE owner_id = $1 AND github_installation_id = $2::bigint
   AND github_paused = ''
 `
 
 type PauseTeamGitHubAppsParams struct {
 	OwnerID        string
-	InstallationID *int64
+	InstallationID int64
 }
 
 // A team letting go of an installation stops its apps building from it.
@@ -360,15 +360,15 @@ func (q *Queries) RecordGitHubDelivery(ctx context.Context, arg RecordGitHubDeli
 const refreshGitHubRepoURL = `-- name: RefreshGitHubRepoURL :execrows
 UPDATE apps
 SET repo_url = $1
-WHERE github_installation_id = $2
-  AND github_repo_id = $3
+WHERE github_installation_id = $2::bigint
+  AND github_repo_id = $3::bigint
   AND repo_url <> $1
 `
 
 type RefreshGitHubRepoURLParams struct {
 	RepoUrl        string
-	InstallationID *int64
-	RepoID         *int64
+	InstallationID int64
+	RepoID         int64
 }
 
 // A push carries the repository's current name. A renamed repository still
@@ -384,11 +384,11 @@ func (q *Queries) RefreshGitHubRepoURL(ctx context.Context, arg RefreshGitHubRep
 const resumeGitHubInstallationApps = `-- name: ResumeGitHubInstallationApps :execrows
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE github_installation_id = $1 AND github_paused = $2
+WHERE github_installation_id = $1::bigint AND github_paused = $2
 `
 
 type ResumeGitHubInstallationAppsParams struct {
-	InstallationID *int64
+	InstallationID int64
 	Reason         string
 }
 
@@ -403,13 +403,13 @@ func (q *Queries) ResumeGitHubInstallationApps(ctx context.Context, arg ResumeGi
 const resumeGitHubRepoApps = `-- name: ResumeGitHubRepoApps :execrows
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE github_installation_id = $1
+WHERE github_installation_id = $1::bigint
   AND github_repo_id = ANY($2::bigint[])
   AND github_paused = 'repo_removed'
 `
 
 type ResumeGitHubRepoAppsParams struct {
-	InstallationID *int64
+	InstallationID int64
 	RepoIds        []int64
 }
 
@@ -424,13 +424,13 @@ func (q *Queries) ResumeGitHubRepoApps(ctx context.Context, arg ResumeGitHubRepo
 const resumeTeamGitHubApps = `-- name: ResumeTeamGitHubApps :execrows
 UPDATE apps
 SET github_paused = '', updated_at = now()
-WHERE owner_id = $1 AND github_installation_id = $2
+WHERE owner_id = $1 AND github_installation_id = $2::bigint
   AND github_paused = 'disconnected'
 `
 
 type ResumeTeamGitHubAppsParams struct {
 	OwnerID        string
-	InstallationID *int64
+	InstallationID int64
 }
 
 // And connecting it again resumes what disconnecting paused, nothing else.
