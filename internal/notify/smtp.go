@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -52,14 +53,26 @@ func NewSMTP(cfg SMTPConfig) (Mailer, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	return &smtpMailer{cfg: cfg, from: from, now: time.Now}, nil
+	_, port, _ := net.SplitHostPort(cfg.Addr)
+	return &smtpMailer{cfg: cfg, from: from, now: time.Now, implicitTLS: port == "465"}, nil
 }
 
 type smtpMailer struct {
 	cfg  SMTPConfig
 	from *mail.Address
 	now  func() time.Time
+
+	// implicitTLS is port 465's way: TLS from the first byte, rather than
+	// STARTTLS after the greeting. Some relays offer only this one
+	// (Cloudflare's), and to them a plain connection is never answered.
+	implicitTLS bool
+	// tlsConfig is nil but in tests, which trust their own relay.
+	tlsConfig *tls.Config
 }
+
+// smtpTimeout bounds a send over implicit TLS, which net/smtp's SendMail
+// would leave unbounded: a sign-in waits on it.
+const smtpTimeout = 30 * time.Second
 
 func (m *smtpMailer) Send(_ context.Context, msg Message) error {
 	if err := msg.Validate(); err != nil {
@@ -76,11 +89,58 @@ func (m *smtpMailer) Send(_ context.Context, msg Message) error {
 		auth = smtp.PlainAuth("", m.cfg.Username, m.cfg.Password, host)
 	}
 
-	if err := smtp.SendMail(m.cfg.Addr, auth, m.from.Address,
-		[]string{msg.To}, m.wire(msg)); err != nil {
+	if !m.implicitTLS {
+		if err := smtp.SendMail(m.cfg.Addr, auth, m.from.Address,
+			[]string{msg.To}, m.wire(msg)); err != nil {
+			return fmt.Errorf("notify: smtp send: %w", err)
+		}
+		return nil
+	}
+	if err := m.sendImplicitTLS(host, auth, msg); err != nil {
 		return fmt.Errorf("notify: smtp send: %w", err)
 	}
 	return nil
+}
+
+// sendImplicitTLS is SendMail over a connection that is TLS from the start.
+func (m *smtpMailer) sendImplicitTLS(host string, auth smtp.Auth, msg Message) error {
+	cfg := m.tlsConfig
+	if cfg == nil {
+		cfg = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: smtpTimeout}, "tcp", m.cfg.Addr, cfg)
+	if err != nil {
+		return err
+	}
+	_ = conn.SetDeadline(time.Now().Add(smtpTimeout))
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	defer c.Close()
+	if auth != nil {
+		if err := c.Auth(auth); err != nil {
+			return err
+		}
+	}
+	if err := c.Mail(m.from.Address); err != nil {
+		return err
+	}
+	if err := c.Rcpt(msg.To); err != nil {
+		return err
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(m.wire(msg)); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 // wire builds the RFC 5322 message.

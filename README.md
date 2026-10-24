@@ -394,7 +394,7 @@ configured separately to pull from an insecure registry.
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
-| `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log |
+| `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` | — | How sign-in links are delivered. Neither means they go to the log. An SMTP address on port 465 is TLS from the start; any other port uses STARTTLS when the relay offers it |
 | `YACHT_WAKER_ADDR` | — | `ip:port` the cluster reaches the waker at. **Setting it lets idle apps sleep.** The waker listens on its own port, never the dashboard's |
 | `YACHT_WAKE_TIMEOUT` | `60s` | How long a wake may take before the app goes back to sleep |
 | `YACHT_DEFAULT_REGION` | — | The [region](#regions) new apps go to when nobody chooses, and that apps made before regions are recorded in. Empty leaves it to the open regions. Ignored while no node carries a region |
