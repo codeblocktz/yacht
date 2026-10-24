@@ -283,6 +283,44 @@ func TestSMTPAndResendTogetherFail(t *testing.T) {
 	}
 }
 
+func TestCloudflareEmailIsATransport(t *testing.T) {
+	cf := map[string]string{
+		"YACHT_BASE_URL":                    "https://yacht.example.test",
+		"YACHT_CLOUDFLARE_EMAIL_TOKEN":      "tok",
+		"YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID": "acct",
+		"YACHT_CLOUDFLARE_EMAIL_FROM":       "Acme <no-reply@example.test>",
+	}
+	setEnv(t, cf)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := c.MailTransport(); got != "cloudflare" {
+		t.Errorf("MailTransport = %q, want cloudflare", got)
+	}
+
+	for _, missing := range []string{"YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID", "YACHT_CLOUDFLARE_EMAIL_FROM"} {
+		env := map[string]string{}
+		for k, v := range cf {
+			if k != missing {
+				env[k] = v
+			}
+		}
+		setEnv(t, env)
+		t.Setenv(missing, "")
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("without %s: Load = %v, want an error naming it", missing, err)
+		}
+	}
+
+	setEnv(t, cf)
+	t.Setenv("YACHT_RESEND_API_KEY", "re_123")
+	t.Setenv("YACHT_RESEND_FROM", "yacht@example.test")
+	if _, err := Load(); err == nil {
+		t.Error("Load accepted Resend and Cloudflare at once")
+	}
+}
+
 func TestSMTPWithoutFromFails(t *testing.T) {
 	setEnv(t, map[string]string{
 		"YACHT_BASE_URL":  "https://yacht.example.test",

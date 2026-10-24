@@ -887,8 +887,8 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 		// operator who does not know it will wait for mail that is never sent.
 		if cfg.MailTransport() == "log" {
 			log.Warn("no mail transport configured — sign-in links will be written " +
-				"to this log instead of being sent; set YACHT_SMTP_ADDR or " +
-				"YACHT_RESEND_API_KEY to deliver them")
+				"to this log instead of being sent; set YACHT_SMTP_ADDR, " +
+				"YACHT_RESEND_API_KEY or YACHT_CLOUDFLARE_EMAIL_TOKEN to deliver them")
 		}
 		// Operators may act as a team for support only where they are named.
 		// With none named every team's owner reads as an operator, and any of
@@ -923,6 +923,8 @@ func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 		})
 	case cfg.ResendAPIKey != "":
 		return notify.NewResend(cfg.ResendAPIKey, cfg.ResendFrom)
+	case cfg.CloudflareEmailToken != "":
+		return notify.NewCloudflare(cfg.CloudflareEmailAccountID, cfg.CloudflareEmailToken, cfg.CloudflareEmailFrom)
 	default:
 		log.Warn("no mail transport configured — sign-in links will be written to " +
 			"this log, where anyone who can read it can use them")
