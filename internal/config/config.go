@@ -192,6 +192,7 @@ type Config struct {
 	CloudflareEmailToken     string
 	CloudflareEmailAccountID string
 	CloudflareEmailFrom      string
+	CloudflareEmailReplyTo   string
 
 	// SessionTTL is how long a signed-in browser stays signed in.
 	SessionTTL time.Duration
@@ -271,6 +272,7 @@ func Load() (Config, error) {
 		CloudflareEmailToken:     env("YACHT_CLOUDFLARE_EMAIL_TOKEN", ""),
 		CloudflareEmailAccountID: env("YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID", ""),
 		CloudflareEmailFrom:      env("YACHT_CLOUDFLARE_EMAIL_FROM", ""),
+		CloudflareEmailReplyTo:   env("YACHT_CLOUDFLARE_EMAIL_REPLY_TO", ""),
 		SessionTTL:               envDuration("YACHT_SESSION_TTL", 720*time.Hour),
 		MagicLinkTTL:             envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout:          envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
