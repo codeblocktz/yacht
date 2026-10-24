@@ -402,6 +402,7 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_WAKER_ADDR` | — | `ip:port` the cluster reaches the waker at. **Setting it lets idle apps sleep.** The waker listens on its own port, never the dashboard's |
 | `YACHT_WAKE_TIMEOUT` | `60s` | How long a wake may take before the app goes back to sleep |
 | `YACHT_DEFAULT_REGION` | — | The [region](#regions) new apps go to when nobody chooses, and that apps made before regions are recorded in. Empty leaves it to the open regions. Ignored while no node carries a region |
+| `YACHT_GITHUB_APP_ID`, `_SLUG`, `_PRIVATE_KEY` (or `_PRIVATE_KEY_FILE`), `_WEBHOOK_SECRET`, `_CLIENT_ID`, `_CLIENT_SECRET` | — | The install's [GitHub App](#github-app): teams connect it to build private repositories and deploy on push. All or none; needs `YACHT_BASE_URL`. The key is the PEM GitHub generates, inline (newlines may be `\n`) or as a file path |
 | `YACHT_DEBUG` | `false` | Verbose logging |
 
 The full list, with the reasoning behind each, is in
