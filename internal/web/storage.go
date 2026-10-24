@@ -266,6 +266,14 @@ func (s *Server) appBranches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A repository chosen from GitHub is read through the App, so a private
+	// one answers: the one chosen in the form, or the one stored when the
+	// form says nothing about either.
+	if ref, ok := s.pickedGitHubRepo(r, a); ok {
+		s.renderGitHubBranches(w, r, ref)
+		return
+	}
+
 	// The URL being typed in the same form wins over the stored one, so the
 	// picker follows a repository that has been changed and not yet saved.
 	repoURL := strings.TrimSpace(r.URL.Query().Get("repo_url"))
@@ -302,6 +310,11 @@ func (s *Server) appDirectories(w http.ResponseWriter, r *http.Request) {
 	a, err := s.apps.Get(ctx, owner.ID, name)
 	if err != nil {
 		http.NotFound(w, r)
+		return
+	}
+
+	if ref, ok := s.pickedGitHubRepo(r, a); ok {
+		s.renderGitHubDirectories(w, r, ref)
 		return
 	}
 
@@ -382,6 +395,12 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 	// The sliders post plain numbers — millicores and mebibytes — rather than
 	// Kubernetes' string grammar, so nothing here has to parse "500m". The
 	// formatting back into that grammar happens in one place.
+	githubRef, err := formGitHubRef(r)
+	if err != nil {
+		s.flashErr(w, r, err.Error())
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
+		return
+	}
 	in := app.UpdateInput{
 		Image:         strings.TrimSpace(r.FormValue("image")),
 		Port:          int32(port),
@@ -394,6 +413,7 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 			URL:    strings.TrimSpace(r.FormValue("repo_url")),
 			Branch: strings.TrimSpace(r.FormValue("repo_branch")),
 			Subdir: strings.TrimSpace(r.FormValue("repo_subdir")),
+			GitHub: githubRef,
 		},
 	}
 

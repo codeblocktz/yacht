@@ -88,6 +88,9 @@ templ TeamPage(d TeamPageData) {
 		</table>
 		</div>
 	</div>
+	if d.GitHub != nil {
+		@teamGitHubPanel(*d.GitHub)
+	}
 	if d.Viewer.CanAdminister() {
 		<div class="panel mb-5">
 			<div class="panel-header"><span class="panel-title">Pending invitations</span></div>

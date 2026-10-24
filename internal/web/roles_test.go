@@ -213,11 +213,13 @@ func newRoleTeam(t *testing.T, teamID, appName string) *roleTeam {
 }
 
 // newRoleTeamWith is newRoleTeam on an install that names its operators.
-func newRoleTeamWith(t *testing.T, teamID, appName string, operators []string) *roleTeam {
+func newRoleTeamWith(
+	t *testing.T, teamID, appName string, operators []string, more ...func(*Options),
+) *roleTeam {
 	t.Helper()
 	ctx := context.Background()
 
-	h := newLiveHarnessWith(t, teamID, "", operators)
+	h := newLiveHarnessWith(t, teamID, "", operators, more...)
 	h.installedApp(t, appName)
 
 	rt := &roleTeam{liveHarness: h, appName: appName}

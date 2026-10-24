@@ -448,6 +448,10 @@ type AppDetailData struct {
 	// back, so this is the one render that can show it.
 	HookSecret string
 
+	// GitHubOn is whether the install has a GitHub App, so the source can be
+	// chosen from the team's repositories rather than only pasted.
+	GitHubOn bool
+
 	// Sleep is the app's sleeping — setting, state, history — where the
 	// server can put apps to sleep; nil leaves every sleep control off.
 	Sleep *app.SleepStatus
@@ -945,9 +949,36 @@ templ appRuntimeForm(d AppDetailData) {
 					<div class="field-label mb-1.5">Source repo</div>
 					@sourceCard(d)
 				</div>
+				if a.GitHubPaused != "" {
+					<div class="callout callout-warn mb-4">
+						<div class="min-w-0">
+							<div class="font-medium">Builds are paused</div>
+							<p class="mt-0.5 text-muted-foreground">
+								{ app.GitHubPausedReason(a.GitHubPaused) } It keeps running on its last image.
+							</p>
+						</div>
+					</div>
+				}
+				if d.GitHubOn {
+					<div class="field-group">
+						<label class="field-label" for="github_repo">From GitHub</label>
+						<p class="field-note">A repository the team's GitHub connection reaches, private ones included.</p>
+						<div class="mt-1.5">
+							@githubRepoPicker(a.Repo.GitHub, repoLabel(a.Repo.URL))
+						</div>
+					</div>
+				} else if a.Repo.GitHub.Set() {
+					// Kept as it is while this install has no GitHub App, rather
+					// than cleared by a save that never mentioned it.
+					<input type="hidden" name="github_repo" value={ a.Repo.GitHub.String() }/>
+				}
 				<div class="field-group">
 					<label class="field-label" for="repo_url">Repository URL</label>
-					<p class="field-note">Where a deploy builds from.</p>
+					if d.GitHubOn {
+						<p class="field-note">For a public repository, when none is chosen from GitHub above.</p>
+					} else {
+						<p class="field-note">Where a deploy builds from.</p>
+					}
 					<input class="control mono mt-1.5" id="repo_url" name="repo_url" value={ a.Repo.URL } placeholder="https://github.com/owner/repo"/>
 				</div>
 				@branchPicker(a.Name, a.Repo.Branch)
@@ -1110,7 +1141,25 @@ templ appPushSection(d AppDetailData) {
 		</div>
 		<div class="panel mb-5">
 			<div class="panel-body">
-				if !d.Hook.Enabled {
+				if !d.Hook.Enabled && d.GitHubOn && a.Repo.GitHub.Set() {
+					<p class="text-[12.5px] text-muted-foreground">
+						Every push to <code class="mono text-foreground">{ a.Repo.Ref() }</code> builds and
+						deploys it, through the GitHub App. There is no webhook to set up.
+					</p>
+					<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border pt-3 text-[11.5px] text-muted-foreground">
+						if d.Hook.LastDeliveryAt.IsZero() {
+							<span>No pushes yet.</span>
+						} else {
+							<span title={ absoluteTime(d.Hook.LastDeliveryAt) }>
+								Last push { preciseAgo(d.Hook.LastDeliveryAt) }: { d.Hook.LastDelivery }
+							</span>
+						}
+						if d.Hook.Pending {
+							<span class="text-border">&middot;</span>
+							<span>A push is waiting for the deploy in flight.</span>
+						}
+					</div>
+				} else if !d.Hook.Enabled {
 					<p class="text-[12.5px] text-muted-foreground">
 						Every push to <code class="mono text-foreground">{ a.Repo.Ref() }</code> builds and
 						deploys it, the same as pressing Redeploy. It takes a webhook on the repository,
@@ -1363,6 +1412,9 @@ type NewAppData struct {
 
 	// Regions is the region field: nothing on an install with no regions.
 	Regions app.RegionChoice
+
+	// GitHubOn offers the team's GitHub repositories beside a pasted URL.
+	GitHubOn bool
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -1374,7 +1426,9 @@ type NewAppForm struct {
 	Replicas string
 	Env      string
 
-	// The repository, for a source that is built rather than pulled.
+	// The repository, for a source that is built rather than pulled:
+	// chosen from GitHub, as the picker's value, or pasted.
+	GitHubRepo string
 	RepoURL    string
 	RepoBranch string
 	RepoSubdir string
@@ -1450,15 +1504,33 @@ templ sourcePicker(d NewAppData) {
 // No image field: the image is what the build produces, so offering a box for
 // one would be offering to overwrite the answer.
 templ repoFields(d NewAppData) {
+	if d.GitHubOn {
+		{{ chosen, _ := app.ParseGitHubRef(d.Form.GitHubRepo) }}
+		<div class="field">
+			<label class="label" for="github_repo">From GitHub</label>
+			@githubRepoPicker(chosen, "The repository chosen")
+			<span class="hint">
+				Repositories the team's GitHub connection reaches, private ones included. Pushes to the
+				branch deploy. Connect GitHub, or reach more of it, on the
+				<a class="underline hover:text-foreground" href="/team">Team</a> page.
+			</span>
+		</div>
+	}
 	<div class="field">
-		<label class="label" for="repo_url">Repository</label>
+		<label class="label" for="repo_url">
+			if d.GitHubOn {
+				Or a public repository
+			} else {
+				Repository
+			}
+		</label>
 		<input
 			class="control mono"
 			id="repo_url"
 			name="repo_url"
 			value={ d.Form.RepoURL }
 			placeholder="https://github.com/you/app.git"
-			required
+			required?={ !d.GitHubOn }
 		/>
 		<span class="hint">
 			An https or ssh URL. It is cloned, built, and run here, so plain http is
@@ -1468,14 +1540,32 @@ templ repoFields(d NewAppData) {
 	<div class="grid gap-4 sm:grid-cols-2">
 		<div class="field">
 			<label class="label" for="repo_branch">Branch</label>
-			<input
-				class="control mono"
-				id="repo_branch"
-				name="repo_branch"
-				value={ d.Form.RepoBranch }
-				placeholder={ app.DefaultBranch }
-			/>
-			<span class="hint">Empty builds { app.DefaultBranch }.</span>
+			if d.GitHubOn {
+				<input
+					class="control mono"
+					id="repo_branch"
+					name="repo_branch"
+					value={ d.Form.RepoBranch }
+					placeholder={ app.DefaultBranch }
+					autocomplete="off"
+					hx-get="/github/branches"
+					hx-trigger="focus, keyup changed delay:250ms"
+					hx-target="#branch-options"
+					hx-swap="innerHTML"
+					hx-include="[name='github_repo']"
+				/>
+				<div id="branch-options"></div>
+				<span class="hint">Empty builds the repository's default branch from GitHub, or { app.DefaultBranch }.</span>
+			} else {
+				<input
+					class="control mono"
+					id="repo_branch"
+					name="repo_branch"
+					value={ d.Form.RepoBranch }
+					placeholder={ app.DefaultBranch }
+				/>
+				<span class="hint">Empty builds { app.DefaultBranch }.</span>
+			}
 		</div>
 		<div class="field">
 			<label class="label" for="repo_subdir">Directory</label>
