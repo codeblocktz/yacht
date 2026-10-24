@@ -115,6 +115,15 @@ func (s *Server) githubCallback(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(ctx)
 	q := r.URL.Query()
 
+	// Somebody changing an installation on GitHub's own pages comes back
+	// here with no state, having started nothing here. What they changed
+	// arrives by the webhook; there is nothing to connect.
+	if q.Get("state") == "" && q.Get("error") == "" {
+		s.flashOK(w, r, "Changes made on GitHub reach this install by itself. "+
+			"To give this team an installation, use Connect GitHub.")
+		http.Redirect(w, r, "/team", http.StatusSeeOther)
+		return
+	}
 	// Cancelled on GitHub, or GitHub refusing: it says so instead of a code.
 	if q.Get("error") != "" || q.Get("code") == "" {
 		s.flashErr(w, r, "GitHub did not connect — nothing was changed.")

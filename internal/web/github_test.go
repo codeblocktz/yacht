@@ -140,6 +140,11 @@ func TestTheCallbackHandsGitHubsAnswerToTheServiceWithTheSession(t *testing.T) {
 
 	// An installation id that is not a number reaches nothing.
 	rt.getAs(t, GitHubCallbackPath+"?code=x&state=y&installation_id=seven", rt.admin)
+	// Nor a return from changing an installation on GitHub's own pages,
+	// which carries no state because nothing here started it.
+	if rec := rt.getAs(t, GitHubCallbackPath+"?code=x&installation_id=7&setup_action=update", rt.admin); rec.Code != http.StatusSeeOther {
+		t.Fatalf("a stateless return = %d, want 303", rec.Code)
+	}
 	// Nor does a return GitHub marked as refused.
 	rt.getAs(t, GitHubCallbackPath+"?error=access_denied&state=y", rt.admin)
 	if len(gh.connects) != 1 {

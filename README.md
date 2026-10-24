@@ -42,6 +42,7 @@ nothing you build here is locked in.
 | Build and deploy from a Git repository, using buildpacks and an external registry | ✅ |
 | Branches read from the remote as you type | ✅ |
 | Deploy on push, from GitHub, GitLab, Gitea or Forgejo webhooks | ✅ |
+| Connect GitHub through a GitHub App: private repositories, picked rather than pasted, deploying on push with no webhook to set up | ✅ |
 | Builds run as an isolated Job, with the log kept | ✅ |
 | Build output streamed to the page while it runs | ✅ |
 | Push build output to an operator-configured OCI registry | ✅ |
@@ -341,6 +342,76 @@ What this doesn't do:
   made.
 - **Pools in admission.** A change is admitted against its region's room, not
   against its team's pool within it.
+
+## GitHub App
+
+Without one, a repository is a URL somebody pastes, cloned anonymously, so
+only a public one builds, and deploying on push means adding a webhook to each
+repository by hand. With one, a team connects GitHub on its **Team** page,
+chooses which account and repositories GitHub lets the install reach, and
+then picks a repository when it deploys, private ones included. A push to it
+deploys every app built from it, with no webhook to set up. Pasted URLs and
+per-app webhooks go on working beside it.
+
+### Creating the App
+
+One App per install. On GitHub, under **Settings → Developer settings → GitHub
+Apps → New GitHub App** (an organisation's settings, for an App the
+organisation owns):
+
+| Setting | Value |
+|---|---|
+| GitHub App name | Anything. Its slug, the name in `github.com/apps/<slug>`, is `YACHT_GITHUB_APP_SLUG` |
+| Homepage URL | `<YACHT_BASE_URL>` |
+| Callback URL | `<YACHT_BASE_URL>/github/callback` |
+| Expire user authorization tokens | On (the default). The user token is used once, to check which installations a person can reach |
+| Request user authorization (OAuth) during installation | **On**. This is how the install proves the person connecting an installation can reach it |
+| Enable Device Flow | Off |
+| Setup URL | None: with the box above on, GitHub sends people to the Callback URL after installing |
+| Webhook | Active |
+| Webhook URL | `<YACHT_BASE_URL>/hooks/github` |
+| Webhook secret | A long random value, which is `YACHT_GITHUB_APP_WEBHOOK_SECRET` (`openssl rand -hex 32`) |
+| Repository permissions | **Contents: Read-only**, and **Metadata: Read-only** (GitHub requires it). Nothing else |
+| Organization and account permissions | None |
+| Subscribe to events | **Push**. Installation and installation-repository events are sent to every App's webhook without subscribing |
+| Where can this GitHub App be installed? | **Any account**, so each team can install it on its own account or organisation. **Only on this account** limits it to the App owner's |
+
+Then, on the App's page, note the **App ID** (`YACHT_GITHUB_APP_ID`) and the
+**Client ID** (`YACHT_GITHUB_APP_CLIENT_ID`), generate a **client secret**
+(`YACHT_GITHUB_APP_CLIENT_SECRET`) and a **private key**, whose `.pem` is
+`YACHT_GITHUB_APP_PRIVATE_KEY_FILE`, or its text, newlines written `\n`, is
+`YACHT_GITHUB_APP_PRIVATE_KEY`. Set them all and restart; the log says the
+App is configured, with the two URLs above.
+
+### What a team does
+
+An admin presses **Connect GitHub** and installs the App on an account or
+organisation, choosing its repositories; **Use an existing installation**
+connects one that is already there. GitHub sends them back with a code that
+only it issues, and the installation is connected only if GitHub's answer to
+that code lists it as theirs: an installation id in a URL proves nothing. Two
+teams may share an installation, each proving its own access. **Disconnect**
+lets go of one.
+
+From then on the deploy form and an app's Source settings offer the
+repositories it reaches, and their branches and directories.
+
+### What it holds, and what it does not
+
+- No token is stored. A build mints one when it starts, scoped to the one
+  repository with contents: read, and hands it to the clone step alone in a
+  Secret that goes with the build. git reads it from that file, so it is not
+  in the Job, the checkout, the image, the URL the app records, or the log.
+- A push is matched to apps by the repository's id, so a rename changes
+  nothing. Deliveries are checked against the webhook secret before they are
+  read, and a redelivery deploys nothing twice.
+- A repository taken from the installation, an installation suspended or
+  uninstalled, or a team disconnecting it, pauses the apps built from it.
+  They are not deleted: they keep running on their last image, say why, and
+  build again once access is back or another repository is chosen.
+
+Not yet: a commit status or check run on GitHub for each build, which needs
+the App to be given Commit statuses or Checks: write.
 
 ## Quick start
 
