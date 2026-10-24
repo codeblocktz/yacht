@@ -361,8 +361,9 @@ type Options struct {
 	// defaultSessionTTL.
 	SessionTTL time.Duration
 
-	// MailTransport names the delivery route — "smtp", "resend" or "log" — so
-	// the settings page can show whether links are actually being sent.
+	// MailTransport names the delivery route — "smtp", "resend", "cloudflare"
+	// or "log" — so the settings page can show whether links are actually
+	// being sent.
 	MailTransport string
 
 	// BootstrapEmail is the address allowed to create itself on first sign-in.

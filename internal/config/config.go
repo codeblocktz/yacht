@@ -187,6 +187,12 @@ type Config struct {
 	ResendAPIKey string
 	ResendFrom   string
 
+	// CloudflareEmail* select Cloudflare Email Sending's HTTP API: for a host
+	// that blocks port 465, the only one Cloudflare takes SMTP on.
+	CloudflareEmailToken     string
+	CloudflareEmailAccountID string
+	CloudflareEmailFrom      string
+
 	// SessionTTL is how long a signed-in browser stays signed in.
 	SessionTTL time.Duration
 
@@ -236,41 +242,44 @@ type Config struct {
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{
-		Addr:                env("YACHT_ADDR", ":8080"),
-		DatabaseURL:         env("YACHT_DATABASE_URL", ""),
-		Kubeconfig:          env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
-		KubeInCluster:       envBool("YACHT_KUBE_IN_CLUSTER", false),
-		AuthToken:           env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:             env("YACHT_OWNER_ID", "owner-local"),
-		OwnerName:           env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:          strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
-		OpenSignup:          envBool("YACHT_OPEN_SIGNUP", false),
-		SecretKey:           strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
-		SecretKeyPrevious:   envList("YACHT_SECRET_KEY_PREVIOUS"),
-		AppDomain:           env("YACHT_APP_DOMAIN", ""),
-		WildcardTLS:         envBool("YACHT_WILDCARD_TLS", false),
-		CertIssuer:          strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
-		DNSResolver:         env("YACHT_DNS_RESOLVER", ""),
-		NetworkIsolation:    env("YACHT_NETWORK_ISOLATION", ""),
-		EgressAllow:         env("YACHT_EGRESS_ALLOW", ""),
-		ReservedDomains:     envList("YACHT_RESERVED_DOMAINS"),
-		Operators:           envList("YACHT_OPERATORS"),
-		BaseURL:             strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
-		SMTPAddr:            env("YACHT_SMTP_ADDR", ""),
-		SMTPUsername:        env("YACHT_SMTP_USER", ""),
-		SMTPPassword:        env("YACHT_SMTP_PASSWORD", ""),
-		SMTPFrom:            env("YACHT_SMTP_FROM", ""),
-		ResendAPIKey:        env("YACHT_RESEND_API_KEY", ""),
-		ResendFrom:          env("YACHT_RESEND_FROM", ""),
-		SessionTTL:          envDuration("YACHT_SESSION_TTL", 720*time.Hour),
-		MagicLinkTTL:        envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
-		ShutdownTimeout:     envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
-		MaxConcurrentBuilds: envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
-		WakerAddr:           strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
-		WakerListen:         strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
-		WakeTimeout:         envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
-		DefaultRegion:       strings.TrimSpace(env("YACHT_DEFAULT_REGION", "")),
-		Debug:               envBool("YACHT_DEBUG", false),
+		Addr:                     env("YACHT_ADDR", ":8080"),
+		DatabaseURL:              env("YACHT_DATABASE_URL", ""),
+		Kubeconfig:               env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
+		KubeInCluster:            envBool("YACHT_KUBE_IN_CLUSTER", false),
+		AuthToken:                env("YACHT_AUTH_TOKEN", ""),
+		OwnerID:                  env("YACHT_OWNER_ID", "owner-local"),
+		OwnerName:                env("YACHT_OWNER_NAME", "Local"),
+		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
+		SecretKey:                strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
+		SecretKeyPrevious:        envList("YACHT_SECRET_KEY_PREVIOUS"),
+		AppDomain:                env("YACHT_APP_DOMAIN", ""),
+		WildcardTLS:              envBool("YACHT_WILDCARD_TLS", false),
+		CertIssuer:               strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
+		DNSResolver:              env("YACHT_DNS_RESOLVER", ""),
+		NetworkIsolation:         env("YACHT_NETWORK_ISOLATION", ""),
+		EgressAllow:              env("YACHT_EGRESS_ALLOW", ""),
+		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
+		Operators:                envList("YACHT_OPERATORS"),
+		BaseURL:                  strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
+		SMTPAddr:                 env("YACHT_SMTP_ADDR", ""),
+		SMTPUsername:             env("YACHT_SMTP_USER", ""),
+		SMTPPassword:             env("YACHT_SMTP_PASSWORD", ""),
+		SMTPFrom:                 env("YACHT_SMTP_FROM", ""),
+		ResendAPIKey:             env("YACHT_RESEND_API_KEY", ""),
+		ResendFrom:               env("YACHT_RESEND_FROM", ""),
+		CloudflareEmailToken:     env("YACHT_CLOUDFLARE_EMAIL_TOKEN", ""),
+		CloudflareEmailAccountID: env("YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID", ""),
+		CloudflareEmailFrom:      env("YACHT_CLOUDFLARE_EMAIL_FROM", ""),
+		SessionTTL:               envDuration("YACHT_SESSION_TTL", 720*time.Hour),
+		MagicLinkTTL:             envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
+		ShutdownTimeout:          envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
+		MaxConcurrentBuilds:      envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
+		WakerAddr:                strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
+		WakerListen:              strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
+		WakeTimeout:              envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
+		DefaultRegion:            strings.TrimSpace(env("YACHT_DEFAULT_REGION", "")),
+		Debug:                    envBool("YACHT_DEBUG", false),
 	}
 
 	if err := c.validate(); err != nil {
@@ -437,15 +446,33 @@ func (c Config) accountFaults() []error {
 
 	// Two transports is not a fallback chain, it is an unanswered question
 	// about which one sends. Say so rather than picking.
-	if c.SMTPAddr != "" && c.ResendAPIKey != "" {
-		errs = append(errs, errors.New(
-			"YACHT_SMTP_ADDR and YACHT_RESEND_API_KEY are both set — configure one mail transport"))
+	var transports []string
+	for _, t := range []struct{ name, value string }{
+		{"YACHT_SMTP_ADDR", c.SMTPAddr},
+		{"YACHT_RESEND_API_KEY", c.ResendAPIKey},
+		{"YACHT_CLOUDFLARE_EMAIL_TOKEN", c.CloudflareEmailToken},
+	} {
+		if t.value != "" {
+			transports = append(transports, t.name)
+		}
+	}
+	if len(transports) > 1 {
+		errs = append(errs, fmt.Errorf(
+			"%s are all set — configure one mail transport", strings.Join(transports, " and ")))
 	}
 	if c.SMTPAddr != "" && c.SMTPFrom == "" {
 		errs = append(errs, errors.New("YACHT_SMTP_FROM is required with YACHT_SMTP_ADDR"))
 	}
 	if c.ResendAPIKey != "" && c.ResendFrom == "" {
 		errs = append(errs, errors.New("YACHT_RESEND_FROM is required with YACHT_RESEND_API_KEY"))
+	}
+	if c.CloudflareEmailToken != "" && c.CloudflareEmailAccountID == "" {
+		errs = append(errs, errors.New(
+			"YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID is required with YACHT_CLOUDFLARE_EMAIL_TOKEN"))
+	}
+	if c.CloudflareEmailToken != "" && c.CloudflareEmailFrom == "" {
+		errs = append(errs, errors.New(
+			"YACHT_CLOUDFLARE_EMAIL_FROM is required with YACHT_CLOUDFLARE_EMAIL_TOKEN"))
 	}
 	// A zero or negative lifetime issues credentials that are already expired,
 	// which presents as sign-in silently never working.
@@ -482,7 +509,7 @@ func (c Config) signupFaults() []error {
 	// Links in the log reach the operator, not the stranger asking for one.
 	if c.MailTransport() == "log" {
 		errs = append(errs, errors.New(
-			"YACHT_OPEN_SIGNUP requires a mail transport — set YACHT_SMTP_ADDR or YACHT_RESEND_API_KEY"))
+			"YACHT_OPEN_SIGNUP requires a mail transport — set YACHT_SMTP_ADDR, YACHT_RESEND_API_KEY or YACHT_CLOUDFLARE_EMAIL_TOKEN"))
 	}
 	return errs
 }
@@ -590,6 +617,8 @@ func (c Config) MailTransport() string {
 		return "smtp"
 	case c.ResendAPIKey != "":
 		return "resend"
+	case c.CloudflareEmailToken != "":
+		return "cloudflare"
 	default:
 		return "log"
 	}
