@@ -121,7 +121,7 @@ fi`
 // gets its own image — clone, BuildKit, buildpacks — so none of them has to be
 // a custom image this project builds and publishes, which would make running
 // Yacht depend on Yacht having somewhere to push.
-func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *batchv1.Job {
+func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret string) *batchv1.Job {
 	// Never retried. A build that failed will fail the same way, and a second
 	// attempt would double the log, double the wait, and end where it started.
 	// Kubernetes' own default is six.
@@ -134,6 +134,42 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 		orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
 		orchestrator.LabelOwner:     sanitiseLabel(string(req.Owner)),
 		"yacht/build":               "true",
+	}
+
+	volumes := []corev1.Volume{
+		{
+			Name: buildVolume,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			Name: "registry",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: pullSecret,
+					Items: []corev1.KeyToPath{{
+						Key: corev1.DockerConfigJsonKey, Path: "config.json",
+					}},
+				},
+			},
+		},
+	}
+	if repoSecret != "" {
+		// Readable by the build's group and nobody else, and mounted by the
+		// clone alone: the steps after it run the repository's own
+		// Dockerfile and buildpacks, which have no business reaching it.
+		mode := int32(0o440)
+		volumes = append(volumes, corev1.Volume{
+			Name: repoCredentialVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  repoSecret,
+					DefaultMode: &mode,
+					Items:       []corev1.KeyToPath{{Key: repoTokenKey, Path: repoTokenKey}},
+				},
+			},
+		})
 	}
 
 	return &batchv1.Job{
@@ -166,27 +202,9 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 					SecurityContext: &corev1.PodSecurityContext{
 						FSGroup: int64Ptr(cnbGID),
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: buildVolume,
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
-						{
-							Name: "registry",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: pullSecret,
-									Items: []corev1.KeyToPath{{
-										Key: corev1.DockerConfigJsonKey, Path: "config.json",
-									}},
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 					InitContainers: []corev1.Container{
-						cloneStep(req),
+						cloneStep(req, repoSecret != ""),
 						dockerfileStep(req),
 					},
 					Containers: []corev1.Container{buildpackStep(req)},
@@ -196,29 +214,59 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret string) *ba
 	}
 }
 
+// repoCredentialVolume is the clone's view of a private repository's token,
+// mounted at repoCredentialPath.
+const (
+	repoCredentialVolume = "repo-credential"
+	repoCredentialPath   = "/repo-credential"
+)
+
 // cloneStep fetches the repository.
 //
 // The URL and ref are passed as environment variables rather than interpolated
 // into the script. A repository URL is somebody's input, and a value spliced
 // into a shell command is a command they get to extend — validation upstream
 // makes that unlikely, and this makes it impossible.
-func cloneStep(req orchestrator.BuildRequest) corev1.Container {
+//
+// A private repository's token is a file from a Secret, which git reads
+// through a credential helper when the server asks for one. Not in the URL,
+// where git would write it into the checkout's config and the Dockerfile
+// step would copy it into the image; not an argument or a variable, which
+// describing the pod would show. -c configures this one command, so the
+// helper is not left in the checkout either.
+func cloneStep(req orchestrator.BuildRequest, withToken bool) corev1.Container {
+	env := []corev1.EnvVar{
+		{Name: "REPO_URL", Value: req.RepoURL},
+		{Name: "REPO_REF", Value: req.Ref},
+		// A credential refused is a failed clone, not a prompt that waits
+		// for a terminal nobody is at.
+		{Name: "GIT_TERMINAL_PROMPT", Value: "0"},
+	}
+	mounts := []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}}
+	if withToken {
+		env = append(env, corev1.EnvVar{Name: "REPO_TOKEN_FILE", Value: repoCredentialPath + "/" + repoTokenKey})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name: repoCredentialVolume, MountPath: repoCredentialPath, ReadOnly: true,
+		})
+	}
 	return corev1.Container{
-		Name:  cloneContainer,
-		Image: gitImage,
-		Env: []corev1.EnvVar{
-			{Name: "REPO_URL", Value: req.RepoURL},
-			{Name: "REPO_REF", Value: req.Ref},
-		},
+		Name:    cloneContainer,
+		Image:   gitImage,
+		Env:     env,
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
 echo "Cloning $REPO_URL at $REPO_REF"
-git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/src
+if [ -n "${REPO_TOKEN_FILE:-}" ]; then
+  git -c credential.helper='!f() { [ "$1" = get ] || exit 0; echo username=x-access-token; echo "password=$(cat "$REPO_TOKEN_FILE")"; }; f' \
+    clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/src
+else
+  git clone --depth 1 --branch "$REPO_REF" --single-branch "$REPO_URL" /workspace/src
+fi
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"
 echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
 `},
 		SecurityContext: hardened(buildUID),
-		VolumeMounts:    []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}},
+		VolumeMounts:    mounts,
 	}
 }
 

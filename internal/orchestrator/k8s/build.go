@@ -3,6 +3,7 @@ package k8s
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -94,21 +95,40 @@ func (o *Orchestrator) Build(
 	}
 
 	name := buildJobName(req)
-	job := buildJob(name, req, secret)
 
 	// Removed first. A Job name is derived from the deployment, so a retry of
 	// the same deployment collides with the previous attempt — and Kubernetes
 	// reports that as an already-exists error rather than running anything.
 	_ = o.deleteBuildJob(ctx, name)
 
-	if _, err := o.client.BatchV1().Jobs(BuildNamespace).
-		Create(ctx, job, metav1.CreateOptions{}); err != nil {
+	// A private repository's token goes in a Secret of the build's own, which
+	// only the clone step mounts, rather than anywhere in the Job: a Job's
+	// spec is readable by anyone who can list Jobs, and its env and args are
+	// echoed by every tool that describes a pod.
+	var repoSecret string
+	if req.RepoToken != "" {
+		repoSecret = repoSecretName(name)
+		if err := o.putRepoSecret(ctx, repoSecret, req.RepoToken); err != nil {
+			return orchestrator.BuildResult{}, err
+		}
+		defer func() { _ = o.deleteRepoSecret(context.WithoutCancel(ctx), repoSecret) }()
+	}
+	job := buildJob(name, req, secret, repoSecret)
+
+	created, err := o.client.BatchV1().Jobs(BuildNamespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
 		return orchestrator.BuildResult{}, fmt.Errorf("k8s: create build job: %w", err)
 	}
 	// The Job outlives this function only if something goes very wrong; the
 	// deferred delete is what stops a failed build's pod sitting on a node
 	// holding its image cache and its disk.
 	defer func() { _ = o.deleteBuildJob(context.WithoutCancel(ctx), name) }()
+	// And the token's Secret goes with the Job, by Kubernetes' own garbage
+	// collection, should this process stop before its deferred delete.
+	if repoSecret != "" {
+		o.ownRepoSecret(ctx, repoSecret, created)
+	}
+	req.Log = redactingLog(req.Log, req.RepoToken)
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
@@ -124,9 +144,79 @@ func (o *Orchestrator) Build(
 	result := o.streamBuildLog(ctx, pod, req.Log)
 
 	if err := o.waitForBuildResult(ctx, name); err != nil {
-		return result, err
+		return result, redactError(err, req.RepoToken)
 	}
 	return result, nil
+}
+
+// repoSecretName is the Secret a build's repository token is in.
+func repoSecretName(job string) string { return job + "-repo" }
+
+// repoTokenKey is the token's key in that Secret, and its file in the clone.
+const repoTokenKey = "token"
+
+// putRepoSecret stores a build's repository token.
+func (o *Orchestrator) putRepoSecret(ctx context.Context, name, token string) error {
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: BuildNamespace,
+			Labels: map[string]string{
+				orchestrator.LabelManagedBy: orchestrator.ManagedByValue,
+				"yacht/build":               "true",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{repoTokenKey: []byte(token)},
+	}
+	_, err := o.client.CoreV1().Secrets(BuildNamespace).Create(ctx, sec, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		_, err = o.client.CoreV1().Secrets(BuildNamespace).Update(ctx, sec, metav1.UpdateOptions{})
+	}
+	if err != nil {
+		// Kubernetes' own error, which names the Secret and not its data.
+		return fmt.Errorf("k8s: store the build's repository credential: %w", err)
+	}
+	return nil
+}
+
+// ownRepoSecret makes the Job the Secret's owner. Best effort: the deferred
+// delete is the first line, and this the backstop.
+func (o *Orchestrator) ownRepoSecret(ctx context.Context, name string, job *batchv1.Job) {
+	sec, err := o.client.CoreV1().Secrets(BuildNamespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	sec.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: job.UID,
+	}}
+	_, _ = o.client.CoreV1().Secrets(BuildNamespace).Update(ctx, sec, metav1.UpdateOptions{})
+}
+
+func (o *Orchestrator) deleteRepoSecret(ctx context.Context, name string) error {
+	err := o.client.CoreV1().Secrets(BuildNamespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// redactingLog keeps a token out of the build log. Nothing in the clone
+// prints it — git reads it from a file when GitHub asks — so this is the
+// second line, for a tool that one day does.
+func redactingLog(logf func(string), token string) func(string) {
+	if token == "" {
+		return logf
+	}
+	return func(chunk string) { logf(strings.ReplaceAll(chunk, token, "***")) }
+}
+
+// redactError is the same for the failure a build reports, which is stored
+// on the build and shown on its page.
+func redactError(err error, token string) error {
+	if err == nil || token == "" || !strings.Contains(err.Error(), token) {
+		return err
+	}
+	return errors.New(strings.ReplaceAll(err.Error(), token, "***"))
 }
 
 // ensureBuildNamespace creates the namespace builds run in.
