@@ -21,7 +21,11 @@ const cloudflareAPI = "https://api.cloudflare.com/client/v4"
 // Cloudflare takes SMTP only on port 465, which many hosts block on the way
 // out, as they block 25; its API is HTTPS, which nothing blocks. The token
 // needs Email Sending: Edit on the account.
-func NewCloudflare(accountID, token, from string) (Mailer, error) {
+//
+// Each message goes as text and as the same text in HTML: filters such as
+// Zoho's file a text-only message with a bare sign-in link from a new domain
+// as spam. replyTo, when set, is where a reply goes instead of from.
+func NewCloudflare(accountID, token, from, replyTo string) (Mailer, error) {
 	var errs []error
 	if accountID == "" {
 		errs = append(errs, errors.New("notify: Cloudflare account ID is required"))
@@ -40,6 +44,7 @@ func NewCloudflare(accountID, token, from string) (Mailer, error) {
 	return &cloudflareMailer{
 		token:    token,
 		from:     from,
+		replyTo:  replyTo,
 		endpoint: cloudflareAPI + "/accounts/" + url.PathEscape(accountID) + "/email/sending/send",
 		client:   &http.Client{Timeout: 15 * time.Second},
 	}, nil
@@ -48,6 +53,7 @@ func NewCloudflare(accountID, token, from string) (Mailer, error) {
 type cloudflareMailer struct {
 	token    string
 	from     string
+	replyTo  string
 	endpoint string
 	client   *http.Client
 }
@@ -57,12 +63,17 @@ func (m *cloudflareMailer) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 
-	payload, err := json.Marshal(map[string]any{
+	body := map[string]any{
 		"from":    m.from,
 		"to":      []string{msg.To},
 		"subject": msg.Subject,
 		"text":    msg.TextBody,
-	})
+		"html":    textToHTML(msg.TextBody),
+	}
+	if m.replyTo != "" {
+		body["reply_to"] = m.replyTo
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("notify: cloudflare encode: %w", err)
 	}
@@ -81,7 +92,7 @@ func (m *cloudflareMailer) Send(ctx context.Context, msg Message) error {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 	var out struct {
 		Success bool `json:"success"`
 		Errors  []struct {
@@ -93,7 +104,7 @@ func (m *cloudflareMailer) Send(ctx context.Context, msg Message) error {
 			Suppressed       []string `json:"suppressed_recipients"`
 		} `json:"result"`
 	}
-	_ = json.Unmarshal(body, &out)
+	_ = json.Unmarshal(raw, &out)
 
 	if resp.StatusCode >= 300 || !out.Success {
 		// Carry the API's own words: "403" alone gives an operator nothing to

@@ -924,7 +924,8 @@ func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 	case cfg.ResendAPIKey != "":
 		return notify.NewResend(cfg.ResendAPIKey, cfg.ResendFrom)
 	case cfg.CloudflareEmailToken != "":
-		return notify.NewCloudflare(cfg.CloudflareEmailAccountID, cfg.CloudflareEmailToken, cfg.CloudflareEmailFrom)
+		return notify.NewCloudflare(cfg.CloudflareEmailAccountID, cfg.CloudflareEmailToken,
+			cfg.CloudflareEmailFrom, cfg.CloudflareEmailReplyTo)
 	default:
 		log.Warn("no mail transport configured — sign-in links will be written to " +
 			"this log, where anyone who can read it can use them")

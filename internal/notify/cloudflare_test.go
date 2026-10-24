@@ -17,7 +17,7 @@ func TestNewCloudflareRejectsIncompleteConfig(t *testing.T) {
 		{"acct", "tok", ""},
 		{"acct/../x", "tok", "a@example.test"},
 	} {
-		if _, err := NewCloudflare(c.account, c.token, c.from); err == nil {
+		if _, err := NewCloudflare(c.account, c.token, c.from, ""); err == nil {
 			t.Errorf("NewCloudflare(%q, %q, %q) accepted it", c.account, c.token, c.from)
 		}
 	}
@@ -34,7 +34,7 @@ func TestCloudflarePostsTheMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, err := NewCloudflare("acct123", "tok", "Acme <no-reply@example.test>")
+	m, err := NewCloudflare("acct123", "tok", "Acme <no-reply@example.test>", "hello@example.test")
 	if err != nil {
 		t.Fatalf("NewCloudflare: %v", err)
 	}
@@ -57,6 +57,12 @@ func TestCloudflarePostsTheMessage(t *testing.T) {
 	if body["from"] != "Acme <no-reply@example.test>" || body["subject"] != "Sign in" || body["text"] != "link" {
 		t.Errorf("body = %v", body)
 	}
+	if body["reply_to"] != "hello@example.test" {
+		t.Errorf("reply_to = %v", body["reply_to"])
+	}
+	if h, _ := body["html"].(string); !strings.Contains(h, "<p>link</p>") {
+		t.Errorf("html = %q, want the text as HTML", h)
+	}
 	if to, _ := body["to"].([]any); len(to) != 1 || to[0] != "someone@example.test" {
 		t.Errorf("to = %v", body["to"])
 	}
@@ -70,7 +76,7 @@ func TestCloudflareReportsAnAPIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewCloudflare("acct", "tok", "a@example.test")
+	m, _ := NewCloudflare("acct", "tok", "a@example.test", "")
 	m.(*cloudflareMailer).endpoint = srv.URL
 	err := m.Send(context.Background(), Message{To: "someone@example.test", Subject: "Sign in", TextBody: "link"})
 	if err == nil || !strings.Contains(err.Error(), "authentication.forbidden (10102)") {
@@ -85,7 +91,7 @@ func TestCloudflareReportsASuppressedRecipient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m, _ := NewCloudflare("acct", "tok", "a@example.test")
+	m, _ := NewCloudflare("acct", "tok", "a@example.test", "")
 	m.(*cloudflareMailer).endpoint = srv.URL
 	if err := m.Send(context.Background(), Message{To: "someone@example.test", Subject: "Sign in", TextBody: "link"}); err == nil {
 		t.Error("Send reported success for a suppressed recipient")
