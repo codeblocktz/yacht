@@ -104,6 +104,8 @@ test_flags_are_checked_before_anything_runs() {
 		'--region dar;id' \
 		'--region dar|id' \
 		'--region .dar' \
+		'--region eu.central' \
+		'--region dar_1' \
 		'--region dar --skip-k3s'; do
 		# Word-split on purpose: each case is a list of flags.
 		# shellcheck disable=SC2086

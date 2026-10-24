@@ -226,8 +226,8 @@ parse_flags() {
 	if [ -n "$SITE" ] && ! valid_label "$SITE"; then
 		die "--site must be lowercase letters, numbers, dashes, dots and underscores, starting and ending with a letter or number, got '$SITE'"
 	fi
-	if [ -n "$REGION" ] && ! valid_label "$REGION"; then
-		die "--region must be lowercase letters, numbers, dashes, dots and underscores, starting and ending with a letter or number, got '$REGION'"
+	if [ -n "$REGION" ] && ! valid_region "$REGION"; then
+		die "--region must be lowercase letters, numbers and dashes, starting and ending with a letter or number, got '$REGION'"
 	fi
 	if [ -n "$PUBLIC_IP" ] && ! valid_ip "$PUBLIC_IP"; then
 		die "--public-ip must be an IP address, got '$PUBLIC_IP'"
@@ -251,6 +251,14 @@ valid_label() {
 		''|*[!"$valid_label_lower"._-]*) return 1 ;;
 		[!"$valid_label_lower"]*|*[!"$valid_label_lower"]) return 1 ;;
 	esac
+}
+
+# valid_region is a label value that is also a DNS label: no dots or
+# underscores, since a wrapper names records and StorageClasses after the
+# region (the engine's ValidateRegion holds the same rule).
+valid_region() {
+	valid_label "$1" || return 1
+	case "$1" in *[._]*) return 1 ;; esac
 }
 
 # valid_ip accepts a dotted IPv4 address, or an IPv6 one written in hex and

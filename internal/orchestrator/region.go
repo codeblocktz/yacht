@@ -1,5 +1,10 @@
 package orchestrator
 
+import (
+	"fmt"
+	"regexp"
+)
+
 // RegionLabel is the node label a region is carried in.
 //
 // A region is where an app lives: its pods, its volumes and its databases
@@ -16,5 +21,20 @@ const RegionLabel = "topology.kubernetes.io/region"
 // ValidateRegion checks a region name: a label value, by the rule a pool and a
 // site are held to, and for the same reason — it is written into the join
 // command somebody pastes into a root shell, and into the installer's K3s
-// arguments. Empty is no region, which is valid: an install in one place.
-func ValidateRegion(region string) error { return ValidateLabelValue("region", region) }
+// arguments. Narrower than a label value, though: a DNS label, with no dots
+// or underscores, because a region's name is what a wrapper names things
+// after — its edge's DNS record, its StorageClass — and a dot there would be
+// a subdomain, an underscore no name at all. Empty is no region, which is
+// valid: an install in one place.
+func ValidateRegion(region string) error {
+	if err := ValidateLabelValue("region", region); err != nil {
+		return err
+	}
+	if region != "" && !regionRE.MatchString(region) {
+		return fmt.Errorf("region name must be lowercase letters, numbers and dashes, " +
+			"starting and ending with a letter or number")
+	}
+	return nil
+}
+
+var regionRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
