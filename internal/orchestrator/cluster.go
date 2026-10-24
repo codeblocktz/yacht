@@ -16,6 +16,11 @@ type NodeInfo struct {
 	Pool    string // scheduling pool, from the yacht/pool label
 	Address string
 
+	// Site is where the machine is — a name the operator gave it when it
+	// joined, from the topology.kubernetes.io/zone label. Empty for a node
+	// with none, which is every node of an install in one place.
+	Site string
+
 	Version      string // kubelet version
 	OS           string
 	Architecture string

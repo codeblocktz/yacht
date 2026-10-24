@@ -73,6 +73,7 @@ func (o *Orchestrator) Nodes(ctx context.Context) ([]orchestrator.NodeInfo, erro
 			Ready:             nodeReady(n),
 			Roles:             nodeRoles(n),
 			Pool:              n.Labels[orchestrator.PoolLabel],
+			Site:              n.Labels[orchestrator.SiteLabel],
 			Address:           nodeAddress(n),
 			Version:           n.Status.NodeInfo.KubeletVersion,
 			OS:                n.Status.NodeInfo.OperatingSystem,

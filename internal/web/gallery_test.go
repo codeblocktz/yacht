@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -564,6 +565,42 @@ func galleryPages() []galleryPage {
 			page: Cluster(ClusterData{
 				Tab: "nodes", OK: true, Summary: summary, Nodes: nodes,
 			}),
+		},
+		{
+			// An install grown into a second place. Reaching it by clicking
+			// means machines at two hosting companies, which is why it is here.
+			file: "states-cluster-sites.html", path: "/cluster/nodes",
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "Cluster"}},
+			page: Cluster(ClusterData{
+				Tab: "nodes", OK: true, Summary: summary, Nodes: sitedNodes(nodes),
+			}),
+		},
+		{
+			// The command for a machine at another site, behind NAT, with the
+			// ports it needs said beside it.
+			file: "states-node-join.html", path: "/cluster/nodes/add",
+			crumbs: []Crumb{{Label: "Admin", Href: "/cluster/nodes"}, {Label: "Add node"}},
+			page: func() templ.Component {
+				m := cluster.Machine{Pool: "apps", Site: "dar-b", PublicIP: "198.51.100.24"}
+				return AddNode(AddNodeData{
+					Settings: cluster.Settings{
+						ServerURL: "https://203.0.113.10:6443", TokenSet: true,
+						UpdatedAt: "2026-09-01 09:30",
+					},
+					Configured: true,
+					Command: cluster.BuildCommand("https://203.0.113.10:6443",
+						"K10c0ffee…::server:5ecret", m),
+					Machine:   m,
+					ClusterOK: true,
+					Nodes: append(sitedNodes(nodes), orchestrator.NodeInfo{
+						Name: "yacht-dar-b-1", Site: "dar-b", Pool: "apps",
+						Version: "v1.36.2+k3s1", OS: "linux", Architecture: "amd64",
+						CreatedAt: now.Add(-40 * time.Second),
+						Reason:    "KubeletNotReady",
+						Message:   "container runtime network not ready: cni plugin not initialized",
+					}),
+				})
+			}(),
 		},
 		{
 			file: "states-pods.html", path: "/cluster/pods",
@@ -1163,6 +1200,17 @@ func issuingGallery(c domain.Custom, cert orchestrator.Certificate) NetworkingDa
 	d.Net.Certs = map[string]orchestrator.Certificate{c.Host: cert}
 	d.Settled = domainsSettled(d.Net)
 	return d
+}
+
+// sitedNodes is the gallery's machines split across two places, with one
+// that was never given a site — which is what an install that grew looks like
+// before somebody labels the first server.
+func sitedNodes(nodes []orchestrator.NodeInfo) []orchestrator.NodeInfo {
+	out := slices.Clone(nodes)
+	out[0].Site = "dar-a"
+	out[1].Site = "dar-b"
+	out[1].Address = "198.51.100.24"
+	return out
 }
 
 // retiringGallery is a node half way through retiring.
