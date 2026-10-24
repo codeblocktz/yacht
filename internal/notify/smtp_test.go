@@ -3,7 +3,11 @@ package notify
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -74,7 +78,51 @@ func TestSMTPSendsANamedFromAsItsAddress(t *testing.T) {
 	}
 }
 
-type relayed struct{ from, data string }
+// Port 465 is TLS from the first byte, as Cloudflare's relay is: a mailer
+// that greets it in plain text waits for an answer that never comes.
+func TestSMTPOnPort465SpeaksTLSFromTheStart(t *testing.T) {
+	m, err := NewSMTP(SMTPConfig{Addr: "smtp.example.test:465", From: "no-reply@example.test"})
+	if err != nil {
+		t.Fatalf("NewSMTP: %v", err)
+	}
+	if !m.(*smtpMailer).implicitTLS {
+		t.Error("port 465 does not use implicit TLS")
+	}
+	m, _ = NewSMTP(SMTPConfig{Addr: "smtp.example.test:587", From: "no-reply@example.test"})
+	if m.(*smtpMailer).implicitTLS {
+		t.Error("port 587 uses implicit TLS; it is STARTTLS's")
+	}
+
+	ts := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(ts.Close)
+	relay := newRelay(t, func(l net.Listener) net.Listener { return tls.NewListener(l, ts.TLS) })
+	m, err = NewSMTP(SMTPConfig{
+		Addr: relay.addr, Username: "api_token", Password: "s3cret", From: "Acme <no-reply@example.test>",
+	})
+	if err != nil {
+		t.Fatalf("NewSMTP: %v", err)
+	}
+	sm := m.(*smtpMailer)
+	sm.implicitTLS = true
+	sm.tlsConfig = &tls.Config{
+		RootCAs:    ts.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs,
+		ServerName: "127.0.0.1",
+	}
+	if err := m.Send(context.Background(), Message{
+		To: "amina@example.test", Subject: "Sign in", TextBody: "Your link.",
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := <-relay.got
+	if want := base64.StdEncoding.EncodeToString([]byte("\x00api_token\x00s3cret")); got.auth != "PLAIN "+want {
+		t.Errorf("AUTH %q, want PLAIN with the username and password", got.auth)
+	}
+	if got.from != "<no-reply@example.test>" || !strings.Contains(got.data, "Your link.") {
+		t.Errorf("relayed %+v", got)
+	}
+}
+
+type relayed struct{ auth, from, data string }
 
 type relay struct {
 	addr string
@@ -82,15 +130,20 @@ type relay struct {
 }
 
 // newRelay is just enough of an SMTP server for one message, without
-// STARTTLS or AUTH, recording the envelope sender and the message.
-func newRelay(t *testing.T) *relay {
+// STARTTLS, recording the login, the envelope sender and the message. wrap,
+// when given, wraps its listener (in TLS, say).
+func newRelay(t *testing.T, wrap ...func(net.Listener) net.Listener) *relay {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { l.Close() })
-	r := &relay{addr: l.Addr().String(), got: make(chan relayed, 1)}
+	addr := l.Addr().String()
+	for _, w := range wrap {
+		l = w(l)
+	}
+	r := &relay{addr: addr, got: make(chan relayed, 1)}
 	go func() {
 		c, err := l.Accept()
 		if err != nil {
@@ -110,6 +163,9 @@ func newRelay(t *testing.T) *relay {
 			switch {
 			case strings.HasPrefix(cmd, "EHLO"), strings.HasPrefix(cmd, "HELO"):
 				say("250 relay.test")
+			case strings.HasPrefix(cmd, "AUTH "):
+				msg.auth = strings.TrimSpace(line)[len("AUTH "):]
+				say("235 ok")
 			case strings.HasPrefix(cmd, "MAIL FROM:"):
 				msg.from = strings.TrimSpace(line)[len("MAIL FROM:"):]
 				say("250 ok")
