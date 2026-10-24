@@ -47,6 +47,7 @@ func TestGallery(t *testing.T) {
 	writeGallerySearchIndex(t, out)
 
 	pages := append(galleryPages(), chromeGalleryPages()...)
+	pages = append(pages, githubGalleryPages()...)
 	for _, g := range append(pages, regionGalleryPages()...) {
 		path := filepath.Join(out, g.file)
 		f, err := os.Create(path)

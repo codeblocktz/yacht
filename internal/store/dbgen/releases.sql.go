@@ -129,7 +129,7 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 }
 
 const getAppForReleaseBackfill = `-- name: GetAppForReleaseBackfill :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused FROM apps
 WHERE owner_id = $1 AND id = $2
 FOR UPDATE
 `
@@ -183,6 +183,9 @@ func (q *Queries) GetAppForReleaseBackfill(ctx context.Context, arg GetAppForRel
 		&i.WakeFailedAt,
 		&i.WakeFailure,
 		&i.Region,
+		&i.GithubInstallationID,
+		&i.GithubRepoID,
+		&i.GithubPaused,
 	)
 	return i, err
 }
@@ -335,7 +338,7 @@ func (q *Queries) ListAppReleases(ctx context.Context, arg ListAppReleasesParams
 }
 
 const listPendingReleaseBackfills = `-- name: ListPendingReleaseBackfills :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, b.state, b.last_error, b.attempts
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, b.state, b.last_error, b.attempts
 FROM app_release_backfills b
 JOIN apps a ON a.id = b.app_id AND a.owner_id = b.owner_id
 WHERE b.state IN ('pending', 'image_unavailable', 'blocked')
@@ -402,6 +405,9 @@ func (q *Queries) ListPendingReleaseBackfills(ctx context.Context, resultLimit i
 			&i.App.WakeFailedAt,
 			&i.App.WakeFailure,
 			&i.App.Region,
+			&i.App.GithubInstallationID,
+			&i.App.GithubRepoID,
+			&i.App.GithubPaused,
 			&i.State,
 			&i.LastError,
 			&i.Attempts,
@@ -448,7 +454,7 @@ SET image           = r.image_ref,
 FROM app_releases r
 WHERE apps.owner_id = $1 AND apps.id = $2
   AND r.id = $3 AND r.owner_id = $1 AND r.app_id = apps.id
-RETURNING apps.id, apps.owner_id, apps.name, apps.namespace, apps.image, apps.replicas, apps.port, apps.cpu_request, apps.cpu_limit, apps.memory_request, apps.memory_limit, apps.created_at, apps.updated_at, apps.health_path, apps.health_liveness, apps.source, apps.internal, apps.project_id, apps.canvas_x, apps.canvas_y, apps.https_only, apps.cname_only, apps.repo_url, apps.repo_branch, apps.repo_subdir, apps.run_as_user, apps.config_version, apps.active_release_id, apps.sleep_mode, apps.sleep_after_minutes, apps.sleep_state, apps.sleeping_since, apps.waking_since, apps.awake_since, apps.last_request_at, apps.request_count, apps.requests_seen_since, apps.wake_failed_at, apps.wake_failure, apps.region
+RETURNING apps.id, apps.owner_id, apps.name, apps.namespace, apps.image, apps.replicas, apps.port, apps.cpu_request, apps.cpu_limit, apps.memory_request, apps.memory_limit, apps.created_at, apps.updated_at, apps.health_path, apps.health_liveness, apps.source, apps.internal, apps.project_id, apps.canvas_x, apps.canvas_y, apps.https_only, apps.cname_only, apps.repo_url, apps.repo_branch, apps.repo_subdir, apps.run_as_user, apps.config_version, apps.active_release_id, apps.sleep_mode, apps.sleep_after_minutes, apps.sleep_state, apps.sleeping_since, apps.waking_since, apps.awake_since, apps.last_request_at, apps.request_count, apps.requests_seen_since, apps.wake_failed_at, apps.wake_failure, apps.region, apps.github_installation_id, apps.github_repo_id, apps.github_paused
 `
 
 type RestoreAppFromReleaseParams struct {
@@ -506,6 +512,9 @@ func (q *Queries) RestoreAppFromRelease(ctx context.Context, arg RestoreAppFromR
 		&i.WakeFailedAt,
 		&i.WakeFailure,
 		&i.Region,
+		&i.GithubInstallationID,
+		&i.GithubRepoID,
+		&i.GithubPaused,
 	)
 	return i, err
 }

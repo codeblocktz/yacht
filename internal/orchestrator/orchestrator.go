@@ -701,6 +701,13 @@ type BuildRequest struct {
 	// build actually needs it.
 	RegistryAuth []byte
 
+	// RepoToken is a credential that can read RepoURL, for a private
+	// repository: a GitHub installation token scoped to the one repository.
+	// Empty clones anonymously. Like RegistryAuth it crosses this seam only
+	// for the build that needs it, and it must reach the clone without
+	// appearing in the Job's spec, its arguments, the checkout, or the log.
+	RepoToken string
+
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.
 	Log func(chunk string)

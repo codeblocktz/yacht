@@ -37,6 +37,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -540,6 +541,10 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if err != nil {
 		return err
 	}
+	gh, err := gitHubApp(cfg, log)
+	if err != nil {
+		return err
+	}
 
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		Builder:             builder,
@@ -556,6 +561,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		WakeTimeout:         cfg.WakeTimeout,
 		DefaultRegion:       cfg.DefaultRegion,
 		Routes:              ov.Routes,
+		GitHub:              gh,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -606,6 +612,9 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Sleep:         e.Apps,
 		Regions:       e.Apps,
 		WakerBrand:    ov.WakerBrand,
+	}
+	if gh != nil {
+		opts.GitHub = e.Apps
 	}
 
 	// The add-node surface only exists where a token could actually be sealed.
@@ -875,6 +884,28 @@ func wakerEndpoint(cfg Config, log *slog.Logger) (*orchestrator.WakerEndpoint, e
 		slog.String("waker", cfg.WakerAddr), slog.String("listen", cfg.WakerListenAddr()),
 		slog.String("needs", "the ingress controller's pods reaching "+cfg.WakerAddr))
 	return &orchestrator.WakerEndpoint{IP: ip, Port: port}, nil
+}
+
+// gitHubApp is the install's GitHub App, nil when it has none — and then a
+// repository is a pasted URL, which is said once here.
+func gitHubApp(cfg Config, log *slog.Logger) (*github.App, error) {
+	if !cfg.GitHubAppEnabled() {
+		log.Info("no GitHub App — set YACHT_GITHUB_APP_* to let teams connect GitHub " +
+			"and build private repositories")
+		return nil, nil
+	}
+	ghc, err := cfg.GitHubApp()
+	if err != nil {
+		return nil, err
+	}
+	app, err := github.New(ghc)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("GitHub App configured", slog.String("slug", cfg.GitHubAppSlug),
+		slog.String("callback", cfg.BaseURL+web.GitHubCallbackPath),
+		slog.String("webhook", cfg.BaseURL+web.GitHubHookPath))
+	return app, nil
 }
 
 func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProvider, error) {

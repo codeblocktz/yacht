@@ -130,6 +130,7 @@ func (s *Server) hookDisable(w http.ResponseWriter, r *http.Request) {
 // attachHook adds deploy on push to the panel, for an app built from a
 // repository on an install that offers it.
 func (s *Server) attachHook(ctx context.Context, r *http.Request, d *AppDetailData) {
+	d.GitHubOn = s.github != nil
 	if s.hooks == nil || d.App.Source != app.SourceGit {
 		return
 	}

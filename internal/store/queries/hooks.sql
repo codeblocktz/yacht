@@ -18,21 +18,26 @@ DELETE FROM app_hooks WHERE owner_id = @owner_id AND app_id = @app_id;
 
 -- name: GetHookForDelivery :one
 -- By app id alone: a delivery carries no session and no owner. The signature,
--- checked against the secret read here, is what authorises it.
+-- checked against the secret read here, is what authorises it. A row with no
+-- secret holds pushes from the GitHub App and is no webhook at all.
 SELECT sqlc.embed(a), h.secret
 FROM app_hooks h
 JOIN apps a ON a.id = h.app_id AND a.owner_id = h.owner_id
-WHERE h.app_id = @app_id;
+WHERE h.app_id = @app_id AND h.secret IS NOT NULL;
 
 -- name: RecordHookDelivery :exec
-UPDATE app_hooks
-SET last_delivery_at = now(), last_delivery = @result
-WHERE app_id = @app_id;
+-- An upsert, because a push through the GitHub App reaches apps that have no
+-- webhook of their own; the row it makes has no secret.
+INSERT INTO app_hooks (app_id, owner_id, last_delivery_at, last_delivery)
+VALUES (@app_id, @owner_id, now(), @result)
+ON CONFLICT (app_id) DO UPDATE
+SET last_delivery_at = now(), last_delivery = excluded.last_delivery;
 
 -- name: MarkHookPending :exec
-UPDATE app_hooks
-SET pending_at = now(), pending_revision = @revision
-WHERE app_id = @app_id;
+INSERT INTO app_hooks (app_id, owner_id, pending_at, pending_revision)
+VALUES (@app_id, @owner_id, now(), @revision)
+ON CONFLICT (app_id) DO UPDATE
+SET pending_at = now(), pending_revision = excluded.pending_revision;
 
 -- name: ListAdmissiblePushes :many
 -- Pushes waiting behind a deploy that has since ended. An app whose deploy is

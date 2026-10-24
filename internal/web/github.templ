@@ -1,0 +1,202 @@
+package web
+
+import (
+	"net/url"
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// teamGitHubPanel is the team's connections to the install's GitHub App.
+//
+// Each row says whose account the installation is on and who connected it,
+// here and on GitHub, because that is the question somebody has when a
+// private repository turns up in the picker: whose access is this.
+templ teamGitHubPanel(d TeamGitHubData) {
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">GitHub</span>
+			if d.CanManage {
+				<div class="flex gap-2">
+					<a class="btn btn-sm" href="/github/authorize">Use an existing installation</a>
+					<a class="btn btn-sm btn-primary" href="/github/install">Connect GitHub</a>
+				</div>
+			}
+		</div>
+		if d.Error != "" {
+			<div class="panel-body"><p class="text-destructive">{ d.Error }</p></div>
+		} else if len(d.Connections) == 0 {
+			<div class="panel-body">
+				<p class="text-muted-foreground">
+					Connect GitHub to deploy private repositories and to deploy on every push, with
+					no webhook to set up. GitHub asks which account and which repositories; nothing
+					else is reachable.
+				</p>
+				if !d.CanManage {
+					<p class="form-note">An admin of the team can connect it.</p>
+				}
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[620px]">
+					<thead>
+						<tr><th>Account</th><th>Connected by</th><th>State</th><th class="text-right">Actions</th></tr>
+					</thead>
+					<tbody>
+						for _, c := range d.Connections {
+							<tr>
+								<td>
+									<span class="mono">{ c.Account }</span>
+									<span class="text-muted-foreground">{ githubAccountKind(c.AccountType) }</span>
+								</td>
+								<td>
+									<span>{ orDash(c.ConnectedBy) }</span>
+									if c.ConnectedAs != "" {
+										<span class="text-muted-foreground">as <span class="mono">{ c.ConnectedAs }</span></span>
+									}
+									<span class="text-muted-foreground" title={ absoluteTime(c.ConnectedAt) }>{ relativeTime(c.ConnectedAt) }</span>
+								</td>
+								<td>
+									switch {
+										case c.Removed:
+											@statusDot("uninstalled", "status-err")
+										case c.Suspended:
+											@statusDot("suspended", "status-warn")
+										default:
+											@statusDot("connected", "status-ok")
+									}
+								</td>
+								<td class="text-right">
+									if d.CanManage {
+										<form
+											method="post"
+											action={ templ.SafeURL("/team/github/" + strconv.FormatInt(c.InstallationID, 10) + "/disconnect") }
+											class="inline"
+											data-confirm="Apps built from its repositories keep running on their last image, and build again once it is connected. The App stays installed on GitHub, where the account removes it."
+											data-confirm-title={ "Disconnect " + c.Account + "?" }
+											data-confirm-label="Disconnect"
+										>
+											<button class="btn btn-sm" type="submit">Disconnect</button>
+										</form>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			<div class="panel-body border-t border-border">
+				<p class="form-note mt-0">
+					To reach more repositories, or fewer, change the installation on GitHub — Connect
+					GitHub goes there. A repository taken away pauses the apps built from it; nothing is deleted.
+				</p>
+			</div>
+		}
+	</div>
+}
+
+func githubAccountKind(t string) string {
+	if t == "Organization" {
+		return "organisation"
+	}
+	return "user"
+}
+
+// GitHubChoosePage is GitHub listing several installations the person can
+// reach, with none named: they pick which this team connects.
+templ GitHubChoosePage(choices []app.GitHubChoice) {
+	@pageHead("Connect GitHub", "GitHub lists more than one account you can reach. Choose which this team uses.", nil)
+	<div class="panel max-w-2xl">
+		<div class="rows">
+			for _, c := range choices {
+				<form method="post" action="/team/github/choose" class="row-item">
+					<input type="hidden" name="choice" value={ c.Token }/>
+					<span class="min-w-0 flex-1">
+						<span class="block font-medium mono">{ c.Account }</span>
+						<span class="block text-muted-foreground">{ githubAccountKind(c.AccountType) }</span>
+					</span>
+					<button class="btn btn-sm btn-primary" type="submit">Connect</button>
+				</form>
+			}
+		</div>
+	</div>
+	<p class="form-note max-w-2xl">
+		Another can be connected the same way later. <a class="underline hover:text-foreground" href="/team">Back to the team</a>
+	</p>
+}
+
+// githubRepoPicker is a repository chosen from the team's installations.
+//
+// Drawn first as what is chosen already, in a hidden field, so a form posted
+// before the list arrives — or with no JavaScript at all — keeps the choice
+// rather than clearing it. The picker itself replaces it once GitHub has
+// said what the team reaches, which is a request to GitHub and so not made
+// while the page is drawn.
+templ githubRepoPicker(selected app.GitHubRef, label string) {
+	<div
+		hx-get={ "/github/repositories?github_repo=" + selected.String() + "&label=" + url.QueryEscape(label) }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	>
+		<input type="hidden" name="github_repo" value={ selected.String() }/>
+		<div class="control mono flex items-center text-muted-foreground">
+			if selected.Set() {
+				{ label }
+			} else {
+				Reading the team's repositories…
+			}
+		</div>
+	</div>
+}
+
+// GitHubRepoSelect is the picker, with everything the team's installations
+// reach. A choice no longer among them stays chosen, and says so, rather
+// than being swapped silently for something else.
+templ GitHubRepoSelect(d GitHubRepoData) {
+	{{ found := d.Selected == "" }}
+	@selectbox.SelectBox() {
+		@selectbox.Trigger(selectbox.TriggerProps{ID: "github_repo", Name: "github_repo", Class: "mono"}) {
+			@selectbox.Value(selectbox.ValueProps{Placeholder: githubPasteLabel})
+		}
+		@selectbox.Content(selectbox.ContentProps{NoSearch: len(d.Repos) < 8, SearchPlaceholder: "Search repositories"}) {
+			@selectbox.Item(selectbox.ItemProps{Value: "", Selected: d.Selected == ""}) {
+				{ githubPasteLabel }
+			}
+			for _, r := range d.Repos {
+				if r.Ref.String() == d.Selected {
+					{{ found = true }}
+				}
+				@selectbox.Item(selectbox.ItemProps{Value: r.Ref.String(), Selected: r.Ref.String() == d.Selected}) {
+					if r.Private {
+						{ r.FullName + " · private" }
+					} else {
+						{ r.FullName }
+					}
+				}
+			}
+			if !found {
+				@selectbox.Item(selectbox.ItemProps{Value: d.Selected, Selected: true}) {
+					{ d.SelectedLabel } — no longer reachable
+				}
+			}
+			if d.Error != "" {
+				@selectbox.Item(selectbox.ItemProps{Value: "error", Disabled: true}) {
+					{ d.Error }
+				}
+			}
+			for i, p := range d.Problems {
+				@selectbox.Item(selectbox.ItemProps{Value: "problem-" + strconv.Itoa(i), Disabled: true}) {
+					{ p }
+				}
+			}
+			if len(d.Repos) == 0 && d.Error == "" {
+				@selectbox.Item(selectbox.ItemProps{Value: "none", Disabled: true}) {
+					No repositories yet — an admin connects GitHub on the Team page
+				}
+			}
+		}
+	}
+}
+
+const githubPasteLabel = "A public repository, by URL"

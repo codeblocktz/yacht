@@ -85,8 +85,10 @@ func (s *Service) GitHook(ctx context.Context, ownerID, name string) (Hook, erro
 	if err != nil {
 		return Hook{}, fmt.Errorf("app: read webhook: %w", err)
 	}
+	// A row with no secret is only the last push through the GitHub App, or
+	// one waiting behind a deploy: there is no webhook of the app's own.
 	h := Hook{
-		Enabled: true, CreatedAt: row.CreatedAt,
+		Enabled: row.Secret != nil, CreatedAt: row.CreatedAt,
 		LastDelivery: row.LastDelivery, Pending: row.PendingAt.Valid,
 	}
 	if row.LastDeliveryAt.Valid {
@@ -175,7 +177,7 @@ func (s *Service) DeliverPush(ctx context.Context, appID uuid.UUID, p Push) (str
 		return "", err
 	}
 	if recErr := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
-		AppID: a.ID, Result: result,
+		AppID: a.ID, OwnerID: a.OwnerID, Result: result,
 	}); recErr != nil {
 		s.log.Warn("record webhook delivery", slog.String("app", a.Name),
 			slog.String("error", recErr.Error()))
@@ -234,7 +236,7 @@ func (s *Service) actOnPush(ctx context.Context, a App, p Push) (string, error) 
 		// Built when the deploy in flight ends, rather than dropped: that build
 		// may already have cloned the commit before this one.
 		if markErr := s.q.MarkHookPending(ctx, dbgen.MarkHookPendingParams{
-			AppID: a.ID, Revision: revision,
+			AppID: a.ID, OwnerID: a.OwnerID, Revision: revision,
 		}); markErr != nil {
 			return "", fmt.Errorf("app: hold push behind the deploy in flight: %w", markErr)
 		}
@@ -290,7 +292,7 @@ func (s *Service) admitPendingPushes(ctx context.Context) error {
 		}
 		result := fmt.Sprintf("Deploying %s, which waited for the deploy before it.", row.PendingRevision)
 		if recErr := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
-			AppID: a.ID, Result: result,
+			AppID: a.ID, OwnerID: a.OwnerID, Result: result,
 		}); recErr != nil {
 			s.log.Warn("record webhook delivery", slog.String("app", a.Name),
 				slog.String("error", recErr.Error()))

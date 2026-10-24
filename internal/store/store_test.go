@@ -203,6 +203,11 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 		"regions": "a region is a place the install's machines are in — what it " +
 			"is called and where its traffic enters is the same for every team " +
 			"placed there, and a per-team row would let one team rename it for all",
+		"github_installations": "an installation is GitHub's, on a GitHub account, and " +
+			"several teams may each prove access to it — which team may use it is " +
+			"team_github_installations, which is owner-scoped",
+		"github_deliveries": "a delivery to the GitHub App's one webhook is about " +
+			"whichever teams' apps the repository reaches, and only its id is kept",
 	}
 
 	rows, err := pool.Query(ctx, `

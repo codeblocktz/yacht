@@ -281,6 +281,12 @@ func TeamPage(d TeamPageData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
+		if d.GitHub != nil {
+			templ_7745c5c3_Err = teamGitHubPanel(*d.GitHub).Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+		}
 		if d.Viewer.CanAdminister() {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<div class=\"panel mb-5\"><div class=\"panel-header\"><span class=\"panel-title\">Pending invitations</span></div>")
 			if templ_7745c5c3_Err != nil {
@@ -304,7 +310,7 @@ func TeamPage(d TeamPageData) templ.Component {
 					var templ_7745c5c3_Var13 string
 					templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(inv.Email)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/team.templ`, Line: 105, Col: 42}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/team.templ`, Line: 108, Col: 42}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 					if templ_7745c5c3_Err != nil {
@@ -325,7 +331,7 @@ func TeamPage(d TeamPageData) templ.Component {
 					var templ_7745c5c3_Var14 templ.SafeURL
 					templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/team/invitations/" + inv.ID.String() + "/revoke"))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/team.templ`, Line: 110, Col: 103}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/team.templ`, Line: 113, Col: 103}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 					if templ_7745c5c3_Err != nil {

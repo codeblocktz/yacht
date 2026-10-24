@@ -49,6 +49,9 @@ type Querier interface {
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
 	ClearSessionActing(ctx context.Context, id uuid.UUID) error
 	CloseAppSleep(ctx context.Context, arg CloseAppSleepParams) error
+	// Connecting again is how somebody else on the team takes it over, so the
+	// record of who connected it follows the latest proof.
+	ConnectTeamGitHubInstallation(ctx context.Context, arg ConnectTeamGitHubInstallationParams) error
 	// Marking consumed and reading the user are one statement, so there is no
 	// window between the two in which a second request can also find the link
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
@@ -163,6 +166,7 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	DisconnectTeamGitHubInstallation(ctx context.Context, arg DisconnectTeamGitHubInstallationParams) (int64, error)
 	// Puts the checklist away for the whole team.
 	//
 	// An upsert because a single-owner install has no team row until its first
@@ -179,6 +183,9 @@ type Querier interface {
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	FinishDeploymentOperation(ctx context.Context, arg FinishDeploymentOperationParams) (int64, error)
+	// A delivery that failed half way is forgotten, so GitHub's redelivery of it
+	// is acted on rather than answered as a duplicate.
+	ForgetGitHubDelivery(ctx context.Context, id string) error
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	// The app a hostname routes to. Not owner-scoped, and it cannot be: the waker
@@ -205,7 +212,8 @@ type Querier interface {
 	GetDeploymentOperation(ctx context.Context, arg GetDeploymentOperationParams) (DeploymentOperation, error)
 	GetDeploymentOperationByDeployment(ctx context.Context, arg GetDeploymentOperationByDeploymentParams) (DeploymentOperation, error)
 	// By app id alone: a delivery carries no session and no owner. The signature,
-	// checked against the secret read here, is what authorises it.
+	// checked against the secret read here, is what authorises it. A row with no
+	// secret holds pushes from the GitHub App and is no webhook at all.
 	GetHookForDelivery(ctx context.Context, appID uuid.UUID) (GetHookForDeliveryRow, error)
 	// Reads an invitation without spending it, so a signed-out visitor can be sent
 	// a sign-in link to the address it names. token_hash is not among the columns,
@@ -296,6 +304,9 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
+	// The check every use of an installation goes through: a team reads the
+	// repositories of an installation only if it is connected to it.
+	GetTeamGitHubInstallation(ctx context.Context, arg GetTeamGitHubInstallationParams) (GetTeamGitHubInstallationRow, error)
 	// Which pool of machines a team's apps are placed on. No row is anywhere.
 	GetTeamPool(ctx context.Context, ownerID string) (TeamPool, error)
 	// What a team may commit, and what it has.
@@ -351,6 +362,10 @@ type Querier interface {
 	// An app's own history, newest first.
 	ListAppSleeps(ctx context.Context, arg ListAppSleepsParams) ([]AppSleep, error)
 	ListApps(ctx context.Context, ownerID string) ([]App, error)
+	// Every app built from one repository through one installation, across teams
+	// — but only teams still connected to it, so an app left behind by a team
+	// that disconnected deploys nothing on a push.
+	ListAppsForGitHubPush(ctx context.Context, arg ListAppsForGitHubPushParams) ([]App, error)
 	// Apps whose database pointer names the workload the cluster must converge to.
 	// This is intentionally install-scoped: the reconciler acts from stored
 	// ownership rather than from an authenticated request.
@@ -423,6 +438,7 @@ type Querier interface {
 	ListSleepingApps(ctx context.Context) ([]App, error)
 	// Wakes whose process went away: a restart, or a replica that stopped.
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
+	ListTeamGitHubInstallations(ctx context.Context, ownerID string) ([]ListTeamGitHubInstallationsRow, error)
 	// Every team with its quota, its pool, its storage and how many people are in
 	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
 	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
@@ -490,6 +506,7 @@ type Querier interface {
 	// Guarded on the state it is coming from, so a check that has since found drift
 	// is not overwritten by an apply that started before it.
 	MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error)
+	MarkGitHubInstallationRemoved(ctx context.Context, id int64) (int64, error)
 	MarkHookPending(ctx context.Context, arg MarkHookPendingParams) error
 	// A verified domain becomes routed only after the app reconciler has observed
 	// or produced the matching workload convergence key. This app-scoped form
@@ -498,6 +515,15 @@ type Querier interface {
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
 	OpenAppSleep(ctx context.Context, arg OpenAppSleepParams) error
+	// Across every team: an installation suspended or removed on GitHub is so for
+	// all of them. Removal is final and wins over any other reason.
+	PauseGitHubInstallationApps(ctx context.Context, arg PauseGitHubInstallationAppsParams) (int64, error)
+	// Repositories the installation no longer reaches, by id.
+	PauseGitHubRepoApps(ctx context.Context, arg PauseGitHubRepoAppsParams) (int64, error)
+	// A team letting go of an installation stops its apps building from it.
+	// Whatever paused them already stays the reason.
+	PauseTeamGitHubApps(ctx context.Context, arg PauseTeamGitHubAppsParams) (int64, error)
+	PruneGitHubDeliveries(ctx context.Context) (int64, error)
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	// Records the region an app already lives in, once. Not versioned: recording
 	// where an app is changes nothing about it, and the affinity reaches its pods
@@ -515,12 +541,19 @@ type Querier interface {
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
+	// Zero rows is a delivery already acted on.
+	RecordGitHubDelivery(ctx context.Context, arg RecordGitHubDeliveryParams) (int64, error)
+	// An upsert, because a push through the GitHub App reaches apps that have no
+	// webhook of their own; the row it makes has no secret.
 	RecordHookDelivery(ctx context.Context, arg RecordHookDeliveryParams) error
 	// Records the ingress controller's counter for an app. A counter that moved
 	// in either direction is a request: up is traffic, and down is the controller
 	// having restarted, which is not a reason to believe nobody came.
 	RecordRequestCount(ctx context.Context, arg RecordRequestCountParams) (App, error)
 	RecoverBuiltDeploymentOperation(ctx context.Context, arg RecoverBuiltDeploymentOperationParams) (DeploymentOperation, error)
+	// A push carries the repository's current name. A renamed repository still
+	// clones from its old address, but the page should show the new one.
+	RefreshGitHubRepoURL(ctx context.Context, arg RefreshGitHubRepoURLParams) (int64, error)
 	// A cluster outage is not a deployment failure. Give observation recovery
 	// back to the queue without changing its checkpoint or verification budget.
 	ReleaseRecoverableDeploymentOperation(ctx context.Context, arg ReleaseRecoverableDeploymentOperationParams) (int64, error)
@@ -543,6 +576,10 @@ type Querier interface {
 	// repository are current state and stay as they are. The uid is a build's
 	// discovery for a Git app, and belongs to the image being restored.
 	RestoreAppFromRelease(ctx context.Context, arg RestoreAppFromReleaseParams) (App, error)
+	ResumeGitHubInstallationApps(ctx context.Context, arg ResumeGitHubInstallationAppsParams) (int64, error)
+	ResumeGitHubRepoApps(ctx context.Context, arg ResumeGitHubRepoAppsParams) (int64, error)
+	// And connecting it again resumes what disconnecting paused, nothing else.
+	ResumeTeamGitHubApps(ctx context.Context, arg ResumeTeamGitHubAppsParams) (int64, error)
 	// Hostnames that may actually be routed to.
 	//
 	// A managed host is routable because the platform issued it; a custom one only
@@ -550,6 +587,10 @@ type Querier interface {
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
+	// Choosing a repository, or pasting a URL in its place, which clears it.
+	// Either way builds resume: whatever paused them was about the repository
+	// that was there before.
+	SetAppGitHubSource(ctx context.Context, arg SetAppGitHubSourceParams) error
 	SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App, error)
 	// The image a build produced. Separate from UpdateApp because a build sets
 	// only this: the replicas and limits a person configured are not a build's to
@@ -573,6 +614,7 @@ type Querier interface {
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
+	SetGitHubInstallationSuspended(ctx context.Context, arg SetGitHubInstallationSuspendedParams) (int64, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
@@ -632,6 +674,11 @@ type Querier interface {
 	// A new secret replaces the old one outright, so regenerating is also how a
 	// leaked secret is revoked.
 	UpsertAppHook(ctx context.Context, arg UpsertAppHookParams) (AppHook, error)
+	// The install's GitHub App. See migration 00037.
+	// Written when a team connects one, with what GitHub said the account is.
+	// The account's name is refreshed rather than kept: an organisation can be
+	// renamed, and the page should say what it is called now.
+	UpsertGitHubInstallation(ctx context.Context, arg UpsertGitHubInstallationParams) error
 	// Re-inviting replaces the pending invitation rather than adding a second one,
 	// so the token in the older mail stops working. Two live tokens for one address
 	// would mean revoking the invitation on screen leaves the other one usable.

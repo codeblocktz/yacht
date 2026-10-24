@@ -613,11 +613,24 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 	if err != nil {
 		return a, err
 	}
+	// A repository reached through the GitHub App is cloned with a token for
+	// it alone, minted now and never stored. Refused here rather than tried
+	// anonymously: a private repository's clone would fail anyway, and a
+	// public one built after its access was taken away is a build nobody
+	// allowed. Recorded on the build, so the page says why.
+	repoToken, err := s.gitHubCloneToken(ctx, a)
+	if err != nil {
+		if finErr := s.finishFencedBuild(ctx, *op, row.ID, BuildFailed, err.Error(), "", ""); finErr != nil {
+			return a, finErr
+		}
+		return a, err
+	}
 	req := orchestrator.BuildRequest{
 		Owner: orchestrator.OwnerID(op.OwnerID), App: a.Name, Image: image,
 		RepoURL: a.Repo.URL, Ref: a.Repo.Ref(), Subdir: a.Repo.Subdir,
 		Insecure: s.images.Insecure(ctx), RegistryAuth: auth,
-		Log: s.buildLogger(ctx, row.ID),
+		RepoToken: repoToken,
+		Log:       s.buildLogger(ctx, row.ID),
 	}
 	if err := s.setFencedBuildJob(ctx, *op, row.ID, s.builder.BuildJobName(req)); err != nil {
 		return a, err

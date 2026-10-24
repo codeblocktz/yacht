@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -236,6 +237,23 @@ type Config struct {
 	// a bounded amount of node capacity rather than an arbitrary pod count.
 	MaxConcurrentBuilds int32
 
+	// GitHubApp* are the install's GitHub App, which teams connect to build
+	// private repositories and deploy on push without a webhook of their own.
+	// All unset, there is no GitHub App and a repository is a pasted URL,
+	// cloned anonymously. Any set, all are required, with BaseURL: GitHub
+	// sends people back to an address under it.
+	//
+	// The private key is the PEM GitHub generates, given inline — newlines
+	// may be written as \n, for an env file that holds one line per variable
+	// — or as the path of a file holding it, never both.
+	GitHubAppID             int64
+	GitHubAppSlug           string
+	GitHubAppPrivateKey     string
+	GitHubAppPrivateKeyFile string
+	GitHubAppWebhookSecret  string
+	GitHubAppClientID       string
+	GitHubAppClientSecret   string
+
 	// Debug enables verbose logging.
 	Debug bool
 }
@@ -281,6 +299,13 @@ func Load() (Config, error) {
 		WakerListen:              strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
 		WakeTimeout:              envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
 		DefaultRegion:            strings.TrimSpace(env("YACHT_DEFAULT_REGION", "")),
+		GitHubAppID:              envInt64("YACHT_GITHUB_APP_ID"),
+		GitHubAppSlug:            strings.TrimSpace(env("YACHT_GITHUB_APP_SLUG", "")),
+		GitHubAppPrivateKey:      env("YACHT_GITHUB_APP_PRIVATE_KEY", ""),
+		GitHubAppPrivateKeyFile:  strings.TrimSpace(env("YACHT_GITHUB_APP_PRIVATE_KEY_FILE", "")),
+		GitHubAppWebhookSecret:   env("YACHT_GITHUB_APP_WEBHOOK_SECRET", ""),
+		GitHubAppClientID:        strings.TrimSpace(env("YACHT_GITHUB_APP_CLIENT_ID", "")),
+		GitHubAppClientSecret:    env("YACHT_GITHUB_APP_CLIENT_SECRET", ""),
 		Debug:                    envBool("YACHT_DEBUG", false),
 	}
 
@@ -367,6 +392,7 @@ func (c Config) validate() error {
 		}
 	}
 	errs = append(errs, c.accountFaults()...)
+	errs = append(errs, c.gitHubFaults()...)
 
 	return errors.Join(errs...)
 }
@@ -516,6 +542,95 @@ func (c Config) signupFaults() []error {
 	return errs
 }
 
+// GitHubAppEnabled reports whether the install has a GitHub App: any of its
+// settings given. Validation has refused a partial one by the time anything
+// else asks.
+func (c Config) GitHubAppEnabled() bool {
+	return c.GitHubAppID != 0 || c.GitHubAppSlug != "" || c.GitHubAppPrivateKey != "" ||
+		c.GitHubAppPrivateKeyFile != "" || c.GitHubAppWebhookSecret != "" ||
+		c.GitHubAppClientID != "" || c.GitHubAppClientSecret != ""
+}
+
+// GitHubApp is the App as the github package takes it, with its key read and
+// parsed.
+func (c Config) GitHubApp() (github.Config, error) {
+	pemText := strings.ReplaceAll(c.GitHubAppPrivateKey, `\n`, "\n")
+	if c.GitHubAppPrivateKeyFile != "" {
+		data, err := os.ReadFile(c.GitHubAppPrivateKeyFile)
+		if err != nil {
+			return github.Config{}, fmt.Errorf("YACHT_GITHUB_APP_PRIVATE_KEY_FILE: %w", err)
+		}
+		pemText = string(data)
+	}
+	key, err := github.ParsePrivateKey([]byte(pemText))
+	if err != nil {
+		return github.Config{}, fmt.Errorf("YACHT_GITHUB_APP_PRIVATE_KEY: %w", err)
+	}
+	return github.Config{
+		AppID:         c.GitHubAppID,
+		Slug:          c.GitHubAppSlug,
+		ClientID:      c.GitHubAppClientID,
+		ClientSecret:  c.GitHubAppClientSecret,
+		PrivateKey:    key,
+		WebhookSecret: c.GitHubAppWebhookSecret,
+	}, nil
+}
+
+// gitHubFaults refuses a GitHub App with any of its settings missing. Half an
+// App fails at the first person to press Connect, or the first push, where
+// nobody connects the failure to a variable left out.
+func (c Config) gitHubFaults() []error {
+	if !c.GitHubAppEnabled() {
+		return nil
+	}
+	var errs []error
+	var missing []string
+	for _, v := range []struct {
+		name string
+		set  bool
+	}{
+		{"YACHT_GITHUB_APP_ID", c.GitHubAppID != 0},
+		{"YACHT_GITHUB_APP_SLUG", c.GitHubAppSlug != ""},
+		{"YACHT_GITHUB_APP_PRIVATE_KEY", c.GitHubAppPrivateKey != "" || c.GitHubAppPrivateKeyFile != ""},
+		{"YACHT_GITHUB_APP_WEBHOOK_SECRET", c.GitHubAppWebhookSecret != ""},
+		{"YACHT_GITHUB_APP_CLIENT_ID", c.GitHubAppClientID != ""},
+		{"YACHT_GITHUB_APP_CLIENT_SECRET", c.GitHubAppClientSecret != ""},
+	} {
+		if !v.set {
+			missing = append(missing, v.name)
+		}
+	}
+	if len(missing) > 0 {
+		errs = append(errs, fmt.Errorf("a GitHub App needs %s too", strings.Join(missing, ", ")))
+	}
+	if c.GitHubAppID < 0 {
+		errs = append(errs, errors.New("YACHT_GITHUB_APP_ID must be the App's numeric id"))
+	}
+	if c.GitHubAppSlug != "" && !github.ValidSlug(c.GitHubAppSlug) {
+		errs = append(errs, fmt.Errorf(
+			"YACHT_GITHUB_APP_SLUG %q is not an App's slug — the name in github.com/apps/<slug>",
+			c.GitHubAppSlug))
+	}
+	if c.GitHubAppPrivateKey != "" && c.GitHubAppPrivateKeyFile != "" {
+		errs = append(errs, errors.New(
+			"YACHT_GITHUB_APP_PRIVATE_KEY and YACHT_GITHUB_APP_PRIVATE_KEY_FILE are both set — give the key one way"))
+	} else if c.GitHubAppPrivateKey != "" || c.GitHubAppPrivateKeyFile != "" {
+		if _, err := c.GitHubApp(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// A short secret signs deliveries anyone could forge by guessing it.
+	if c.GitHubAppWebhookSecret != "" && len(c.GitHubAppWebhookSecret) < 16 {
+		errs = append(errs, errors.New("YACHT_GITHUB_APP_WEBHOOK_SECRET must be at least 16 characters"))
+	}
+	if !c.AccountsEnabled() {
+		errs = append(errs, errors.New(
+			"a GitHub App requires YACHT_BASE_URL — GitHub sends people back to "+
+				"<YACHT_BASE_URL>/github/callback, and connecting is done by a signed-in team"))
+	}
+	return errs
+}
+
 // Unauthenticated reports whether the dashboard will accept any caller.
 func (c Config) Unauthenticated() bool { return c.AuthToken == "" }
 
@@ -572,6 +687,20 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// envInt64 reads a number, and -1 for one that is set and is not a number, so
+// validation can say so rather than the setting quietly reading as unset.
+func envInt64(key string) int64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return -1
+	}
+	return n
+}
+
 func envInt32(key string, fallback int32) int32 {
 	v, ok := os.LookupEnv(key)
 	if !ok || v == "" {
@@ -601,10 +730,11 @@ func (c Config) String() string {
 	}
 	return fmt.Sprintf(
 		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
-			"accounts=%t mail=%s waker=%s isolation=%s debug=%t",
+			"accounts=%t mail=%s waker=%s isolation=%s github_app=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
 		c.KubeInCluster, token, c.OwnerID,
-		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation, c.Debug,
+		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation,
+		orOff(c.GitHubAppSlug), c.Debug,
 	)
 }
 

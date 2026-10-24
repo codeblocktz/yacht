@@ -12,46 +12,49 @@ import (
 )
 
 type App struct {
-	ID                uuid.UUID
-	OwnerID           string
-	Name              string
-	Namespace         string
-	Image             string
-	Replicas          int32
-	Port              int32
-	CpuRequest        string
-	CpuLimit          string
-	MemoryRequest     string
-	MemoryLimit       string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	HealthPath        string
-	HealthLiveness    bool
-	Source            string
-	Internal          bool
-	ProjectID         pgtype.UUID
-	CanvasX           *int32
-	CanvasY           *int32
-	HttpsOnly         bool
-	CnameOnly         bool
-	RepoUrl           string
-	RepoBranch        string
-	RepoSubdir        string
-	RunAsUser         int64
-	ConfigVersion     int64
-	ActiveReleaseID   pgtype.UUID
-	SleepMode         string
-	SleepAfterMinutes *int32
-	SleepState        string
-	SleepingSince     pgtype.Timestamptz
-	WakingSince       pgtype.Timestamptz
-	AwakeSince        time.Time
-	LastRequestAt     pgtype.Timestamptz
-	RequestCount      *int64
-	RequestsSeenSince pgtype.Timestamptz
-	WakeFailedAt      pgtype.Timestamptz
-	WakeFailure       string
-	Region            *string
+	ID                   uuid.UUID
+	OwnerID              string
+	Name                 string
+	Namespace            string
+	Image                string
+	Replicas             int32
+	Port                 int32
+	CpuRequest           string
+	CpuLimit             string
+	MemoryRequest        string
+	MemoryLimit          string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	HealthPath           string
+	HealthLiveness       bool
+	Source               string
+	Internal             bool
+	ProjectID            pgtype.UUID
+	CanvasX              *int32
+	CanvasY              *int32
+	HttpsOnly            bool
+	CnameOnly            bool
+	RepoUrl              string
+	RepoBranch           string
+	RepoSubdir           string
+	RunAsUser            int64
+	ConfigVersion        int64
+	ActiveReleaseID      pgtype.UUID
+	SleepMode            string
+	SleepAfterMinutes    *int32
+	SleepState           string
+	SleepingSince        pgtype.Timestamptz
+	WakingSince          pgtype.Timestamptz
+	AwakeSince           time.Time
+	LastRequestAt        pgtype.Timestamptz
+	RequestCount         *int64
+	RequestsSeenSince    pgtype.Timestamptz
+	WakeFailedAt         pgtype.Timestamptz
+	WakeFailure          string
+	Region               *string
+	GithubInstallationID *int64
+	GithubRepoID         *int64
+	GithubPaused         string
 }
 
 type AppHook struct {
@@ -220,6 +223,22 @@ type Domain struct {
 	Verified      bool
 }
 
+type GithubDelivery struct {
+	ID         string
+	Event      string
+	ReceivedAt time.Time
+}
+
+type GithubInstallation struct {
+	ID           int64
+	AccountLogin string
+	AccountType  string
+	SuspendedAt  pgtype.Timestamptz
+	RemovedAt    pgtype.Timestamptz
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 type ImpersonationEvent struct {
 	ID            uuid.UUID
 	OwnerID       string
@@ -325,6 +344,14 @@ type Team struct {
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	OnboardingDismissedAt pgtype.Timestamptz
+}
+
+type TeamGithubInstallation struct {
+	OwnerID          string
+	InstallationID   int64
+	ConnectedByEmail string
+	ConnectedByLogin string
+	ConnectedAt      time.Time
 }
 
 type TeamPool struct {

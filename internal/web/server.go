@@ -299,6 +299,12 @@ type Options struct {
 	// the settings section off.
 	Hooks Hooks
 
+	// GitHub is the install's GitHub App. Nil, which is every install that
+	// has not configured one, leaves connecting GitHub, the repository
+	// picker and the App's webhook off the router, and a repository is a
+	// pasted URL as before. Needs Accounts: connecting is a signed-in team's.
+	GitHub GitHub
+
 	// Logs, when set, puts the log surface on the router.
 	Logs Logger
 
@@ -438,6 +444,9 @@ type Server struct {
 
 	hooks Hooks
 
+	// github is the install's GitHub App; nil when it has none.
+	github GitHub
+
 	// registries is where built images go. Nil leaves the Registry surface
 	// off, which is right for an install that cannot build anything.
 	registries Registries
@@ -499,6 +508,11 @@ func New(opts Options) (*Server, error) {
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
+	if opts.GitHub != nil && opts.Accounts == nil {
+		return nil, errors.New(
+			"web: GitHub needs Accounts — an installation is connected by a signed-in " +
+				"person in a team, and GitHub sends them back to the BaseURL")
+	}
 	if opts.Accounts != nil {
 		if opts.BaseURL == "" {
 			return nil, errors.New(
@@ -553,6 +567,7 @@ func New(opts Options) (*Server, error) {
 		stacks:         opts.Stacks,
 		nets:           opts.Nets,
 		hooks:          opts.Hooks,
+		github:         opts.GitHub,
 		registries:     opts.Registries,
 		quotas:         opts.Quotas,
 		capacity:       opts.Capacity,
@@ -600,6 +615,12 @@ func (s *Server) Handler() http.Handler {
 	// csrfProtect lets it through for the same reason — see hookPath.
 	if s.hooks != nil {
 		r.Post(hookPath+"{id}/push", s.hookDeliver)
+	}
+	// The GitHub App's one webhook, for every installation, on the same
+	// terms: no session, and a signature with the App's secret as its whole
+	// authorisation.
+	if s.github != nil {
+		r.Post(GitHubHookPath, s.githubDeliver)
 	}
 
 	// Static assets are embedded and carry no owner data, so they sit outside
@@ -739,6 +760,15 @@ func (s *Server) Handler() http.Handler {
 			// Reads the remote with ls-remote while somebody types a branch.
 			r.Get("/apps/{name}/branches", s.appBranches)
 			r.Get("/apps/{name}/directories", s.appDirectories)
+			if s.github != nil {
+				// What the team's installations reach, for the pickers.
+				// Member, like the branch picker: reading what can be built
+				// is not a privilege, and every read checks the team's own
+				// connection to the installation.
+				r.Get("/github/repositories", s.githubRepositories)
+				r.Get("/github/branches", s.githubBranches)
+				r.Get("/github/directories", s.githubDirectories)
+			}
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
 				// Settings, where they sat among health checks and resources.
@@ -855,6 +885,18 @@ func (s *Server) Handler() http.Handler {
 
 			if s.extra.Admin != nil {
 				s.extra.Admin(r)
+			}
+
+			// Connecting GitHub hands the team's apps a way to read an
+			// account's repositories, and disconnecting stops their builds:
+			// neither is undone by a redeploy. The callback is here too, so
+			// a member following somebody's link connects nothing.
+			if s.github != nil {
+				r.Get("/github/install", s.githubInstall)
+				r.Get("/github/authorize", s.githubAuthorize)
+				r.Get(GitHubCallbackPath, s.githubCallback)
+				r.Post("/team/github/choose", s.githubChoose)
+				r.Post("/team/github/{id}/disconnect", s.githubDisconnect)
 			}
 
 			if s.accounts != nil {
@@ -1155,7 +1197,7 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 	data := NewAppData{
 		Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
-		Regions: s.regionChoice(r.Context()),
+		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
 	}
 
 	// Only somebody the registry page would actually admit is offered a link
@@ -1214,10 +1256,16 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Port:       r.FormValue("port"),
 		Replicas:   r.FormValue("replicas"),
 		Env:        r.FormValue("env"),
+		GitHubRepo: strings.TrimSpace(r.FormValue("github_repo")),
 		RepoURL:    strings.TrimSpace(r.FormValue("repo_url")),
 		RepoBranch: strings.TrimSpace(r.FormValue("repo_branch")),
 		RepoSubdir: strings.TrimSpace(r.FormValue("repo_subdir")),
 		Region:     strings.TrimSpace(r.FormValue("region")),
+	}
+	githubRef, err := formGitHubRef(r)
+	if err != nil {
+		s.renderErrFor(w, r, source, form, err.Error())
+		return
 	}
 
 	port, err := parseIntField(form.Port, 0)
@@ -1245,6 +1293,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		Env:      env,
 		Repo: app.Repo{
 			URL: form.RepoURL, Branch: form.RepoBranch, Subdir: form.RepoSubdir,
+			GitHub: githubRef,
 		},
 		Region: form.Region,
 	})
@@ -1265,7 +1314,7 @@ func (s *Server) renderErrFor(
 ) {
 	data := NewAppData{
 		Error: msg, Form: form, Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
-		Regions: s.regionChoice(r.Context()),
+		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
 	}
 	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b

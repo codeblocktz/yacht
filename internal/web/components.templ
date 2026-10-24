@@ -252,6 +252,7 @@ templ branchPicker(appName, value string) {
 			hx-target="#branch-options"
 			hx-swap="innerHTML"
 			hx-params="*"
+			hx-include="[name='github_repo']"
 		/>
 		<div id="branch-options" class="mt-1.5"></div>
 	</div>
@@ -310,6 +311,7 @@ templ directoryPicker(appName, value string) {
 			hx-target="#directory-options"
 			hx-swap="innerHTML"
 			hx-params="*"
+			hx-include="[name='github_repo']"
 		/>
 		<div id="directory-options" class="mt-1.5"></div>
 	</div>

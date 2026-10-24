@@ -209,6 +209,10 @@ type TeamPageData struct {
 	// Sleep is the team's default for sleeping apps, nil where the install
 	// cannot put apps to sleep.
 	Sleep *app.SleepPolicy
+
+	// GitHub is the team's connections to the install's GitHub App, nil
+	// where the install has none.
+	GitHub *TeamGitHubData
 }
 
 // teamPage shows who is in the team and who has been invited.
@@ -256,6 +260,7 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		Invitations: invitations,
 		Error:       r.URL.Query().Get("error"),
 	}
+	data.GitHub = s.teamGitHub(ctx, owner.ID, viewer.CanAdminister())
 	if s.sleep != nil && s.sleep.CanSleep() {
 		if p, err := s.sleep.TeamSleepDefault(ctx, owner.ID); err == nil {
 			data.Sleep = &p
