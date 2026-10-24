@@ -54,10 +54,10 @@ func (q *Queries) GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook
 }
 
 const getHookForDelivery = `-- name: GetHookForDelivery :one
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, h.secret
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, h.secret
 FROM app_hooks h
 JOIN apps a ON a.id = h.app_id AND a.owner_id = h.owner_id
-WHERE h.app_id = $1
+WHERE h.app_id = $1 AND h.secret IS NOT NULL
 `
 
 type GetHookForDeliveryRow struct {
@@ -66,7 +66,8 @@ type GetHookForDeliveryRow struct {
 }
 
 // By app id alone: a delivery carries no session and no owner. The signature,
-// checked against the secret read here, is what authorises it.
+// checked against the secret read here, is what authorises it. A row with no
+// secret holds pushes from the GitHub App and is no webhook at all.
 func (q *Queries) GetHookForDelivery(ctx context.Context, appID uuid.UUID) (GetHookForDeliveryRow, error) {
 	row := q.db.QueryRow(ctx, getHookForDelivery, appID)
 	var i GetHookForDeliveryRow
@@ -111,13 +112,16 @@ func (q *Queries) GetHookForDelivery(ctx context.Context, appID uuid.UUID) (GetH
 		&i.App.WakeFailedAt,
 		&i.App.WakeFailure,
 		&i.App.Region,
+		&i.App.GithubInstallationID,
+		&i.App.GithubRepoID,
+		&i.App.GithubPaused,
 		&i.Secret,
 	)
 	return i, err
 }
 
 const listAdmissiblePushes = `-- name: ListAdmissiblePushes :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, h.pending_revision
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, h.pending_revision
 FROM app_hooks h
 JOIN apps a ON a.id = h.app_id AND a.owner_id = h.owner_id
 WHERE h.pending_at IS NOT NULL
@@ -187,6 +191,9 @@ func (q *Queries) ListAdmissiblePushes(ctx context.Context, resultLimit int32) (
 			&i.App.WakeFailedAt,
 			&i.App.WakeFailure,
 			&i.App.Region,
+			&i.App.GithubInstallationID,
+			&i.App.GithubRepoID,
+			&i.App.GithubPaused,
 			&i.PendingRevision,
 		); err != nil {
 			return nil, err
@@ -200,34 +207,40 @@ func (q *Queries) ListAdmissiblePushes(ctx context.Context, resultLimit int32) (
 }
 
 const markHookPending = `-- name: MarkHookPending :exec
-UPDATE app_hooks
-SET pending_at = now(), pending_revision = $1
-WHERE app_id = $2
+INSERT INTO app_hooks (app_id, owner_id, pending_at, pending_revision)
+VALUES ($1, $2, now(), $3)
+ON CONFLICT (app_id) DO UPDATE
+SET pending_at = now(), pending_revision = excluded.pending_revision
 `
 
 type MarkHookPendingParams struct {
-	Revision string
 	AppID    uuid.UUID
+	OwnerID  string
+	Revision string
 }
 
 func (q *Queries) MarkHookPending(ctx context.Context, arg MarkHookPendingParams) error {
-	_, err := q.db.Exec(ctx, markHookPending, arg.Revision, arg.AppID)
+	_, err := q.db.Exec(ctx, markHookPending, arg.AppID, arg.OwnerID, arg.Revision)
 	return err
 }
 
 const recordHookDelivery = `-- name: RecordHookDelivery :exec
-UPDATE app_hooks
-SET last_delivery_at = now(), last_delivery = $1
-WHERE app_id = $2
+INSERT INTO app_hooks (app_id, owner_id, last_delivery_at, last_delivery)
+VALUES ($1, $2, now(), $3)
+ON CONFLICT (app_id) DO UPDATE
+SET last_delivery_at = now(), last_delivery = excluded.last_delivery
 `
 
 type RecordHookDeliveryParams struct {
-	Result string
-	AppID  uuid.UUID
+	AppID   uuid.UUID
+	OwnerID string
+	Result  string
 }
 
+// An upsert, because a push through the GitHub App reaches apps that have no
+// webhook of their own; the row it makes has no secret.
 func (q *Queries) RecordHookDelivery(ctx context.Context, arg RecordHookDeliveryParams) error {
-	_, err := q.db.Exec(ctx, recordHookDelivery, arg.Result, arg.AppID)
+	_, err := q.db.Exec(ctx, recordHookDelivery, arg.AppID, arg.OwnerID, arg.Result)
 	return err
 }
 
