@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -33,6 +34,9 @@ type fakeGitHubSurface struct {
 	conns     []app.GitHubConnection
 	linkOwner string
 	linkUser  string
+
+	deliveries []app.GitHubDelivery
+	deliverErr error
 }
 
 type fakeConnect struct {
@@ -94,6 +98,13 @@ func (f *fakeGitHubSurface) GitHubBranches(_ context.Context, _ string, ref app.
 
 func (f *fakeGitHubSurface) GitHubDirectories(context.Context, string, app.GitHubRef, string) ([]string, error) {
 	return []string{"server"}, nil
+}
+
+func (f *fakeGitHubSurface) DeliverGitHub(_ context.Context, d app.GitHubDelivery) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deliveries = append(f.deliveries, d)
+	return "Deploying 0123456.", f.deliverErr
 }
 
 func githubTeam(t *testing.T, teamID string) (*roleTeam, *fakeGitHubSurface) {
@@ -251,5 +262,43 @@ func TestGitHubRefusalsReadAsSentences(t *testing.T) {
 		if got := githubSentence(err); !strings.Contains(got, want) || strings.HasPrefix(got, "app:") {
 			t.Errorf("githubSentence(%v) = %q", err, got)
 		}
+	}
+}
+
+// The App's webhook is a server calling a server: no Origin, no cookie. It
+// reaches the service with the headers GitHub signs and names deliveries by,
+// and nothing beside that one path is let past the cross-origin check.
+func TestTheAppsWebhookReachesTheServiceWithoutAnOrigin(t *testing.T) {
+	rt, gh := githubTeam(t, "web-gh-hook")
+
+	req := httptest.NewRequest(http.MethodPost, GitHubHookPath, strings.NewReader(`{"ref":"refs/heads/main"}`))
+	req.Header.Set("X-GitHub-Event", "push")
+	req.Header.Set("X-GitHub-Delivery", "d-1")
+	req.Header.Set("X-Hub-Signature-256", "sha256=abc")
+	rec := httptest.NewRecorder()
+	rt.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), "Deploying 0123456.") {
+		t.Fatalf("delivery = %d %q, want 202 with what the service said", rec.Code, rec.Body.String())
+	}
+	if len(gh.deliveries) != 1 {
+		t.Fatalf("deliveries = %d, want 1", len(gh.deliveries))
+	}
+	d := gh.deliveries[0]
+	if d.ID != "d-1" || d.Event != "push" || d.Signature != "sha256=abc" || string(d.Body) != `{"ref":"refs/heads/main"}` {
+		t.Fatalf("delivery = %+v, want GitHub's headers and body as they came", d)
+	}
+
+	gh.deliverErr = app.ErrHookUnauthorized
+	rec = httptest.NewRecorder()
+	rt.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, GitHubHookPath, strings.NewReader(`{}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a refused signature = %d, want 401", rec.Code)
+	}
+
+	// The exemption is the path, not a prefix of it.
+	rec = httptest.NewRecorder()
+	rt.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, GitHubHookPath+"x", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST %sx without an Origin = %d, want 403", GitHubHookPath, rec.Code)
 	}
 }

@@ -63,7 +63,7 @@ func (s *Server) csrfProtect(next http.Handler) http.Handler {
 		// no cookie that a forged cross-site post could ride on. It is
 		// authorised by a signature over its body, which a page on another
 		// origin cannot produce.
-		webhook := strings.HasPrefix(r.URL.Path, hookPath)
+		webhook := strings.HasPrefix(r.URL.Path, hookPath) || r.URL.Path == GitHubHookPath
 		if !originlessSignIn && !webhook && (got == "" || want == "" || originOf(got) != want) {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return

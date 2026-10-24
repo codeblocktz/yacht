@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -36,6 +37,10 @@ type GitHub interface {
 	GitHubRepos(ctx context.Context, ownerID string) ([]app.GitHubRepo, []string, error)
 	GitHubBranches(ctx context.Context, ownerID string, ref app.GitHubRef, query string) ([]string, error)
 	GitHubDirectories(ctx context.Context, ownerID string, ref app.GitHubRef, path string) ([]string, error)
+
+	// DeliverGitHub is a delivery to the App's webhook, checked against its
+	// signature before anything in it is read.
+	DeliverGitHub(ctx context.Context, d app.GitHubDelivery) (string, error)
 }
 
 // GitHubCallbackPath is where GitHub sends a person back after installing the
@@ -342,3 +347,44 @@ func (s *Server) pickedGitHubRepo(r *http.Request, a app.App) (app.GitHubRef, bo
 	}
 	return app.GitHubRef{}, false
 }
+
+// githubDeliver takes one delivery to the App's webhook: every installation's
+// pushes and changes, signed with the App's webhook secret.
+//
+// Plain text back, like an app's own webhook, because GitHub shows it beside
+// the delivery in the App's settings, where whoever runs the install reads
+// what each push did.
+func (s *Server) githubDeliver(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxGitHubBody))
+	if err != nil {
+		http.Error(w, "the delivery is too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	result, err := s.github.DeliverGitHub(r.Context(), app.GitHubDelivery{
+		ID:        r.Header.Get("X-GitHub-Delivery"),
+		Event:     r.Header.Get("X-GitHub-Event"),
+		Signature: r.Header.Get("X-Hub-Signature-256"),
+		Body:      body,
+	})
+	switch {
+	case errors.Is(err, app.ErrHookUnauthorized):
+		http.Error(w, "this delivery is not signed with the App's webhook secret", http.StatusUnauthorized)
+		return
+	case errors.Is(err, app.ErrGitHubDeliveryInvalid):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		s.log.Error("GitHub delivery", slog.String("delivery", r.Header.Get("X-GitHub-Delivery")),
+			slog.String("error", err.Error()))
+		http.Error(w, "the delivery could not be processed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_, _ = io.WriteString(w, result+"\n")
+}
+
+// maxGitHubBody caps a delivery. GitHub's own ceiling is 25 MB; a push with
+// its commits is rarely more than a few hundred kilobytes, and nothing here
+// reads past the repository and the ref.
+const maxGitHubBody = 5 << 20

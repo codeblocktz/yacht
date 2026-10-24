@@ -616,6 +616,12 @@ func (s *Server) Handler() http.Handler {
 	if s.hooks != nil {
 		r.Post(hookPath+"{id}/push", s.hookDeliver)
 	}
+	// The GitHub App's one webhook, for every installation, on the same
+	// terms: no session, and a signature with the App's secret as its whole
+	// authorisation.
+	if s.github != nil {
+		r.Post(GitHubHookPath, s.githubDeliver)
+	}
 
 	// Static assets are embedded and carry no owner data, so they sit outside
 	// the authenticated group too — otherwise the stylesheet 401s on the login
