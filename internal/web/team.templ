@@ -53,12 +53,12 @@ templ TeamPage(d TeamPageData) {
 							@statusDot(string(m.Role), roleTone(m.Role))
 						</td>
 						<td class="text-right">
-							<div class="flex gap-2 justify-end">
+							<div class="flex items-center justify-end gap-2">
 								if d.Viewer.CanOwn() && m.UserID != d.ViewerID {
-									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="inline">
-										@selectbox.SelectBox() {
+									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/role") } class="flex items-center gap-2">
+										@selectbox.SelectBox(selectbox.Props{Class: "w-[116px] shrink-0"}) {
 											@selectbox.Trigger(selectbox.TriggerProps{
-												Name: "role", Class: "h-8 w-[116px] text-[12px]",
+												Name: "role", Class: "h-7 w-full text-[12px]",
 											}) {
 												@selectbox.Value(selectbox.ValueProps{Placeholder: string(m.Role)})
 											}
@@ -72,11 +72,11 @@ templ TeamPage(d TeamPageData) {
 												}
 											}
 										}
-										<button class="btn btn-sm" type="submit">Change role</button>
+										<button class="btn btn-sm whitespace-nowrap" type="submit">Change role</button>
 									</form>
 								}
 								if d.Viewer.CanAdminister() && m.UserID != d.ViewerID {
-									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/remove") } class="inline">
+									<form method="post" action={ templ.SafeURL("/team/members/" + m.UserID.String() + "/remove") } class="flex">
 										<button class="btn btn-sm btn-danger" type="submit">Remove</button>
 									</form>
 								}
