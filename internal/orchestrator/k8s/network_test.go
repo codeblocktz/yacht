@@ -70,8 +70,8 @@ func TestStrictIsolationLimitsWhereWorkloadsConnectTo(t *testing.T) {
 	if !slices.Contains(p.Spec.PolicyTypes, networkingv1.PolicyTypeEgress) {
 		t.Fatalf("policy types = %v, want egress too", p.Spec.PolicyTypes)
 	}
-	if len(p.Spec.Egress) != 3 {
-		t.Fatalf("egress = %+v, want DNS, the team and public addresses", p.Spec.Egress)
+	if len(p.Spec.Egress) != 5 {
+		t.Fatalf("egress = %+v, want DNS, the team, public addresses and the way in", p.Spec.Egress)
 	}
 	dns, team, public := p.Spec.Egress[0], p.Spec.Egress[1], p.Spec.Egress[2]
 	if len(dns.Ports) != 2 || dns.Ports[0].Port.IntValue() != 53 || *dns.Ports[0].Protocol != corev1.ProtocolUDP ||
@@ -96,10 +96,41 @@ func TestStrictIsolationLimitsWhereWorkloadsConnectTo(t *testing.T) {
 	if public.To[1].IPBlock == nil || public.To[1].IPBlock.CIDR != lan.String() {
 		t.Errorf("the allowed range is %+v, want %s", public.To[1], lan)
 	}
+	checkTheWayIn(t, p.Spec.Egress[3], p.Spec.Egress[4])
 }
 
-// Nothing connects to a build; under strict isolation a build reaches DNS
-// and public addresses only.
+// checkTheWayIn checks the rules that let a workload reach the ingress
+// controller, as the internet does: its entrypoints and the load balancer in
+// front of it, by their pods, never anything else in their namespaces.
+func checkTheWayIn(t *testing.T, ingress, lb networkingv1.NetworkPolicyEgressRule) {
+	t.Helper()
+	if len(ingress.To) != 1 || ingress.To[0].PodSelector == nil ||
+		ingress.To[0].PodSelector.MatchLabels["app.kubernetes.io/name"] != "traefik" {
+		t.Errorf("the ingress rule is %+v, want Traefik's pods", ingress.To)
+	} else if sel := ingress.To[0].NamespaceSelector; sel == nil || len(sel.MatchExpressions) != 1 ||
+		sel.MatchExpressions[0].Key != nameLabel || !slices.Equal(sel.MatchExpressions[0].Values, ingressNamespaces) {
+		t.Errorf("the ingress rule's namespaces are %+v, want %v by name", sel, ingressNamespaces)
+	}
+	var ports []string
+	for _, p := range ingress.Ports {
+		ports = append(ports, p.Port.String())
+	}
+	if !slices.Equal(ports, []string{"web", "websecure"}) {
+		t.Errorf("the ingress rule's ports are %v, want its entrypoints only", ports)
+	}
+	if len(lb.To) != 1 || lb.To[0].PodSelector == nil ||
+		lb.To[0].PodSelector.MatchLabels["svccontroller.k3s.cattle.io/svcname"] != "traefik" ||
+		lb.To[0].NamespaceSelector == nil || lb.To[0].NamespaceSelector.MatchLabels[nameLabel] != "kube-system" {
+		t.Errorf("the load balancer rule is %+v, want the svclb pods in kube-system", lb.To)
+	}
+	if len(lb.Ports) != 2 || lb.Ports[0].Port.IntValue() != 80 || lb.Ports[1].Port.IntValue() != 443 {
+		t.Errorf("the load balancer rule's ports are %+v, want 80 and 443", lb.Ports)
+	}
+}
+
+// Nothing connects to a build; under strict isolation a build reaches DNS,
+// public addresses, and the way in that serves this cluster's own public
+// addresses, such as a registry it runs.
 func TestBuildsAcceptNothingAndStrictlyReachOnlyThePublic(t *testing.T) {
 	for _, mode := range []orchestrator.IsolationMode{orchestrator.IsolationTeam, orchestrator.IsolationStrict} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -116,8 +147,11 @@ func TestBuildsAcceptNothingAndStrictlyReachOnlyThePublic(t *testing.T) {
 			if slices.Contains(p.Spec.PolicyTypes, networkingv1.PolicyTypeEgress) != strict {
 				t.Errorf("egress limited = %t under %s", !strict, mode)
 			}
-			if strict && len(p.Spec.Egress) != 2 {
-				t.Errorf("a strict build's egress is %+v, want DNS and public addresses", p.Spec.Egress)
+			if strict {
+				if len(p.Spec.Egress) != 4 {
+					t.Fatalf("a strict build's egress is %+v, want DNS, public addresses and the way in", p.Spec.Egress)
+				}
+				checkTheWayIn(t, p.Spec.Egress[2], p.Spec.Egress[3])
 			}
 		})
 	}

@@ -20,8 +20,9 @@ const (
 	IsolationTeam IsolationMode = "team"
 
 	// IsolationStrict is IsolationTeam, and limits what a team's workloads
-	// and builds may connect out to as well: DNS, the team's own apps, and
-	// public addresses. Private addresses — the nodes' network, the
+	// and builds may connect out to as well: DNS, the team's own apps,
+	// public addresses, and the ingress controller's entrypoints, which serve
+	// the cluster's own public addresses. Private addresses — the nodes' network, the
 	// platform's own database, anything else on the LAN — are refused unless
 	// named in Isolation.EgressAllow.
 	IsolationStrict IsolationMode = "strict"

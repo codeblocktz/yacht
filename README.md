@@ -375,6 +375,10 @@ enforce the stricter boundary: token services use the registry authority for
 plain HTTP, or the same registrable domain over TLS. Every K3s node must also be
 configured separately to pull from an insecure registry.
 
+A wrapping application that runs a registry of its own can fill the form in
+from its configuration with `Engine.SetRegistry`, at every start: the same
+checks apply, and settings that have not changed are not written again.
+
 ### Configuration
 
 | Variable | Default | Notes |
@@ -481,7 +485,12 @@ customers' Dockerfiles. Nothing connects to a build at all.
 `YACHT_NETWORK_ISOLATION=strict` limits the way out as well: apps and builds
 reach DNS, their own team's apps and public addresses, and no private
 address — not the nodes' network, not cloud metadata, not anything else on
-the LAN — except ranges named in `YACHT_EGRESS_ALLOW`. Use it wherever teams
+the LAN — except ranges named in `YACHT_EGRESS_ALLOW`. They do reach the
+ingress controller's HTTP and HTTPS entrypoints (and K3s's load balancer in
+front of them), as the internet does: a request for one of the cluster's own
+public addresses arrives there by a private one, so without it an app could
+not call another app's URL, nor a build push to a registry the cluster
+serves. Use it wherever teams
 are strangers to each other. Namespaces made before a change of mode are
 brought into line at startup.
 
