@@ -364,3 +364,24 @@ func TestEveryVariableReadIsDocumented(t *testing.T) {
 		}
 	}
 }
+
+// The default region becomes a node affinity on every app placed in it, so
+// it is held to the label rule a region is, at startup rather than at the
+// first deploy.
+func TestDefaultRegionLoadsAndIsValidated(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_DEFAULT_REGION": " fsn "})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.DefaultRegion != "fsn" {
+		t.Fatalf("DefaultRegion = %q, want fsn", c.DefaultRegion)
+	}
+
+	for _, bad := range []string{"FSN", "fsn;id", "-fsn", strings.Repeat("a", 64)} {
+		setEnv(t, map[string]string{"YACHT_DEFAULT_REGION": bad})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_DEFAULT_REGION") {
+			t.Errorf("Load accepted YACHT_DEFAULT_REGION=%q: %v", bad, err)
+		}
+	}
+}

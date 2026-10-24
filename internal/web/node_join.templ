@@ -52,6 +52,16 @@ templ AddNode(d AddNodeData) {
 							placeholder="dar-a"
 						/>
 					</div>
+					<div class="field min-w-[160px]">
+						<label class="label" for="region">Region</label>
+						<input
+							class="control"
+							id="region"
+							name="region"
+							value={ d.Machine.Region }
+							placeholder="dar"
+						/>
+					</div>
 					<div class="field min-w-[200px]">
 						<label class="label" for="public_ip">Public address</label>
 						<input
@@ -71,7 +81,9 @@ templ AddNode(d AddNodeData) {
 					which keeps it for its pool's apps alone. A site says where the
 					machine is: one short name per place, like
 					<code class="mono">dar-a</code>, and an app's replicas are spread
-					across sites. Give a public address only when the machine's is not on
+					across sites. A region is the broader place a site is in, like
+					<code class="mono">dar</code>: an app lives in one region, and its
+					pods and volumes stay there. Give a public address only when the machine's is not on
 					its own network interface, as behind NAT or a floating IP. Leave them
 					all empty for an ordinary node.
 				</p>

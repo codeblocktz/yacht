@@ -351,6 +351,9 @@ func nodeSubtitle(n orchestrator.NodeInfo) string {
 	if n.OS != "" && n.Architecture != "" {
 		parts = append(parts, n.OS+"/"+n.Architecture)
 	}
+	if n.Region != "" {
+		parts = append(parts, "region: "+n.Region)
+	}
 	if n.Site != "" {
 		parts = append(parts, "site: "+n.Site)
 	}

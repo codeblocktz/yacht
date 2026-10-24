@@ -171,6 +171,7 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 			volumeSources(spec)...,
 		)...)
 	podSpec = placeInPool(podSpec, spec.Pool)
+	podSpec = placeInRegion(podSpec, spec.Region)
 
 	// A rolling update starts the replacement before the original stops. With a
 	// ReadWriteOnce claim the replacement cannot mount what the original still
@@ -267,6 +268,34 @@ func placeInPool(pod *corev1ac.PodSpecApplyConfiguration, pool string) *corev1ac
 			WithOperator(corev1.TolerationOpEqual).
 			WithValue(pool).
 			WithEffect(corev1.TaintEffectNoSchedule))
+}
+
+// placeInRegion requires a workload's pods to run on its region's nodes: a
+// required node affinity on the region label. Nothing for no region.
+//
+// Required rather than preferred. A preference would let a full region spill
+// an app into another one, quietly moving its traffic and its data across the
+// world; a pod that stays Pending, with the scheduler saying why, is the
+// honest result and the one an operator can act on.
+//
+// An affinity rather than a second node selector entry, so the region and the
+// pool stay separate fields with separate owners. The scheduler requires both:
+// a node selector and a required node affinity must each be satisfied.
+//
+// Removing the region removes the affinity, like the pool: it is owned by this
+// field manager, and an apply that omits it takes it off.
+func placeInRegion(pod *corev1ac.PodSpecApplyConfiguration, region string) *corev1ac.PodSpecApplyConfiguration {
+	if region == "" {
+		return pod
+	}
+	return pod.WithAffinity(corev1ac.Affinity().
+		WithNodeAffinity(corev1ac.NodeAffinity().
+			WithRequiredDuringSchedulingIgnoredDuringExecution(corev1ac.NodeSelector().
+				WithNodeSelectorTerms(corev1ac.NodeSelectorTerm().
+					WithMatchExpressions(corev1ac.NodeSelectorRequirement().
+						WithKey(orchestrator.RegionLabel).
+						WithOperator(corev1.NodeSelectorOpIn).
+						WithValues(region))))))
 }
 
 // spreadConstraints asks the scheduler to keep an app's replicas apart: on
@@ -568,6 +597,11 @@ func specHash(spec orchestrator.AppSpec) string {
 	// fingerprint it had before pools existed and is not rolled for nothing.
 	if spec.Pool != "" {
 		fmt.Fprintf(h, "pool=%s\n", spec.Pool)
+	}
+	// The same for a region: an install that has none, and every app recorded
+	// before regions existed, keeps its fingerprint.
+	if spec.Region != "" {
+		fmt.Fprintf(h, "region=%s\n", spec.Region)
 	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])

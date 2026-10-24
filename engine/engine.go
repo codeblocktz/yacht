@@ -100,7 +100,8 @@ type (
 	// Orchestrator runs workloads — seam 1.
 	Orchestrator = orchestrator.Orchestrator
 	// NodeInfo is one machine, from Orchestrator.Nodes: its pool, its site —
-	// where it is, empty on an install in one place — and its room.
+	// where it is, empty on an install in one place — its region, and its
+	// room.
 	NodeInfo = orchestrator.NodeInfo
 
 	// Role is a team role, for a wrapper gating pages of its own.
@@ -163,6 +164,36 @@ type (
 	// Apps.SleepIntervals — what a meter subtracts; see AwakeWithin.
 	SleepInterval = app.SleepInterval
 
+	// Region is a place apps live in, as the operator describes it: what it
+	// is called, its Edge, the StorageClass its volumes use, and whether new
+	// apps may be placed in it. Apps.SetRegion replaces one.
+	Region = app.Region
+	// Edge is where a region's traffic enters: a hostname a custom domain
+	// CNAMEs to, and the addresses behind it.
+	Edge = app.Edge
+	// RegionInfo is a region with what the cluster says is in it — its
+	// machines, its sites, its apps — from Apps.Regions and Apps.Region. A
+	// region the machines carry and nobody configured has Configured false.
+	RegionInfo = app.RegionInfo
+	// RegionChoice is what a form placing a new app offers, from
+	// Apps.RegionChoice: whether there are regions at all, the open ones,
+	// and the default.
+	RegionChoice = app.RegionChoice
+	// RegionCapacity is one region's room, in CapacitySnapshot.Regions.
+	RegionCapacity = app.RegionCapacity
+
+	// Route is one hostname the install answers — an app's issued address or
+	// a domain a team brought — with the app's region and that region's
+	// edge, from Engine.Routes. What a wrapper writing DNS reconciles from.
+	Route = app.Route
+	// RouteObserver is told, through Overrides.Routes, when an app's
+	// hostnames or region change or a region's edge does. RouteChange says
+	// which; RouteObserverFunc adapts a function.
+	RouteObserver     = app.RouteObserver
+	RouteObserverFunc = app.RouteObserverFunc
+	RouteChange       = app.RouteChange
+	RouteChangeKind   = app.RouteChangeKind
+
 	// Server is the engine's dashboard.
 	Server = web.Server
 	// Keeper seals secrets at rest.
@@ -207,6 +238,15 @@ const (
 	SleepAsleep = app.SleepAsleep
 	SleepWaking = app.SleepWaking
 
+	// RouteChangeApp is one app's hostnames or region; RouteChangeRegion a
+	// region's edge.
+	RouteChangeApp    = app.RouteChangeApp
+	RouteChangeRegion = app.RouteChangeRegion
+
+	// RegionLabel is the node label a region is read from:
+	// topology.kubernetes.io/region.
+	RegionLabel = orchestrator.RegionLabel
+
 	// DefaultSleepAfter and MinSleepAfter bound the idle time: 30 minutes
 	// where nobody says otherwise, and never under 5.
 	DefaultSleepAfter = app.DefaultSleepAfter
@@ -240,6 +280,23 @@ var (
 	// asleep, the refusal is recorded like any other capacity refusal, and a
 	// request a minute later tries again.
 	ErrWakeNoRoom = app.ErrWakeNoRoom
+
+	// ErrMoveHasStorage is Apps.MoveApp refusing an app with a volume — every
+	// database has one — whose data lives on its region's machines.
+	ErrMoveHasStorage = app.ErrMoveHasStorage
+	// ErrRegionClosed is a region that cannot take a new app: closed, not
+	// configured, or with no machine ready. ErrNoRegionOpen is an install
+	// with regions where none can; ErrNoSuchRegion a name neither a machine
+	// nor the regions table carries; ErrNoRegions asking for a region on an
+	// install whose machines carry none.
+	ErrRegionClosed = app.ErrRegionClosed
+	ErrNoRegionOpen = app.ErrNoRegionOpen
+	ErrNoSuchRegion = app.ErrNoSuchRegion
+	ErrNoRegions    = app.ErrNoRegions
+
+	// ValidateRegion is the rule a region name is held to — a Kubernetes
+	// label value — for a wrapper reading regions from its own configuration.
+	ValidateRegion = orchestrator.ValidateRegion
 
 	// AwakeWithin is how long an app was awake in [from, to), given the
 	// intervals Apps.SleepIntervals returned for that window.
@@ -324,6 +381,12 @@ type Overrides struct {
 	// visitors, and the mail the engine sends — sign-in, sign-up and
 	// invitation links. Empty is the engine's own name.
 	WakerBrand string
+
+	// Routes is told when an app's hostnames or region change, or a region's
+	// edge does — for a wrapper that writes DNS so each app's traffic enters
+	// at its region's edge. Called after the change commits, off the request
+	// path; a hint, so the wrapper also reconciles from Engine.Routes.
+	Routes RouteObserver
 
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
 	// own migrations. They share the database; a wrapper keeps its own goose
@@ -488,6 +551,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Resolver:            e.resolver,
 		Waker:               waker,
 		WakeTimeout:         cfg.WakeTimeout,
+		DefaultRegion:       cfg.DefaultRegion,
+		Routes:              ov.Routes,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -536,6 +601,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Quotas:        e.Apps,
 		Capacity:      e.Apps,
 		Sleep:         e.Apps,
+		Regions:       e.Apps,
 		WakerBrand:    ov.WakerBrand,
 	}
 
@@ -586,6 +652,16 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 // RoomShort is the one field fit to turn into something a customer is shown.
 func (e *Engine) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	return e.Apps.Capacity(ctx)
+}
+
+// Routes is every hostname the install answers — each app's issued address
+// and every domain a team brought — with the region the app lives in and that
+// region's edge. For a wrapper writing DNS so that an app's traffic enters at
+// its region's edge: it reconciles from this on a timer, and sooner when
+// Overrides.Routes says something changed. On an install with no regions
+// every Region is empty and every Edge zero.
+func (e *Engine) Routes(ctx context.Context) ([]Route, error) {
+	return e.Apps.Routes(ctx)
 }
 
 // NetworkIsolation is the network isolation in force. False when the
@@ -641,6 +717,11 @@ func (e *Engine) Start(ctx context.Context) {
 	// Counts each app's requests and puts the idle ones to sleep, where the
 	// install has a waker to wake them again.
 	go apps.RunSleeper(ctx)
+
+	// Records the region of every app made before regions existed, where it
+	// can be told, and does nothing on an install with none. Recording only:
+	// an app's pods learn their region at its next apply.
+	go apps.RunRegionBackfill(ctx)
 
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.

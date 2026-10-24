@@ -103,6 +103,15 @@ func (s *Service) AttachVolume(
 	if err := s.admit(ctx, q, ownerID, quotaChange{Storage: in.SizeBytes}); err != nil {
 		return Volume{}, err
 	}
+	// Unless somebody named one, a volume is provisioned from its region's
+	// StorageClass, recorded here so the claim keeps it: Kubernetes will not
+	// change a claim's class, and a region whose class changes later must
+	// not leave this volume asking for one it was not made with.
+	if in.Class == "" {
+		if in.Class, err = regionStorageClass(ctx, q, a.Region); err != nil {
+			return Volume{}, err
+		}
+	}
 	row, err := q.CreateVolumeAndBump(ctx, dbgen.CreateVolumeAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Name: in.Name,
 		MountPath: in.MountPath, SizeBytes: in.SizeBytes, Class: in.Class,

@@ -51,6 +51,7 @@ type App struct {
 	RequestsSeenSince pgtype.Timestamptz
 	WakeFailedAt      pgtype.Timestamptz
 	WakeFailure       string
+	Region            *string
 }
 
 type AppHook struct {
@@ -281,6 +282,17 @@ type Project struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type Region struct {
+	Name          string
+	DisplayName   string
+	EdgeHost      string
+	EdgeAddresses []string
+	StorageClass  string
+	Open          bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Session struct {

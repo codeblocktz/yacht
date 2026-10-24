@@ -74,7 +74,8 @@ func (d AddNodeData) IsNew(n orchestrator.NodeInfo) bool {
 func (d AddNodeData) StatusURL() string {
 	q := url.Values{}
 	for k, v := range map[string]string{
-		"pool": d.Machine.Pool, "site": d.Machine.Site, "public_ip": d.Machine.PublicIP,
+		"pool": d.Machine.Pool, "site": d.Machine.Site, "region": d.Machine.Region,
+		"public_ip": d.Machine.PublicIP,
 	} {
 		if v != "" {
 			q.Set(k, v)
@@ -110,6 +111,7 @@ func (s *Server) addNodeData(r *http.Request) AddNodeData {
 	data := AddNodeData{Machine: cluster.Machine{
 		Pool:      strings.TrimSpace(q.Get("pool")),
 		Site:      strings.TrimSpace(q.Get("site")),
+		Region:    strings.TrimSpace(q.Get("region")),
 		PublicIP:  strings.TrimSpace(q.Get("public_ip")),
 		Dedicated: q.Get("dedicated") == "1",
 	}}

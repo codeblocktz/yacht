@@ -1,0 +1,451 @@
+package web
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// AdminRegions is every region the install's machines carry or its operator
+// has configured, with what is in each.
+templ AdminRegions(d RegionsData) {
+	if d.CanAddNode {
+		@pageHead("Regions", "Where apps live. An app, its volumes and its databases stay in its region.", addNodeButton())
+	} else {
+		@pageHead("Regions", "Where apps live. An app, its volumes and its databases stay in its region.", nil)
+	}
+	if !d.OK {
+		@clusterCallout(d.Error)
+	}
+	if len(d.Regions) == 0 && d.OK {
+		<div class="panel mb-5">
+			<div class="empty">
+				<p class="font-medium text-foreground">This install has no regions</p>
+				<p class="mx-auto max-w-xl">
+					Every app runs wherever the scheduler finds room, which is right for machines in one
+					place. To keep apps in places of their own, give each machine a region — the
+					<span class="font-medium text-foreground">Region</span> field when you add a node,
+					<code class="mono">--region</code> on the installer's server, or
+					<code class="mono">kubectl label node &lt;name&gt; topology.kubernetes.io/region=&lt;name&gt;</code>
+					on one already running. Label every machine once there is more than one region.
+				</p>
+			</div>
+		</div>
+	} else if len(d.Regions) > 0 {
+		<div class="panel mb-5">
+			<div class="table-scroll">
+				<table class="dtable min-w-[860px]">
+					<thead>
+						<tr>
+							<th>Region</th>
+							<th>Machines</th>
+							<th class="text-right">Apps</th>
+							<th>CPU sold</th>
+							<th>Memory sold</th>
+							<th>Edge</th>
+							<th>Volumes</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range d.Regions {
+							<tr data-region={ r.Name }>
+								<td class="max-w-[220px]">
+									<div class="flex flex-wrap items-center gap-1.5">
+										<span class="font-medium">{ r.Label() }</span>
+										@regionState(r)
+									</div>
+									<div class="mono truncate text-[11.5px] text-muted-foreground">{ r.Name }</div>
+								</td>
+								<td class="text-[12.5px]">
+									<span class="tabular-nums">{ strconv.Itoa(r.Ready) }</span>
+									<span class="text-muted-foreground">ready of { strconv.Itoa(r.Nodes) }</span>
+									if len(r.Sites) > 0 {
+										<div class="truncate text-[11.5px] text-muted-foreground">
+											{ plural(len(r.Sites), "site") }: { strings.Join(r.Sites, ", ") }
+										</div>
+									}
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ strconv.FormatInt(r.Apps, 10) }</td>
+								if rc, ok := d.Capacity[r.Name]; ok {
+									<td class="w-[160px]">
+										@regionShare(rc.CPU, rc.Known, cpuAmount)
+									</td>
+									<td class="w-[160px]">
+										@regionShare(rc.Memory, rc.Known, byteAmount)
+									</td>
+								} else {
+									<td class="text-muted-foreground">—</td>
+									<td class="text-muted-foreground">—</td>
+								}
+								<td class="max-w-[200px] text-[12.5px]">
+									if r.Edge.Host != "" {
+										<div class="mono truncate">{ r.Edge.Host }</div>
+									}
+									if len(r.Edge.Addresses) > 0 {
+										<div class="mono truncate text-[11.5px] text-muted-foreground">{ strings.Join(r.Edge.Addresses, ", ") }</div>
+									}
+									if !r.Edge.Set() {
+										<span class="text-muted-foreground">the install's</span>
+									}
+								</td>
+								<td class="mono max-w-[160px] truncate text-[12.5px]">
+									if r.StorageClass != "" {
+										{ r.StorageClass }
+									} else {
+										<span class="font-sans text-muted-foreground">default class</span>
+									}
+								</td>
+								<td class="text-right">
+									<a class="btn btn-sm" href={ templ.URL("/admin/regions/" + r.Name) }>
+										if r.Configured {
+											Edit
+										} else {
+											Configure
+										}
+									</a>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<p class="text-[12.5px] text-muted-foreground">
+			A new app can be placed in a region that is configured, open, and has a machine ready.
+			Its pods are required to run on the region's machines, its volumes come from the region's
+			StorageClass, and a custom domain on it is told to point at the region's edge. Sold is what
+			the apps there have committed of what the capacity policy sells of the region's machines.
+		</p>
+	}
+}
+
+// regionState is a region's standing in a word or two.
+templ regionState(r app.RegionInfo) {
+	if !r.Configured {
+		<span class="status status-warn">unconfigured</span>
+	} else if !r.Open {
+		<span class="status status-neutral">closed</span>
+	} else if r.Nodes == 0 {
+		<span class="status status-neutral">no machines</span>
+	} else if r.Ready == 0 {
+		<span class="status status-err">no machine ready</span>
+	} else {
+		<span class="status status-ok">open</span>
+	}
+	if r.Default {
+		<span class="tag">default</span>
+	}
+}
+
+// regionShare is one resource of a region: committed of sellable, as a bar.
+templ regionShare(res app.CapacityResource, known bool, amount func(int64) string) {
+	if !known || !res.Counted {
+		<span class="text-[12px] text-muted-foreground">{ amount(res.Committed) } committed</span>
+	} else {
+		<div class="flex items-baseline justify-between gap-2 text-[11.5px]">
+			<span class="tabular-nums">{ amount(res.Committed) }</span>
+			<span class="text-muted-foreground tabular-nums">of { amount(res.Sellable) }</span>
+		</div>
+		@meter(res.Percent(), meterClass(res.Percent()))
+	}
+}
+
+// AdminRegion is one region's settings.
+templ AdminRegion(f RegionFormData) {
+	@pageHead(f.Info.Label(), regionSubtitle(f.Info), nil)
+	if f.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">That was not saved</div>
+				<p class="mt-0.5 text-muted-foreground">{ f.Error }</p>
+			</div>
+		</div>
+	}
+	if !f.Info.Configured {
+		<div class="callout mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">Not configured yet</div>
+				<p class="mt-0.5 text-muted-foreground">
+					if f.Info.Nodes > 0 {
+						Machines carry this region, and no new app can be placed in it until it is saved here.
+					} else {
+						No machine carries this region yet. It can be configured now and take apps once one joins with it.
+					}
+				</p>
+			</div>
+		</div>
+	}
+	<form method="post" action={ templ.URL("/admin/regions/" + f.Info.Name) } class="max-w-2xl">
+		<div class="panel">
+			<div class="panel-header">
+				<span class="panel-title">Region</span>
+				<span class="mono text-[12px] text-muted-foreground">{ f.Info.Name }</span>
+			</div>
+			<div class="panel-body flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="display_name">Display name</label>
+					<input class="control" id="display_name" name="display_name" value={ f.DisplayName } placeholder={ f.Info.Name } maxlength="80"/>
+					<span class="hint">What people choosing a region are shown. Empty shows { f.Info.Name }.</span>
+				</div>
+				@checkOption("open", "1", "Open for new apps", f.Open, false) {
+					Closed, it takes no new apps and nothing moves into it. The apps already there stay.
+				}
+			</div>
+		</div>
+		<div class="panel mt-4">
+			<div class="panel-header">
+				<span class="panel-title">Edge</span>
+			</div>
+			<div class="panel-body flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="edge_host">Hostname</label>
+					<input class="control mono" id="edge_host" name="edge_host" value={ f.EdgeHost } placeholder="edge-fsn.example.test"/>
+					<span class="hint">
+						A name that resolves to this region's ingress. A custom domain on an app here is told to
+						CNAME to it. Empty uses the install's CNAME target.
+					</span>
+				</div>
+				<div class="field">
+					<label class="label" for="edge_addresses">Addresses</label>
+					<textarea class="control mono" id="edge_addresses" name="edge_addresses" rows="3" placeholder="203.0.113.10">{ f.EdgeAddrs }</textarea>
+					<span class="hint">The IPs the region's ingress answers on, one per line — for whatever writes this install's DNS records.</span>
+				</div>
+				<p class="text-[12px] text-muted-foreground">
+					Yacht writes no DNS itself. An application wrapping it reads every hostname with its
+					region and edge, and is told when they change, so it can send each app's traffic in
+					where the app lives.
+				</p>
+			</div>
+		</div>
+		<div class="panel mt-4">
+			<div class="panel-header">
+				<span class="panel-title">Volumes</span>
+			</div>
+			<div class="panel-body flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="storage_class">StorageClass</label>
+					<input class="control mono" id="storage_class" name="storage_class" value={ f.StorageClass } placeholder="the cluster's default"/>
+					<span class="hint">
+						What a volume made in this region is provisioned from. Recorded on each volume as it is
+						made, so a change here reaches new volumes and never an existing one.
+					</span>
+				</div>
+				<p class="text-[12px] text-muted-foreground">
+					A pod is kept in its region by its own placement, and that is enough for storage on the
+					machine it runs on. Replicated storage is not: its copies are placed by the storage
+					system, which knows nothing of the pod. Give such storage a class of its own per region
+					that keeps its copies on the region's machines, and name it here.
+				</p>
+			</div>
+		</div>
+		<div class="mt-4 flex items-center gap-2">
+			<button class="btn btn-primary" type="submit">Save region</button>
+			<a class="btn btn-ghost" href="/admin/regions">Back to regions</a>
+		</div>
+	</form>
+}
+
+func regionSubtitle(r app.RegionInfo) string {
+	parts := []string{fmt.Sprintf("%d of %d machines ready", r.Ready, r.Nodes)}
+	if len(r.Sites) > 0 {
+		parts = append(parts, plural(len(r.Sites), "site")+": "+strings.Join(r.Sites, ", "))
+	}
+	parts = append(parts, plural(int(r.Apps), "app"))
+	return strings.Join(parts, " · ")
+}
+
+// regionField is the region a new app goes to, on an install with regions.
+// Nothing at all on one without, which is every install that has never
+// labelled a machine with one.
+templ regionField(id string, c app.RegionChoice, chosen string) {
+	if c.InUse {
+		if len(c.Options) == 0 {
+			<div class="callout callout-warn">
+				<div class="min-w-0">
+					<div class="font-medium">No region is open for new apps</div>
+					<p class="mt-0.5 text-muted-foreground">
+						Every region is closed, unconfigured, or has no machine ready. The people who run this
+						install open one under Admin › Regions.
+					</p>
+				</div>
+			</div>
+		} else {
+			{{ selected := chosen }}
+			if selected == "" {
+				{{ selected = c.Default }}
+			}
+			<div class="field">
+				<label class="label" for={ id }>Region</label>
+				@selectbox.SelectBox() {
+					@selectbox.Trigger(selectbox.TriggerProps{ID: id, Name: "region"}) {
+						@selectbox.Value(selectbox.ValueProps{Placeholder: regionOptionLabel(c, selected)})
+					}
+					@selectbox.Content(selectbox.ContentProps{NoSearch: len(c.Options) < 8}) {
+						for _, o := range c.Options {
+							@selectbox.Item(selectbox.ItemProps{Value: o.Name, Selected: o.Name == selected}) {
+								{ o.Label() }
+							}
+						}
+					}
+				}
+				<span class="hint">Where it runs, with its volumes and data. Only an app without storage can move later.</span>
+			</div>
+		}
+	}
+}
+
+// regionOptionLabel is what the select shows before it is opened.
+func regionOptionLabel(c app.RegionChoice, name string) string {
+	for _, o := range c.Options {
+		if o.Name == name {
+			return o.Label()
+		}
+	}
+	return name
+}
+
+// regionTag is the region an app lives in, beside its name.
+templ regionTag(r *AppRegionData) {
+	if r != nil && r.Name != "" {
+		<span class="tag inline-flex items-center gap-1 [&>svg]:size-3" title="Region">
+			@icon("map-pin")
+			{ r.Label }
+		</span>
+	}
+}
+
+// appRegionSection is where an app lives, and moving it.
+templ appRegionSection(d AppDetailData) {
+	if r := d.Region; r != nil {
+		<section id="region" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">
+					@icon("map-pin")
+				</span>
+				<h2 class="settings-section-title">Region</h2>
+			</div>
+			<div class="panel mb-5">
+				<div class="panel-header">
+					<span class="panel-title">Lives in { r.Label }</span>
+					if r.Name != "" && r.Label != r.Name {
+						<span class="mono text-[12px] text-muted-foreground">{ r.Name }</span>
+					}
+				</div>
+				<div class="panel-body flex flex-col gap-4">
+					if !r.Recorded && r.Name != "" {
+						<p class="text-[12.5px] text-muted-foreground">
+							Made before this install had regions, and taken to be here. Its pods are kept here from its next deploy.
+						</p>
+					}
+					if r.HasStorage {
+						<div class="callout">
+							<div class="min-w-0">
+								<div class="font-medium">An app with storage stays in its region</div>
+								<p class="mt-0.5 text-muted-foreground">
+									Its volumes live on this region's machines and cannot move with it. To run it
+									somewhere else, back the data up, deploy a new app in the other region, and restore
+									it there.
+								</p>
+							</div>
+						</div>
+					} else if len(r.Options) == 0 {
+						<p class="text-[12.5px] text-muted-foreground">No other region is open for apps to move to.</p>
+					} else {
+						<form
+							method="post"
+							action={ templ.URL("/apps/" + d.App.Name + "/region") }
+							class="flex flex-wrap items-end gap-3"
+							data-confirm={ d.App.Name + " is redeployed in the region you choose. The new pods start there before the old ones stop, and its traffic follows once DNS points at the new region." }
+							data-confirm-title={ "Move " + d.App.Name + "?" }
+							data-confirm-label="Move app"
+						>
+							<div class="field w-[260px]">
+								<label class="label" for="move-region">Move to</label>
+								@selectbox.SelectBox() {
+									@selectbox.Trigger(selectbox.TriggerProps{ID: "move-region", Name: "region"}) {
+										@selectbox.Value(selectbox.ValueProps{Placeholder: r.Options[0].Label()})
+									}
+									@selectbox.Content(selectbox.ContentProps{NoSearch: len(r.Options) < 8}) {
+										for i, o := range r.Options {
+											@selectbox.Item(selectbox.ItemProps{Value: o.Name, Selected: i == 0}) {
+												{ o.Label() }
+											}
+										}
+									}
+								}
+							</div>
+							<button class="btn" type="submit">Move</button>
+						</form>
+						<p class="text-[12px] text-muted-foreground">
+							It needs room in the region it moves to, like a new app there would.
+						</p>
+					}
+				</div>
+			</div>
+		</section>
+	}
+}
+
+// capacityRegions is the room region by region, on an install with regions:
+// what admission actually holds a change to.
+templ capacityRegions(s app.CapacitySnapshot) {
+	if len(s.Regions) > 0 {
+		<div class="panel mb-5">
+			<div class="panel-header">
+				<span class="panel-title">By region</span>
+				<span class="text-[11.5px] text-muted-foreground">a change needs room in its own region</span>
+			</div>
+			<div class="table-scroll">
+				<table class="dtable min-w-[760px]">
+					<thead>
+						<tr>
+							<th>Region</th>
+							<th>Machines</th>
+							<th class="text-right">Apps</th>
+							<th>CPU sold</th>
+							<th>Memory sold</th>
+							<th class="text-right">Storage</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, rc := range s.Regions {
+							<tr data-region={ rc.Region }>
+								<td>
+									<div class="flex items-center gap-1.5">
+										<a class="font-medium hover:underline" href={ templ.URL("/admin/regions/" + rc.Region) }>{ rc.Label }</a>
+										if rc.Level == app.CapacityFull {
+											<span class="status status-err">full</span>
+										} else if rc.Level == app.CapacityWarn {
+											<span class="status status-warn">nearly full</span>
+										} else if !rc.Open {
+											<span class="status status-neutral">closed</span>
+										}
+									</div>
+									if rc.Label != rc.Region {
+										<div class="mono text-[11.5px] text-muted-foreground">{ rc.Region }</div>
+									}
+								</td>
+								<td class="text-[12.5px]">
+									<span class="tabular-nums">{ strconv.Itoa(rc.Schedulable) }</span>
+									<span class="text-muted-foreground">taking work, of { strconv.Itoa(rc.Nodes) }</span>
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ strconv.FormatInt(rc.Apps, 10) }</td>
+								<td class="w-[180px]">
+									@regionShare(rc.CPU, rc.Known, cpuAmount)
+								</td>
+								<td class="w-[180px]">
+									@regionShare(rc.Memory, rc.Known, byteAmount)
+								</td>
+								<td class="text-right tabular-nums text-muted-foreground">{ byteAmount(rc.Storage.Committed) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}

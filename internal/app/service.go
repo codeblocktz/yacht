@@ -135,6 +135,12 @@ type App struct {
 	// A sleeping app's Status reads stopped — it has no pods — and this is
 	// what says why.
 	Sleep Sleep
+
+	// Region is the region recorded for the app, empty where none is: every
+	// app on an install with no regions, and one made before regions existed
+	// that has not been recorded yet. AppRegion says where such an app is
+	// taken to be.
+	Region string
 }
 
 // Deployment is one recorded attempt to run a version of an app.
@@ -273,6 +279,15 @@ type Options struct {
 	WakeTimeout        time.Duration
 	WakePollInterval   time.Duration
 	SleepCheckInterval time.Duration
+
+	// DefaultRegion is where a new app goes when nobody chooses, and where an
+	// app made before regions existed is recorded: YACHT_DEFAULT_REGION.
+	// Empty leaves it to the regions that are open.
+	DefaultRegion string
+
+	// Routes is told when an app's hostnames or region change, or a region's
+	// edge does. Nil tells nobody.
+	Routes RouteObserver
 }
 
 // Service manages app lifecycle.
@@ -314,6 +329,10 @@ type Service struct {
 	// so that a cluster that cannot be counted is logged once and not every
 	// minute.
 	requestsUnknown atomic.Bool
+
+	// routesWG is the route notifications still being delivered, so a test
+	// can wait for them.
+	routesWG sync.WaitGroup
 }
 
 // NewService wires the store and the orchestrator together.
@@ -374,6 +393,11 @@ type CreateInput struct {
 	// Repo is where to build from, for SourceGit. Ignored by every other
 	// source: an image nobody builds has no repository to name.
 	Repo Repo
+
+	// Region is where the app lives, on an install with regions. Empty is the
+	// default region. It has to be open to new apps and have a machine ready;
+	// on an install with no regions it has to be empty.
+	Region string
 
 	Name     string
 	Image    string
@@ -505,6 +529,12 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	// Carried across because UpdateApp does not select them and apply reads
 	// them off the App it is handed.
 	updated.Volumes, updated.Variables = a.Volumes, a.Variables
+
+	// A port cleared or an app made internal withdraws its address; the
+	// reverse issues one.
+	if updated.Internal != a.Internal || (updated.Port == 0) != (a.Port == 0) {
+		s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
+	}
 
 	// A repository change alone reaches no cluster: it decides what the next
 	// build reads. Recording a deployment for it would put a rollout in the
@@ -653,11 +683,22 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 
 	q := s.q.WithTx(tx)
 
+	// The region before anything is counted, since the room a new app needs
+	// is in the region it goes to.
+	views, err := s.regionView(ctx, q)
+	if err != nil {
+		return App{}, err
+	}
+	region, err := views.resolveNew(in.Region)
+	if err != nil {
+		return App{}, err
+	}
+
 	// First in the transaction, so the quota row stays locked until this app
 	// is committed and a create racing this one counts it. Storage the source
 	// brings is counted with the app: a database refused for its volume after
 	// the app row exists would be half a database.
-	change := quotaChange{Added: []shape{{
+	change := quotaChange{Region: region, Added: []shape{{
 		Replicas: in.Replicas, CPULimit: in.CPULimit, MemoryLimit: in.MemoryLimit,
 	}}}
 	if blueprint.Volume != nil {
@@ -684,6 +725,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		RepoUrl:       in.Repo.URL,
 		RepoBranch:    in.Repo.Branch,
 		RepoSubdir:    in.Repo.Subdir,
+		Region:        regionPtr(region),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -734,11 +776,18 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	// not one somebody has to finish setting up; it is one that has not been
 	// deployed.
 	if blueprint.Volume != nil {
+		// From the region's StorageClass, recorded on the volume: what keeps a
+		// replicated volume's copies on the region's machines.
+		class, err := regionStorageClass(ctx, q, region)
+		if err != nil {
+			return App{}, err
+		}
 		if _, err := q.CreateVolume(ctx, dbgen.CreateVolumeParams{
 			OwnerID: ownerID, AppID: created.ID,
 			Name:      blueprint.Volume.Name,
 			MountPath: blueprint.Volume.MountPath,
 			SizeBytes: blueprint.Volume.SizeBytes,
+			Class:     class,
 		}); err != nil {
 			return App{}, fmt.Errorf("app: create volume: %w", err)
 		}
@@ -805,7 +854,9 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	s.log.Info("app created",
 		slog.String("owner", ownerID),
 		slog.String("name", created.Name),
-		slog.String("namespace", created.Namespace))
+		slog.String("namespace", created.Namespace),
+		slog.String("region", region))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: created.ID, App: created.Name})
 	return created, nil
 }
 
@@ -888,16 +939,24 @@ func (s *Service) applyRelease(
 	if err != nil {
 		return err
 	}
+	// Only a recorded region places the pods. An app made before regions
+	// existed runs where it always did until its region is recorded, and the
+	// affinity then arrives with its next apply.
+	target := s.cnameTarget(ctx)
+	if edge := s.regionEdge(ctx, q, a.Region); edge.Host != "" {
+		target = edge.Host
+	}
 	spec := release.AppSpec(ReleaseOverlays{
 		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
 		Volumes: volumeSpecs(vols), Hosts: hosts, TLSHosts: s.tlsHosts(hosts),
 		IssuedHosts: s.issuedHosts(hosts), CertIssuer: s.opts.CertIssuer,
 		HTTPSOnly:   a.HTTPSOnly && len(hosts) > 0,
-		CNAMETarget: cnameTargetFor(a, s.cnameTarget(ctx)),
+		CNAMETarget: cnameTargetFor(a, target),
 		Asleep:      a.Sleep.State == SleepAsleep,
 		Waker:       s.wakerFor(a, hosts),
 		Pool:        pool,
+		Region:      a.Region,
 	})
 	return s.orch.ApplyApp(ctx, spec)
 }
@@ -1509,6 +1568,7 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 
 	s.log.Info("app deleted",
 		slog.String("owner", ownerID), slog.String("name", name))
+	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	return nil
 }
 
@@ -1554,6 +1614,9 @@ func toApp(row dbgen.App) App {
 		X:             row.CanvasX,
 		Y:             row.CanvasY,
 		Sleep:         toSleep(row),
+	}
+	if row.Region != nil {
+		a.Region = *row.Region
 	}
 	if row.ActiveReleaseID.Valid {
 		id := uuid.UUID(row.ActiveReleaseID.Bytes)

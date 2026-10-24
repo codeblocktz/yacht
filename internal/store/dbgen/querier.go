@@ -58,6 +58,9 @@ type Querier interface {
 	// which a second request also finds it unconsumed.
 	ConsumeSignupLink(ctx context.Context, tokenHash []byte) (string, error)
 	CountApps(ctx context.Context, ownerID string) (int64, error)
+	// How many apps each region holds, across every team, for the operator. Null
+	// is the apps not placed in any region yet.
+	CountAppsByRegion(ctx context.Context) ([]CountAppsByRegionRow, error)
 	CountCapacityRefusalsSince(ctx context.Context, since time.Time) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CountPendingReleaseBackfills(ctx context.Context) (int64, error)
@@ -167,6 +170,11 @@ type Querier interface {
 	// reasonable thing to do. The row it creates is the one CreateTeamRow fills in
 	// later.
 	DismissOnboarding(ctx context.Context, ownerID string) error
+	// The install's default region gets a row, open, the first time it is named,
+	// so a cluster labelled with one region and YACHT_DEFAULT_REGION set needs
+	// nothing more before apps can be placed. Never overwrites: an operator who
+	// closed it, or named it, keeps that.
+	EnsureRegion(ctx context.Context, name string) error
 	FailQueuedBuildOperation(ctx context.Context, arg FailQueuedBuildOperationParams) (int64, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
@@ -253,6 +261,7 @@ type Querier interface {
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
+	GetRegion(ctx context.Context, name string) (Region, error)
 	GetReleaseBackfillState(ctx context.Context, arg GetReleaseBackfillStateParams) (AppReleaseBackfill, error)
 	// Expiry is filtered here for the reason GetSessionByHash gives: so that an
 	// expired row can never be treated as valid by a caller that forgets to check.
@@ -394,6 +403,13 @@ type Querier interface {
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
 	// alone would be correct today and wrong the moment more than one owner exists.
 	ListRecentDeployments(ctx context.Context, arg ListRecentDeploymentsParams) ([]ListRecentDeploymentsRow, error)
+	// Regions are the install's, like the capacity policy: what a region is
+	// called and where its traffic enters is the same for every team.
+	ListRegions(ctx context.Context) ([]Region, error)
+	// Every hostname on the install with the app and region it belongs to, for an
+	// application that writes DNS. Not owner-scoped: it is the wrapper's view of
+	// the whole install, like the capacity footprints.
+	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
 	// Every build still claiming to run, oldest first. Not owner-scoped: this
 	// feeds the reconciler, which is the platform settling its own records rather
 	// than a team reading theirs.
@@ -410,6 +426,10 @@ type Querier interface {
 	// Every team with its quota, its pool, its storage and how many people are in
 	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
 	ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, error)
+	// Every app not yet placed in a region, with whether it has storage: an app
+	// with a volume is never recorded anywhere but where it is seen running,
+	// because its volume may live on one region's machines and nowhere else.
+	ListUnplacedApps(ctx context.Context) ([]ListUnplacedAppsRow, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
 	// Taken inside the transaction that commits a change, after the team's quota
@@ -479,6 +499,11 @@ type Querier interface {
 	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
 	OpenAppSleep(ctx context.Context, arg OpenAppSleepParams) error
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
+	// Records the region an app already lives in, once. Not versioned: recording
+	// where an app is changes nothing about it, and the affinity reaches its pods
+	// at its next apply rather than restarting every app on the install at once.
+	// Only where it is still unrecorded, so a move racing this is never undone.
+	RecordAppRegion(ctx context.Context, arg RecordAppRegionParams) (int64, error)
 	RecordCapacityRefusal(ctx context.Context, arg RecordCapacityRefusalParams) error
 	// Records what a check saw.
 	//
@@ -533,6 +558,9 @@ type Querier interface {
 	SetAppNetworking(ctx context.Context, arg SetAppNetworkingParams) (int64, error)
 	SetAppPosition(ctx context.Context, arg SetAppPositionParams) (int64, error)
 	SetAppProject(ctx context.Context, arg SetAppProjectParams) (int64, error)
+	// Moves an app to a region and versions it, so the reconciler re-applies it
+	// with the new placement the way a team's pool change does.
+	SetAppRegion(ctx context.Context, arg SetAppRegionParams) (App, error)
 	SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) (App, error)
 	// Recorded by a build, which is the only thing that can discover it. The
 	// image update owns the build operation's single config_version increment.
@@ -566,6 +594,9 @@ type Querier interface {
 	StartActing(ctx context.Context, arg StartActingParams) (int64, error)
 	SumInstallVolumeBytes(ctx context.Context) (int64, error)
 	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
+	// Volume bytes by the region of the app holding them, for the capacity page's
+	// regions. Null is the apps not placed in a region yet.
+	SumVolumeBytesByRegion(ctx context.Context) ([]SumVolumeBytesByRegionRow, error)
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.
 	TakeHookPending(ctx context.Context, appID uuid.UUID) (int64, error)
@@ -625,6 +656,7 @@ type Querier interface {
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go
 	// struct for no reason at all, which is the shortest route to it being logged.
 	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
+	UpsertRegion(ctx context.Context, arg UpsertRegionParams) (Region, error)
 	UpsertTeamPool(ctx context.Context, arg UpsertTeamPoolParams) (TeamPool, error)
 	UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error)
 	UpsertTeamSleepDefault(ctx context.Context, arg UpsertTeamSleepDefaultParams) (TeamSleepDefault, error)

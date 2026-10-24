@@ -18,6 +18,11 @@ templ TemplateList(d TemplateListData) {
 			</div>
 		</div>
 	}
+	if d.Regions.InUse && len(d.Regions.Options) == 0 {
+		<div class="mb-5">
+			@regionField("region", d.Regions, "")
+		</div>
+	}
 	for _, t := range d.Templates {
 		@templateCard(t, d)
 	}
@@ -68,11 +73,17 @@ templ templateCard(t app.Template, d TemplateListData) {
 						required
 					/>
 				</div>
+				if d.Regions.InUse && len(d.Regions.Options) > 0 {
+					<div class="min-w-[200px]">
+						@regionField("region-"+t.Slug, d.Regions, d.Region)
+					</div>
+				}
 				<button class="btn btn-primary" type="submit">Deploy stack</button>
 			</form>
 			<p class="mt-2 text-[12.5px] text-muted-foreground">
 				Every app is named after the stack, so the same template can be
-				deployed more than once. They land on a new project of their own.
+				deployed more than once. They land on a new project of their own,
+				and in one region together.
 			</p>
 		</div>
 	</div>

@@ -99,7 +99,14 @@ test_flags_are_checked_before_anything_runs() {
 		'--site dar;id' \
 		'--site -dar' \
 		'--multi-site --skip-k3s' \
-		'--site dar-a --skip-k3s'; do
+		'--site dar-a --skip-k3s' \
+		'--region DAR' \
+		'--region dar;id' \
+		'--region dar|id' \
+		'--region .dar' \
+		'--region eu.central' \
+		'--region dar_1' \
+		'--region dar --skip-k3s'; do
 		# Word-split on purpose: each case is a list of flags.
 		# shellcheck disable=SC2086
 		if sh -c '. "$1"; shift; parse_flags "$@"' sh "$INSTALL_LIB" $bad 2>/dev/null; then
@@ -112,6 +119,8 @@ test_flags_are_checked_before_anything_runs() {
 		'--multi-site --public-ip 203.0.113.7' \
 		'--multi-site --public-ip 2001:db8::7' \
 		'--site dar-a' \
+		'--region dar' \
+		'--site dar-a --region dar' \
 		'--multi-site --site eu.west_1'; do
 		# shellcheck disable=SC2086
 		if ! sh -c '. "$1"; shift; parse_flags "$@"' sh "$INSTALL_LIB" $good; then
@@ -119,7 +128,7 @@ test_flags_are_checked_before_anything_runs() {
 			return
 		fi
 	done
-	ok 'site and public address flags are checked before anything runs'
+	ok 'site, region and public address flags are checked before anything runs'
 }
 
 test_one_place_installs_k3s_as_before() {
@@ -135,7 +144,7 @@ test_one_place_installs_k3s_as_before() {
 
 test_multi_site_installs_wireguard() {
 	log="$TMP_ROOT/multi.log"
-	fresh_install "$log" --multi-site --public-ip 203.0.113.7 --site dar-a >/dev/null
+	fresh_install "$log" --multi-site --public-ip 203.0.113.7 --site dar-a --region dar >/dev/null
 	got=$(cat "$log")
 	if assert_contains "$got" 'exec=server ' &&
 		assert_contains "$got" '--flannel-backend=wireguard-native' &&
@@ -143,10 +152,24 @@ test_multi_site_installs_wireguard() {
 		assert_contains "$got" '--node-external-ip=203.0.113.7' &&
 		assert_contains "$got" '--tls-san=203.0.113.7' &&
 		assert_contains "$got" '--node-label=topology.kubernetes.io/zone=dar-a' &&
+		assert_contains "$got" '--node-label=topology.kubernetes.io/region=dar' &&
 		assert_contains "$got" 'wireguard-checked'; then
 		ok '--multi-site installs K3s over WireGuard at its public address'
 	else
 		not_ok '--multi-site installs K3s over WireGuard at its public address'
+	fi
+}
+
+test_a_region_labels_the_server() {
+	log="$TMP_ROOT/region.log"
+	fresh_install "$log" --region fsn >/dev/null
+	got=$(cat "$log")
+	if assert_contains "$got" 'exec=server --node-label=topology.kubernetes.io/region=fsn' &&
+		! assert_contains "$got" 'wireguard' 2>/dev/null; then
+		ok '--region alone labels the server and changes nothing else'
+	else
+		not_ok '--region alone labels the server and changes nothing else'
+		printf '%s\n' "$got" >&2
 	fi
 }
 
@@ -234,10 +257,11 @@ test_backend_is_read_from_either_place() {
 	fi
 }
 
-printf '1..8\n'
+printf '1..9\n'
 test_flags_are_checked_before_anything_runs
 test_one_place_installs_k3s_as_before
 test_multi_site_installs_wireguard
+test_a_region_labels_the_server
 test_public_address_comes_from_the_default_route
 test_a_private_address_is_not_guessed
 test_running_vxlan_is_not_changed

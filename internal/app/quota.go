@@ -146,6 +146,12 @@ type quotaChange struct {
 	// Storage is bytes of volume being added; negative for a volume shrinking,
 	// which nothing does today.
 	Storage int64
+
+	// Region is where Added goes, on an install with regions: the install's
+	// capacity is then the region's machines against the apps in it. Empty
+	// for a change to an existing app, whose region is its own, and on an
+	// install with none.
+	Region string
 }
 
 // withinQuota refuses a change that would raise a team's committed use past its
@@ -238,6 +244,9 @@ type footprint struct {
 	ID uuid.UUID
 	shape
 	Asleep bool
+
+	// Region is the region recorded for the app, nil where none is.
+	Region *string
 }
 
 // tally is what a set of apps and volumes commits, with a change applied when

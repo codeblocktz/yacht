@@ -103,7 +103,7 @@ func (q *Queries) ListCapacityRefusalsSince(ctx context.Context, arg ListCapacit
 }
 
 const listInstallFootprints = `-- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep
+SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep, region
 FROM apps
 `
 
@@ -113,6 +113,7 @@ type ListInstallFootprintsRow struct {
 	CpuLimit    string
 	MemoryLimit string
 	Asleep      bool
+	Region      *string
 }
 
 // Every app on the install, with its id so a change to one can be counted in
@@ -134,6 +135,7 @@ func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootp
 			&i.CpuLimit,
 			&i.MemoryLimit,
 			&i.Asleep,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -252,4 +254,38 @@ func (q *Queries) SumInstallVolumeBytes(ctx context.Context) (int64, error) {
 	var total int64
 	err := row.Scan(&total)
 	return total, err
+}
+
+const sumVolumeBytesByRegion = `-- name: SumVolumeBytesByRegion :many
+SELECT a.region, coalesce(sum(v.size_bytes), 0)::bigint AS total
+FROM volumes v
+JOIN apps a ON a.id = v.app_id
+GROUP BY a.region
+`
+
+type SumVolumeBytesByRegionRow struct {
+	Region *string
+	Total  int64
+}
+
+// Volume bytes by the region of the app holding them, for the capacity page's
+// regions. Null is the apps not placed in a region yet.
+func (q *Queries) SumVolumeBytesByRegion(ctx context.Context) ([]SumVolumeBytesByRegionRow, error) {
+	rows, err := q.db.Query(ctx, sumVolumeBytesByRegion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SumVolumeBytesByRegionRow{}
+	for rows.Next() {
+		var i SumVolumeBytesByRegionRow
+		if err := rows.Scan(&i.Region, &i.Total); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

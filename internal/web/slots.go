@@ -398,6 +398,11 @@ func breadcrumbFor(path string) []Crumb {
 		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Teams", Href: "/admin/teams"}}
 	case hasPrefix(path, "/admin/capacity"):
 		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Capacity"}}
+	case path == "/admin/regions":
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Regions"}}
+	case hasPrefix(path, "/admin/regions/"):
+		// The region's name is appended by the handler, which knows it.
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Regions", Href: "/admin/regions"}}
 	}
 	return nil
 }
@@ -483,6 +488,10 @@ func adminNav(ctx context.Context, path string) []NavItem {
 			NavItem{Label: "Capacity", Href: "/admin/capacity", Icon: "gauge",
 				Active: hasPrefix(path, "/admin/capacity")},
 		)
+	}
+	if s.Regions {
+		items = append(items, NavItem{Label: "Regions", Href: "/admin/regions", Icon: "map-pin",
+			Active: hasPrefix(path, "/admin/regions")})
 	}
 	items = append(items,
 		NavItem{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -16,7 +17,9 @@ import (
 // this creates several and the project holding them. Keeping it apart means the
 // templates page cannot reach anything else on the app service by accident.
 type Stacks interface {
-	DeployTemplate(ctx context.Context, ownerID, slug, stack string) (app.Project, error)
+	// DeployTemplateIn places every app of the stack in one region; empty
+	// is the default, and the only answer on an install with none.
+	DeployTemplateIn(ctx context.Context, ownerID, slug, stack, region string) (app.Project, error)
 }
 
 // TemplateListData is the page offering the stacks that can be deployed.
@@ -28,11 +31,16 @@ type TemplateListData struct {
 
 	// RoomShort says the install is nearly out of room; see NewAppData.
 	RoomShort bool
+
+	// Regions and Region are the region the stack goes to; see NewAppData.
+	Regions app.RegionChoice
+	Region  string
 }
 
 func (s *Server) templateList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, TemplateList(TemplateListData{
 		Templates: app.Templates(), RoomShort: s.roomShort(r.Context()),
+		Regions: s.regionChoice(r.Context()),
 	}))
 }
 
@@ -43,8 +51,9 @@ func (s *Server) templateDeploy(w http.ResponseWriter, r *http.Request) {
 
 	slug := r.FormValue("template")
 	stack := r.FormValue("stack")
+	region := strings.TrimSpace(r.FormValue("region"))
 
-	project, err := s.stacks.DeployTemplate(ctx, owner.ID, slug, stack)
+	project, err := s.stacks.DeployTemplateIn(ctx, owner.ID, slug, stack, region)
 	if err != nil {
 		// Re-rendered with what was typed, so a refused name can be corrected
 		// rather than typed again from nothing.
@@ -52,7 +61,7 @@ func (s *Server) templateDeploy(w http.ResponseWriter, r *http.Request) {
 			slog.String("template", slug), slog.String("error", err.Error()))
 		data := TemplateListData{
 			Templates: app.Templates(), Stack: stack, Slug: slug, Error: err.Error(),
-			RoomShort: s.roomShort(ctx),
+			RoomShort: s.roomShort(ctx), Regions: s.regionChoice(ctx), Region: region,
 		}
 		if errors.Is(err, app.ErrTemplateNotFound) {
 			http.NotFound(w, r)

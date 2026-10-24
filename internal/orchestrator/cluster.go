@@ -21,6 +21,11 @@ type NodeInfo struct {
 	// with none, which is every node of an install in one place.
 	Site string
 
+	// Region is the broader place the machine is in — the region its apps
+	// live in, from the topology.kubernetes.io/region label. Empty for a node
+	// with none, which is every node of an install that has no regions.
+	Region string
+
 	Version      string // kubelet version
 	OS           string
 	Architecture string
