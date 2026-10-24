@@ -176,7 +176,8 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 		return fmt.Errorf("k8s: create build service account: %w", err)
 	}
 	// A build runs a customer's Dockerfile: nothing may connect to it, and,
-	// under strict isolation, it reaches only DNS and public addresses.
+	// under strict isolation, it reaches only DNS, public addresses and the
+	// ingress that serves the cluster's own.
 	return o.isolate(ctx, buildIsolation)
 }
 

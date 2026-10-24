@@ -27,8 +27,9 @@ const nameLabel = "kubernetes.io/metadata.name"
 // privateRanges are refused as destinations under strict isolation: the
 // nodes' own network, the cluster's pods and services, the link-local range
 // cloud metadata services answer on, and carrier-grade NAT. Everything a
-// workload has any business reaching there is either its own team — allowed
-// by namespace — or named in EgressAllow.
+// workload has any business reaching there is its own team — allowed by
+// namespace — the ingress controller, which the public reaches too, or named
+// in EgressAllow.
 var privateRanges = []string{
 	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16",
 }
@@ -88,7 +89,7 @@ func teamIsolation(namespace, owner string, iso orchestrator.Isolation) *network
 				networkingv1ac.NetworkPolicyEgressRule().WithTo(networkingv1ac.NetworkPolicyPeer().
 					WithNamespaceSelector(metav1ac.LabelSelector().
 						WithMatchLabels(map[string]string{orchestrator.LabelOwner: owner}))),
-				publicEgress(iso.EgressAllow))
+				publicEgress(iso.EgressAllow), ingressEgress(), loadBalancerEgress())
 	}
 	return policy(namespace, spec)
 }
@@ -96,15 +97,16 @@ func teamIsolation(namespace, owner string, iso orchestrator.Isolation) *network
 // buildIsolation is the policy for the namespace builds run in. Nothing
 // connects to a build, so nothing is let in. Under strict isolation a build
 // reaches DNS and public addresses — its repository, base images, package
-// registries — and the private ranges named in EgressAllow, where an image
-// registry on the LAN would be.
+// registries, and a registry this cluster serves itself through its ingress —
+// and the private ranges named in EgressAllow, where an image registry on the
+// LAN would be.
 func buildIsolation(iso orchestrator.Isolation) *networkingv1ac.NetworkPolicyApplyConfiguration {
 	spec := networkingv1ac.NetworkPolicySpec().
 		WithPodSelector(metav1ac.LabelSelector()).
 		WithPolicyTypes(networkingv1.PolicyTypeIngress)
 	if iso.Mode == orchestrator.IsolationStrict {
 		spec = spec.WithPolicyTypes(networkingv1.PolicyTypeEgress).
-			WithEgress(dnsEgress(), publicEgress(iso.EgressAllow))
+			WithEgress(dnsEgress(), publicEgress(iso.EgressAllow), ingressEgress(), loadBalancerEgress())
 	}
 	return policy(BuildNamespace, spec)
 }
@@ -137,6 +139,50 @@ func publicEgress(allow []netip.Prefix) *networkingv1ac.NetworkPolicyEgressRuleA
 			networkingv1ac.IPBlock().WithCIDR(p.String())))
 	}
 	return rule
+}
+
+// ingressNamespaces are where the ingress controller runs: K3s's own Traefik
+// in kube-system, or one installed in its own namespace. The same places the
+// access log is read from (httplog.go).
+var ingressNamespaces = []string{"kube-system", "traefik"}
+
+// ingressEgress lets a workload reach the ingress controller's HTTP and HTTPS
+// ports, which anyone on the internet reaches already: a request for a public
+// address this cluster serves, made from inside it, arrives there by a private
+// address. Kubernetes rewrites the destination before the policy is asked —
+// a Service's address, or a node's own public address, becomes the pod behind
+// it — so publicEgress alone refuses an app calling another app's public URL,
+// or a build pushing to a registry the cluster serves, whenever the way in is
+// on the same cluster. Only the entrypoints, never its dashboard or metrics.
+func ingressEgress() *networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration {
+	tcp := corev1.ProtocolTCP
+	return networkingv1ac.NetworkPolicyEgressRule().
+		WithTo(networkingv1ac.NetworkPolicyPeer().
+			WithNamespaceSelector(metav1ac.LabelSelector().WithMatchExpressions(
+				metav1ac.LabelSelectorRequirement().
+					WithKey(nameLabel).WithOperator(metav1.LabelSelectorOpIn).WithValues(ingressNamespaces...))).
+			WithPodSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{"app.kubernetes.io/name": "traefik"}))).
+		WithPorts(
+			networkingv1ac.NetworkPolicyPort().WithProtocol(tcp).WithPort(intstr.FromString("web")),
+			networkingv1ac.NetworkPolicyPort().WithProtocol(tcp).WithPort(intstr.FromString("websecure")))
+}
+
+// loadBalancerEgress is the other way K3s rewrites a request for a node's own
+// public address: to the load balancer pod that binds 80 and 443 on that node
+// (ServiceLB's svclb-traefik), which hands it on to the ingress controller.
+// Its pods run in kube-system, the only namespace K3s puts them in.
+func loadBalancerEgress() *networkingv1ac.NetworkPolicyEgressRuleApplyConfiguration {
+	tcp := corev1.ProtocolTCP
+	return networkingv1ac.NetworkPolicyEgressRule().
+		WithTo(networkingv1ac.NetworkPolicyPeer().
+			WithNamespaceSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{nameLabel: "kube-system"})).
+			WithPodSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{"svccontroller.k3s.cattle.io/svcname": "traefik"}))).
+		WithPorts(
+			networkingv1ac.NetworkPolicyPort().WithProtocol(tcp).WithPort(intstr.FromInt32(80)),
+			networkingv1ac.NetworkPolicyPort().WithProtocol(tcp).WithPort(intstr.FromInt32(443)))
 }
 
 // isolate writes one namespace's policy, as build makes it of the isolation
