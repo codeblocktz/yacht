@@ -139,7 +139,7 @@ templ appDatabase(d AppDetailData) {
 				<div class="min-w-0">
 					<div class="font-medium">{ sourceLabel(d.App.Source) } has no tables to browse here</div>
 					<p class="mt-0.5 text-muted-foreground">
-						The data browser reads SQL databases; PostgreSQL first. Connect from an app with
+						The data browser reads PostgreSQL and MySQL. Connect from an app with
 						the address under Connect, or from your machine with the engine's own client.
 					</p>
 				</div>
@@ -402,16 +402,18 @@ templ databaseConfig(a app.App, db DatabaseData) {
 				</table>
 			</div>
 		</div>
-		<div class="panel">
-			<div class="panel-header">
-				<span class="panel-title">Extensions</span>
+		if len(db.Config.Extensions) > 0 {
+			<div class="panel">
+				<div class="panel-header">
+					<span class="panel-title">Extensions</span>
+				</div>
+				<div class="record">
+					for _, e := range db.Config.Extensions {
+						@statRow(e.Name, e.Version)
+					}
+				</div>
 			</div>
-			<div class="record">
-				for _, e := range db.Config.Extensions {
-					@statRow(e.Name, e.Version)
-				}
-			</div>
-		</div>
+		}
 	}
 }
 

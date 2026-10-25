@@ -185,6 +185,9 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 	if _, err := s.DatabaseCredentials(ctx, id, "web"); !errors.Is(err, ErrNotADatabase) {
 		t.Errorf("an image app's credentials: %v, want ErrNotADatabase", err)
 	}
+	if _, err := s.DatabaseBrowser(ctx, id, "db-mysql"); err != nil {
+		t.Errorf("MySQL's browser: %v", err)
+	}
 	if _, err := s.DatabaseBrowser(ctx, id, "db-redis"); !errors.Is(err, database.ErrNoBrowser) {
 		t.Errorf("Redis's browser: %v, want ErrNoBrowser", err)
 	}

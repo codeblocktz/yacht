@@ -119,8 +119,8 @@ func (s *Service) databaseCredentials(ctx context.Context, a App) (DatabaseCrede
 // and the cluster address still routes — the same path the waker hands held
 // requests down (see orchestrator.ServiceAddresser).
 //
-// Only Postgres for now. MySQL is next and would sit beside it; Redis and
-// MongoDB have no tables, and say so rather than showing an empty list.
+// Postgres and MySQL. Redis and MongoDB have no tables, and say so rather
+// than showing an empty list.
 func (s *Service) DatabaseBrowser(ctx context.Context, ownerID, name string) (database.Browser, error) {
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
@@ -129,7 +129,8 @@ func (s *Service) DatabaseBrowser(ctx context.Context, ownerID, name string) (da
 	if !a.Source.Database() {
 		return nil, ErrNotADatabase
 	}
-	if a.Source != SourcePostgres {
+	open, ok := browsers[a.Source]
+	if !ok {
 		return nil, database.ErrNoBrowser
 	}
 	creds, err := s.databaseCredentials(ctx, a)
@@ -140,9 +141,15 @@ func (s *Service) DatabaseBrowser(ctx context.Context, ownerID, name string) (da
 	if err != nil {
 		return nil, err
 	}
-	return database.Postgres(database.Target{
+	return open(database.Target{
 		Addr: addr, User: creds.User, Password: creds.Password, Database: creds.Database,
 	}, database.Limits{}), nil
+}
+
+// browsers are the engines with a data browser.
+var browsers = map[Source]func(database.Target, database.Limits) database.Browser{
+	SourcePostgres: database.Postgres,
+	SourceMySQL:    database.MySQL,
 }
 
 // ErrDatabaseUnreachable is a database the engine has no way to dial: an
