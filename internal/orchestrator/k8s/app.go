@@ -28,7 +28,7 @@ import (
 // servicePort is the stable port the in-cluster Service listens on, regardless
 // of what port the container uses. Keeping it fixed means ingress and
 // service-discovery config does not change when an app changes its port.
-const servicePort int32 = 80
+const servicePort = orchestrator.PublicServicePort
 
 // deploymentProgressDeadline is also the upper bound used by the application
 // worker. Setting it on the object lets the Deployment controller supply the
@@ -59,6 +59,12 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 	// kubelet retries.
 	if err := o.applySecret(ctx, spec); err != nil {
 		return err
+	}
+
+	// A workload on a schedule is a CronJob, and everything that makes an
+	// always-running one reachable goes.
+	if spec.Schedule != "" {
+		return o.applyScheduled(ctx, spec)
 	}
 
 	// Going to sleep, the route moves to the waker before the pods go away,
@@ -108,6 +114,13 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		}
 	}
 
+	// A workload that ran on a schedule and no longer does: its CronJob
+	// goes once the Deployment replacing it is in place, so the switch never
+	// leaves it with neither.
+	if err := o.deleteCronJob(ctx, spec.Ref); err != nil {
+		return err
+	}
+
 	// The Deployment metadata key is the commit marker for the whole apply,
 	// not merely for the Deployment. Writing it last means a Service or
 	// Ingress failure remains visibly drifted and the app reconciler retries
@@ -148,6 +161,10 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		orchestrator.AnnotationRevision:      specHash(spec),
 		orchestrator.AnnotationReleaseID:     "",
 		orchestrator.AnnotationConfigVersion: "-1",
+		// On the Deployment rather than its pods, so changing the policy
+		// restarts nothing: it decides how AppStatus reads a crash, which is
+		// read from here.
+		annotationCrashLimit: strconv.Itoa(int(spec.CrashLimit())),
 	}
 
 	podSpec := corev1ac.PodSpec().
@@ -208,7 +225,7 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		WithAnnotations(pendingAnnotations).
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithStrategy(strategy).
-			WithProgressDeadlineSeconds(deploymentProgressDeadline).
+			WithProgressDeadlineSeconds(progressDeadline(spec)).
 			WithReplicas(spec.Replicas).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(orchestrator.SelectorLabels(spec.Name))).
@@ -396,6 +413,16 @@ func (o *Orchestrator) container(
 			volumeMounts(spec)...,
 		)...)
 
+	// A start command replaces the image's ENTRYPOINT and CMD both: with a
+	// command and no args, Kubernetes runs exactly the command. Left off
+	// when empty, rather than set to nothing, so the image decides — and so
+	// clearing one hands the container back to its image on the next apply,
+	// since this field manager owns the field and an apply without it
+	// removes it.
+	if cmd := startCommand(spec); cmd != nil {
+		c = c.WithCommand(cmd...)
+	}
+
 	// Readiness first: it is what keeps traffic away from a container that is
 	// not serving yet, which is the whole of what most workloads need.
 	if spec.HealthPath != "" {
@@ -516,6 +543,10 @@ func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) erro
 		return err
 	}
 
+	if err := o.deleteCronJob(ctx, ref); err != nil {
+		return err
+	}
+
 	if err := o.deleteSecret(ctx, ref); err != nil {
 		return err
 	}
@@ -536,7 +567,8 @@ func (o *Orchestrator) AppStatus(
 		Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return orchestrator.AppStatus{}, orchestrator.ErrNotFound
+			// No Deployment is also what a workload on a schedule has.
+			return o.scheduledStatus(ctx, ref)
 		}
 		return orchestrator.AppStatus{}, fmt.Errorf("k8s: get deployment %s: %w", ref, err)
 	}
@@ -596,7 +628,7 @@ func (o *Orchestrator) AppStatus(
 	// its config missing, a crash on every start. Only the release being
 	// rolled out is looked at; an old pod's trouble is not this deploy's.
 	if !status.Terminal && status.Ready < desired && status.ReleaseID != "" {
-		if reason, message, ok := o.unstartable(ctx, ref, status.ReleaseID); ok {
+		if reason, message, ok := o.unstartable(ctx, ref, status.ReleaseID, crashLimit(dep.Annotations)); ok {
 			status.Terminal = true
 			status.Reason, status.Message = reason, message
 		}
@@ -609,14 +641,40 @@ func (o *Orchestrator) AppStatus(
 }
 
 // crashesBeforeFailing is how many times a release's container may crash
-// and be restarted before its rollout is given up: enough for one that
-// waits on a database still starting, few enough not to wait out the
-// deadline for one that never will.
-const crashesBeforeFailing = 3
+// and be restarted before its rollout is given up, for a Deployment written
+// before its restart policy was recorded on it: the default policy's.
+const crashesBeforeFailing = orchestrator.DefaultMaxRestarts
+
+// annotationCrashLimit records a workload's restart policy, as the number of
+// restarts its container may have before it is failing; zero is no limit.
+const annotationCrashLimit = "yacht/crash-limit"
+
+// crashLimit reads it back.
+func crashLimit(annotations map[string]string) int32 {
+	n, err := strconv.ParseInt(annotations[annotationCrashLimit], 10, 32)
+	if err != nil || n < 0 {
+		return crashesBeforeFailing
+	}
+	return int32(n)
+}
+
+// progressDeadline is how long Kubernetes lets a rollout go without progress
+// before it reports ProgressDeadlineExceeded: the app's healthcheck timeout
+// when it has one, so the cluster gives up when the deploy does and says why
+// in its own words, and the engine's budget otherwise.
+func progressDeadline(spec orchestrator.AppSpec) int32 {
+	if spec.HealthTimeoutSeconds > 0 {
+		return spec.HealthTimeoutSeconds
+	}
+	return deploymentProgressDeadline
+}
 
 // unstartable reports why a release's container cannot start, if it
-// cannot: a reason Kubernetes will not get past by trying again.
-func (o *Orchestrator) unstartable(ctx context.Context, ref orchestrator.Ref, releaseID string) (string, string, bool) {
+// cannot: a reason Kubernetes will not get past by trying again, or more
+// crashes than the restart policy allows.
+func (o *Orchestrator) unstartable(
+	ctx context.Context, ref orchestrator.Ref, releaseID string, limit int32,
+) (string, string, bool) {
 	pods, err := o.client.CoreV1().Pods(ref.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
 	})
@@ -628,7 +686,7 @@ func (o *Orchestrator) unstartable(ctx context.Context, ref orchestrator.Ref, re
 			continue
 		}
 		for _, cs := range p.Status.ContainerStatuses {
-			if reason, message, ok := containerCannotStart(cs); ok {
+			if reason, message, ok := containerCannotStart(cs, limit); ok {
 				return reason, message, true
 			}
 		}
@@ -637,8 +695,15 @@ func (o *Orchestrator) unstartable(ctx context.Context, ref orchestrator.Ref, re
 }
 
 // containerCannotStart reads one container's state for a failure that
-// trying again will not cure.
-func containerCannotStart(cs corev1.ContainerStatus) (string, string, bool) {
+// trying again will not cure, or for more crashes than limit allows. A limit
+// of zero is the "always" policy: crashing is never what fails it. One is
+// "never": the first crash does, caught as the container exits as well as
+// while it waits to be restarted.
+func containerCannotStart(cs corev1.ContainerStatus, limit int32) (string, string, bool) {
+	if t := cs.State.Terminated; limit == 1 && t != nil && t.ExitCode != 0 {
+		return "Crashed", fmt.Sprintf("the container exited with code %d (%s), and the restart policy is never",
+			t.ExitCode, cmp.Or(t.Reason, "no reason given")), true
+	}
 	w := cs.State.Waiting
 	if w == nil {
 		return "", "", false
@@ -652,7 +717,7 @@ func containerCannotStart(cs corev1.ContainerStatus) (string, string, bool) {
 		if last != nil && last.Reason == "StartError" {
 			return "StartError", last.Message, true
 		}
-		if cs.RestartCount >= crashesBeforeFailing {
+		if limit > 0 && (cs.RestartCount >= limit || limit == 1) {
 			if last != nil {
 				return "CrashLoopBackOff", fmt.Sprintf("the container exited %d times; the last time with code %d (%s)",
 					cs.RestartCount, last.ExitCode, cmp.Or(last.Reason, "no reason given")), true
@@ -681,11 +746,35 @@ func specHash(spec orchestrator.AppSpec) string {
 	if spec.Region != "" {
 		fmt.Fprintf(h, "region=%s\n", spec.Region)
 	}
+	// And a start command: every app that has never set one keeps the
+	// fingerprint it had before there was one to set.
+	if spec.StartCommand != "" {
+		fmt.Fprintf(h, "start=%s\n", spec.StartCommand)
+	}
+	// Not the restart policy or the healthcheck timeout: neither is in the pod
+	// template, and changing them is no reason to restart anything.
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
+
+// startCommand is the container command for a start command, nil for none.
+//
+// Through a shell, because a start command is typed the way it would be at a
+// prompt — "bin/server --port $PORT", "npm run start && echo done" — and only
+// a shell splits words, expands variables and runs the second half of an &&.
+// The cost is that an image with no /bin/sh cannot have one, which is the same
+// trade every platform with this setting makes.
+func startCommand(spec orchestrator.AppSpec) []string {
+	if spec.StartCommand == "" {
+		return nil
+	}
+	return shellCommand(spec.StartCommand)
+}
+
+// shellCommand runs a command line through /bin/sh.
+func shellCommand(line string) []string { return []string{"/bin/sh", "-c", line} }
 
 // maps returns an iterator over a map's keys.
 func maps[K comparable, V any](m map[K]V) func(func(K) bool) {
@@ -705,10 +794,7 @@ func maps[K comparable, V any](m map[K]V) func(func(K) bool) {
 // ingress, and giving it the same fixed port would mean a connection string
 // naming its real port reaches a Service that is not listening there.
 func exposedPort(spec orchestrator.AppSpec) int32 {
-	if spec.Internal {
-		return spec.Port
-	}
-	return servicePort
+	return orchestrator.ServicePort(spec.Internal, spec.Port)
 }
 
 // servicePortName labels the port. "http" would be a lie on a database.

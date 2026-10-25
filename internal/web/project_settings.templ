@@ -1,0 +1,105 @@
+package web
+
+import "github.com/codeblocktz/yacht/internal/app"
+
+// ProjectSettingsData is a project's settings page.
+type ProjectSettingsData struct {
+	Project app.Project
+	// Apps is how many apps deleting the project deletes with it.
+	Apps     int
+	Error    string
+	CanAdmin bool
+
+	// Shared is the project's shared variables, and SharedOn whether the
+	// service has them at all; without, the section is left out.
+	Shared      []app.Variable
+	SharedOn    bool
+	SharedAdmin bool
+}
+
+// ProjectSettings is the project's own settings, reached from the rail, as
+// Railway's are: what the project is called, and deleting it.
+templ ProjectSettings(d ProjectSettingsData) {
+	<div class="project-page">
+		<div class="project-page-inner">
+			<h1 class="text-[20px] font-semibold tracking-tight">Project Settings</h1>
+			if d.Error != "" {
+				<div class="callout callout-err mt-5">
+					<div class="min-w-0">{ d.Error }</div>
+				</div>
+			}
+			<div class="settings-shell mt-6">
+				<nav class="settings-nav" aria-label="Settings sections">
+					<a href="#general">General</a>
+					if d.SharedOn {
+						<a href="#shared-variables">Shared Variables</a>
+					}
+					<a href="#danger">Danger</a>
+				</nav>
+				<div class="min-w-0 flex-1">
+					<section id="general" class="settings-section">
+						<div class="settings-section-head">
+							<span class="settings-section-mark">@icon("settings")</span>
+							<h2 class="settings-section-title">Project info</h2>
+						</div>
+						<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/rename") } class="field-group">
+							<label class="field-label" for="project-name">Name</label>
+							<p class="field-note">What the project is called on screen. Its address stays <code class="mono">{ "/projects/" + d.Project.Slug }</code>.</p>
+							<div class="mt-1.5 flex items-center gap-2">
+								<input class="control w-72" id="project-name" name="name" value={ d.Project.Name } required maxlength="80" disabled?={ !d.CanAdmin }/>
+								if d.CanAdmin {
+									<button class="btn" type="submit">Update</button>
+								}
+							</div>
+						</form>
+						<div class="field-group">
+							<span class="field-label">Project ID</span>
+							<p class="mono mt-1 text-[12.5px] text-muted-foreground">{ d.Project.ID.String() }</p>
+						</div>
+					</section>
+					if d.SharedOn {
+						@sharedVariablesSection(d)
+					}
+					<section id="danger" class="settings-section">
+						<div class="settings-section-head">
+							<span class="settings-section-mark">@icon("minus")</span>
+							<h2 class="settings-section-title">Danger</h2>
+						</div>
+						<div class="panel border-l-2 border-l-destructive">
+							<div class="panel-body">
+								<div class="font-medium">Delete this project</div>
+								if d.Project.Slug == app.DefaultProjectSlug {
+									<p class="hint mt-0.5">
+										The default project is where an app lands when nobody chose a project, so it
+										cannot be deleted. Delete or move its apps instead.
+									</p>
+								} else if !d.CanAdmin {
+									<p class="hint mt-0.5">Only an admin of the team can delete a project.</p>
+								} else {
+									<p class="hint mt-0.5">
+										Deletes the project and its { plural(d.Apps, "app") } — each one's workload,
+										namespace, domains and storage. Not reversible.
+									</p>
+									<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/delete") } class="mt-4 flex flex-wrap items-end gap-3">
+										<div class="field min-w-[220px] flex-1">
+											<label class="label" for="confirm-project">
+												Type <code class="mono">{ d.Project.Name }</code> to confirm
+											</label>
+											<input class="control" id="confirm-project" name="confirm" placeholder={ d.Project.Name } autocomplete="off" required/>
+										</div>
+										<button class="btn btn-danger" type="submit">
+											Delete project
+											if d.Apps > 0 {
+												{ " and its " + plural(d.Apps, "app") }
+											}
+										</button>
+									</form>
+								}
+							</div>
+						</div>
+					</section>
+				</div>
+			</div>
+		</div>
+	</div>
+}

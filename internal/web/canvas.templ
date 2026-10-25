@@ -4,30 +4,17 @@ import (
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/popover"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
 // Canvas draws a project's apps and what connects them.
 //
-// Server-rendered: the layout is computed in Go and the edges are an SVG path
-// list. There is no client-side graph library because there is no Node in this
-// project, and a canvas that needs a build step to render is one a self-hoster
-// cannot patch. Dragging is progressive — every card is a link first, and the
-// script only adds the ability to move it.
+// Server-rendered first: the layout is computed in Go, every card is a link,
+// and the edges are an SVG path list, so the page works with no script at
+// all. canvas.js then hands the same cards to JointJS (vendored, no build
+// step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
-	// A bar rather than a page heading: the graph is the page, and a heading
-	// with a paragraph under it would push the thing somebody came to look at
-	// below the fold.
-	<div class="canvas-bar">
-		<a class="canvas-bar-back" href="/projects" aria-label="All projects">
-			@icon("layers")
-		</a>
-		<span class="min-w-0 truncate font-medium">{ d.Project.Name }</span>
-		<span class="min-w-0 flex-1 truncate text-muted-foreground">
-			How these apps relate to each other.
-		</span>
-		@deployButton(d.Project.Slug)
-	</div>
 	if d.Empty {
 		<div class="canvas-empty">
 			@emptyApps(d.Project.Slug)
@@ -38,12 +25,16 @@ templ Canvas(d CanvasData) {
 		// rather than a second copy that can drift from them.
 		<div
 			class="canvas"
+			style={ canvasVars() }
 			data-canvas
 			data-card-w={ strconv.Itoa(cardW) }
 			data-card-h={ strconv.Itoa(cardH) }
 			data-volume-h={ strconv.Itoa(volumeH) }
 			data-project={ d.Project.Slug }
 		>
+			// What the drawing joins, for the script. The cards below are still
+			// the server's, and are what a browser without the script shows.
+			@templ.JSONScript("canvas-graph", d.Graph())
 			<div class="canvas-inner" style={ canvasSize(d) }>
 				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
 					<defs>
@@ -91,22 +82,29 @@ templ Canvas(d CanvasData) {
 							<span class="canvas-grip" data-drag-handle aria-hidden="true">
 								@icon("grip")
 							</span>
+							// Railway's card: what it is and where it answers at the
+							// top, whether it is up at the foot.
 							<span class="canvas-card-head">
-								@icon(sourceIcon(n.App.Source))
-								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
+								<span class="canvas-card-icon">
+									@icon(sourceIcon(n.App.Source))
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="block truncate font-semibold">{ n.App.Name }</span>
+									if n.App.Host != "" {
+										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.Host }</span>
+									}
+								</span>
+								@stagedMarker(d.Staged.For(n.App.Name))
 							</span>
-							<span class="canvas-card-status">
-								@appStatus(n.App)
-								if n.App.Host != "" {
-									<span class="mono truncate text-[11.5px] text-muted-foreground">
-										{ n.App.Host }
-									</span>
-								}
+							{{ label, class := cardStatus(n.App) }}
+							<span class={ "canvas-card-status", class }>
+								<span class="card-status-dot" aria-hidden="true"></span>
+								{ label }
 							</span>
 						</a>
 						if n.Volume != nil {
 							<a
-								href={ templ.URL("/apps/" + n.App.Name + "/storage") }
+								href={ templ.URL("/apps/" + n.App.Name + "/settings#volumes") }
 								class="canvas-volume"
 							>
 								@icon("disk")
@@ -117,6 +115,8 @@ templ Canvas(d CanvasData) {
 					</div>
 				}
 			</div>
+			@canvasAdd(d.Project.Slug)
+			@stagedBar(d)
 			// Floating on the surface rather than in the bar, because they act on
 			// the view rather than on the project — and because an infinite canvas
 			// has no edge to hang them off. Hidden until the script runs: buttons
@@ -200,21 +200,15 @@ templ appPanelBody(d AppDetailData) {
 			}
 		}
 	}
-	<div class="canvas-sheet-actions">
-		@sleepActions(d)
-		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/redeploy") }>
-			<button class="btn btn-sm" type="submit">Redeploy</button>
-		</form>
-		<form
-			method="post"
-			action={ templ.URL("/apps/" + d.App.Name + "/delete") }
-			data-confirm="This deletes the app and its namespace. This cannot be undone."
-			data-confirm-title={ "Delete " + d.App.Name + "?" }
-			data-confirm-label="Delete app"
-		>
-			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
-		</form>
-	</div>
+	// Railway's header is the service and nothing else. Redeploy is on the
+	// live deployment and Delete is in Settings › Danger, where each is
+	// next to what it acts on; sleeping and waking stay here, since they are
+	// about the app as a whole and have nowhere better.
+	if hasSleepActions(d) {
+		<div class="canvas-sheet-actions">
+			@sleepActions(d)
+		</div>
+	}
 	@appTabs(d.App.Name, d.Tab)
 	<div class="canvas-sheet-body">
 		@sleepCallout(d)
@@ -223,11 +217,11 @@ templ appPanelBody(d AppDetailData) {
 				@appVariables(d)
 			case "metrics":
 				@appMetrics(d)
-			case "storage":
-				@appStorage(d)
-			case "domains":
-				@appDomains(d)
-			case "settings":
+			case "console":
+				@appConsole(d)
+			case "settings", "domains", "storage":
+				// The old Domains and Storage addresses, and the forms that answer
+				// to them, land on Settings, where both now live.
 				@appSettings(d)
 			default:
 				@appDeployments(d)
@@ -294,4 +288,68 @@ templ projectRow(p app.Project) {
 		</span>
 		<span class="tabular-nums text-muted-foreground">{ plural(int(p.Apps), "app") }</span>
 	</a>
+}
+
+// canvasAdd is Railway's Add: one button on the canvas, and everything a
+// project can be given behind it. Each entry is the flow that already
+// exists for it, into this project.
+templ canvasAdd(project string) {
+	<div class="canvas-add">
+		@popover.Root() {
+			@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+				<button type="button" class="btn btn-sm canvas-add-btn">
+					@icon("plus")
+					Add
+				</button>
+			}
+			@popover.Content(popover.ContentProps{Placement: popover.PlacementBottomEnd, Exclusive: true}) {
+				// The GitHub step: a search over the team's repositories, in the
+				// menu, as Railway's is. Shown by canvas.js; without it the
+				// GitHub entry is a link to the same list on a page.
+				<div class="canvas-add-github" data-add-step="github" hidden>
+					<div class="flex items-center gap-2 border-b border-border p-2">
+						<button type="button" class="btn btn-ghost btn-sm btn-icon" data-add-back aria-label="Back">
+							@icon("chevron-right")
+						</button>
+						<input type="hidden" name="project" value={ project }/>
+						<input
+							class="control h-8 flex-1"
+							type="search"
+							name="q"
+							placeholder="Search repositories"
+							autocomplete="off"
+							hx-get="/apps/new/github/repositories"
+							hx-trigger="input changed delay:200ms, search"
+							hx-target="next [data-add-rows]"
+							hx-include="previous [name='project']"
+						/>
+					</div>
+					<div class="canvas-add-rows" data-add-rows></div>
+				</div>
+				<div class="flex min-w-[230px] flex-col gap-px p-1" data-add-step="root">
+					<div class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Create</div>
+					<a class="switcher-item" href={ templ.URL(githubDeployHref(project)) } data-add-open="github">
+						@icon("github")
+						<span class="flex-1">GitHub Repository</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourcePostgres, project)) }>
+						@icon("storage")
+						<span class="flex-1">Database</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL("/templates" + projectQuery("?", project)) }>
+						@icon("layers")
+						<span class="flex-1">Template</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourceImage, project)) }>
+						@icon("package")
+						<span class="flex-1">Docker Image</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourceGit, project)) }>
+						@icon("box")
+						<span class="flex-1">Git Repository</span>
+					</a>
+				</div>
+			}
+		}
+	</div>
 }

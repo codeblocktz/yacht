@@ -288,6 +288,9 @@ func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 		Env: []corev1.EnvVar{
 			{Name: "IMAGE", Value: req.Image},
 			{Name: "SUBDIR", Value: req.Subdir},
+			// An environment variable rather than spliced into the script,
+			// like the repository URL: it is somebody's input.
+			{Name: "DOCKERFILE", Value: req.Dockerfile},
 			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
 			{Name: "DOCKER_CONFIG", Value: "/registry"},
 			// An empty value leaves the output option off entirely, so the
@@ -310,15 +313,28 @@ if [ -n "$INSECURE_HOST" ]; then
 fi
 
 cd /workspace/src/$SUBDIR
-if [ ! -f Dockerfile ]; then
+# A Dockerfile somebody named is built or the build fails; only the default
+# falls back to buildpacks, because only there is "no Dockerfile" a choice.
+if [ -n "$DOCKERFILE" ]; then
+  if [ ! -f "$DOCKERFILE" ]; then
+    echo "There is no $DOCKERFILE in this repository — check the Dockerfile path in Settings."
+    exit 1
+  fi
+  dockerfile="$DOCKERFILE"
+elif [ -f Dockerfile ]; then
+  dockerfile=Dockerfile
+else
   echo "No Dockerfile here — falling back to buildpacks."
   exit 0
 fi
-echo "Building the Dockerfile and pushing $IMAGE"
+echo "Building $dockerfile and pushing $IMAGE"
+# The context stays the directory being built; only where the Dockerfile is
+# read from moves, which is what a Dockerfile path means everywhere else.
 buildctl-daemonless.sh build \
   --frontend dockerfile.v0 \
   --local context=. \
-  --local dockerfile=. \
+  --local dockerfile="$(dirname "$dockerfile")" \
+  --opt filename="$(basename "$dockerfile")" \
   --output type=image,name=$IMAGE,push=true$INSECURE \
   --progress plain
 touch ` + dockerfileMarker + `

@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 	"strconv"
 
@@ -400,6 +401,8 @@ templ appStatus(a app.App) {
 		@sleepingStatus(a)
 	} else if !a.StatusKnown {
 		@statusDot("unknown", "status-neutral")
+	} else if a.Status.Phase == orchestrator.PhaseScheduled {
+		@statusDot(cronStatus(a.Status), phaseClass(string(a.Status.Phase)))
 	} else {
 		@statusDot(string(a.Status.Phase), phaseClass(string(a.Status.Phase)))
 	}
@@ -411,6 +414,12 @@ type AppDetailData struct {
 	// Projects are the team's, for the settings' move; empty leaves the
 	// section out.
 	Projects    []app.Project
+	// RefTargets are the other apps a variable can refer to, for the
+	// variables tab's picker; empty leaves the picker out.
+	RefTargets []app.ReferenceTarget
+	// Vars is the rest of the variables tab: what is staged, what the
+	// platform adds, and which of its controls the service supports.
+	Vars        VariablesView
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -608,9 +617,8 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "", "Deployments")
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
-		@appTab(name, active, "storage", "Storage")
-		@appTab(name, active, "domains", "Domains")
-		@appTab(name, active, "settings", "Settings")
+		@appTab(name, active, "console", "Console")
+		@appTab(name, settingsTab(active), "settings", "Settings")
 	</nav>
 }
 
@@ -651,6 +659,7 @@ templ AppDeploymentsBody(d AppDetailData) {
 		@deployInFlight(d)
 	}
 	if active, ok := activeDeploymentOf(d.Deployments); ok {
+		@deploymentsHeader(d)
 		@activeDeployment(d, active)
 	} else if d.App.ActiveReleaseID != nil {
 		<div class="panel border-l-2 border-l-success p-4">
@@ -668,27 +677,32 @@ templ AppDeploymentsBody(d AppDetailData) {
 				} else if lastDeployFailed(d.Deployments) {
 					<p>The last deploy failed. Fix this and redeploy:</p>
 					if reason := failureReason(d.Deployments[0].Message); reason != "" {
-						<p class="mono mt-2 break-words text-[12px] text-destructive">{ reason }</p>
+						<p class="mono mt-2 break-words text-[12px] text-destructive">
+							for _, line := range failureLines(reason) {
+								<span class="block">{ line }</span>
+							}
+						</p>
 					}
 				} else {
 					<p>It runs once its first deploy succeeds.</p>
 				}
+				<div class="mt-3">
+					@redeployButton(d.App.Name)
+				</div>
 			</div>
 		</div>
 	}
 	if len(d.Deployments) > 0 {
-		<div class="panel mt-4">
-			<div class="panel-header">
-				<span class="panel-title">History</span>
-			</div>
-			<div class="rows">
+		<details class="deploy-history" open>
+			<summary class="deploy-history-head">History</summary>
+			<div class="flex flex-col gap-2">
 				for _, dep := range d.Deployments {
 					if !dep.IsActive {
 						@deploymentRow(d.App, dep, !deploymentsInFlight(d))
 					}
 				}
 			</div>
-		</div>
+		</details>
 	}
 	<div class="panel mt-4">
 		<div class="panel-header">
@@ -736,51 +750,58 @@ templ deployInFlight(d AppDetailData) {
 }
 
 templ activeDeployment(d AppDetailData, dep app.Deployment) {
-	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
-		<div class="flex flex-wrap items-center justify-between gap-3">
-			@deployLogsButton(d.App.Name, dep)
-			<div class="min-w-0">
-				<div class="flex items-center gap-2">
-					@deploymentStatus(dep)
-					<span class="tag">active release</span>
-					<span class="text-[12px] text-muted-foreground">
-						{ relativeTime(dep.StartedAt) } via { deploymentSource(d.App, dep) }
-					</span>
+	<div class="deploy-card deploy-card-active">
+		<div class="flex items-center gap-4">
+			@deploymentBadgeTag(dep)
+			<div class="min-w-0 flex-1">
+				<div class="truncate font-medium text-foreground">{ deploymentTitle(dep) }</div>
+				<div class="text-[12px] text-muted-foreground">
+					{ relativeTime(dep.StartedAt) } via { deploymentSource(d.App, dep) }
 				</div>
-				if d.App.Port > 0 {
-					<p class="mono mt-1.5 truncate text-muted-foreground">
-						{ d.App.Namespace }.svc.cluster.local:80
-					</p>
-				}
-				if dep.Message != "" {
-					<p class="mt-1.5 text-[12.5px] text-muted-foreground">{ dep.Message }</p>
-				}
 			</div>
-			<div class="flex items-center gap-2">
-				<span class="tag">{ dep.Revision }</span>
-			</div>
+			@deployLogsButton(d.App.Name, dep)
+			@redeployButton(d.App.Name)
+		</div>
+		<div class="deploy-card-foot">
+			@icon("check")
+			if dep.Message != "" {
+				<span class="min-w-0 truncate">{ dep.Message }</span>
+			} else {
+				<span>Deployment successful</span>
+			}
+			<span class={ "mono ml-auto truncate text-[11.5px] text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
 		</div>
 	</div>
 }
 
+// deploymentRow is one past deployment, as Railway lists them: a badge for
+// what became of it, what caused it and when, and its logs. Rolling back to
+// it is in the row's menu rather than a button on every row.
+//
 // rollback is false while a deploy is in flight: the engine would refuse it,
-// and a button whose only answer is "not now" is one to leave off until then.
+// and an item whose only answer is "not now" is one to leave off until then.
 templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
-	<div class="row-item !py-2.5">
-		<span class="w-24 shrink-0">
-			@deploymentStatus(dep)
-		</span>
-		<span class="min-w-0 flex-1">
-			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
-		</span>
-		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
-			{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }
-		</span>
-		if rollback && canRollBackTo(a, dep) {
-			@rollbackButton(a, dep)
-		}
-		@deployLogsButton(a.Name, dep)
+	<div class="deploy-card">
+		<div class="flex items-center gap-4">
+			@deploymentBadgeTag(dep)
+			<div class="min-w-0 flex-1">
+				<div class="truncate font-medium text-foreground">{ deploymentTitle(dep) }</div>
+				<div class="truncate text-[12px] text-muted-foreground">
+					{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }
+					<span class={ "mono ml-2", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
+				</div>
+			</div>
+			@deployLogsButton(a.Name, dep)
+			if rollback && canRollBackTo(a, dep) {
+				@rollbackButton(a, dep)
+			}
+		</div>
 	</div>
+}
+
+templ deploymentBadgeTag(dep app.Deployment) {
+	{{ label, class := deploymentBadge(dep) }}
+	<span class={ "deploy-badge", class }>{ label }</span>
 }
 
 // rollbackButton puts the app back on the release this row ran.
@@ -823,83 +844,9 @@ templ deploymentStatus(dep app.Deployment) {
 }
 
 // ---- variables tab
+// appVariables is the Variables tab; see variables.templ.
 templ appVariables(d AppDetailData) {
-	if d.Error != "" {
-		<div class="callout callout-err mb-5">
-			<div class="min-w-0">{ d.Error }</div>
-		</div>
-	}
-	<div class="panel mb-5">
-		<div class="panel-header">
-			<span class="panel-title">Environment</span>
-			<span class="text-[12px] text-muted-foreground tabular-nums">
-				{ strconv.Itoa(len(d.App.Variables)) }
-			</span>
-		</div>
-		if len(d.App.Variables) == 0 {
-			<div class="empty">
-				<p>No environment variables set.</p>
-			</div>
-		} else {
-			<div class="table-scroll">
-			<table class="dtable min-w-[520px]">
-				<thead>
-					<tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr>
-				</thead>
-				<tbody>
-					for _, v := range d.App.Variables {
-						<tr>
-							<td class="mono">{ v.Key }</td>
-							<td class="mono">
-								if v.Secret {
-									// The value is not in the struct this page was
-									// given, so there is nothing here to reveal.
-									// A page that could show it is one an
-									// onlooker can read.
-									<span class="text-muted-foreground">••••••••</span>
-									<span class="ml-2">
-										@statusDot("secret", "status-info")
-									</span>
-								} else {
-									{ v.Value }
-								}
-							</td>
-							<td class="text-right">
-								<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/" + v.Key + "/delete") }>
-									<button class="btn btn-sm btn-danger" type="submit">Remove</button>
-								</form>
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-			</div>
-		}
-	</div>
-	<div class="panel">
-		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
-		<div class="panel-body">
-			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
-				<div class="field">
-					<label class="label" for="var-key">Key</label>
-					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
-				</div>
-				<div class="field grow">
-					<label class="label" for="var-value">Value</label>
-					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
-				</div>
-				@checkField("secret", "1", "Secret", false)
-				<button class="btn btn-primary" type="submit">Save</button>
-			</form>
-			<p class="mt-3 text-[12px] text-muted-foreground">
-				A secret is encrypted before it is stored and mounted from a Kubernetes
-				Secret, so it appears neither in a database dump nor in
-				<code class="mono">kubectl get deploy -o yaml</code>. It cannot be shown
-				again afterwards — replace it instead. Setting one requires
-				<code class="mono">YACHT_SECRET_KEY</code>.
-			</p>
-		</div>
-	</div>
+	@variablesTab(d)
 }
 
 // ---- metrics tab
@@ -1048,6 +995,10 @@ templ appRuntimeForm(d AppDetailData) {
 				tab.
 			</p>
 		</section>
+		if a.Source == app.SourceGit {
+			@appBuildSection(a)
+		}
+		@appDeploySection(a)
 		<section id="scale" class="settings-section">
 			<div class="settings-section-head">
 				<span class="settings-section-mark">@icon("cpu")</span>
@@ -1079,6 +1030,126 @@ templ appRuntimeForm(d AppDetailData) {
 			</span>
 		</div>
 	</form>
+}
+
+// appDeploySection is how a new version starts: what runs before it takes
+// traffic, and what it runs.
+//
+// Part of the runtime form rather than a form of its own, because both are
+// part of the release and saving either rolls the app out like an image
+// change does. The pre-deploy command comes first because that is the order
+// they run in.
+templ appDeploySection(a app.App) {
+	<section id="deploy" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("rocket")</span>
+			<h2 class="settings-section-title">Deploy</h2>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="pre_deploy_command">Pre-deploy command</label>
+			<p class="field-note">
+				Runs once before each new version takes traffic, in the new image with
+				this app's variables. Database migrations go here. If it fails, the
+				deploy fails and the running version keeps running.
+			</p>
+			<input class="control mono mt-1.5" id="pre_deploy_command" name="pre_deploy_command" value={ a.PreDeployCommand } placeholder="bin/migrate" autocomplete="off" spellcheck="false"/>
+			<p class="field-note mt-1.5">
+				It runs again when a deploy is retried, so it should be safe to run twice.
+				Volumes are not attached while it runs.
+			</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="start_command">Start command</label>
+			<p class="field-note">
+				Runs instead of the image's own command. Empty starts the image the way
+				it was built.
+			</p>
+			<input class="control mono mt-1.5" id="start_command" name="start_command" value={ a.StartCommand } placeholder="bin/server start" autocomplete="off" spellcheck="false"/>
+			<p class="field-note mt-1.5">Both commands run through <code class="mono">/bin/sh -c</code>, so the image needs a shell.</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="cron_schedule">Cron schedule</label>
+			<p class="field-note">
+				Run the app on this schedule instead of keeping it running, in UTC. Each
+				run starts the app and ends when it exits, and a run still going when the
+				next is due skips that one. Nothing routes to it, so it has no hostname.
+				Empty keeps it running.
+			</p>
+			<input class="control mono mt-1.5 w-56" id="cron_schedule" name="cron_schedule" value={ a.CronSchedule } placeholder="0 3 * * *" autocomplete="off" spellcheck="false"/>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="restart_policy">Restart policy</label>
+			<p class="field-note">
+				What a crash costs. Kubernetes restarts a running app's container whatever
+				this says; what it decides is how many crashes a new version may have
+				before its deploy fails and the version before it keeps running, and when
+				a running app shows as failing.
+			</p>
+			<div class="mt-1.5 flex flex-wrap items-end gap-3">
+				@selectbox.SelectBox(selectbox.Props{Class: "w-56 shrink-0"}) {
+					@selectbox.Trigger(selectbox.TriggerProps{ID: "restart_policy", Name: "restart_policy", Class: "w-full"}) {
+						@selectbox.Value(selectbox.ValueProps{Placeholder: restartPolicyLabel(restartPolicyOf(a))})
+					}
+					@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+						for _, p := range restartPolicies {
+							@selectbox.Item(selectbox.ItemProps{Value: string(p.Value), Selected: restartPolicyOf(a) == p.Value}) {
+								{ p.Label }
+							}
+						}
+					}
+				}
+				<div>
+					<label class="field-label" for="restart_max_retries">Max restart retries</label>
+					<input class="control mt-1.5 w-32" id="restart_max_retries" type="number" name="restart_max_retries" min="0" max="100" value={ optionalNumber(a.RestartMaxRetries) } placeholder={ strconv.Itoa(orchestrator.DefaultMaxRestarts) }/>
+				</div>
+			</div>
+			<p class="field-note mt-1.5">
+				On failure gives up after the retries, three when empty. Always never
+				gives up on a crash. Never fails a deploy on its first crash. A run on a
+				schedule is retried as many times, or not at all with Never.
+			</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="health_timeout">Healthcheck timeout</label>
+			<p class="field-note">
+				Seconds a new version has to become ready before its deploy fails and the
+				running version stays. With a health path, ready is answering on it.
+				Empty is ten minutes.
+			</p>
+			<input class="control mt-1.5 w-32" id="health_timeout" type="number" name="health_timeout" min="0" max={ strconv.Itoa(orchestrator.MaxHealthTimeoutSeconds) } value={ optionalNumber(a.HealthTimeoutSeconds) } placeholder="600"/>
+		</div>
+	</section>
+}
+
+// appBuildSection is how a Git app's next build reads its repository: which
+// Dockerfile, and which pushes are worth building at all.
+//
+// Neither rolls anything out. Like the repository above them, they decide
+// what the next build does, and the save says so.
+templ appBuildSection(a app.App) {
+	<section id="build" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Build</h2>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="dockerfile_path">Dockerfile path</label>
+			<p class="field-note">
+				Relative to the repository's directory above. Empty builds the Dockerfile
+				there, or works out how to build the code when there is none.
+			</p>
+			<input class="control mono mt-1.5" id="dockerfile_path" name="dockerfile_path" value={ a.DockerfilePath } placeholder="Dockerfile" autocomplete="off" spellcheck="false"/>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="watch_paths">Watch paths</label>
+			<p class="field-note">
+				Gitignore-style patterns, one per line, from the repository's root. A push
+				that changes no file they match is skipped instead of deployed. Empty
+				deploys every push.
+			</p>
+			<textarea class="control mono mt-1.5" id="watch_paths" name="watch_paths" rows="3" placeholder={ watchPathsPlaceholder } spellcheck="false">{ watchPathsText(a.WatchPaths) }</textarea>
+		</div>
+	</section>
 }
 
 // ---- domains tab
@@ -1121,6 +1192,12 @@ templ appSettings(d AppDetailData) {
 				<a href="#push">Deploy on push</a>
 			}
 			<a href="#networking">Networking</a>
+			<a href="#domains">Domains</a>
+			<a href="#volumes">Volumes</a>
+			if d.App.Source == app.SourceGit {
+				<a href="#build">Build</a>
+			}
+			<a href="#deploy">Deploy</a>
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
 			<a href="#replicas">Replicas</a>
@@ -1142,6 +1219,23 @@ templ appSettings(d AppDetailData) {
 			if d.HooksOn {
 				@appPushSection(d)
 			}
+			// Domains and volumes are settings, as on Railway, rather than tabs
+			// of their own: they are things set once and looked at rarely, and
+			// a tab apiece pushed the ones looked at every day off the bar.
+			<section id="domains" class="settings-section">
+				<div class="settings-section-head">
+					<span class="settings-section-mark">@icon("globe")</span>
+					<h2 class="settings-section-title">Domains</h2>
+				</div>
+				@appDomains(d)
+			</section>
+			<section id="volumes" class="settings-section">
+				<div class="settings-section-head">
+					<span class="settings-section-mark">@icon("disk")</span>
+					<h2 class="settings-section-title">Volumes</h2>
+				</div>
+				@appStorage(d)
+			</section>
 			@appLegacySettings(d)
 			@appSleepSection(d)
 			@appRegionSection(d)
@@ -2316,4 +2410,35 @@ templ appStorage(d AppDetailData) {
 
 templ backToSources() {
 	<a class="btn btn-ghost" href="/apps/new">Change source</a>
+}
+
+// deploymentsHeader is the line Railway puts over a service's deployments:
+// where it answers, where it runs, and how many of it there are.
+templ deploymentsHeader(d AppDetailData) {
+	<div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
+		if d.App.Host != "" {
+			<a class="inline-flex min-w-0 items-center gap-1.5 text-foreground hover:underline" href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) } target="_blank" rel="noreferrer">
+				@icon("globe")
+				<span class="truncate">{ d.App.Host }</span>
+			</a>
+		}
+		<span class="flex-1"></span>
+		if d.App.Region != "" {
+			<span class="inline-flex items-center gap-1.5 text-muted-foreground">
+				@icon("map-pin")
+				{ d.App.Region }
+			</span>
+		}
+		<span class="inline-flex items-center gap-1.5 text-muted-foreground">
+			@icon("layers")
+			{ plural(int(d.App.Replicas), "Replica") }
+		</span>
+	</div>
+}
+
+// redeployButton deploys the app again, from its source.
+templ redeployButton(name string) {
+	<form method="post" action={ templ.URL("/apps/" + name + "/redeploy") }>
+		<button class="btn btn-sm" type="submit">Redeploy</button>
+	</form>
 }

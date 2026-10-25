@@ -277,3 +277,64 @@ func (s *Service) MoveToProject(ctx context.Context, ownerID, name, projectSlug 
 	}
 	return p, nil
 }
+
+// RenameProject changes what a project is called on screen. The slug, and
+// so every link to the canvas, stays as it was: a rename that broke the
+// address somebody bookmarked would be a rename nobody dared make.
+func (s *Service) RenameProject(ctx context.Context, ownerID, slug, name string) (Project, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Project{}, errors.New("a project needs a name")
+	}
+	if len(name) > 80 {
+		return Project{}, errors.New("a project name is at most 80 characters")
+	}
+	p, err := s.Project(ctx, ownerID, slug)
+	if err != nil {
+		return Project{}, err
+	}
+	row, err := s.q.RenameProject(ctx, dbgen.RenameProjectParams{OwnerID: ownerID, ID: p.ID, Name: name})
+	if err != nil {
+		return Project{}, fmt.Errorf("app: rename project: %w", err)
+	}
+	return toProject(row), nil
+}
+
+// DeleteProject removes a project and every app on it, as Railway's does.
+//
+// The apps are deleted one at a time through Delete, so each goes the way
+// an app always goes — workload, namespace, domains and storage — and a
+// failure part way leaves the project and whatever is still on it, rather
+// than a project gone with apps orphaned behind it. The default project is
+// refused: it is where an app lands when nobody chose, and it comes back the
+// moment one does.
+func (s *Service) DeleteProject(ctx context.Context, ownerID, slug string) error {
+	p, err := s.Project(ctx, ownerID, slug)
+	if err != nil {
+		return err
+	}
+	if p.Slug == DefaultProjectSlug {
+		return errors.New("the default project cannot be deleted; delete its apps instead")
+	}
+	apps, err := s.q.ListAppsInProject(ctx, dbgen.ListAppsInProjectParams{
+		OwnerID: ownerID, ProjectID: pgUUID(p.ID),
+	})
+	if err != nil {
+		return fmt.Errorf("app: list the project's apps: %w", err)
+	}
+	for _, a := range apps {
+		// A deploy in flight would refuse the delete. Deleting the project is
+		// the stronger request, so the deploy is stopped first — the way
+		// somebody would by hand with Stop deploy, then Delete.
+		if err := s.CancelLiveDeployment(ctx, ownerID, a.Name); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("app: stop %s's deploy: %w", a.Name, err)
+		}
+		if err := s.Delete(ctx, ownerID, a.Name); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("app: delete %s: %w", a.Name, err)
+		}
+	}
+	if _, err := s.q.DeleteProject(ctx, dbgen.DeleteProjectParams{OwnerID: ownerID, ID: p.ID}); err != nil {
+		return fmt.Errorf("app: delete project: %w", err)
+	}
+	return nil
+}

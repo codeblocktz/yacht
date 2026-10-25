@@ -98,6 +98,13 @@ type recordingOrchestrator struct {
 
 	mu   sync.Mutex
 	last orchestrator.AppSpec
+
+	// events is what crossed the seam in order — "pre-deploy" and "apply" —
+	// so a test can say which came first. preDeploys are the requests, and
+	// preDeploy, when set, decides how one ends.
+	events     []string
+	preDeploys []orchestrator.PreDeployRequest
+	preDeploy  func(orchestrator.PreDeployRequest) (orchestrator.PreDeployResult, error)
 }
 
 type deleteRaceOrchestrator struct {
@@ -143,8 +150,32 @@ func (o *deleteRaceOrchestrator) AppStatus(
 func (r *recordingOrchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) error {
 	r.mu.Lock()
 	r.last = spec
+	r.events = append(r.events, "apply")
 	r.mu.Unlock()
 	return r.Noop.ApplyApp(ctx, spec)
+}
+
+func (r *recordingOrchestrator) PreDeploy(
+	ctx context.Context, req orchestrator.PreDeployRequest,
+) (orchestrator.PreDeployResult, error) {
+	r.mu.Lock()
+	r.events = append(r.events, "pre-deploy")
+	r.preDeploys = append(r.preDeploys, req)
+	run := r.preDeploy
+	r.mu.Unlock()
+	if run != nil {
+		return run(req)
+	}
+	return r.Noop.PreDeploy(ctx, req)
+}
+
+// takeEvents returns what crossed the seam since it was last asked.
+func (r *recordingOrchestrator) takeEvents() ([]string, []orchestrator.PreDeployRequest) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	events, reqs := r.events, r.preDeploys
+	r.events, r.preDeploys = nil, nil
+	return events, reqs
 }
 
 func (r *recordingOrchestrator) lastAppSpec() orchestrator.AppSpec {

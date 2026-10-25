@@ -19,7 +19,7 @@ func TestDeploymentsRenderThePointerRatherThanTheNewestAttemptAsActive(t *testin
 			{Revision: "old-live", Status: app.DeploySucceeded, IsActive: true, StartedAt: time.Now()},
 		},
 	}))
-	for _, want := range []string{"active release", "old-live", "new-failed-image", "History"} {
+	for _, want := range []string{">ACTIVE<", "old-live", "new-failed-image", "History"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("deployment body missing %q", want)
 		}

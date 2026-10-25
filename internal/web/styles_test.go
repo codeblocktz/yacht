@@ -259,7 +259,7 @@ func TestEveryIconNameHasADrawing(t *testing.T) {
 // stopped short of the card it pointed at — which looked like the graph being
 // disconnected rather than like a spacing bug.
 func TestTheCardGeometryComesFromTheServer(t *testing.T) {
-	style := canvasSize(CanvasData{Width: 10, Height: 10})
+	style := canvasVars()
 	for _, want := range []string{
 		"--canvas-card-h:" + strconv.Itoa(cardH) + "px",
 		"--canvas-volume-h:" + strconv.Itoa(volumeH) + "px",

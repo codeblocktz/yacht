@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/url"
@@ -58,8 +59,86 @@ func phaseClass(phase string) string {
 		return "status-info"
 	case string(orchestrator.PhaseFailing):
 		return "status-err"
+	case string(orchestrator.PhaseScheduled):
+		return "status-info"
 	}
 	return "status-neutral"
+}
+
+// cronStatus is a scheduled app's status in a few words: that it runs on a
+// schedule, and when it next will — the question somebody looking at a card
+// that is never "running" has.
+func cronStatus(st orchestrator.AppStatus) string { return cronStatusAt(st, time.Now()) }
+
+func cronStatusAt(st orchestrator.AppStatus, now time.Time) string {
+	next, ok := orchestrator.NextRun(st.Schedule, now)
+	if !ok {
+		return "Cron"
+	}
+	return "Cron · next run " + untilLabel(next.Sub(now)) + afterFailure(st)
+}
+
+// afterFailure adds that the last run failed, when it did.
+func afterFailure(st orchestrator.AppStatus) string {
+	if st.Message != "" {
+		return " · " + st.Message
+	}
+	return ""
+}
+
+// untilLabel is a wait in words, rounded the way a person says it.
+func untilLabel(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "in under a minute"
+	case d < time.Hour:
+		return "in " + plural(int(d.Round(time.Minute).Minutes()), "minute")
+	case d < 48*time.Hour:
+		return "in " + plural(int(d.Round(time.Hour).Hours()), "hour")
+	}
+	return "in " + plural(int(d.Round(24*time.Hour).Hours()/24), "day")
+}
+
+// restartPolicies are the restart policy's choices, in Railway's order and
+// words.
+var restartPolicies = []struct {
+	Value orchestrator.RestartPolicy
+	Label string
+}{
+	{orchestrator.RestartOnFailure, "On failure"},
+	{orchestrator.RestartAlways, "Always"},
+	{orchestrator.RestartNever, "Never"},
+}
+
+// restartPolicyLabel is a policy in words.
+func restartPolicyLabel(p orchestrator.RestartPolicy) string {
+	for _, c := range restartPolicies {
+		if c.Value == p {
+			return c.Label
+		}
+	}
+	return string(p)
+}
+
+// restartPolicyOf is an app's policy, the default when it has none recorded.
+func restartPolicyOf(a app.App) orchestrator.RestartPolicy {
+	return cmp.Or(a.RestartPolicy, orchestrator.RestartOnFailure)
+}
+
+// watchPathsPlaceholder shows both halves of the grammar: what to watch, and
+// a ! line taking some of it back.
+const watchPathsPlaceholder = "/backend/**\n!/backend/**/*.md"
+
+// watchPathsText is watch paths as the field edits them, one per line.
+func watchPathsText(patterns []string) string { return strings.Join(patterns, "\n") }
+
+// optionalNumber shows zero — "the default" — as an empty field, so the
+// placeholder says what the default is.
+func optionalNumber(n int32) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(int(n))
 }
 
 // podPhaseClass maps a pod to a status style, treating a Running pod whose
@@ -493,8 +572,15 @@ func roleTone(r account.Role) string {
 // time.
 func canvasSize(d CanvasData) string {
 	return "width:" + strconv.Itoa(d.Width) + "px" +
-		";height:" + strconv.Itoa(d.Height) + "px" +
-		";--canvas-card-h:" + strconv.Itoa(cardH) + "px" +
+		";height:" + strconv.Itoa(d.Height) + "px"
+}
+
+// canvasVars are the card geometry, on the canvas itself rather than the
+// server's layer: the script moves the cards out of that layer into the
+// drawing, and they keep their size only if what sizes them is still above
+// them.
+func canvasVars() string {
+	return "--canvas-card-h:" + strconv.Itoa(cardH) + "px" +
 		";--canvas-volume-h:" + strconv.Itoa(volumeH) + "px"
 }
 
@@ -728,7 +814,78 @@ func failureReason(message string) string {
 	return message
 }
 
+// failureLines is failureReason a line at a time. Most reasons are one line;
+// a pre-deploy command's carries the end of what it printed, and a stack
+// trace run together into one paragraph is a stack trace nobody can read.
+func failureLines(message string) []string {
+	return strings.Split(failureReason(message), "\n")
+}
+
 // lastDeployFailed reports whether the most recent deployment failed.
 func lastDeployFailed(deps []app.Deployment) bool {
 	return len(deps) > 0 && deps[0].Status == app.DeployFailed
+}
+
+// settingsTab is which tab is lit for a tab name: Domains and Storage are
+// sections of Settings now, so their addresses light Settings.
+func settingsTab(active string) string {
+	if active == "domains" || active == "storage" {
+		return "settings"
+	}
+	return active
+}
+
+// deploymentTitle is what a deployment row is called, in Railway's place
+// for the commit message: what caused it, said the way a person would.
+func deploymentTitle(dep app.Deployment) string {
+	rev := dep.Revision
+	switch {
+	case rev == "" || rev == "initial":
+		return "Initial deploy"
+	case rev == "redeploy":
+		return "Redeploy"
+	case rev == app.RollbackTrigger:
+		return "Rollback"
+	case strings.HasPrefix(rev, app.PushTriggerPrefix):
+		sha := strings.TrimPrefix(rev, app.PushTriggerPrefix)
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		return "Push " + sha
+	case strings.HasPrefix(rev, "variable-delete:"):
+		return "Removed " + strings.TrimPrefix(rev, "variable-delete:")
+	case strings.HasPrefix(rev, "variable:"):
+		return "Set " + strings.TrimPrefix(rev, "variable:")
+	case strings.HasPrefix(rev, "git:"):
+		return "Build " + strings.TrimPrefix(rev, "git:")
+	}
+	// Settings changes are recorded as what changed ("port:8080 cpu:…");
+	// the first part is enough for a title, and the rest is in the logs.
+	first, _, _ := strings.Cut(rev, " ")
+	return "Changed " + strings.ReplaceAll(first, ":", " → ")
+}
+
+// deploymentBadge is the word Railway puts in a deployment's badge — ACTIVE
+// for the one serving, REMOVED for one it replaced — with its colour.
+func deploymentBadge(dep app.Deployment) (label, class string) {
+	switch {
+	case dep.IsActive:
+		return "ACTIVE", "badge-ok"
+	case dep.Status == app.DeployFailed:
+		return "FAILED", "badge-err"
+	case dep.Status == app.DeployRunning || dep.Status == "pending":
+		if imageIsPending(dep.Image) {
+			return "BUILDING", "badge-busy"
+		}
+		return "DEPLOYING", "badge-busy"
+	case dep.Status == "cancelled":
+		return "CANCELLED", "badge-idle"
+	}
+	return "REMOVED", "badge-idle"
+}
+
+// hasSleepActions reports whether the panel has a Sleep now or Wake now to
+// show, so an empty actions bar is not drawn when it has neither.
+func hasSleepActions(d AppDetailData) bool {
+	return d.Sleep != nil && (d.App.Sleep.Asleep() || d.Sleep.Unavailable == nil)
 }

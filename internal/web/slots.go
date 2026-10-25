@@ -171,6 +171,12 @@ type Slots struct {
 	// binding on it.
 	FullBleed bool
 
+	// Project is the project a full-bleed page belongs to. When set, the page
+	// is drawn the way Railway draws a project — a bar naming the project and
+	// its environment, and a rail of the project's own sections — instead of
+	// under the dashboard's sidebar. Nil keeps the dashboard's chrome.
+	Project *ProjectBar
+
 	// Banner renders above the page content, full width. Intended for
 	// account-level notices such as a low balance or a pending suspension.
 	//
@@ -313,6 +319,7 @@ func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		// 1240px column with the window's scrollbar beside it reads as a
 		// picture of a canvas rather than one.
 		FullBleed:     isCanvasPath(path),
+		Project:       projectBarFor(ws, haveWorkspace, path),
 		Breadcrumb:    breadcrumbFor(path),
 		BrandName:     DefaultBrandName,
 		BrandHref:     "/",

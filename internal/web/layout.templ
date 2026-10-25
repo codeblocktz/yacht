@@ -58,6 +58,7 @@ templ Layout(s Slots, page templ.Component) {
 			@popover.Script()
 			@checkbox.Script()
 			if s.FullBleed {
+				<script src={ asset("/assets/js/joint.min.js") } defer></script>
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>
 			}
@@ -68,6 +69,7 @@ templ Layout(s Slots, page templ.Component) {
 			<script src={ asset("/assets/js/forms.js") } defer></script>
 			<script src={ asset("/assets/js/toasts.js") } defer></script>
 			<script src={ asset("/assets/js/copy.js") } defer></script>
+			<script src={ asset("/assets/js/variables.js") } defer></script>
 			<script src={ asset("/assets/js/sliders.js") } defer></script>
 			// The sidebar's menus, project tree and theme choice, and the
 			// command palette. Their own files rather than inline: they are
@@ -101,6 +103,8 @@ templ Layout(s Slots, page templ.Component) {
 				</main>
 				@confirmationDialog()
 				@toastHost(s.Flash)
+			} else if s.FullBleed && s.Project != nil {
+				@projectShell(s, page)
 			} else {
 				@appShell(s, page)
 			}
@@ -1185,9 +1189,29 @@ templ icon(name string) {
 			case "arrow-right":
 				<path d="M5 12h14"></path>
 				<path d="m12 5 7 7-7 7"></path>
+			case "network":
+				<rect x="16" y="16" width="6" height="6" rx="1"></rect>
+				<rect x="2" y="16" width="6" height="6" rx="1"></rect>
+				<rect x="9" y="2" width="6" height="6" rx="1"></rect>
+				<path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"></path>
+				<path d="M12 12V8"></path>
+			case "link":
+				<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+				<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
 			case "corner-down-left":
 				<polyline points="9 10 4 15 9 20"></polyline>
 				<path d="M20 4v7a4 4 0 0 1-4 4H4"></path>
+			case "eye":
+				<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path>
+				<circle cx="12" cy="12" r="3"></circle>
+			case "eye-off":
+				<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"></path>
+				<path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"></path>
+				<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"></path>
+				<path d="m2 2 20 20"></path>
+			case "code":
+				<polyline points="16 18 22 12 16 6"></polyline>
+				<polyline points="8 6 2 12 8 18"></polyline>
 		}
 	</svg>
 }

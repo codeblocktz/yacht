@@ -114,8 +114,18 @@ func (s *Service) DeploymentLogs(
 
 // isLatestDeployment reports whether nothing has been deployed since d.
 func (s *Service) isLatestDeployment(ctx context.Context, ownerID string, d Deployment) bool {
-	rows, err := s.q.ListDeployments(ctx, dbgen.ListDeploymentsParams{OwnerID: ownerID, AppID: d.AppID, Limit: 1})
-	return err == nil && len(rows) == 1 && rows[0].ID == d.ID
+	// A few rather than one, so skipped pushes since — which deployed
+	// nothing — do not make a failed deploy stop being the latest.
+	rows, err := s.q.ListDeployments(ctx, dbgen.ListDeploymentsParams{OwnerID: ownerID, AppID: d.AppID, Limit: 10})
+	if err != nil {
+		return false
+	}
+	for _, row := range rows {
+		if row.Status != DeploySkipped {
+			return row.ID == d.ID
+		}
+	}
+	return false
 }
 
 // Logs is an app's container output, and which pods it could have come from.

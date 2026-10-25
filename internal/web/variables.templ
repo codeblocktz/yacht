@@ -1,0 +1,331 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/popover"
+)
+
+// revealedValue is what an eye button fetches: the value, and nothing a
+// script would need to pick it out of.
+templ revealedValue(v string) {
+	{ v }
+}
+
+// variablesTab is the app's Variables tab, drawn the way Railway draws one:
+// every value masked until somebody presses its eye, a Raw Editor for the
+// whole set as a .env file, and the variables the platform adds listed apart,
+// folded away.
+templ variablesTab(d AppDetailData) {
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">{ d.Error }</div>
+		</div>
+	}
+	@appStagedCallout(d)
+	<div class="panel mb-5">
+		<div class="panel-header">
+			<span class="panel-title">Environment</span>
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ strconv.Itoa(len(d.App.Variables)) }
+			</span>
+		</div>
+		if len(d.App.Variables) == 0 {
+			<div class="empty">
+				<p>No environment variables set.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[520px]">
+					<thead>
+						<tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr>
+					</thead>
+					<tbody>
+						for _, v := range d.App.Variables {
+							<tr>
+								<td class="mono">
+									<span class="flex flex-wrap items-center gap-1.5">
+										<span>{ v.Key }</span>
+										@stagedTag(v.Staged)
+									</span>
+								</td>
+								<td class="mono">
+									if v.Reference {
+										@variableReference(v)
+									} else if v.Secret {
+										<span class="flex items-center gap-2">
+											if d.Vars.CanReveal {
+												@maskedValue("var-app-"+v.Key, v.Key, "", "/apps/"+d.App.Name+"/variables/"+v.Key+"/value")
+											} else {
+												<span class="var-mask" aria-hidden="true">••••••••</span>
+											}
+											@statusDot("secret", "status-info")
+										</span>
+									} else {
+										@maskedValue("var-app-"+v.Key, v.Key, v.Value, "")
+									}
+								</td>
+								<td class="text-right">
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/" + v.Key + "/delete") }>
+										<button class="btn btn-sm btn-danger" type="submit">Remove</button>
+									</form>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	@platformVariablesPanel(d)
+	if len(d.RefTargets) > 0 {
+		@addReference(d)
+	}
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
+		<div class="panel-body">
+			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
+				<div class="field">
+					<label class="label" for="var-key">Key</label>
+					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
+				</div>
+				<div class="field grow">
+					<label class="label" for="var-value">Value</label>
+					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
+				</div>
+				@checkField("secret", "1", "Secret", false)
+				<button class="btn btn-primary" type="submit">Save</button>
+			</form>
+			<p class="mt-3 text-[12px] text-muted-foreground">
+				A secret is encrypted before it is stored and mounted from a Kubernetes
+				Secret, so it appears neither in a database dump nor in
+				<code class="mono">kubectl get deploy -o yaml</code>. Its eye opens it for whoever
+				presses it, and each time is logged. Setting one requires
+				<code class="mono">YACHT_SECRET_KEY</code>.
+				if d.Vars.Stages {
+					Saving deploys nothing: changes wait for Deploy.
+				}
+			</p>
+		</div>
+	</div>
+	if d.Vars.Raw {
+		@rawEditor(d)
+	}
+}
+
+// maskedValue is a value drawn as dots, and the eye that shows it. A plain
+// value is in the page already, hidden; a secret's is fetched by the eye the
+// first time it is pressed, which is the request the server logs.
+templ maskedValue(id, label, value, fetch string) {
+	<span class="var-cell" data-var>
+		<span class="var-mask" aria-hidden="true">••••••••</span>
+		<span class="var-value" id={ id }>{ value }</span>
+		<button
+			type="button"
+			class="var-eye"
+			data-reveal={ label }
+			aria-label={ "Show " + label }
+			aria-pressed="false"
+			title="Show or hide the value"
+			if fetch != "" {
+				hx-get={ fetch }
+				hx-trigger="click once"
+				hx-target={ "#" + id }
+				hx-swap="innerHTML"
+			}
+		>
+			<span class="var-eye-show">
+				@icon("eye")
+			</span>
+			<span class="var-eye-hide">
+				@icon("eye-off")
+			</span>
+		</button>
+	</span>
+}
+
+// stagedTag marks a variable that differs from what is deployed.
+templ stagedTag(kind string) {
+	switch kind {
+		case app.StagedAdded:
+			<span class="tag staged-tag" title="Not deployed yet">new</span>
+		case app.StagedChanged:
+			<span class="tag staged-tag" title="Not deployed yet">edited</span>
+	}
+}
+
+// appStagedCallout is one app's waiting changes, at the top of its tab, with
+// the same Deploy and Discard the canvas's bar has for the whole project.
+templ appStagedCallout(d AppDetailData) {
+	if d.Vars.Stages && len(d.Vars.Changes) > 0 {
+		<div class="callout staged-callout mb-5">
+			<div class="min-w-0 flex-1">
+				<div class="font-medium">{ plural(len(d.Vars.Changes), "change") } not deployed</div>
+				<ul class="staged-list mt-1">
+					for _, c := range d.Vars.Changes {
+						@stagedItem(c)
+					}
+				</ul>
+			</div>
+			<div class="flex shrink-0 items-start gap-2">
+				<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/changes/discard") }>
+					<input type="hidden" name="next" value={ "/apps/" + d.App.Name + "/variables" }/>
+					<button class="btn btn-sm" type="submit">Discard</button>
+				</form>
+				<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/changes/deploy") }>
+					<input type="hidden" name="next" value={ "/apps/" + d.App.Name + "/variables" }/>
+					<button class="btn btn-sm btn-primary" type="submit">Deploy</button>
+				</form>
+			</div>
+		</div>
+	}
+}
+
+// stagedItem is one change as a line: what it does, to what, and anything
+// worth knowing first.
+templ stagedItem(c app.StagedChange) {
+	<li class="staged-item">
+		<span class={ "staged-kind", changeClass(c) }>{ changeVerb(c) }</span>
+		<span class="mono min-w-0 break-all">{ changeLabel(c) }</span>
+		if c.Note != "" {
+			<span class="staged-note">{ c.Note }</span>
+		}
+	</li>
+}
+
+// platformVariablesPanel is what the platform gives the app at every deploy,
+// folded away under "N variables added by …", as Railway lists its own.
+templ platformVariablesPanel(d AppDetailData) {
+	if len(d.Vars.Platform) > 0 {
+		<details class="panel platform-vars mb-5">
+			<summary class="panel-header platform-vars-summary">
+				<span class="flex items-center gap-2">
+					@icon("chevron-right")
+					<span class="panel-title">{ plural(len(d.Vars.Platform), "variable") } added by { d.Vars.Brand }</span>
+				</span>
+				<span class="text-[12px] text-muted-foreground">Set at every deploy</span>
+			</summary>
+			<div class="table-scroll">
+				<table class="dtable min-w-[520px]">
+					<tbody>
+						for _, v := range d.Vars.Platform {
+							<tr>
+								<td class="mono">{ v.Key }</td>
+								<td class="mono">
+									if d.Vars.Shadowed(d.App, v.Key) {
+										<span class="text-muted-foreground">Replaced by this app’s own { v.Key }</span>
+									} else {
+										@maskedValue("var-platform-"+v.Key, v.Key, v.Value, "")
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+			<p class="hint px-4 pb-3 pt-2">
+				Read-only, and current at each deploy. A variable of the app's own with the same name
+				wins — the app gets that value instead.
+			</p>
+		</details>
+	}
+}
+
+// rawEditor is every variable that is not a secret as one .env file.
+// Saving replaces that set, so a line taken out is a variable removed.
+templ rawEditor(d AppDetailData) {
+	{{ secrets := secretKeys(d.App.Variables) }}
+	<details class="panel raw-editor">
+		<summary class="panel-header platform-vars-summary">
+			<span class="flex items-center gap-2">
+				@icon("code")
+				<span class="panel-title">Raw Editor</span>
+			</span>
+			<span class="text-[12px] text-muted-foreground">Edit every variable as a .env file</span>
+		</summary>
+		<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/raw") } class="panel-body">
+			<label class="sr-only" for="raw-env">Variables as a .env file</label>
+			<textarea
+				id="raw-env"
+				class="control mono raw-editor-text"
+				name="raw"
+				rows={ strconv.Itoa(rawRows(d.App.Variables)) }
+				spellcheck="false"
+				autocomplete="off"
+				placeholder="KEY=value"
+			>{ app.FormatEnv(d.App.Variables) }</textarea>
+			if len(secrets) > 0 {
+				<p class="hint mt-2">
+					{ plural(len(secrets), "secret") } — <span class="mono">{ strings.Join(secrets, ", ") }</span> —
+					not shown here and left as they are. Change a secret in the table above.
+				</p>
+			}
+			<p class="hint mt-2">
+				Saving replaces every variable that is not a secret: a line you take out is a variable
+				removed. Quotes and <code class="mono">#</code> comments work as in a
+				<code class="mono">.env</code> file; a reference is written <code class="mono">{ "${{app.KEY}}" }</code>.
+			</p>
+			<div class="mt-3 flex items-center gap-2">
+				<button class="btn btn-primary" type="submit">Save</button>
+				if d.Vars.Stages {
+					<span class="hint">Changes wait for Deploy.</span>
+				}
+			</div>
+		</form>
+	</details>
+}
+
+// stagedBar is the canvas's "N changes" bar: Railway's, floating at the top
+// of the canvas while anything in the project is waiting to deploy. Details
+// lists each change by app; Deploy ships them all, Discard throws them away.
+templ stagedBar(d CanvasData) {
+	if d.Staged.Count() > 0 {
+		<div class="staged-bar" role="region" aria-label="Changes waiting to deploy" data-canvas-controls>
+			<span class="staged-bar-dot" aria-hidden="true"></span>
+			<span class="staged-bar-count">{ plural(d.Staged.Count(), "change") }</span>
+			@popover.Root() {
+				@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+					<button type="button" class="btn btn-sm btn-ghost">Details</button>
+				}
+				@popover.Content(popover.ContentProps{Placement: popover.PlacementBottom, Exclusive: true}) {
+					<div class="staged-details">
+						for _, a := range d.Staged.ByApp {
+							<div class="staged-details-app">
+								<a class="staged-details-name" href={ templ.URL("/apps/" + a.App + "/variables") }>
+									{ a.App }
+									<span class="text-muted-foreground tabular-nums">{ strconv.Itoa(len(a.Changes)) }</span>
+								</a>
+								<ul class="staged-list">
+									for _, c := range a.Changes {
+										@stagedItem(c)
+									}
+								</ul>
+							</div>
+						}
+					</div>
+				}
+			}
+			<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/discard") }>
+				<input type="hidden" name="next" value={ canvasHere(d) }/>
+				<button class="btn btn-sm btn-ghost" type="submit">Discard</button>
+			</form>
+			<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/deploy") }>
+				<input type="hidden" name="next" value={ canvasHere(d) }/>
+				<button class="btn btn-sm btn-primary" type="submit">Deploy</button>
+			</form>
+		</div>
+	}
+}
+
+// stagedMarker is the dot on a card with changes waiting. Not positioned:
+// the card is drawn inside a foreignObject, where WebKit puts positioned
+// content at the page's origin.
+templ stagedMarker(n int) {
+	if n > 0 {
+		<span class="staged-marker" title={ plural(n, "change") + " not deployed" }>
+			<span class="sr-only">{ plural(n, "change") } not deployed</span>
+		</span>
+	}
+}

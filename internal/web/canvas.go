@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // Canvas geometry. Fixed rather than fluid: the layout is computed on the
@@ -11,7 +12,7 @@ import (
 // draw an edge to.
 const (
 	cardW   = 260
-	cardH   = 96
+	cardH   = 112
 	volumeH = 40
 	gapX    = 120
 	gapY    = 110
@@ -69,6 +70,10 @@ type CanvasData struct {
 	// Open is the app whose panel is showing, nil when none is. It is the same
 	// data the app page used to render, because the panel IS the app page now.
 	Open *AppDetailData
+
+	// Staged is the changes waiting to deploy, for the bar across the top
+	// and the marker on each card; nil when nothing is waiting.
+	Staged *StagedBar
 }
 
 // layout places the cards and routes the edges.
@@ -238,4 +243,82 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// canvasGraph is the graph as the canvas script draws it. The cards are the
+// server's — the script moves them into the drawing rather than rendering
+// its own — so this carries only what the drawing needs to place them and
+// join them: where each card is, and which depends on which.
+type canvasGraph struct {
+	Nodes []canvasGraphNode `json:"nodes"`
+	Edges []canvasGraphEdge `json:"edges"`
+}
+
+type canvasGraphNode struct {
+	Name string `json:"name"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	H    int    `json:"h"`
+}
+
+// canvasGraphEdge is every variable one app reaches another through, drawn
+// as one arrow: two arrows between the same cards would sit on top of each
+// other and read as one anyway.
+type canvasGraphEdge struct {
+	From string   `json:"from"`
+	To   string   `json:"to"`
+	Via  []string `json:"via"`
+}
+
+// Graph is the canvas for the script.
+func (d CanvasData) Graph() canvasGraph {
+	g := canvasGraph{Nodes: make([]canvasGraphNode, 0, len(d.Nodes)), Edges: []canvasGraphEdge{}}
+	for _, n := range d.Nodes {
+		g.Nodes = append(g.Nodes, canvasGraphNode{Name: n.App.Name, X: n.X, Y: n.Y, H: n.Height})
+	}
+	at := map[[2]string]int{}
+	for _, e := range d.Edges {
+		pair := [2]string{e.From, e.To}
+		i, ok := at[pair]
+		if !ok {
+			i = len(g.Edges)
+			at[pair] = i
+			g.Edges = append(g.Edges, canvasGraphEdge{From: e.From, To: e.To})
+		}
+		if e.Via != "" {
+			g.Edges[i].Via = append(g.Edges[i].Via, e.Via)
+		}
+	}
+	for i := range g.Edges {
+		sort.Strings(g.Edges[i].Via)
+	}
+	return g
+}
+
+// cardStatus is an app's state in the words Railway puts at the foot of a
+// card — Online, Deploying, Crashed — with the colour that goes with it.
+// A card is glanced at, so it says what a person would ask ("is it up?")
+// rather than the orchestrator's phase.
+func cardStatus(a app.App) (label, class string) {
+	switch {
+	case a.Sleep.Asleep():
+		return "Sleeping", "card-status-idle"
+	case !a.StatusKnown:
+		return "Unknown", "card-status-idle"
+	}
+	switch a.Status.Phase {
+	case orchestrator.PhaseRunning:
+		return "Online", "card-status-ok"
+	case orchestrator.PhaseDegraded:
+		return "Degraded", "card-status-warn"
+	case orchestrator.PhaseFailing:
+		return "Crashed", "card-status-err"
+	case orchestrator.PhaseStopped:
+		return "Stopped", "card-status-idle"
+	case orchestrator.PhasePending:
+		return "Deploying", "card-status-busy"
+	case orchestrator.PhaseScheduled:
+		return cronStatus(a.Status), "card-status-idle"
+	}
+	return string(a.Status.Phase), "card-status-idle"
 }

@@ -8,6 +8,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,6 +85,29 @@ type App struct {
 	// means no probe. Liveness lets the same path also restart the container.
 	HealthPath string
 	Liveness   bool
+
+	// StartCommand replaces the image's own command when set, and
+	// PreDeployCommand runs once before each new version takes traffic. Both
+	// are shell command lines, and both are empty unless somebody set them.
+	StartCommand     string
+	PreDeployCommand string
+
+	// CronSchedule runs the app on a schedule instead of all the time; empty
+	// keeps it running. RestartPolicy and RestartMaxRetries say what a crash
+	// costs it, and HealthTimeoutSeconds how long a new version has to
+	// become ready, zero being the engine's own. See orchestrator.AppSpec.
+	CronSchedule         string
+	RestartPolicy        orchestrator.RestartPolicy
+	RestartMaxRetries    int32
+	HealthTimeoutSeconds int32
+
+	// DockerfilePath is the Dockerfile a build uses, relative to the
+	// repository's subdirectory; empty is the one named Dockerfile there.
+	// WatchPaths are gitignore-style patterns, from the repository's root: a
+	// push that changes no file they match does not deploy. Both are read by
+	// the next build, like the repository itself.
+	DockerfilePath string
+	WatchPaths     []string
 
 	// Variables are this app's environment. A secret's value is not carried
 	// here — see Variable.
@@ -299,6 +323,21 @@ type Options struct {
 	// repository is a pasted URL, cloned anonymously, and nothing about
 	// connecting GitHub is offered.
 	GitHub *github.App
+
+	// StageChanges saves a person's edits — variables, and the settings that
+	// roll out — without deploying them. They collect until DeployStaged
+	// ships them as one deployment, or DiscardStaged throws them away, the
+	// way Railway's "N changes" bar does. Off, every save deploys at once,
+	// which is what the engine did before and what its tests are written
+	// against. See staged.go.
+	StageChanges bool
+
+	// PlatformVariablePrefix begins the names of the variables the platform
+	// gives every app — its domains, its name, its project's. Empty is
+	// DefaultPlatformVariablePrefix; a wrapper sets its own product's, so an
+	// app reads DATAHURU_PUBLIC_DOMAIN rather than the engine's name for it.
+	// See platform.go.
+	PlatformVariablePrefix string
 }
 
 // Service manages app lifecycle.
@@ -373,6 +412,9 @@ func NewService(
 	}
 	if opts.SleepCheckInterval == 0 {
 		opts.SleepCheckInterval = DefaultSleepCheckInterval
+	}
+	if opts.PlatformVariablePrefix == "" {
+		opts.PlatformVariablePrefix = DefaultPlatformVariablePrefix
 	}
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
@@ -453,6 +495,26 @@ type UpdateInput struct {
 	// the next deploy uses it — so it is the one field here that does not
 	// roll the workload.
 	Repo Repo
+
+	// StartCommand and PreDeployCommand are the app's deploy commands. Here
+	// rather than on a form of their own because they roll out like the
+	// image does: a new start command is a new release, and so is a new
+	// pre-deploy command, which runs before that release starts.
+	StartCommand     string
+	PreDeployCommand string
+
+	// CronSchedule, RestartPolicy, RestartMaxRetries and
+	// HealthTimeoutSeconds are the rest of the Deploy section, and roll out
+	// like the commands do. An empty RestartPolicy is RestartOnFailure.
+	CronSchedule         string
+	RestartPolicy        orchestrator.RestartPolicy
+	RestartMaxRetries    int32
+	HealthTimeoutSeconds int32
+
+	// DockerfilePath and WatchPaths are the Build section. Like Repo, they
+	// decide what the next build does and roll nothing out themselves.
+	DockerfilePath string
+	WatchPaths     []string
 }
 
 // Validate checks an update against the same bounds a create is held to.
@@ -467,9 +529,35 @@ func (in UpdateInput) Validate(source Source) error {
 		return errors.New("port must be between 0 and 65535")
 	case source != SourceGit && in.Image == "":
 		return errors.New("image is required")
+	case len(in.StartCommand) > maxCommandLength:
+		return fmt.Errorf("the start command must be at most %d characters", maxCommandLength)
+	case len(in.PreDeployCommand) > maxCommandLength:
+		return fmt.Errorf("the pre-deploy command must be at most %d characters", maxCommandLength)
+	case in.RestartMaxRetries < 0 || in.RestartMaxRetries > maxRestartRetries:
+		return fmt.Errorf("max restart retries must be between 0 and %d", maxRestartRetries)
+	case in.HealthTimeoutSeconds < 0 || in.HealthTimeoutSeconds > orchestrator.MaxHealthTimeoutSeconds:
+		return fmt.Errorf("the healthcheck timeout must be between 0 and %d seconds",
+			orchestrator.MaxHealthTimeoutSeconds)
 	}
-	return nil
+	if err := orchestrator.ValidateSchedule(strings.TrimSpace(in.CronSchedule)); err != nil {
+		return err
+	}
+	if err := orchestrator.ValidateRestartPolicy(in.RestartPolicy); err != nil {
+		return err
+	}
+	if err := validateDockerfilePath(in.DockerfilePath); err != nil {
+		return err
+	}
+	return validateWatchPaths(in.WatchPaths)
 }
+
+// maxRestartRetries is the most restarts a policy may allow, as the store
+// bounds it.
+const maxRestartRetries = 100
+
+// maxCommandLength is the longest deploy command the store keeps; see the
+// migration that added them.
+const maxCommandLength = 4096
 
 // Update changes an app and rolls it out.
 //
@@ -542,6 +630,18 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		RepoUrl:       in.Repo.URL,
 		RepoBranch:    in.Repo.Branch,
 		RepoSubdir:    in.Repo.Subdir,
+		// Trimmed, so a command that is only whitespace is no command at
+		// all rather than one that runs a shell with nothing to do.
+		StartCommand:     strings.TrimSpace(in.StartCommand),
+		PreDeployCommand: strings.TrimSpace(in.PreDeployCommand),
+		CronSchedule:     strings.TrimSpace(in.CronSchedule),
+		RestartPolicy:    string(cmp.Or(in.RestartPolicy, orchestrator.RestartOnFailure)),
+		// A retry count belongs to on-failure alone; kept for the others it
+		// would come back, unasked, the day somebody switches back.
+		RestartMaxRetries:    restartRetriesFor(in.RestartPolicy, in.RestartMaxRetries),
+		HealthTimeoutSeconds: in.HealthTimeoutSeconds,
+		DockerfilePath:       cleanDockerfilePath(in.DockerfilePath),
+		WatchPaths:           cleanWatchPaths(in.WatchPaths),
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return App{}, fmt.Errorf("app: update: %w", err)
@@ -590,6 +690,14 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	if updated.Image == PendingImage {
 		return updated, nil
 	}
+	// Saved, and left for the next deploy to carry. The release the app is
+	// running still has the old values, which is what StagedChanges compares
+	// against to say what is waiting.
+	if s.opts.StageChanges {
+		s.log.Info("app update staged", slog.String("app", name),
+			slog.String("change", updateReason(a, updated)))
+		return updated, nil
+	}
 
 	err = s.deployCurrentRelease(ctx, ownerID, updated, updateReason(a, updated))
 	if err != nil {
@@ -605,8 +713,19 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 // The port and the internal flag are here because they change the Service and
 // the Ingress as well as the Deployment — a port change that only rewrote the
 // container's port would leave the Service routing to nothing.
+//
+// The pre-deploy command is here although it changes nothing the workload
+// runs, because it belongs to the release: saving one is how somebody runs it,
+// and a save that recorded it for "the next deploy" would leave them to find
+// out how to make a deploy happen.
 func RollsOut(before, after App) bool {
 	return before.Image != after.Image ||
+		before.StartCommand != after.StartCommand ||
+		before.PreDeployCommand != after.PreDeployCommand ||
+		before.CronSchedule != after.CronSchedule ||
+		before.RestartPolicy != after.RestartPolicy ||
+		before.RestartMaxRetries != after.RestartMaxRetries ||
+		before.HealthTimeoutSeconds != after.HealthTimeoutSeconds ||
 		before.Port != after.Port ||
 		before.Internal != after.Internal ||
 		before.CPURequest != after.CPURequest ||
@@ -634,6 +753,21 @@ func updateReason(before, after App) string {
 		before.MemoryRequest != after.MemoryRequest || before.MemoryLimit != after.MemoryLimit {
 		parts = append(parts, "resources")
 	}
+	if before.StartCommand != after.StartCommand {
+		parts = append(parts, "start command")
+	}
+	if before.PreDeployCommand != after.PreDeployCommand {
+		parts = append(parts, "pre-deploy command")
+	}
+	if before.CronSchedule != after.CronSchedule {
+		parts = append(parts, "schedule")
+	}
+	if before.RestartPolicy != after.RestartPolicy || before.RestartMaxRetries != after.RestartMaxRetries {
+		parts = append(parts, "restart policy")
+	}
+	if before.HealthTimeoutSeconds != after.HealthTimeoutSeconds {
+		parts = append(parts, "healthcheck timeout")
+	}
 	if len(parts) == 0 {
 		return "update"
 	}
@@ -651,6 +785,10 @@ func (in CreateInput) Validate() error {
 		return errors.New("name must be at most 40 characters")
 	case !nameRE.MatchString(in.Name):
 		return errors.New("name must be lowercase letters, numbers and dashes")
+	case in.Name == SharedScope:
+		// ${{shared.KEY}} is a project's shared variable. An app with this
+		// name would make every such reference mean two things.
+		return errors.New(`"shared" is reserved for a project's shared variables — choose another name`)
 	case in.Image == "":
 		return errors.New("image is required")
 	case in.Replicas < 0 || in.Replicas > 50:
@@ -966,6 +1104,11 @@ func (s *Service) applyRelease(
 		effective.Port = release.Port
 		effective.Internal = release.Internal
 		effective.Source = release.Source
+		// Nothing routes to a workload on a schedule, so it holds no
+		// hostname: between runs there is nothing behind it to answer.
+		if release.CronSchedule != "" {
+			effective.Port = 0
+		}
 	}
 	hosts, err := s.reconcileHosts(ctx, q, effective)
 	if err != nil {
@@ -992,7 +1135,7 @@ func (s *Service) applyRelease(
 	if release == nil {
 		return fmt.Errorf("%w for %s", ErrNoBaselineRelease, a.Name)
 	}
-	_, secrets, err := s.envFor(ctx, q, a.ID)
+	_, secrets, err := s.envFor(ctx, q, a.OwnerID, a.ID)
 	if err != nil {
 		return err
 	}
@@ -1019,6 +1162,7 @@ func (s *Service) applyRelease(
 		Pool:        pool,
 		Region:      a.Region,
 	})
+	s.addPlatformVariables(ctx, q, a, hosts, &spec)
 	return s.orch.ApplyApp(ctx, spec)
 }
 
@@ -1232,7 +1376,9 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	// Read on the same pass. Storage changes what the app page can offer —
 	// scaling, and whether a deploy will recreate — so a caller holding an App
 	// without it would be deciding from a partial picture.
-	if vars, err := s.variablesFor(ctx, s.q, a.ID); err == nil {
+	// As they will deploy, staged edits included: a page lists what
+	// somebody typed, marked with whether it is deployed yet.
+	if vars, err := s.desiredVariablesFor(ctx, s.q, a.OwnerID, a.ID); err == nil {
 		a.Variables = vars
 	}
 	if vols, err := s.volumesFor(ctx, s.q, a.ID); err == nil {
@@ -1368,6 +1514,9 @@ const (
 	DeploySucceeded  = "succeeded"
 	DeployFailed     = "failed"
 	DeploySuperseded = "superseded"
+	// DeploySkipped is a push that changed none of the app's watch paths:
+	// recorded so the history says why it did not deploy, and never run.
+	DeploySkipped = "skipped"
 )
 
 // beginDeployment opens a new attempt without rewriting earlier history.
@@ -1459,6 +1608,10 @@ func (s *Service) deployReleaseOperation(
 }
 
 // Scale changes the replica count and reapplies.
+//
+// Never staged, even with StageChanges on. Scaling is also how the platform
+// stops a team's apps and starts them again — a wrapper's billing does — and
+// a stop that waited for somebody to press Deploy would not be one.
 func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int32) (App, error) {
 	if replicas < 0 || replicas > 50 {
 		return App{}, errors.New("replicas must be between 0 and 50")
@@ -1660,22 +1813,30 @@ func toApp(row dbgen.App) App {
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
-		GitHubPaused:  row.GithubPaused,
-		Internal:      row.Internal,
-		HealthPath:    row.HealthPath,
-		Liveness:      row.HealthLiveness,
-		CPURequest:    row.CpuRequest,
-		CPULimit:      row.CpuLimit,
-		MemoryRequest: row.MemoryRequest,
-		MemoryLimit:   row.MemoryLimit,
-		CreatedAt:     row.CreatedAt,
-		UpdatedAt:     row.UpdatedAt,
-		HTTPSOnly:     row.HttpsOnly,
-		CNAMEOnly:     row.CnameOnly,
-		ProjectID:     row.ProjectID.Bytes,
-		X:             row.CanvasX,
-		Y:             row.CanvasY,
-		Sleep:         toSleep(row),
+		GitHubPaused:     row.GithubPaused,
+		Internal:         row.Internal,
+		HealthPath:       row.HealthPath,
+		Liveness:         row.HealthLiveness,
+		StartCommand:     row.StartCommand,
+		PreDeployCommand: row.PreDeployCommand,
+		CronSchedule:         row.CronSchedule,
+		RestartPolicy:        orchestrator.RestartPolicy(row.RestartPolicy),
+		RestartMaxRetries:    row.RestartMaxRetries,
+		HealthTimeoutSeconds: row.HealthTimeoutSeconds,
+		DockerfilePath:       row.DockerfilePath,
+		WatchPaths:           row.WatchPaths,
+		CPURequest:       row.CpuRequest,
+		CPULimit:         row.CpuLimit,
+		MemoryRequest:    row.MemoryRequest,
+		MemoryLimit:      row.MemoryLimit,
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
+		HTTPSOnly:        row.HttpsOnly,
+		CNAMEOnly:        row.CnameOnly,
+		ProjectID:        row.ProjectID.Bytes,
+		X:                row.CanvasX,
+		Y:                row.CanvasY,
+		Sleep:            toSleep(row),
 	}
 	if row.Region != nil {
 		a.Region = *row.Region
@@ -1751,6 +1912,12 @@ func (s *Service) SetHealth(
 	}
 
 	updated := toApp(row)
+	if s.opts.StageChanges {
+		s.log.Info("health probe staged",
+			slog.String("app", name), slog.String("path", probe.HealthPath),
+			slog.Bool("liveness", probe.Liveness))
+		return nil
+	}
 	if err := s.deployCurrentRelease(ctx, ownerID, updated, "health"); err != nil {
 		return err
 	}

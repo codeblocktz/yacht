@@ -1100,6 +1100,51 @@
   }
 }
 
+  /* ------------------------------------------------------- project chrome
+     A project is drawn the way Railway draws one: a bar naming the project
+     and its environment, a rail of its sections, and the page filling the
+     rest. The dashboard's sidebar is not part of it. */
+  .project-shell { @apply flex h-full flex-col bg-canvas; }
+  .project-bar {
+    @apply flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-3 text-[13px];
+  }
+  .project-bar-brand {
+    @apply grid size-8 place-items-center rounded-md text-foreground transition-colors hover:bg-accent;
+  }
+  .project-bar-rule { @apply h-5 w-px bg-border; }
+  .project-bar-switch {
+    @apply inline-flex max-w-[260px] items-center gap-1.5 rounded-md px-2 py-1 text-foreground
+           transition-colors hover:bg-accent;
+  }
+  .project-bar-switch svg { @apply size-3.5; }
+  .project-bar-env {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-muted-foreground;
+  }
+  .project-body { @apply flex min-h-0 flex-1; }
+  .project-rail {
+    @apply flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-2;
+  }
+  .project-rail-link {
+    @apply relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground;
+  }
+  .project-rail-link-active { @apply bg-accent text-foreground; }
+  /* The rail's names, shown beside it on hover, the way the collapsed
+     sidebar shows them. */
+  .project-rail-link .nav-tip {
+    @apply pointer-events-none absolute left-full top-1/2 z-50 ml-2 hidden -translate-y-1/2
+           whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[12px]
+           text-popover-foreground shadow-sm;
+  }
+  .project-rail-link:hover .nav-tip,
+  .project-rail-link:focus-visible .nav-tip { @apply block; }
+  .project-main { @apply flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden; }
+  .switcher-item-active { @apply bg-accent text-foreground; }
+  /* A project page that is not the canvas: scrolls inside the project's
+     chrome, at the width the dashboard's own pages use. */
+  .project-page { @apply min-h-0 flex-1 overflow-y-auto; }
+  .project-page-inner { @apply mx-auto w-full max-w-[1100px] px-6 py-8; }
+
   /* ---------------------------------------------------------------- canvas */
 
   /* The graph is laid out on the server, so the cards are absolutely
@@ -1187,8 +1232,20 @@
   }
   /* The card whose panel is open, marked so it is findable behind the sheet. */
   .canvas-card-open { @apply border-foreground/50 ring-1 ring-foreground/15; }
-  .canvas-card-head { @apply flex items-center gap-2.5 text-[13px] text-foreground; }
-  .canvas-card-status { @apply flex items-center gap-2 overflow-hidden; }
+  /* Railway's card: icon and name with the address under it, and the state
+     in a word at the foot. */
+  .canvas-card { @apply justify-between py-4; }
+  .canvas-card-head { @apply flex items-start gap-3 text-[14px] text-foreground; }
+  .canvas-card-icon { @apply mt-0.5 grid size-5 shrink-0 place-items-center; }
+  .canvas-card-icon svg { @apply size-[18px]; }
+  .canvas-card-status { @apply flex items-center gap-2 pl-8 text-[13px]; }
+  .card-status-dot { @apply size-2 rounded-full bg-current; }
+  .card-status-ok { @apply text-success; }
+  .card-status-warn { @apply text-warning; }
+  .card-status-err { @apply text-destructive; }
+  .card-status-idle { @apply text-muted-foreground; }
+  .card-status-busy { @apply text-info; }
+  .card-status-busy .card-status-dot { @apply animate-pulse; }
 
   /* Only the grip starts a drag, so a click anywhere else is unambiguously a
      click. It stays faint until the card is hovered: a handle on every card at
@@ -1204,12 +1261,158 @@
 
   /* Attached beneath the card, sharing its edge, so the volume reads as part
      of the service rather than as a second thing that happens to be nearby. */
+  /* With a volume under it, the card and the volume are one object: the
+     card gives up its bottom corners and its bottom edge becomes the line
+     between them, the way Railway draws a database with its volume. */
+  .canvas-node[data-has-volume="true"] .canvas-card { @apply rounded-b-none; }
+  /* Hovered as one object too: a border that lit up on the card and not on
+     its volume drew the seam back in. */
+  .canvas-node:hover .canvas-card,
+  .canvas-node:hover .canvas-volume { @apply border-foreground/25; }
   .canvas-volume {
     @apply flex items-center gap-2.5 rounded-b-md border border-t-0 border-border
            bg-muted/40 px-3.5 text-[12px] text-muted-foreground
            transition-colors hover:text-foreground;
     height: var(--canvas-volume-h);
   }
+
+  /* Railway's Add, floating top-right on the surface: the canvas is the
+     page, and a bar across it to hold one button pushed it down for nothing. */
+  .canvas-add { @apply absolute right-4 top-4 z-30; }
+  .canvas-add-btn { @apply gap-1.5 bg-card shadow-sm; }
+  .canvas-add-btn svg { @apply size-3.5; }
+  .canvas-add-github { @apply w-[380px]; }
+  .canvas-add-github [data-add-back] svg { @apply rotate-180; }
+  .canvas-add-rows { @apply max-h-[360px] overflow-y-auto; }
+  .canvas-add-rows .panel { @apply rounded-none border-0 bg-transparent shadow-none; }
+
+  /* ---- a service's deployments, as Railway lists them */
+  .deploy-card { @apply rounded-lg border border-border bg-card px-4 py-3; }
+  .deploy-card-active { @apply border-success/40 bg-success/5; }
+  .deploy-card-foot {
+    @apply mt-3 flex items-center gap-2 border-t border-success/20 pt-2.5 text-[12.5px] text-success;
+  }
+  .deploy-card-foot svg { @apply size-3.5; }
+  .deploy-badge {
+    @apply inline-flex w-[92px] shrink-0 justify-center rounded px-2 py-1 font-mono text-[11px]
+           font-medium tracking-wide;
+  }
+  .badge-ok { @apply bg-success/15 text-success; }
+  .badge-err { @apply bg-destructive/15 text-destructive; }
+  .badge-busy { @apply bg-info/15 text-info; }
+  .badge-idle { @apply bg-muted text-muted-foreground; }
+  .deploy-history { @apply mt-5; }
+  .deploy-history-head {
+    @apply mb-2 cursor-pointer select-none text-[11.5px] font-medium uppercase tracking-wide
+           text-muted-foreground;
+  }
+
+  /* ---- drawn by JointJS (canvas.js). The server's cards are moved into the
+     drawing, each in a foreignObject, so they keep every style above. */
+  .canvas-paper { @apply absolute inset-0; }
+  .canvas-paper svg { @apply overflow-visible; }
+  .canvas-card-host { @apply h-full w-full; }
+  /* WebKit draws positioned or composited HTML inside a foreignObject at the
+     page's origin instead of where the drawing puts it, so every card stacked
+     in the corner in Safari. Inside a drawn card nothing is positioned (the
+     one thing that was, the grip, is hidden) and an icon is dimmed by its
+     colour rather than by opacity. Important, because the cards' own classes
+     are utilities and would otherwise win. */
+  .canvas-card-host,
+  .canvas-card-host * { position: static !important; }
+  .canvas-card-host svg {
+    opacity: 1 !important;
+    color: color-mix(in oklab, currentColor 70%, transparent);
+  }
+  /* Any part of a drawn card starts a drag; a click without moving still
+     follows its link. The grip was there for the hand-rolled drag. */
+  .canvas-drawn .canvas-grip { @apply hidden; }
+
+  /* Dashed and moving toward what is depended on, the way Railway draws a
+     connection: still lines on a canvas read as decoration. */
+  .canvas-link {
+    @apply fill-none stroke-muted-foreground/45;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 5;
+    animation: canvas-link-flow 1.1s linear infinite;
+  }
+  .canvas-link-hit { cursor: default; }
+  .canvas-link-arrow { @apply fill-muted-foreground/60 stroke-none; }
+  .canvas-link-label { @apply fill-muted-foreground font-mono; }
+  .canvas-link-label-bg { @apply fill-card stroke-border; stroke-width: 1; }
+  @keyframes canvas-link-flow { to { stroke-dashoffset: -11; } }
+  @media (prefers-reduced-motion: reduce) {
+    .canvas-link { animation: none; }
+  }
+
+  /* Hovering a card: its arrows and what they reach stay, the rest steps back. */
+  .canvas-focusing .joint-cell { @apply transition-opacity; }
+  .canvas-focusing .joint-cell:not(.canvas-related) { @apply opacity-30; }
+  .canvas-related .canvas-link { @apply stroke-foreground/80; }
+  .canvas-related .canvas-link-arrow { @apply fill-foreground/80; }
+
+  .canvas-card-dragging .canvas-card { @apply border-foreground/40 shadow-lg transition-none; }
+  .canvas-card-unsaved .canvas-card { @apply border-destructive; }
+
+  /* A variable that is another app's: the app it comes from, as a link. */
+  .ref-chip {
+    @apply inline-flex items-center gap-1.5 rounded border border-border bg-muted/40
+           px-1.5 py-0.5 text-[12px] text-foreground transition-colors hover:bg-accent;
+  }
+  .ref-chip svg { @apply size-3.5; }
+
+  /* ---- variables: masked values, staged changes, the Raw Editor ------- */
+
+  /* Every value is dots until its eye is pressed (variables.js). The value
+     sits beside the mask, hidden, so showing it moves nothing else. */
+  .var-cell { @apply inline-flex min-w-0 max-w-full items-center gap-2; }
+  .var-mask { @apply select-none tracking-[0.15em] text-muted-foreground; }
+  .var-value { @apply hidden min-w-0 break-all; }
+  [data-revealed] > .var-value { @apply inline; }
+  [data-revealed] > .var-mask { @apply hidden; }
+  .var-eye {
+    @apply inline-flex shrink-0 items-center rounded p-1 text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .var-eye svg { @apply size-3.5; }
+  .var-eye-hide { @apply hidden; }
+  [data-revealed] .var-eye-hide { @apply inline-flex; }
+  [data-revealed] .var-eye-show { @apply hidden; }
+
+  /* Not deployed yet: the warning tone, the colour of "this is not what is
+     running", rather than the info blue a secret already uses. */
+  .staged-tag { @apply border-warning/40 bg-warning/10 text-warning; }
+  .staged-callout { @apply border-warning/35 bg-warning/[0.07]; }
+  .staged-list { @apply flex flex-col gap-1; }
+  .staged-item { @apply flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]; }
+  .staged-kind { @apply w-[58px] shrink-0 text-[11px] font-medium uppercase tracking-wide; }
+  .staged-added { @apply text-success; }
+  .staged-changed { @apply text-warning; }
+  .staged-removed { @apply text-destructive; }
+  .staged-note { @apply basis-full pl-[66px] text-[11.5px] text-muted-foreground; }
+
+  /* Railway's bar: floating at the top centre of the canvas, over the
+     drawing, for as long as anything is waiting. */
+  .staged-bar {
+    @apply absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center gap-1.5
+           rounded-lg border border-border bg-card py-1 pl-3 pr-1 text-[13px] shadow-md;
+  }
+  .staged-bar-dot { @apply size-2 shrink-0 rounded-full bg-warning; }
+  .staged-bar-count { @apply mr-1 font-medium tabular-nums whitespace-nowrap; }
+  .staged-details { @apply flex max-h-[60vh] w-[340px] flex-col gap-3 overflow-y-auto p-3; }
+  .staged-details-app { @apply flex flex-col gap-1.5; }
+  .staged-details-name { @apply flex items-center justify-between text-[13px] font-medium hover:underline; }
+  /* A card's marker sits in its header's flow: nothing inside a drawn card
+     may be positioned (see .canvas-card-host). */
+  .staged-marker { @apply inline-block size-2 shrink-0 rounded-full bg-warning; }
+
+  .platform-vars-summary { @apply cursor-pointer list-none select-none; }
+  .platform-vars-summary::-webkit-details-marker { @apply hidden; }
+  .platform-vars-summary svg { @apply transition-transform; }
+  .platform-vars[open] .platform-vars-summary svg { @apply rotate-90; }
+  .raw-editor[open] .platform-vars-summary svg { @apply rotate-0; }
+  .raw-editor-text { @apply h-auto min-h-[140px] w-full resize-y py-2 text-[12.5px] leading-relaxed; }
 
   /* The panel over the canvas. Wider than a default sheet because it holds the
      app's whole detail — a variables table at 24rem wraps every row. */
@@ -1832,5 +2035,53 @@
      matter. */
   .copy-btn[data-copied="true"] {
     @apply text-success;
+  }
+}
+
+@layer components {
+  /* The Console tab: a terminal in one of the app's containers.
+
+     Dark in both themes, like every terminal people already use. A shell's
+     programs choose their colours assuming a dark background, and a light one
+     turns half of them unreadable. The colours themselves are xterm.js's to
+     draw; this is only the frame around it. */
+  .console {
+    @apply flex flex-col overflow-hidden rounded-lg border border-border bg-[#0c0c0e];
+  }
+  .console-bar {
+    @apply flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2
+           text-[12px] text-zinc-300;
+  }
+  .console-bar .btn {
+    @apply border-white/15 bg-white/5 text-zinc-200 hover:bg-white/10;
+  }
+  /* Railway's "Connected", with a dot that says it before the word is read. */
+  .console-status {
+    @apply inline-flex items-center gap-1.5 font-medium;
+  }
+  .console-status::before {
+    @apply size-1.5 rounded-full bg-zinc-500;
+    content: "";
+  }
+  .console-status[data-state="connected"]::before { @apply bg-success; }
+  .console-status[data-state="connecting"]::before { @apply bg-warning; }
+  .console-status[data-state="closed"]::before { @apply bg-destructive; }
+  .console-pod { @apply truncate text-[11.5px] text-zinc-400; }
+  .console-picker { @apply flex items-center gap-2; }
+  /* Tall enough for a full screen of `top`; the fit addon decides how many
+     rows that is. */
+  .console-screen {
+    @apply h-[460px] min-h-0 px-2 py-1.5;
+  }
+  .console-note {
+    @apply border-t border-white/10 px-3 py-2 text-[12px] text-zinc-300;
+  }
+  /* Full screen is the frame, not the terminal alone, so the status and the
+     way back out stay on screen with it. */
+  .console:fullscreen {
+    @apply rounded-none border-0;
+  }
+  .console:fullscreen .console-screen {
+    @apply h-auto flex-1;
   }
 }

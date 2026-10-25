@@ -52,8 +52,10 @@ ORDER BY name;
 SELECT sqlc.embed(a), d.status AS last_deploy_status
 FROM apps a
 LEFT JOIN LATERAL (
+    -- A skipped push is not how the last deploy ended: nothing was
+    -- deployed, and the one before it still says how that went.
     SELECT status FROM deployments
-    WHERE app_id = a.id
+    WHERE app_id = a.id AND status <> 'skipped'
     ORDER BY started_at DESC
     LIMIT 1
 ) d ON true
@@ -84,14 +86,28 @@ SET image          = @image,
     repo_url       = @repo_url,
     repo_branch    = @repo_branch,
     repo_subdir    = @repo_subdir,
+    start_command      = @start_command,
+    pre_deploy_command = @pre_deploy_command,
+    cron_schedule          = @cron_schedule,
+    restart_policy         = @restart_policy,
+    restart_max_retries    = @restart_max_retries,
+    health_timeout_seconds = @health_timeout_seconds,
+    dockerfile_path        = @dockerfile_path,
+    watch_paths            = @watch_paths,
     config_version = config_version + 1,
     updated_at     = now()
 WHERE owner_id = @owner_id AND id = @id
   AND (image, port, cpu_request, cpu_limit, memory_request, memory_limit,
-       internal, repo_url, repo_branch, repo_subdir)
+       internal, repo_url, repo_branch, repo_subdir,
+       start_command, pre_deploy_command,
+       cron_schedule, restart_policy, restart_max_retries,
+       health_timeout_seconds, dockerfile_path, watch_paths)
       IS DISTINCT FROM
       (@image, @port, @cpu_request, @cpu_limit, @memory_request, @memory_limit,
-       @internal, @repo_url, @repo_branch, @repo_subdir)
+       @internal, @repo_url, @repo_branch, @repo_subdir,
+       @start_command, @pre_deploy_command,
+       @cron_schedule, @restart_policy, @restart_max_retries::integer,
+       @health_timeout_seconds::integer, @dockerfile_path, @watch_paths::text[])
 RETURNING *;
 
 -- name: SetAppReplicas :one
@@ -111,6 +127,19 @@ INSERT INTO deployments (
 VALUES (
     @owner_id, @app_id, @image, @revision, @status, @release_id, @trigger,
     @actor_kind, @actor_id
+)
+RETURNING *;
+
+-- name: CreateSkippedDeployment :one
+-- A push that changed no watched file: recorded, already finished, and never
+-- queued, because there is nothing for a worker to do.
+INSERT INTO deployments (
+    owner_id, app_id, image, revision, status, message, trigger,
+    actor_kind, finished_at
+)
+VALUES (
+    @owner_id, @app_id, @image, @revision, 'skipped', @message, @revision,
+    'webhook', now()
 )
 RETURNING *;
 

@@ -304,6 +304,10 @@ func TestTheSidebarMarkup(t *testing.T) {
 	}}
 	ctx := workspaceCtx(ws)
 	s := DefaultSlots{}.Slots(ctx, httptest.NewRequest("GET", "/apps/web", nil))
+	// The sidebar itself, as a wrapper that draws no project bar gets it: an
+	// app's page is otherwise drawn in its project's chrome (see
+	// TestAProjectIsDrawnInItsOwnChrome).
+	s.Project = nil
 	// Admin first, as a wrapper might leave it.
 	s.Nav = append([]NavGroup{{Heading: AdminNavHeading, Items: []NavItem{{Label: "Nodes", Href: "/cluster/nodes", Icon: "server"}}}}, s.Nav...)
 	page := renderWith(t, ctx, Layout(s, templ.NopComponent))
@@ -444,3 +448,39 @@ func renderWith(t *testing.T, ctx context.Context, c templ.Component) string {
 }
 
 var _ io.Writer = (*strings.Builder)(nil)
+
+// A project's pages — its canvas, an app on it, its settings — are drawn
+// the way Railway draws a project: a bar naming it and its environment, a
+// rail of its sections, and no dashboard sidebar.
+func TestAProjectIsDrawnInItsOwnChrome(t *testing.T) {
+	ws := app.Workspace{Projects: []app.WorkspaceProject{
+		project("shop", app.WorkspaceApp{Name: "web", State: app.AppServing}),
+		project("blog"),
+	}}
+	ctx := workspaceCtx(ws)
+	for path, section := range map[string]string{
+		"/projects/shop":          "Architecture",
+		"/apps/web/variables":     "Architecture",
+		"/projects/shop/settings": "Settings",
+	} {
+		s := DefaultSlots{}.Slots(ctx, httptest.NewRequest("GET", path, nil))
+		if s.Project == nil || s.Project.Slug != "shop" {
+			t.Fatalf("%s: project bar = %+v", path, s.Project)
+		}
+		page := renderWith(t, ctx, Layout(s, templ.NopComponent))
+		for _, want := range []string{`class="project-bar"`, "production", `href="/projects/blog"`,
+			`aria-current="page"`, `aria-label="` + section + `"`} {
+			if !strings.Contains(page, want) {
+				t.Errorf("%s: the project chrome is missing %q", path, want)
+			}
+		}
+		if strings.Contains(page, `id="sidebar"`) {
+			t.Errorf("%s: the dashboard sidebar is drawn inside a project", path)
+		}
+	}
+	// Outside a project, the dashboard is unchanged.
+	outside := DefaultSlots{}.Slots(ctx, httptest.NewRequest("GET", "/projects", nil))
+	if outside.Project != nil {
+		t.Error("the list of projects is drawn as a project")
+	}
+}

@@ -104,6 +104,13 @@ type (
 	// where it is, empty on an install in one place — its region, and its
 	// room.
 	NodeInfo = orchestrator.NodeInfo
+	// PreDeployer is what an Orchestrator also implements to run an app's
+	// pre-deploy command, with the request and result that cross it. A
+	// wrapper that supplies its own Orchestrator implements it to deploy apps
+	// that have one; without it, their deploys fail with the reason.
+	PreDeployer      = orchestrator.PreDeployer
+	PreDeployRequest = orchestrator.PreDeployRequest
+	PreDeployResult  = orchestrator.PreDeployResult
 
 	// Role is a team role, for a wrapper gating pages of its own.
 	Role = account.Role
@@ -383,6 +390,13 @@ type Overrides struct {
 	// invitation links. Empty is the engine's own name.
 	WakerBrand string
 
+	// PlatformVariablePrefix begins the variables every app is given at
+	// deploy — PUBLIC_DOMAIN, PRIVATE_DOMAIN, SERVICE_NAME, PROJECT_NAME — so
+	// a product names them after itself: "DATAHURU_" gives an app
+	// DATAHURU_PUBLIC_DOMAIN. Empty is the engine's own, "YACHT_". A name a
+	// shell would refuse to export is refused at startup.
+	PlatformVariablePrefix string
+
 	// Routes is told when an app's hostnames or region change, or a region's
 	// edge does — for a wrapper that writes DNS so each app's traffic enters
 	// at its region's edge. Called after the change commits, off the request
@@ -443,6 +457,9 @@ func New(ctx context.Context, cfg Config, ov Overrides) (*Engine, error) {
 		slog.String("version", version),
 		slog.String("config", cfg.String()),
 	)
+	if err := app.ValidatePlatformVariablePrefix(ov.PlatformVariablePrefix); err != nil {
+		return nil, err
+	}
 
 	if err := store.WaitForDatabase(ctx, cfg.DatabaseURL, time.Minute, log); err != nil {
 		return nil, err
@@ -565,6 +582,10 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		DefaultRegion:       cfg.DefaultRegion,
 		Routes:              ov.Routes,
 		GitHub:              gh,
+		StageChanges:        cfg.StageChanges,
+		// The wrapper's product name, where an app reads what the
+		// platform tells it: DATAHURU_PUBLIC_DOMAIN rather than the engine's.
+		PlatformVariablePrefix: ov.PlatformVariablePrefix,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
