@@ -1232,8 +1232,20 @@
   }
   /* The card whose panel is open, marked so it is findable behind the sheet. */
   .canvas-card-open { @apply border-foreground/50 ring-1 ring-foreground/15; }
-  .canvas-card-head { @apply flex items-center gap-2.5 text-[13px] text-foreground; }
-  .canvas-card-status { @apply flex items-center gap-2 overflow-hidden; }
+  /* Railway's card: icon and name with the address under it, and the state
+     in a word at the foot. */
+  .canvas-card { @apply justify-between py-4; }
+  .canvas-card-head { @apply flex items-start gap-3 text-[14px] text-foreground; }
+  .canvas-card-icon { @apply mt-0.5 grid size-5 shrink-0 place-items-center; }
+  .canvas-card-icon svg { @apply size-[18px]; }
+  .canvas-card-status { @apply flex items-center gap-2 pl-8 text-[13px]; }
+  .card-status-dot { @apply size-2 rounded-full bg-current; }
+  .card-status-ok { @apply text-success; }
+  .card-status-warn { @apply text-warning; }
+  .card-status-err { @apply text-destructive; }
+  .card-status-idle { @apply text-muted-foreground; }
+  .card-status-busy { @apply text-info; }
+  .card-status-busy .card-status-dot { @apply animate-pulse; }
 
   /* Only the grip starts a drag, so a click anywhere else is unambiguously a
      click. It stays faint until the card is hovered: a handle on every card at

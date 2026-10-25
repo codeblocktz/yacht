@@ -82,17 +82,23 @@ templ Canvas(d CanvasData) {
 							<span class="canvas-grip" data-drag-handle aria-hidden="true">
 								@icon("grip")
 							</span>
+							// Railway's card: what it is and where it answers at the
+							// top, whether it is up at the foot.
 							<span class="canvas-card-head">
-								@icon(sourceIcon(n.App.Source))
-								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
+								<span class="canvas-card-icon">
+									@icon(sourceIcon(n.App.Source))
+								</span>
+								<span class="min-w-0 flex-1">
+									<span class="block truncate font-semibold">{ n.App.Name }</span>
+									if n.App.Host != "" {
+										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.Host }</span>
+									}
+								</span>
 							</span>
-							<span class="canvas-card-status">
-								@appStatus(n.App)
-								if n.App.Host != "" {
-									<span class="mono truncate text-[11.5px] text-muted-foreground">
-										{ n.App.Host }
-									</span>
-								}
+							{{ label, class := cardStatus(n.App) }}
+							<span class={ "canvas-card-status", class }>
+								<span class="card-status-dot" aria-hidden="true"></span>
+								{ label }
 							</span>
 						</a>
 						if n.Volume != nil {

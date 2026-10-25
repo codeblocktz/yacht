@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func node(t *testing.T, d CanvasData, name string) CanvasNode {
@@ -177,5 +178,24 @@ func TestEdgesNameTheCardsTheyJoin(t *testing.T) {
 	}
 	if d.Edges[0].From != "api" || d.Edges[0].To != "db" {
 		t.Fatalf("edge joins %q to %q, want api to db", d.Edges[0].From, d.Edges[0].To)
+	}
+}
+
+// A card says whether the app is up in Railway's words.
+func TestACardSaysWhetherTheAppIsUp(t *testing.T) {
+	for _, tc := range []struct {
+		a    app.App
+		want string
+	}{
+		{app.App{StatusKnown: true, Status: orchestrator.AppStatus{Phase: orchestrator.PhaseRunning}}, "Online"},
+		{app.App{StatusKnown: true, Status: orchestrator.AppStatus{Phase: orchestrator.PhasePending}}, "Deploying"},
+		{app.App{StatusKnown: true, Status: orchestrator.AppStatus{Phase: orchestrator.PhaseFailing}}, "Crashed"},
+		{app.App{StatusKnown: true, Status: orchestrator.AppStatus{Phase: orchestrator.PhaseStopped}}, "Stopped"},
+		{app.App{Sleep: app.Sleep{State: app.SleepAsleep}}, "Sleeping"},
+		{app.App{}, "Unknown"},
+	} {
+		if got, _ := cardStatus(tc.a); got != tc.want {
+			t.Errorf("cardStatus(%+v) = %q, want %q", tc.a.Status.Phase, got, tc.want)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // Canvas geometry. Fixed rather than fluid: the layout is computed on the
@@ -11,7 +12,7 @@ import (
 // draw an edge to.
 const (
 	cardW   = 260
-	cardH   = 96
+	cardH   = 112
 	volumeH = 40
 	gapX    = 120
 	gapY    = 110
@@ -288,4 +289,30 @@ func (d CanvasData) Graph() canvasGraph {
 		sort.Strings(g.Edges[i].Via)
 	}
 	return g
+}
+
+// cardStatus is an app's state in the words Railway puts at the foot of a
+// card — Online, Deploying, Crashed — with the colour that goes with it.
+// A card is glanced at, so it says what a person would ask ("is it up?")
+// rather than the orchestrator's phase.
+func cardStatus(a app.App) (label, class string) {
+	switch {
+	case a.Sleep.Asleep():
+		return "Sleeping", "card-status-idle"
+	case !a.StatusKnown:
+		return "Unknown", "card-status-idle"
+	}
+	switch a.Status.Phase {
+	case orchestrator.PhaseRunning:
+		return "Online", "card-status-ok"
+	case orchestrator.PhaseDegraded:
+		return "Degraded", "card-status-warn"
+	case orchestrator.PhaseFailing:
+		return "Crashed", "card-status-err"
+	case orchestrator.PhaseStopped:
+		return "Stopped", "card-status-idle"
+	case orchestrator.PhasePending:
+		return "Deploying", "card-status-busy"
+	}
+	return string(a.Status.Phase), "card-status-idle"
 }
