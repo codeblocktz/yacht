@@ -264,6 +264,12 @@ func (s *Service) MoveToProject(ctx context.Context, ownerID, name, projectSlug 
 	if err != nil {
 		return Project{}, err
 	}
+	// A copy in another environment belongs to its environment as much as
+	// to its project; moving it alone would leave it in an environment the
+	// other project may not have.
+	if a.Environment() != DefaultEnvironment {
+		return Project{}, fmt.Errorf("%s is %s's copy in %s; move the service from production", a.Name, a.ServiceName(), a.Environment())
+	}
 	p, err := s.Project(ctx, ownerID, projectSlug)
 	if err != nil {
 		return Project{}, err

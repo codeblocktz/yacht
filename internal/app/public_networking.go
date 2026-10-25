@@ -25,10 +25,23 @@ import (
 // environments: what a generated hostname says after the app's name.
 const DefaultEnvironment = "production"
 
-// Environment is the environment the app is in. A method rather than the
-// constant at each use, so that when apps have environments of their own this
-// is the one place that changes.
-func (a App) Environment() string { return DefaultEnvironment }
+// Environment is the environment the app is in: production, unless it is a
+// service's copy in an environment made beside it.
+func (a App) Environment() string {
+	if a.EnvSlug == "" {
+		return DefaultEnvironment
+	}
+	return a.EnvSlug
+}
+
+// ServiceName is what the canvas calls the app: its service, or its name for
+// an app recorded before services were.
+func (a App) ServiceName() string {
+	if a.Service == "" {
+		return a.Name
+	}
+	return a.Service
+}
 
 // ErrNoTCPProxyPort means every port TCP proxies may be given is in use.
 var ErrNoTCPProxyPort = errors.New("app: every TCP proxy port on this install is in use")

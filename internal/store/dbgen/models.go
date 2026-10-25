@@ -63,6 +63,8 @@ type App struct {
 	HealthTimeoutSeconds int32
 	DockerfilePath       string
 	WatchPaths           []string
+	Environment          string
+	Service              string
 }
 
 type AppHook struct {
@@ -263,6 +265,16 @@ type Domain struct {
 	CheckAttempts int32
 	Verified      bool
 	Generated     bool
+}
+
+type Environment struct {
+	ID         uuid.UUID
+	OwnerID    string
+	ProjectID  uuid.UUID
+	Slug       string
+	Name       string
+	CopiedFrom string
+	CreatedAt  time.Time
 }
 
 type GithubDelivery struct {
