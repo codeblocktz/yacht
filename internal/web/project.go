@@ -215,6 +215,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachRegion(ctx, d)
 	s.attachProjects(ctx, d)
 	s.attachReferenceTargets(ctx, d)
+	d.Stages = s.stages()
 	return d
 }
 
