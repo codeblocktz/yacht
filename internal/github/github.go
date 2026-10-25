@@ -549,6 +549,52 @@ type Entry struct {
 	Type string `json:"type"`
 }
 
+// maxFile is the most of one file File reads: a Dockerfile, not a dataset.
+const maxFile = 256 << 10
+
+// File reads one file of a repository's default branch, with the
+// repository's own scoped token. ErrRepoNotAccessible when there is no such
+// file, or it is not a file.
+func (a *App) File(ctx context.Context, installationID, repoID int64, path string) ([]byte, error) {
+	tok, err := a.RepoToken(ctx, installationID, repoID)
+	if err != nil {
+		return nil, err
+	}
+	var full string
+	for _, r := range tok.Repositories {
+		if r.ID == repoID {
+			full = r.FullName
+		}
+	}
+	path = strings.Trim(path, "/")
+	if full == "" || path == "" || strings.Contains(path, "..") {
+		return nil, ErrRepoNotAccessible
+	}
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	var out struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+		Size     int64  `json:"size"`
+	}
+	endpoint := a.cfg.APIURL + "/repos/" + full + "/contents/" + strings.Join(parts, "/")
+	if _, err := a.do(ctx, http.MethodGet, endpoint, "token "+tok.Value, nil, &out); err != nil {
+		if errors.Is(err, errNotFound) {
+			return nil, ErrRepoNotAccessible
+		}
+		// A directory answers with an array, which does not decode here.
+		return nil, err
+	}
+	if out.Type != "file" || out.Encoding != "base64" || out.Size > maxFile {
+		return nil, ErrRepoNotAccessible
+	}
+	// GitHub wraps the base64 at 60 columns.
+	return base64.StdEncoding.DecodeString(strings.ReplaceAll(out.Content, "\n", ""))
+}
+
 // Contents lists a directory of a repository's default branch, read with the
 // repository's own scoped token. path is relative to the root, empty for the
 // root itself.

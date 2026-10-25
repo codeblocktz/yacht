@@ -312,7 +312,7 @@ func galleryPages() []galleryPage {
 			page: stack(
 				section("App states", "running · degraded · pending · stopped · unknown · image pull failure",
 					panelWrap(appRows(allApps))),
-				section("Empty state", "no workloads yet", panelWrap(emptyApps())),
+				section("Empty state", "no workloads yet", panelWrap(emptyApps(""))),
 				section("Cluster unreachable", "records still render; live status does not",
 					clusterCallout(`Get "https://10.0.0.4:6443/version": dial tcp: i/o timeout`)),
 			),

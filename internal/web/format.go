@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -259,11 +260,25 @@ func imageIsPending(image string) bool { return image == app.PendingImage }
 // A template makes several apps and a project to hold them, so it cannot use
 // the create form, which is a form for one app. Branching here rather than in
 // the template keeps the picker a list of links.
-func sourceHref(src app.Source) string {
+func sourceHref(src app.Source, project string) string {
 	if src == app.SourceTemplate {
 		return "/templates"
 	}
-	return "/apps/new?source=" + string(src)
+	return "/apps/new?source=" + string(src) + projectQuery("&", project)
+}
+
+// newAppHref is the deploy page, into a project when one is named.
+func newAppHref(project string) string { return "/apps/new" + projectQuery("?", project) }
+
+// githubDeployHref is the one-click GitHub deploy, into a project when one
+// is named.
+func githubDeployHref(project string) string { return "/apps/new/github" + projectQuery("?", project) }
+
+func projectQuery(sep, project string) string {
+	if project == "" {
+		return ""
+	}
+	return sep + "project=" + url.QueryEscape(project)
 }
 
 // totalApps counts the apps across every project.

@@ -68,7 +68,7 @@ func Canvas(d CanvasData) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = deployButton().Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = deployButton(d.Project.Slug).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -81,7 +81,7 @@ func Canvas(d CanvasData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = emptyApps().Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = emptyApps(d.Project.Slug).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

@@ -427,6 +427,13 @@ func (o *Orchestrator) container(
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		c = c.WithEnv(corev1ac.EnvVar().WithName(k).WithValue(spec.Env[k]))
 	}
+	// PORT is the port traffic is sent to, as Heroku and Railway set it:
+	// Phoenix, Rails, Express and most frameworks listen where it says. Not
+	// when the app sets PORT itself, as a variable or a secret — a literal
+	// here would win over the secret's.
+	if port, ok := portEnv(spec); ok {
+		c = c.WithEnv(corev1ac.EnvVar().WithName("PORT").WithValue(port))
+	}
 
 	res, err := resourceRequirements(spec)
 	if err != nil {
@@ -674,4 +681,19 @@ func (o *Orchestrator) ensurePullSecret(ctx context.Context, spec orchestrator.A
 		return fmt.Errorf("k8s: store the pull credential in %s: %w", spec.Namespace, err)
 	}
 	return nil
+}
+
+// portEnv is the PORT an app is given: its port, unless it has none or sets
+// PORT itself.
+func portEnv(spec orchestrator.AppSpec) (string, bool) {
+	if spec.Port <= 0 {
+		return "", false
+	}
+	if _, ok := spec.Env["PORT"]; ok {
+		return "", false
+	}
+	if _, ok := spec.Secrets["PORT"]; ok {
+		return "", false
+	}
+	return strconv.Itoa(int(spec.Port)), true
 }

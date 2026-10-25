@@ -1,0 +1,105 @@
+package web
+
+// NewAppGitHub is the one-click deploy: the team's repositories, and a
+// click on one is a deploy. Nothing is asked first. The name is the
+// repository's, the branch its default, the port what its Dockerfile
+// exposes; variables, branch, directory and domain are changed on the app,
+// where somebody can see what it needs, rather than guessed at here.
+templ NewAppGitHub(d NewAppGitHubData) {
+	if d.ProjectName != "" {
+		@pageHead("Deploy from GitHub", "Into "+d.ProjectName+". Pick a repository and it builds and deploys.", githubDeployOptions(d.Project))
+	} else {
+		@pageHead("Deploy from GitHub", "Pick a repository and it builds and deploys.", githubDeployOptions(d.Project))
+	}
+	if d.Error != "" {
+		<div class="callout callout-err mb-5 max-w-2xl">
+			<div>
+				<div class="font-medium">Could not deploy</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	if !d.Connected {
+		<div class="panel max-w-2xl">
+			<div class="empty">
+				<span class="empty-mark" aria-hidden="true">
+					@icon("github")
+				</span>
+				<p class="font-medium text-foreground">GitHub is not connected</p>
+				<p>Connect it on the Team page, and choose which repositories datahuru may build.</p>
+				<a class="btn btn-primary mt-3" href="/team">Connect GitHub</a>
+			</div>
+		</div>
+	} else {
+		<div class="max-w-2xl">
+			<input type="hidden" name="project" value={ d.Project }/>
+			<input
+				class="control mb-3"
+				type="search"
+				name="q"
+				value={ d.Query }
+				placeholder="Search repositories"
+				autocomplete="off"
+				autofocus
+				hx-get="/apps/new/github/repositories"
+				hx-trigger="input changed delay:200ms, search"
+				hx-target="#github-deploy-rows"
+				hx-include="[name='project']"
+			/>
+			<div id="github-deploy-rows">
+				@githubDeployRows(d)
+			</div>
+			<p class="mt-3 text-[12.5px] text-muted-foreground">
+				A repository not listed? Choose more on the
+				<a class="underline hover:text-foreground" href="/team">Team</a> page.
+			</p>
+		</div>
+	}
+}
+
+// githubDeployOptions is the way to the full form, for a public repository
+// or for options that have to be set before the first build.
+templ githubDeployOptions(project string) {
+	<a class="btn btn-ghost" href={ templ.SafeURL(sourceHref("git", project)) }>More options</a>
+}
+
+// githubDeployRows is the list, filtered. Each row is a form: one click,
+// one deploy.
+templ githubDeployRows(d NewAppGitHubData) {
+	<div class="panel">
+		if len(d.Repos) == 0 {
+			<div class="empty">
+				if d.Query != "" {
+					<p class="font-medium text-foreground">No repository matches “{ d.Query }”</p>
+				} else {
+					<p class="font-medium text-foreground">No repositories yet</p>
+					<p>The GitHub connection reaches none. Choose some on the Team page.</p>
+				}
+			</div>
+		} else {
+			<div class="rows">
+				for _, r := range d.Repos {
+					<form method="post" action="/apps/github">
+						<input type="hidden" name="github_repo" value={ r.Ref.String() }/>
+						<input type="hidden" name="project" value={ d.Project }/>
+						<button type="submit" class="row-link w-full text-left" data-github-deploy={ r.FullName }>
+							<span class="text-muted-foreground">
+								@icon("github")
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="block truncate font-medium mono">{ r.FullName }</span>
+								if r.Private {
+									<span class="block text-muted-foreground">Private</span>
+								}
+							</span>
+							<span class="text-[12.5px] text-muted-foreground">Deploy &rsaquo;</span>
+						</button>
+					</form>
+				}
+			</div>
+		}
+		for _, p := range d.Problems {
+			<div class="panel-foot text-xs text-muted-foreground">{ p }</div>
+		}
+	</div>
+}

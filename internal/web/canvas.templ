@@ -26,11 +26,11 @@ templ Canvas(d CanvasData) {
 		<span class="min-w-0 flex-1 truncate text-muted-foreground">
 			How these apps relate to each other.
 		</span>
-		@deployButton()
+		@deployButton(d.Project.Slug)
 	</div>
 	if d.Empty {
 		<div class="canvas-empty">
-			@emptyApps()
+			@emptyApps(d.Project.Slug)
 		</div>
 	} else {
 		// The geometry lives here, in one place, so the script that re-routes

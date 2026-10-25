@@ -768,6 +768,10 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/github/repositories", s.githubRepositories)
 				r.Get("/github/branches", s.githubBranches)
 				r.Get("/github/directories", s.githubDirectories)
+				// The one-click deploy: pick a repository, and it builds.
+				r.Get("/apps/new/github", s.appNewGitHub)
+				r.Get("/apps/new/github/repositories", s.appNewGitHubRepos)
+				r.Post("/apps/github", s.appDeployGitHub)
 			}
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
@@ -1199,6 +1203,7 @@ func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 		Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
 		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
 	}
+	data.Project, data.ProjectName = s.namedProject(r, r.URL.Query().Get("project"))
 
 	// Only somebody the registry page would actually admit is offered a link
 	// to it. A control that leads to a 403 tells the viewer they have a
@@ -1262,6 +1267,12 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		RepoSubdir: strings.TrimSpace(r.FormValue("repo_subdir")),
 		Region:     strings.TrimSpace(r.FormValue("region")),
 	}
+	project := strings.TrimSpace(r.FormValue("project"))
+	projectID, err := s.projectID(ctx, owner.ID, project)
+	if err != nil {
+		s.renderErrFor(w, r, source, form, err.Error())
+		return
+	}
 	githubRef, err := formGitHubRef(r)
 	if err != nil {
 		s.renderErrFor(w, r, source, form, err.Error())
@@ -1295,7 +1306,8 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 			URL: form.RepoURL, Branch: form.RepoBranch, Subdir: form.RepoSubdir,
 			GitHub: githubRef,
 		},
-		Region: form.Region,
+		Region:    form.Region,
+		ProjectID: projectID,
 	})
 	if err != nil {
 		s.log.Warn("create app failed",
@@ -1316,6 +1328,7 @@ func (s *Server) renderErrFor(
 		Error: msg, Form: form, Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
 		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
 	}
+	data.Project, data.ProjectName = s.namedProject(r, r.FormValue("project"))
 	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b
 	}
