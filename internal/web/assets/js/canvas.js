@@ -270,6 +270,27 @@
   } else {
     fit();
   }
+  revealOpenCard();
+
+  // revealOpenCard slides the view so the card whose panel is open sits in
+  // the part of the canvas the panel leaves showing, as Railway does. A
+  // panel that hid the card it was about would leave nothing on screen
+  // saying which app this is, or what it is connected to.
+  function revealOpenCard() {
+    var open = canvas.querySelector(".canvas-card-open");
+    var sheet = document.querySelector("#canvas-sheet .canvas-sheet");
+    if (!open || !sheet) return;
+    var cardBox = open.getBoundingClientRect();
+    var canvasBox = canvas.getBoundingClientRect();
+    // Its width rather than where it is: the panel may still be sliding in.
+    var visibleRight = canvasBox.right - sheet.offsetWidth - FIT_MARGIN;
+    var visibleLeft = canvasBox.left + FIT_MARGIN;
+    if (visibleRight - visibleLeft < cardBox.width) return; // a narrow window: nothing fits beside it
+    if (cardBox.left >= visibleLeft && cardBox.right <= visibleRight) return;
+    // Centred in what is left, keeping the zoom somebody chose.
+    view.x += (visibleLeft + visibleRight) / 2 - (cardBox.left + cardBox.right) / 2;
+    apply();
+  }
 
   var controls = document.querySelector("[data-canvas-controls]");
   if (controls) {
