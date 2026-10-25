@@ -1,0 +1,285 @@
+package web
+
+import (
+	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/apitoken"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// ProjectTokensData is Project Settings › Tokens.
+type ProjectTokensData struct {
+	Tokens  []apitoken.Token
+	New     *NewToken
+	BaseURL string
+}
+
+// teamTabs is the row above the team's pages. Only the pages that exist are
+// drawn, and Audit log only for whoever may open it.
+templ teamTabs(t TeamTabs) {
+	if t.Tokens || t.Audit {
+		<nav class="tabs mb-5" aria-label="Team">
+			<a class={ "tab", templ.KV("tab-active", t.Active == "members") } href="/team">Members</a>
+			if t.Tokens {
+				<a class={ "tab", templ.KV("tab-active", t.Active == "tokens") } href="/team/tokens">API tokens</a>
+			}
+			if t.Audit {
+				<a class={ "tab", templ.KV("tab-active", t.Active == "audit") } href="/team/audit">Audit log</a>
+			}
+		</nav>
+	}
+}
+
+// newTokenCallout shows a token once. It is the only place the token is
+// ever rendered: the list below has a hint of its last characters and
+// nothing else.
+templ newTokenCallout(t NewToken, baseURL string) {
+	<div class="callout callout-ok mb-5" role="status">
+		<div class="min-w-0 flex-1">
+			<div class="font-medium">{ t.Name } is ready — copy it now</div>
+			<p class="mt-0.5 text-muted-foreground">
+				This is the only time it is shown. Keep it somewhere safe: anybody holding it can do what it allows.
+			</p>
+			<div class="mt-2 flex items-center gap-2">
+				<code class="mono min-w-0 flex-1 truncate rounded border border-border bg-muted px-2 py-1 text-[12.5px]" data-token>{ t.Value }</code>
+				@copyButton(t.Value, "token")
+			</div>
+			<p class="mt-2 text-[12.5px] text-muted-foreground">
+				In CI, keep it as a secret named <code class="mono">{ t.TokenEnv() }</code> and run
+				<code class="mono">{ t.CLI + " up --app <name>" }</code>
+				if baseURL != "" {
+					against <code class="mono">{ baseURL }</code>
+				}
+				.
+			</p>
+		</div>
+	</div>
+}
+
+templ tokenRoleSelect(id string, viewer account.Role) {
+	@selectbox.SelectBox() {
+		@selectbox.Trigger(selectbox.TriggerProps{ID: id, Name: "role"}) {
+			@selectbox.Value(selectbox.ValueProps{Placeholder: "member"})
+		}
+		@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+			@selectbox.Item(selectbox.ItemProps{Value: "member", Selected: true}) {
+				member
+			}
+			// Offered only to whoever could use it: the service refuses a
+			// token stronger than its maker either way.
+			if viewer.CanAdminister() {
+				@selectbox.Item(selectbox.ItemProps{Value: "admin"}) {
+					admin
+				}
+			}
+		}
+	}
+}
+
+// TeamTokensPage is Team › API tokens: the team's tokens, and making one.
+templ TeamTokensPage(d TeamTokensData) {
+	@pageHead("Team", d.TeamName, nil)
+	@teamTabs(d.Tabs)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5"><div class="min-w-0">{ d.Error }</div></div>
+	}
+	if d.New != nil {
+		@newTokenCallout(*d.New, d.BaseURL)
+	}
+	<div class="panel mb-5">
+		<div class="panel-header"><span class="panel-title">API tokens</span></div>
+		<div class="panel-body">
+			<p class="text-muted-foreground">
+				A token lets a program act for the team: the CLI on your laptop, or a CI job that deploys on merge.
+				A member's token can deploy, roll back and read; an admin's can also change variables and read secrets.
+				A token never does more than the person who made it still may — remove them from the team and it stops working.
+			</p>
+		</div>
+		if len(d.Tokens) == 0 {
+			<div class="empty"><p>No tokens yet.</p></div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[720px]">
+					<thead>
+						<tr><th>Name</th><th>Role</th><th>Scope</th><th>Made by</th><th>Last used</th><th class="text-right">Actions</th></tr>
+					</thead>
+					<tbody>
+						for _, t := range d.Tokens {
+							<tr>
+								<td>
+									<span class="font-medium">{ t.Name }</span>
+									<span class="mono ml-1 text-muted-foreground">…{ t.Hint }</span>
+									if t.Origin == "cli" {
+										@statusDot("CLI", "status-info")
+									}
+								</td>
+								<td>@statusDot(string(t.Role), roleTone(t.Role))</td>
+								<td>
+									if t.Project() {
+										<a class="hover:underline" href={ templ.SafeURL("/projects/" + t.ProjectSlug + "/settings#tokens") }>{ t.ProjectName }</a>
+									} else {
+										<span class="text-muted-foreground">whole team</span>
+									}
+								</td>
+								<td class="mono text-[12.5px]">{ t.CreatedByEmail }</td>
+								<td class="text-muted-foreground">
+									if t.LastUsedAt != nil {
+										<span title={ absoluteTime(*t.LastUsedAt) }>{ relativeTime(*t.LastUsedAt) }</span>
+									} else {
+										never
+									}
+								</td>
+								<td class="text-right">
+									if d.Viewer.CanAdminister() || t.CreatedBy == d.ViewerID {
+										<form method="post" action={ templ.SafeURL("/team/tokens/" + t.ID.String() + "/revoke") } class="inline">
+											<button class="btn btn-sm btn-danger" type="submit">Revoke</button>
+										</form>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	if !d.Acting {
+		<div class="panel mb-5">
+			<div class="panel-header"><span class="panel-title">New token</span></div>
+			<div class="panel-body">
+				<form method="post" action="/team/tokens" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+					<div class="field grow">
+						<label class="label" for="token-name">Name</label>
+						<input class="control" id="token-name" name="name" required maxlength="60" placeholder="GitHub Actions"/>
+					</div>
+					<div class="field">
+						<label class="label" for="token-role">Role</label>
+						@tokenRoleSelect("token-role", d.Viewer)
+					</div>
+					<button class="btn btn-primary" type="submit">Create token</button>
+				</form>
+				<p class="form-note">
+					Signing the CLI in from a terminal makes one for you — run its <code class="mono">login</code> command.
+					A token for one project only is made on that project's settings.
+				</p>
+			</div>
+		</div>
+	}
+}
+
+// projectTokensSection is Project Settings › Tokens: Railway's project
+// tokens, which reach this project's apps and nothing else of the team's.
+templ projectTokensSection(slug string, d ProjectTokensData, viewer account.Role) {
+	<section id="tokens" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("key")</span>
+			<h2 class="settings-section-title">Tokens</h2>
+		</div>
+		<p class="field-note">
+			A project token can deploy and read this project's apps and nothing else of the team's — what to give a CI job.
+			Anyone with an admin's token can read the project's secret variables.
+		</p>
+		if d.New != nil {
+			<div class="mt-3">
+				@newTokenCallout(*d.New, d.BaseURL)
+			</div>
+		}
+		<div class="panel mt-3">
+			if len(d.Tokens) == 0 {
+				<div class="empty"><p>No project tokens.</p></div>
+			} else {
+				<div class="table-scroll">
+					<table class="dtable min-w-[560px]">
+						<thead><tr><th>Name</th><th>Role</th><th>Made by</th><th>Last used</th><th class="text-right">Actions</th></tr></thead>
+						<tbody>
+							for _, t := range d.Tokens {
+								<tr>
+									<td><span class="font-medium">{ t.Name }</span> <span class="mono text-muted-foreground">…{ t.Hint }</span></td>
+									<td>@statusDot(string(t.Role), roleTone(t.Role))</td>
+									<td class="mono text-[12.5px]">{ t.CreatedByEmail }</td>
+									<td class="text-muted-foreground">
+										if t.LastUsedAt != nil {
+											{ relativeTime(*t.LastUsedAt) }
+										} else {
+											never
+										}
+									</td>
+									<td class="text-right">
+										<form method="post" action={ templ.SafeURL("/projects/" + slug + "/tokens/" + t.ID.String() + "/revoke") }>
+											<button class="btn btn-sm btn-danger" type="submit">Revoke</button>
+										</form>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</div>
+		<form method="post" action={ templ.SafeURL("/projects/" + slug + "/tokens") } class="mt-4 flex flex-wrap items-end gap-4">
+			<div class="field grow">
+				<label class="label" for="project-token-name">Name</label>
+				<input class="control" id="project-token-name" name="name" required maxlength="60" placeholder="Deploy from CI"/>
+			</div>
+			<div class="field">
+				<label class="label" for="project-token-role">Role</label>
+				@tokenRoleSelect("project-token-role", viewer)
+			</div>
+			<button class="btn btn-primary" type="submit">Create token</button>
+		</form>
+	</section>
+}
+
+// CLIAuthorizePage is where a CLI's browser login lands.
+templ CLIAuthorizePage(d CLIAuthorizeData) {
+	@pageHead("Sign in a CLI", d.TeamName, nil)
+	<div class="panel mx-auto max-w-[560px]">
+		<div class="panel-body">
+			switch {
+				case d.Done == "approved":
+					<div class="font-medium">The CLI is signed in.</div>
+					<p class="mt-1 text-muted-foreground">You can close this window and go back to your terminal. The token it was given is listed under Team › API tokens, where it can be revoked.</p>
+				case d.Done == "denied":
+					<div class="font-medium">Refused.</div>
+					<p class="mt-1 text-muted-foreground">The CLI was told no, and nothing was made.</p>
+				case d.Login == nil:
+					if d.Error != "" {
+						<div class="callout callout-err mb-4"><div class="min-w-0">{ d.Error }</div></div>
+					}
+					<form method="get" action="/cli/authorize" class="flex items-end gap-3">
+						<div class="field grow">
+							<label class="label" for="cli-code">Code shown in your terminal</label>
+							<input class="control mono uppercase" id="cli-code" name="code" required placeholder="ABCD-EFGH" autocomplete="off"/>
+						</div>
+						<button class="btn" type="submit">Continue</button>
+					</form>
+				default:
+					if d.Error != "" {
+						<div class="callout callout-err mb-4"><div class="min-w-0">{ d.Error }</div></div>
+					}
+					<p class="text-muted-foreground">A CLI is asking to act for <span class="font-medium text-foreground">{ d.TeamName }</span>.</p>
+					<div class="my-4 text-center">
+						<div class="mono text-[28px] font-semibold tracking-[0.2em]">{ d.Login.UserCode }</div>
+						if d.Login.ClientName != "" {
+							<div class="mt-1 text-[12.5px] text-muted-foreground">on { d.Login.ClientName }</div>
+						}
+					</div>
+					<div class="callout callout-warn mb-4">
+						<div class="min-w-0">Only approve if this is the code your own terminal is showing. If somebody sent you this link, refuse it.</div>
+					</div>
+					if d.Acting {
+						<p class="hint">You are acting as this team for support, which makes you no member of it; sign a CLI in from your own team.</p>
+					} else {
+						<form method="post" action="/cli/authorize" class="flex flex-wrap items-end gap-3">
+							<input type="hidden" name="code" value={ d.Login.UserCode }/>
+							<div class="field">
+								<label class="label" for="cli-role">Role</label>
+								@tokenRoleSelect("cli-role", d.Viewer)
+							</div>
+							<button class="btn btn-primary" type="submit" name="decision" value="approve">Approve</button>
+							<button class="btn" type="submit" name="decision" value="deny">Refuse</button>
+						</form>
+					}
+			}
+		</div>
+	</div>
+}

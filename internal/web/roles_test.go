@@ -17,9 +17,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/apitoken"
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/audit"
 	"github.com/codeblocktz/yacht/internal/identity"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/webhook"
 )
 
 // rolelessAccounts resolves any cookie to a session that is signed in and holds
@@ -58,7 +61,13 @@ func gatedServer(t *testing.T, accounts Accounts, team string) http.Handler {
 		// nobody remembers to gate.
 		Joiner: &fakeJoiner{configured: true},
 		Quotas: newFakeQuotas(team),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		// The token, audit and webhook surfaces, so their routes are on the
+		// table too. Nil services behind them: a gate that holds never lets
+		// a request reach one.
+		Tokens:   (*apitoken.Service)(nil),
+		Audit:    (*audit.Log)(nil),
+		Webhooks: (*webhook.Service)(nil),
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -118,6 +127,12 @@ func TestEveryMutatingRouteHasARoleGate(t *testing.T) {
 		}
 		posts = append(posts, route)
 
+		// The API is authorised by a bearer token, never by a session, and
+		// has gates of its own on the same roles; it is walked with tokens
+		// in TestATokenFromOneTeamNeverTouchesAnother.
+		if strings.HasPrefix(route, APIPrefix+"/") {
+			return nil
+		}
 		if _, ok := allowed[route]; ok {
 			seen[route] = true
 			// An allowlisted route has to work without a role, or it is not an

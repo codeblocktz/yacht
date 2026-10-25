@@ -29,11 +29,21 @@ func (s *Server) projectSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderProjectSettings(w http.ResponseWriter, r *http.Request, status int, fail string) {
-	s.renderProjectSettingsWith(w, r, status, fail, nil)
+	s.renderProjectSettingsWith(w, r, status, fail, projectExtras{})
+}
+
+// projectExtras is what one response shows once and never again: a token
+// or a webhook's signing secret just made.
+type projectExtras struct {
+	token   *NewToken
+	webhook *NewWebhook
+	// decorate adds what a response has to say once, such as what creating
+	// an environment did with each service.
+	decorate func(*ProjectSettingsData)
 }
 
 func (s *Server) renderProjectSettingsWith(
-	w http.ResponseWriter, r *http.Request, status int, fail string, decorate func(*ProjectSettingsData),
+	w http.ResponseWriter, r *http.Request, status int, fail string, extra projectExtras,
 ) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
@@ -70,8 +80,16 @@ func (s *Server) renderProjectSettingsWith(
 			s.log.Warn("list environments", slog.String("error", err.Error()))
 		}
 	}
-	if decorate != nil {
-		decorate(&d)
+	// Tokens and webhooks are the admins' to see as well as to change: a
+	// Discord webhook's URL is its credential, and a token's list says what
+	// can deploy the project.
+	if role, ok := s.roleOf(r); ok && role.CanAdminister() {
+		d.Viewer = role
+		d.Tokens = s.projectTokens(r, p, extra.token)
+		d.Webhooks = s.projectWebhooks(r, p, extra.webhook)
+	}
+	if extra.decorate != nil {
+		extra.decorate(&d)
 	}
 	s.renderStatus(w, r, status, ProjectSettings(d))
 }
@@ -96,7 +114,7 @@ func (s *Server) environmentCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	env, copies, err := es.CreateEnvironment(ctx, owner.ID, slug, r.FormValue("name"), from)
 	if err != nil && env.Slug == "" {
-		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), projectExtras{})
 		return
 	}
 	if err != nil {
@@ -108,9 +126,9 @@ func (s *Server) environmentCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, envHref(slug, env.Slug), http.StatusSeeOther)
 		return
 	}
-	s.renderProjectSettingsWith(w, r, http.StatusOK, "", func(d *ProjectSettingsData) {
+	s.renderProjectSettingsWith(w, r, http.StatusOK, "", projectExtras{decorate: func(d *ProjectSettingsData) {
 		d.Copied, d.CopiedEnv = copies, env.Name
-	})
+	}})
 }
 
 // environmentDelete deletes an environment and its services.
@@ -124,7 +142,7 @@ func (s *Server) environmentDelete(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(ctx)
 	slug, env := chi.URLParam(r, "slug"), chi.URLParam(r, "env")
 	if err := es.DeleteEnvironment(ctx, owner.ID, slug, env); err != nil {
-		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), projectExtras{})
 		return
 	}
 	rememberEnv(w, slug, app.DefaultEnvironment)
@@ -196,7 +214,7 @@ func (s *Server) projectPREnvironments(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 	enabled := formChecked(r, "enabled")
 	if err := pe.SetPREnvironments(r.Context(), owner.ID, slug, enabled); err != nil {
-		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), projectExtras{})
 		return
 	}
 	if enabled {

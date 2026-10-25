@@ -67,7 +67,16 @@ func (s *Server) csrfProtect(next http.Handler) http.Handler {
 		// authorised by a signature over its body, which a page on another
 		// origin cannot produce.
 		webhook := strings.HasPrefix(r.URL.Path, hookPath) || r.URL.Path == GitHubHookPath
-		if !originlessSignIn && !webhook && (got == "" || want == "" || originOf(got) != want) {
+		// The API never reads a cookie: it is authorised by a bearer token in
+		// a header, which a page on another origin cannot make a browser
+		// send. Only with that header, though — an install with no accounts
+		// may answer the API without one, and there a cross-site form post
+		// would otherwise be a deploy. Signing a CLI in carries no token yet,
+		// and creates nothing until a person approves it on the dashboard.
+		_, hasBearer := bearer(r)
+		api := strings.HasPrefix(r.URL.Path, APIPrefix+"/") &&
+			(hasBearer || strings.HasPrefix(r.URL.Path, APIPrefix+"/cli/login"))
+		if !originlessSignIn && !webhook && !api && (got == "" || want == "" || originOf(got) != want) {
 			http.Error(w, "cross-origin request refused", http.StatusForbidden)
 			return
 		}

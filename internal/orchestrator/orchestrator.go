@@ -927,6 +927,14 @@ type BuildRequest struct {
 	// appearing in the Job's spec, its arguments, the checkout, or the log.
 	RepoToken string
 
+	// SourceURL, when set, is fetched instead of RepoURL being cloned: a
+	// gzipped tar of somebody's working directory, uploaded by the CLI and
+	// served by the engine. SourceToken is the bearer credential the fetch
+	// presents, short-lived and good for this one archive; like RepoToken it
+	// must reach the fetch without appearing in the Job's spec or the log.
+	SourceURL   string
+	SourceToken string
+
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.
 	Log func(chunk string)

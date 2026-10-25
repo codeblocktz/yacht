@@ -149,6 +149,9 @@ func (s *Server) flashOK(w http.ResponseWriter, r *http.Request, text string) {
 }
 
 func (s *Server) flashErr(w http.ResponseWriter, r *http.Request, text string) {
+	// A failure said by flash is still a failure: the audit log must not
+	// record the action as done because the redirect after it was a 303.
+	markAuditFailed(r.Context())
 	s.setFlash(w, r, FlashErr, text)
 }
 

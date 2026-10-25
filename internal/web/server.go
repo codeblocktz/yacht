@@ -408,6 +408,24 @@ type Options struct {
 	// owner and invited people get in. Either way the form answers alike.
 	OpenSignup bool
 
+	// Tokens, when set with Accounts, puts the API under /api/v1, API tokens
+	// on the Team page and on Project Settings, and signing a CLI in through
+	// the browser. Without accounts the API is on regardless, authenticated
+	// by Identity — a shared-token install's token is its API token too.
+	Tokens Tokens
+
+	// Audit, when set, records who did what on every action in auditRoutes,
+	// and puts Team › Audit log on the router.
+	Audit AuditLog
+
+	// Webhooks, when set, puts Project Settings › Webhooks on the router.
+	Webhooks Webhooks
+
+	// CLIName is what the product's CLI is called, for the token pages to
+	// say how to use what they make: "datahuru" tells somebody to run
+	// datahuru up with DATAHURU_TOKEN. Empty is the engine's own, "yacht".
+	CLIName string
+
 	Logger *slog.Logger
 }
 
@@ -509,6 +527,18 @@ type Server struct {
 	// flashKey authenticates the one-shot message a redirect carries. See
 	// newFlashKey for why it is minted here rather than configured.
 	flashKey []byte
+
+	// tokens, audit and webhooks are the API's credentials, the team's
+	// record, and a project's webhooks; each nil leaves its surface off.
+	tokens   Tokens
+	audit    AuditLog
+	webhooks Webhooks
+	cliName  string
+
+	// apiRate and apiFailures are the API's brakes: requests per token, and
+	// failed authentications per address.
+	apiRate     *apiRateLimiter
+	apiFailures *apiFailureLimiter
 }
 
 // New validates options and returns a server.
@@ -611,6 +641,12 @@ func New(opts Options) (*Server, error) {
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		signInLimit:    newAttemptLimiter(signInWindow),
 		flashKey:       flashKey,
+		tokens:         opts.Tokens,
+		audit:          opts.Audit,
+		webhooks:       opts.Webhooks,
+		cliName:        cmp.Or(opts.CLIName, "yacht"),
+		apiRate:        newAPIRateLimiter(apiRatePerMinute, apiRateBurst),
+		apiFailures:    &apiFailureLimiter{l: newAttemptLimiter(time.Minute), limit: apiFailuresPerMinute},
 	}, nil
 }
 
@@ -646,6 +682,9 @@ func (s *Server) Handler() http.Handler {
 	if s.github != nil {
 		r.Post(GitHubHookPath, s.githubDeliver)
 	}
+
+	// The API: a token or nothing, JSON in and out. See api.go.
+	s.mountAPI(r)
 
 	// Static assets are embedded and carry no owner data, so they sit outside
 	// the authenticated group too — otherwise the stylesheet 401s on the login
@@ -731,6 +770,12 @@ func (s *Server) Handler() http.Handler {
 		// the Deployments badge. Deferred like the teams above: only a
 		// response that draws the chrome pays for the query.
 		r.Use(s.withWorkspace)
+
+		// Who did what, for the team's audit log, recorded after each action
+		// in auditRoutes succeeds. On the group like the gates below, so a
+		// route is recorded because it is in the table, not because its
+		// handler remembered.
+		r.Use(s.auditTrail)
 
 		// The split between these groups is at the line where an action stops
 		// being undoable by redeploying. Each gate is on the group rather than in
@@ -880,6 +925,14 @@ func (s *Server) Handler() http.Handler {
 			if s.accounts != nil {
 				r.Post("/teams/switch", s.teamSwitch)
 
+				// API tokens: any member may make one for themselves, no
+				// stronger than their own role, and take back their own —
+				// the service checks both. Approving a CLI's login is making
+				// one. See tokens.go.
+				if s.tokens != nil {
+					s.mountMemberTokens(r)
+				}
+
 				// Stopping acting is any session's, not the operator's: whoever
 				// is acting must always be able to stop, including somebody
 				// taken off the operators a moment ago. Member is what the
@@ -906,6 +959,16 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/projects/{slug}/environments/{env}/delete", s.environmentDelete)
 			r.Post("/projects/{slug}/pr-environments", s.projectPREnvironments)
 			r.Post("/projects/{slug}/delete", s.projectDelete)
+			// A project token and a webhook each hand an outside system a
+			// way into the project — to deploy it, or to hear about it —
+			// which a redeploy does not undo. See tokens.go, webhooks.go.
+			if s.tokens != nil && s.accounts != nil {
+				r.Post("/projects/{slug}/tokens", s.projectTokenCreate)
+				r.Post("/projects/{slug}/tokens/{id}/revoke", s.projectTokenRevoke)
+			}
+			if s.webhooks != nil {
+				s.mountWebhooks(r)
+			}
 
 			// Storage sits with the admin actions rather than the member ones:
 			// attaching changes how the app deploys, and deleting destroys what
@@ -979,6 +1042,11 @@ func (s *Server) Handler() http.Handler {
 				// which is more than any one member's app.
 				if s.sleep != nil {
 					r.Post("/team/sleep", s.teamSleepDefault)
+				}
+				// The audit log names who revealed which secret, so it is
+				// the admins'. See auditlog.go.
+				if s.audit != nil {
+					r.Get("/team/audit", s.teamAudit)
 				}
 				r.Post("/team/invite", s.teamInvite)
 				r.Post("/team/invitations/{id}/revoke", s.teamRevokeInvitation)

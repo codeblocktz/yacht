@@ -1,0 +1,127 @@
+package web
+
+import (
+	"github.com/codeblocktz/yacht/internal/audit"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// TeamAuditPage is Team › Audit log: who did what to the team, when, and
+// from where, newest first, with filters.
+templ TeamAuditPage(d TeamAuditData) {
+	@pageHead("Team", d.TeamName, nil)
+	@teamTabs(d.Tabs)
+	<form method="get" action="/team/audit" class="panel mb-5">
+		<div class="panel-body flex flex-wrap items-end gap-3">
+			<div class="field">
+				<label class="label" for="audit-category">Action</label>
+				@selectbox.SelectBox(selectbox.Props{Class: "w-40"}) {
+					@selectbox.Trigger(selectbox.TriggerProps{ID: "audit-category", Name: "category"}) {
+						@selectbox.Value(selectbox.ValueProps{Placeholder: "Any action"})
+					}
+					@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+						@selectbox.Item(selectbox.ItemProps{Value: "", Selected: d.Category == ""}) {
+							Any action
+						}
+						for _, c := range d.Categories {
+							@selectbox.Item(selectbox.ItemProps{Value: c, Selected: d.Category == c}) {
+								{ c }
+							}
+						}
+					}
+				}
+			</div>
+			<div class="field">
+				<label class="label" for="audit-actor">Who</label>
+				@selectbox.SelectBox(selectbox.Props{Class: "w-56"}) {
+					@selectbox.Trigger(selectbox.TriggerProps{ID: "audit-actor", Name: "actor"}) {
+						@selectbox.Value(selectbox.ValueProps{Placeholder: "Anybody"})
+					}
+					@selectbox.Content() {
+						@selectbox.Item(selectbox.ItemProps{Value: "", Selected: d.Actor == ""}) {
+							Anybody
+						}
+						for _, a := range d.Actors {
+							@selectbox.Item(selectbox.ItemProps{Value: a, Selected: d.Actor == a}) {
+								{ a }
+							}
+						}
+					}
+				}
+			</div>
+			<div class="field grow">
+				<label class="label" for="audit-q">Search</label>
+				<input class="control" id="audit-q" name="q" value={ d.Query } placeholder="An app, a member, a key"/>
+			</div>
+			<div class="field">
+				<label class="label" for="audit-since">From</label>
+				<input class="control" id="audit-since" name="since" type="date" value={ d.Since }/>
+			</div>
+			<div class="field">
+				<label class="label" for="audit-until">To</label>
+				<input class="control" id="audit-until" name="until" type="date" value={ d.Until }/>
+			</div>
+			<button class="btn" type="submit">Filter</button>
+			if d.Category != "" || d.Actor != "" || d.Query != "" || d.Since != "" || d.Until != "" {
+				<a class="btn btn-ghost" href="/team/audit">Clear</a>
+			}
+		</div>
+	</form>
+	<div class="panel">
+		if len(d.Entries) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing recorded</p>
+				<p>Deploys, variable changes, domains, people, tokens, consoles and revealed secrets are recorded here as they happen.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[860px]">
+					<thead>
+						<tr><th>When</th><th>Who</th><th>Did</th><th>To</th><th>Details</th><th>From</th></tr>
+					</thead>
+					<tbody>
+						for _, e := range d.Entries {
+							<tr>
+								<td class="whitespace-nowrap text-muted-foreground"><span title={ absoluteTime(e.At) }>{ relativeTime(e.At) }</span></td>
+								<td>
+									<span class="mono text-[12.5px]">{ orDash(e.Actor.Name) }</span>
+									if e.Actor.Kind != audit.ActorUser {
+										@statusDot(auditActorLabel(e.Actor.Kind), "status-info")
+									}
+								</td>
+								<td><code class="mono text-[12.5px]">{ e.Action }</code></td>
+								<td>
+									if e.Target != "" {
+										<span class="text-muted-foreground">{ e.TargetKind }</span> <span class="font-medium">{ e.Target }</span>
+									}
+								</td>
+								<td class="text-[12.5px] text-muted-foreground">
+									for _, k := range sortedKeys(e.Detail) {
+										<span class="mr-2 whitespace-nowrap"><span>{ k }</span>=<span class="mono text-foreground">{ e.Detail[k] }</span></span>
+									}
+								</td>
+								<td class="mono whitespace-nowrap text-[12px] text-muted-foreground" title={ e.Actor.UserAgent }>{ orDash(e.Actor.IP) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	if d.NextQuery != "" {
+		<div class="mt-4 flex justify-center">
+			<a class="btn" href={ templ.SafeURL("/team/audit?" + d.NextQuery) }>Older</a>
+		</div>
+	}
+}
+
+func auditActorLabel(kind string) string {
+	switch kind {
+	case audit.ActorToken:
+		return "token"
+	case audit.ActorOperator:
+		return "operator"
+	case audit.ActorSystem:
+		return "platform"
+	}
+	return kind
+}

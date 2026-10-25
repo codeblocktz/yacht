@@ -123,10 +123,12 @@ func (s *Service) admitDeploymentTx(
 	if requiresBuild {
 		image = PendingImage
 	}
+	actorKind, actorID := deployActor(ctx, actorKind)
 	deployment, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
 		OwnerID: ownerID, AppID: a.ID, Image: image,
 		Revision: trigger, Status: DeployRunning,
-		ReleaseID: pgUUID(releaseID), Trigger: trigger, ActorKind: actorKind,
+		ReleaseID: pgUUID(releaseID), Trigger: trigger,
+		ActorKind: actorKind, ActorID: actorID,
 	})
 	if err != nil {
 		return Operation{}, fmt.Errorf("app: record admitted deployment: %w", err)
@@ -422,6 +424,7 @@ func (s *Service) completeOperation(ctx context.Context, op Operation, cause err
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("app: commit operation completion: %w", err)
 	}
+	s.emitDeployFinished(ctx, op, cause)
 	return cause
 }
 
@@ -607,11 +610,24 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 	if !s.CanBuild(ctx) {
 		return a, ErrNoBuilder
 	}
+	// A deploy made by `up` builds the archive it was given in place of the
+	// repository: the same build, with the clone swapped for a fetch. The
+	// archive goes once the build is over, whichever way it went.
+	upload, uploaded := s.uploadFor(ctx, *op)
+	if uploaded {
+		defer s.purgeUpload(ctx, op.OwnerID, upload)
+	}
 	image, err := s.images.ImageFor(ctx, op.OwnerID, a.Name, revisionFor(op.DeploymentID))
 	if err != nil {
 		return a, err
 	}
-	row, err := s.createFencedBuild(ctx, *op, a)
+	recorded := a
+	if uploaded {
+		// What the build row says it built from, since there is no
+		// repository to name: the upload, which the deploy links to.
+		recorded.Repo = Repo{URL: UploadTriggerPrefix + upload.ID.String(), Branch: "upload", Subdir: a.Repo.Subdir}
+	}
+	row, err := s.createFencedBuild(ctx, *op, recorded)
 	if err != nil {
 		return a, err
 	}
@@ -619,12 +635,18 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 	if err != nil {
 		return a, err
 	}
-	// A repository reached through the GitHub App is cloned with a token for
-	// it alone, minted now and never stored. Refused here rather than tried
-	// anonymously: a private repository's clone would fail anyway, and a
-	// public one built after its access was taken away is a build nobody
-	// allowed. Recorded on the build, so the page says why.
-	repoToken, err := s.gitHubCloneToken(ctx, a)
+	var repoToken, sourceURL, sourceToken string
+	if uploaded {
+		sourceURL, sourceToken, err = s.sourceFetch(ctx, op.OwnerID, upload)
+	} else {
+		// A repository reached through the GitHub App is cloned with a token
+		// for it alone, minted now and never stored. Refused here rather
+		// than tried anonymously: a private repository's clone would fail
+		// anyway, and a public one built after its access was taken away is
+		// a build nobody allowed. Recorded on the build, so the page says
+		// why.
+		repoToken, err = s.gitHubCloneToken(ctx, a)
+	}
 	if err != nil {
 		if finErr := s.finishFencedBuild(ctx, *op, row.ID, BuildFailed, err.Error(), "", ""); finErr != nil {
 			return a, finErr
@@ -638,6 +660,12 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		Insecure:   s.images.Insecure(ctx), RegistryAuth: auth,
 		RepoToken: repoToken,
 		Log:       s.buildLogger(ctx, row.ID),
+	}
+	if uploaded {
+		// The archive is the directory `up` was run in, which is the
+		// subdirectory a monorepo's app builds from: nothing to descend into.
+		req.RepoURL, req.Ref, req.Subdir = "", "", ""
+		req.SourceURL, req.SourceToken = sourceURL, sourceToken
 	}
 	if err := s.setFencedBuildJob(ctx, *op, row.ID, s.builder.BuildJobName(req)); err != nil {
 		return a, err

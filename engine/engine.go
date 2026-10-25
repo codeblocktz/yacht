@@ -22,6 +22,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,7 +34,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/apitoken"
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/audit"
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
 	"github.com/codeblocktz/yacht/internal/domain"
@@ -47,6 +50,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
 	"github.com/codeblocktz/yacht/internal/web"
+	"github.com/codeblocktz/yacht/internal/webhook"
 )
 
 // The seams, by their engine names. Aliases rather than copies: a value a
@@ -418,6 +422,16 @@ type Overrides struct {
 	// without one the section is left out. See UsageMeter.
 	Usage UsageMeter
 
+	// TokenPrefix begins every API token the engine issues, so a secret
+	// scanner can recognise one pasted where it should not be. Empty is the
+	// engine's own, "yacht_"; a product sets its own name.
+	TokenPrefix string
+
+	// CLIName is what the product's CLI is called — the binary its users
+	// type — so the token pages say "datahuru up" rather than the engine's
+	// name. Empty is "yacht", cmd/yacht-cli's own.
+	CLIName string
+
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
 	// own migrations. They share the database; a wrapper keeps its own goose
 	// version table so the two histories never collide.
@@ -440,6 +454,13 @@ type Engine struct {
 	Keeper *Keeper
 	Apps   *Apps
 	Server *Server
+
+	// Tokens is the API's credentials, nil with accounts off; Audit the
+	// team's record of who did what; Webhooks a project's, nil without a
+	// secret key to seal them with.
+	Tokens   *apitoken.Service
+	Audit    *audit.Log
+	Webhooks *webhook.Service
 
 	resolver domain.Resolver
 	// registry is Settings › Registry's store, which SetRegistry writes too.
@@ -599,6 +620,23 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 			"set YACHT_BACKUP_S3_* to keep them off the cluster")
 	}
 
+	// A project's webhooks need the key for the headers and secret they
+	// keep, and are told about deploys by the app service built next.
+	e.Audit = audit.New(e.Pool, log)
+	var events app.EventSink
+	if e.Keeper.Configured() {
+		e.Webhooks = webhook.New(e.Pool, e.Keeper, e.Orchestrator, log, webhook.Options{
+			BaseURL: cfg.BaseURL, Brand: cmp.Or(ov.WakerBrand, web.DefaultBrandName),
+		})
+		events = e.Webhooks
+	}
+	// Uploaded source is fetched by the build from the engine itself; with
+	// no address to give the build there is no way to, and `up` says so.
+	var sourceFetch string
+	if base := cmp.Or(cfg.BuildSourceURL, cfg.BaseURL); base != "" {
+		sourceFetch = base + web.APIPrefix + "/build-sources"
+	}
+
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		BackupS3:            backups,
 		BackupToolImage:     cfg.BackupToolImage,
@@ -624,6 +662,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		// The wrapper's product name, where an app reads what the
 		// platform tells it: DATAHURU_PUBLIC_DOMAIN rather than the engine's.
 		PlatformVariablePrefix: ov.PlatformVariablePrefix,
+		Events:                 events,
+		SourceFetchURL:         sourceFetch,
 	})
 
 	// Yacht cannot check that the ingress controller actually has a default
@@ -680,6 +720,11 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Sleep:         e.Apps,
 		Regions:       e.Apps,
 		WakerBrand:    ov.WakerBrand,
+		Audit:         e.Audit,
+		CLIName:       ov.CLIName,
+	}
+	if e.Webhooks != nil {
+		opts.Webhooks = e.Webhooks
 	}
 	if gh != nil {
 		opts.GitHub = e.Apps
@@ -699,6 +744,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	}
 
 	if cfg.AccountsEnabled() {
+		e.Tokens = apitoken.New(e.Pool, log, ov.TokenPrefix)
+		opts.Tokens = e.Tokens
 		opts.Accounts = e.Accounts
 		opts.Mailer = e.Mailer
 		opts.BaseURL = cfg.BaseURL
@@ -789,6 +836,15 @@ func (e *Engine) Waker() http.Handler { return e.Server.Waker() }
 // processes at once, so a wrapper may run replicas.
 func (e *Engine) Start(ctx context.Context) {
 	apps, log := e.Apps, e.Log
+
+	// Sends a project's webhooks, and watches the apps they listen to for
+	// crashing. Both claim their work in the database, so every replica may
+	// run them. And drops uploaded source no build is going to read.
+	if e.Webhooks != nil {
+		go e.Webhooks.Run(ctx)
+		go e.Webhooks.WatchCrashes(ctx)
+	}
+	go apps.RunUploadJanitor(ctx)
 
 	// Settles builds whose process went away — a restart mid-build, or a
 	// replica that stopped. Level-triggered against the Job rather than driven
