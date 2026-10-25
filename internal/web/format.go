@@ -728,6 +728,13 @@ func failureReason(message string) string {
 	return message
 }
 
+// failureLines is failureReason a line at a time. Most reasons are one line;
+// a pre-deploy command's carries the end of what it printed, and a stack
+// trace run together into one paragraph is a stack trace nobody can read.
+func failureLines(message string) []string {
+	return strings.Split(failureReason(message), "\n")
+}
+
 // lastDeployFailed reports whether the most recent deployment failed.
 func lastDeployFailed(deps []app.Deployment) bool {
 	return len(deps) > 0 && deps[0].Status == app.DeployFailed

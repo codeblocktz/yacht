@@ -365,6 +365,10 @@ func (s *Server) appSourceDisconnect(w http.ResponseWriter, r *http.Request) {
 		MemoryLimit:   a.MemoryLimit,
 		Internal:      a.Internal,
 		Repo:          app.Repo{},
+		// Carried as they are: disconnecting a repository is not a reason
+		// to forget how the image it built is started.
+		StartCommand:     a.StartCommand,
+		PreDeployCommand: a.PreDeployCommand,
 	}); err != nil {
 		s.flashErr(w, r, err.Error())
 		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
@@ -415,6 +419,8 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 			Subdir: strings.TrimSpace(r.FormValue("repo_subdir")),
 			GitHub: githubRef,
 		},
+		StartCommand:     r.FormValue("start_command"),
+		PreDeployCommand: r.FormValue("pre_deploy_command"),
 	}
 
 	before, err := s.apps.Get(ctx, owner.ID, name)

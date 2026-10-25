@@ -115,7 +115,7 @@ func (q *Queries) GetTeamGitHubInstallation(ctx context.Context, arg GetTeamGitH
 }
 
 const listAppsForGitHubPush = `-- name: ListAppsForGitHubPush :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command
 FROM apps a
 JOIN team_github_installations t
   ON t.owner_id = a.owner_id AND t.installation_id = a.github_installation_id
@@ -185,6 +185,8 @@ func (q *Queries) ListAppsForGitHubPush(ctx context.Context, arg ListAppsForGitH
 			&i.GithubInstallationID,
 			&i.GithubRepoID,
 			&i.GithubPaused,
+			&i.StartCommand,
+			&i.PreDeployCommand,
 		); err != nil {
 			return nil, err
 		}

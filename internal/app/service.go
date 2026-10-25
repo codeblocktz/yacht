@@ -85,6 +85,12 @@ type App struct {
 	HealthPath string
 	Liveness   bool
 
+	// StartCommand replaces the image's own command when set, and
+	// PreDeployCommand runs once before each new version takes traffic. Both
+	// are shell command lines, and both are empty unless somebody set them.
+	StartCommand     string
+	PreDeployCommand string
+
 	// Variables are this app's environment. A secret's value is not carried
 	// here — see Variable.
 	Variables []Variable
@@ -453,6 +459,13 @@ type UpdateInput struct {
 	// the next deploy uses it — so it is the one field here that does not
 	// roll the workload.
 	Repo Repo
+
+	// StartCommand and PreDeployCommand are the app's deploy commands. Here
+	// rather than on a form of their own because they roll out like the
+	// image does: a new start command is a new release, and so is a new
+	// pre-deploy command, which runs before that release starts.
+	StartCommand     string
+	PreDeployCommand string
 }
 
 // Validate checks an update against the same bounds a create is held to.
@@ -467,9 +480,17 @@ func (in UpdateInput) Validate(source Source) error {
 		return errors.New("port must be between 0 and 65535")
 	case source != SourceGit && in.Image == "":
 		return errors.New("image is required")
+	case len(in.StartCommand) > maxCommandLength:
+		return fmt.Errorf("the start command must be at most %d characters", maxCommandLength)
+	case len(in.PreDeployCommand) > maxCommandLength:
+		return fmt.Errorf("the pre-deploy command must be at most %d characters", maxCommandLength)
 	}
 	return nil
 }
+
+// maxCommandLength is the longest deploy command the store keeps; see the
+// migration that added them.
+const maxCommandLength = 4096
 
 // Update changes an app and rolls it out.
 //
@@ -542,6 +563,10 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		RepoUrl:       in.Repo.URL,
 		RepoBranch:    in.Repo.Branch,
 		RepoSubdir:    in.Repo.Subdir,
+		// Trimmed, so a command that is only whitespace is no command at
+		// all rather than one that runs a shell with nothing to do.
+		StartCommand:     strings.TrimSpace(in.StartCommand),
+		PreDeployCommand: strings.TrimSpace(in.PreDeployCommand),
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return App{}, fmt.Errorf("app: update: %w", err)
@@ -605,8 +630,15 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 // The port and the internal flag are here because they change the Service and
 // the Ingress as well as the Deployment — a port change that only rewrote the
 // container's port would leave the Service routing to nothing.
+//
+// The pre-deploy command is here although it changes nothing the workload
+// runs, because it belongs to the release: saving one is how somebody runs it,
+// and a save that recorded it for "the next deploy" would leave them to find
+// out how to make a deploy happen.
 func RollsOut(before, after App) bool {
 	return before.Image != after.Image ||
+		before.StartCommand != after.StartCommand ||
+		before.PreDeployCommand != after.PreDeployCommand ||
 		before.Port != after.Port ||
 		before.Internal != after.Internal ||
 		before.CPURequest != after.CPURequest ||
@@ -633,6 +665,12 @@ func updateReason(before, after App) string {
 	if before.CPURequest != after.CPURequest || before.CPULimit != after.CPULimit ||
 		before.MemoryRequest != after.MemoryRequest || before.MemoryLimit != after.MemoryLimit {
 		parts = append(parts, "resources")
+	}
+	if before.StartCommand != after.StartCommand {
+		parts = append(parts, "start command")
+	}
+	if before.PreDeployCommand != after.PreDeployCommand {
+		parts = append(parts, "pre-deploy command")
 	}
 	if len(parts) == 0 {
 		return "update"
@@ -1660,22 +1698,24 @@ func toApp(row dbgen.App) App {
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
-		GitHubPaused:  row.GithubPaused,
-		Internal:      row.Internal,
-		HealthPath:    row.HealthPath,
-		Liveness:      row.HealthLiveness,
-		CPURequest:    row.CpuRequest,
-		CPULimit:      row.CpuLimit,
-		MemoryRequest: row.MemoryRequest,
-		MemoryLimit:   row.MemoryLimit,
-		CreatedAt:     row.CreatedAt,
-		UpdatedAt:     row.UpdatedAt,
-		HTTPSOnly:     row.HttpsOnly,
-		CNAMEOnly:     row.CnameOnly,
-		ProjectID:     row.ProjectID.Bytes,
-		X:             row.CanvasX,
-		Y:             row.CanvasY,
-		Sleep:         toSleep(row),
+		GitHubPaused:     row.GithubPaused,
+		Internal:         row.Internal,
+		HealthPath:       row.HealthPath,
+		Liveness:         row.HealthLiveness,
+		StartCommand:     row.StartCommand,
+		PreDeployCommand: row.PreDeployCommand,
+		CPURequest:       row.CpuRequest,
+		CPULimit:         row.CpuLimit,
+		MemoryRequest:    row.MemoryRequest,
+		MemoryLimit:      row.MemoryLimit,
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
+		HTTPSOnly:        row.HttpsOnly,
+		CNAMEOnly:        row.CnameOnly,
+		ProjectID:        row.ProjectID.Bytes,
+		X:                row.CanvasX,
+		Y:                row.CanvasY,
+		Sleep:            toSleep(row),
 	}
 	if row.Region != nil {
 		a.Region = *row.Region

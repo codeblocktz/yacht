@@ -396,6 +396,16 @@ func (o *Orchestrator) container(
 			volumeMounts(spec)...,
 		)...)
 
+	// A start command replaces the image's ENTRYPOINT and CMD both: with a
+	// command and no args, Kubernetes runs exactly the command. Left off
+	// when empty, rather than set to nothing, so the image decides — and so
+	// clearing one hands the container back to its image on the next apply,
+	// since this field manager owns the field and an apply without it
+	// removes it.
+	if cmd := startCommand(spec); cmd != nil {
+		c = c.WithCommand(cmd...)
+	}
+
 	// Readiness first: it is what keeps traffic away from a container that is
 	// not serving yet, which is the whole of what most workloads need.
 	if spec.HealthPath != "" {
@@ -681,11 +691,33 @@ func specHash(spec orchestrator.AppSpec) string {
 	if spec.Region != "" {
 		fmt.Fprintf(h, "region=%s\n", spec.Region)
 	}
+	// And a start command: every app that has never set one keeps the
+	// fingerprint it had before there was one to set.
+	if spec.StartCommand != "" {
+		fmt.Fprintf(h, "start=%s\n", spec.StartCommand)
+	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
+
+// startCommand is the container command for a start command, nil for none.
+//
+// Through a shell, because a start command is typed the way it would be at a
+// prompt — "bin/server --port $PORT", "npm run start && echo done" — and only
+// a shell splits words, expands variables and runs the second half of an &&.
+// The cost is that an image with no /bin/sh cannot have one, which is the same
+// trade every platform with this setting makes.
+func startCommand(spec orchestrator.AppSpec) []string {
+	if spec.StartCommand == "" {
+		return nil
+	}
+	return shellCommand(spec.StartCommand)
+}
+
+// shellCommand runs a command line through /bin/sh.
+func shellCommand(line string) []string { return []string{"/bin/sh", "-c", line} }
 
 // maps returns an iterator over a map's keys.
 func maps[K comparable, V any](m map[K]V) func(func(K) bool) {

@@ -84,3 +84,39 @@ func TestSavingSettingsSaysWhatHappened(t *testing.T) {
 		t.Errorf("a port change = %d to %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
+
+// The Deploy section's two commands are fields of the settings form: shown as
+// saved, sent with the rest, and a change to either rolls the app out.
+func TestTheSettingsFormSavesTheDeployCommands(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.PreDeployCommand, a.StartCommand = "bin/migrate", "bin/web start"
+	apps := newFakeApps(a)
+	h := testServer(t, Options{Apps: apps})
+
+	body := get(t, h, "/apps/web/settings").Body.String()
+	for _, want := range []string{
+		`name="pre_deploy_command"`, `value="bin/migrate"`,
+		`name="start_command"`, `value="bin/web start"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the settings page does not have %q", want)
+		}
+	}
+
+	form := url.Values{
+		"image": {a.Image}, "port": {"8080"},
+		"pre_deploy_command": {"bin/app eval 'App.Release.migrate()'"},
+		"start_command":      {"bin/app start"},
+	}
+	rec := post(t, h, "/apps/web/runtime", form)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web" {
+		t.Errorf("a command change = %d to %q, want it rolling out", rec.Code, rec.Header().Get("Location"))
+	}
+	if len(apps.updated) != 1 {
+		t.Fatalf("updates = %d, want 1", len(apps.updated))
+	}
+	got := apps.updated[0]
+	if got.PreDeployCommand != "bin/app eval 'App.Release.migrate()'" || got.StartCommand != "bin/app start" {
+		t.Errorf("saved pre-deploy %q and start %q", got.PreDeployCommand, got.StartCommand)
+	}
+}

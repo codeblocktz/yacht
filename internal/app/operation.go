@@ -804,18 +804,23 @@ func (s *Service) applyAndVerifyOperation(
 	ctx context.Context, op Operation, a App, stageErr error,
 ) error {
 	err := stageErr
+	// Every operation that reaches here is about to change the release the
+	// app runs — a build, a redeploy, a rollback, a settings rollout — and so
+	// every one runs the release's pre-deploy command first. A failure ends
+	// the operation here, before anything is applied. Every error fails the
+	// deploy, as an apply error does in this path; it is recovery, which
+	// observes the cluster rather than acting on it, that tells a command's
+	// failure from a cluster that could not be asked.
+	if err == nil {
+		err = s.preDeployOperation(ctx, op)
+	}
 	var release Release
 	if err == nil {
 		err = s.withAppConvergenceLock(ctx, op.AppID, func() error {
-			current, readErr := s.q.GetDeploymentOperation(ctx,
-				dbgen.GetDeploymentOperationParams{OwnerID: op.OwnerID, ID: op.ID})
-			if readErr != nil {
-				return readErr
+			if claimErr := s.checkOperationClaim(ctx, op); claimErr != nil {
+				return claimErr
 			}
-			if op.ClaimToken == nil || !current.ClaimToken.Valid ||
-				uuid.UUID(current.ClaimToken.Bytes) != *op.ClaimToken || current.Status != op.Status {
-				return ErrOperationClaimLost
-			}
+			var readErr error
 			a, readErr = s.operationApp(ctx, op)
 			if readErr != nil {
 				return readErr
@@ -893,18 +898,34 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 		return ErrOperationRecoveryPending
 	}
 
+	// An applying stage may have stopped before its pre-deploy command
+	// finished, or before it started; see recoverPreDeploy. A verifying one
+	// applied, so its command had already succeeded.
+	if op.Status == OperationApplying {
+		if err := s.recoverPreDeploy(ctx, op); err != nil {
+			// Only the command's own answer ends the deploy. Anything else
+			// is left as the stage's other failures are: given back, or left
+			// for the lease to expire, and looked at again.
+			var failed *PreDeployFailure
+			switch {
+			case errors.As(err, &failed), errors.Is(err, ErrNoPreDeployer):
+				return s.completeOperation(ctx, op, err)
+			case errors.Is(err, ErrClusterObservation):
+				if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
+					return releaseErr
+				}
+			}
+			return err
+		}
+	}
+
 	var a App
 	var release Release
 	err := s.withAppConvergenceLock(ctx, op.AppID, func() error {
-		current, readErr := s.q.GetDeploymentOperation(ctx,
-			dbgen.GetDeploymentOperationParams{OwnerID: op.OwnerID, ID: op.ID})
-		if readErr != nil {
-			return readErr
+		if claimErr := s.checkOperationClaim(ctx, op); claimErr != nil {
+			return claimErr
 		}
-		if !current.ClaimToken.Valid || uuid.UUID(current.ClaimToken.Bytes) != *op.ClaimToken ||
-			current.Status != op.Status {
-			return ErrOperationClaimLost
-		}
+		var readErr error
 		a, readErr = s.operationApp(ctx, op)
 		if readErr != nil {
 			return readErr

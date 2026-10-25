@@ -135,7 +135,11 @@ templ DeployLogPanel(d DeployLogsData) {
 			<div class="callout callout-err">
 				<div class="min-w-0">
 					<p class="font-medium">Why it failed</p>
-					<p class="mono mt-1 break-words text-[12px]">{ failureReason(d.Deploy.Deployment.Message) }</p>
+					<p class="mono mt-1 break-words text-[12px]">
+						for _, line := range failureLines(d.Deploy.Deployment.Message) {
+							<span class="block">{ line }</span>
+						}
+					</p>
 				</div>
 			</div>
 		</div>

@@ -99,6 +99,20 @@ func (n *Noop) AppStatus(_ context.Context, ref Ref) (AppStatus, error) {
 
 func (n *Noop) Ping(context.Context) error { return nil }
 
+// Compile-time check that Noop can run a pre-deploy command, so an app that
+// has one deploys on an install with no cluster rather than being refused.
+var _ PreDeployer = (*Noop)(nil)
+
+// PreDeploy reports success without running anything. There is no image to
+// run the command in, and an engine booted without a cluster is one somebody
+// is clicking through rather than migrating a database with.
+func (n *Noop) PreDeploy(_ context.Context, req PreDeployRequest) (PreDeployResult, error) {
+	if err := req.App.Validate(); err != nil {
+		return PreDeployResult{}, err
+	}
+	return PreDeployResult{Succeeded: true}, nil
+}
+
 // ClusterSummary reports what was applied, not a simulated cluster.
 //
 // Node and capacity figures stay zero because there is no cluster to report

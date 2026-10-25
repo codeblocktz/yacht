@@ -123,6 +123,7 @@ func (f *fakeApps) Update(
 			a.Port, a.Internal = in.Port, in.Internal
 			a.CPURequest, a.CPULimit = in.CPURequest, in.CPULimit
 			a.MemoryRequest, a.MemoryLimit = in.MemoryRequest, in.MemoryLimit
+			a.StartCommand, a.PreDeployCommand = in.StartCommand, in.PreDeployCommand
 			apps[i] = a
 			return a, nil
 		}

@@ -52,6 +52,13 @@ type Release struct {
 	HealthPath string
 	Liveness   bool
 
+	// StartCommand is what the release's container runs, and
+	// PreDeployCommand what runs once before it starts. Release history
+	// rather than current state, so a rollback runs the commands written for
+	// the code it returns to.
+	StartCommand     string
+	PreDeployCommand string
+
 	Env        map[string]string
 	SecretKeys []string
 
@@ -139,6 +146,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		Waker:                  waker,
 		Pool:                   overlays.Pool,
 		Region:                 overlays.Region,
+		StartCommand:           r.StartCommand,
 	}
 }
 
@@ -228,6 +236,7 @@ func (s *Service) recordRelease(
 		ScratchPaths:           append([]string{}, runtime.ScratchPaths...),
 		WritableRootFilesystem: false,
 		HealthPath:             a.HealthPath, HealthLiveness: a.Liveness,
+		StartCommand: a.StartCommand, PreDeployCommand: a.PreDeployCommand,
 		Env: env, SecretKeys: append([]string{}, secretKeys...),
 		ConfigVersion: a.ConfigVersion, Origin: origin,
 	})
@@ -308,6 +317,7 @@ func toRelease(row dbgen.AppRelease) Release {
 		ScratchPaths:           append([]string(nil), row.ScratchPaths...),
 		WritableRootFilesystem: row.WritableRootFilesystem,
 		HealthPath:             row.HealthPath, Liveness: row.HealthLiveness,
+		StartCommand: row.StartCommand, PreDeployCommand: row.PreDeployCommand,
 		Env: env, SecretKeys: append([]string(nil), row.SecretKeys...),
 		ConfigVersion: row.ConfigVersion, CreatedAt: row.CreatedAt,
 		Origin: row.Origin,

@@ -129,7 +129,7 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, arg GetProjectBySlugPara
 }
 
 const listAppsInProject = `-- name: ListAppsInProject :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command FROM apps
 WHERE owner_id = $1 AND project_id = $2
 ORDER BY name
 `
@@ -192,6 +192,8 @@ func (q *Queries) ListAppsInProject(ctx context.Context, arg ListAppsInProjectPa
 			&i.GithubInstallationID,
 			&i.GithubRepoID,
 			&i.GithubPaused,
+			&i.StartCommand,
+			&i.PreDeployCommand,
 		); err != nil {
 			return nil, err
 		}
@@ -204,7 +206,7 @@ func (q *Queries) ListAppsInProject(ctx context.Context, arg ListAppsInProjectPa
 }
 
 const listAppsWithoutProject = `-- name: ListAppsWithoutProject :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command FROM apps
 WHERE owner_id = $1 AND project_id IS NULL
 ORDER BY name
 `
@@ -267,6 +269,8 @@ func (q *Queries) ListAppsWithoutProject(ctx context.Context, ownerID string) ([
 			&i.GithubInstallationID,
 			&i.GithubRepoID,
 			&i.GithubPaused,
+			&i.StartCommand,
+			&i.PreDeployCommand,
 		); err != nil {
 			return nil, err
 		}

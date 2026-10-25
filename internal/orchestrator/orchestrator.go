@@ -322,6 +322,12 @@ type AppSpec struct {
 	// The pods only, like Pool. A build may run in any region: it produces an
 	// image in a registry, and nothing of the app's stays where it ran.
 	Region string
+
+	// StartCommand, when set, is what the container runs instead of the
+	// image's own ENTRYPOINT and CMD: a shell command line, run by /bin/sh -c
+	// so it reads the way somebody would type it. Empty runs the image as it
+	// was built, which is every app that has never set one.
+	StartCommand string
 }
 
 // VolumeSpec is one piece of storage attached to a workload.
@@ -447,6 +453,72 @@ type Certificate struct {
 // what became of it.
 type CertificateReader interface {
 	Certificate(ctx context.Context, ref Ref, host string) (Certificate, error)
+}
+
+// DefaultPreDeployTimeout is how long a pre-deploy command may run when the
+// request names no limit of its own.
+//
+// Long enough for a migration that rewrites a large table, short enough that
+// a command waiting on something that will never answer — a database it
+// cannot reach, a prompt nobody will see — fails the deploy in minutes rather
+// than holding it for the whole of the deploy's budget.
+const DefaultPreDeployTimeout = 10 * time.Minute
+
+// PreDeployRequest is one run of a release's pre-deploy command.
+type PreDeployRequest struct {
+	// App is the release about to be applied, exactly as it will be applied.
+	// The command runs in its image, with its environment, its secrets, its
+	// user and its limits, in its namespace and its region — the same place
+	// the new version is about to start, so a migration that works here works
+	// for the app.
+	App AppSpec
+
+	// Command is a shell command line, run by /bin/sh -c.
+	Command string
+
+	// Timeout caps the run. Zero is DefaultPreDeployTimeout.
+	Timeout time.Duration
+}
+
+// PreDeployResult is how a pre-deploy command ended.
+type PreDeployResult struct {
+	// Succeeded is true when the command exited 0 within its time.
+	Succeeded bool
+
+	// ExitCode is what the command exited with, when it exited at all. A
+	// command stopped at its deadline, or that never started, has none and
+	// says why in Reason.
+	ExitCode int32
+
+	// Reason is why a command that did not succeed did not, in a phrase:
+	// "timed out after 10m0s", or what the runtime said about a container
+	// that could not start. Empty when the exit code says it all.
+	Reason string
+
+	// Output is the end of what the command printed, oldest first. The end
+	// because that is where a failure says what it was, and a bounded amount
+	// because a migration can print a line per row.
+	Output []string
+}
+
+// PreDeployer runs a release's pre-deploy command before the release is
+// applied.
+//
+// Optional, and asserted for like CertificateReader. Most of what an
+// orchestrator does is converge a workload; running a command to completion
+// and reporting how it ended is a different capability, and an implementation
+// without it is still a working orchestrator. What it is not is one that can
+// deploy an app with a pre-deploy command: the engine refuses such a deploy
+// rather than skipping the command, because the new version would start
+// against a database nobody migrated.
+//
+// The error is for a run that could not be carried out — the cluster refused
+// the Job, or stopped answering. A command that ran and failed is a result,
+// not an error, so a caller can tell "the migration failed" from "the
+// migration could not be asked for", which is the difference between a
+// deploy that has failed and one worth trying again.
+type PreDeployer interface {
+	PreDeploy(ctx context.Context, req PreDeployRequest) (PreDeployResult, error)
 }
 
 // Phase is a coarse lifecycle state, deliberately smaller than the set of

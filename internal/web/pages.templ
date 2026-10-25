@@ -668,7 +668,11 @@ templ AppDeploymentsBody(d AppDetailData) {
 				} else if lastDeployFailed(d.Deployments) {
 					<p>The last deploy failed. Fix this and redeploy:</p>
 					if reason := failureReason(d.Deployments[0].Message); reason != "" {
-						<p class="mono mt-2 break-words text-[12px] text-destructive">{ reason }</p>
+						<p class="mono mt-2 break-words text-[12px] text-destructive">
+							for _, line := range failureLines(reason) {
+								<span class="block">{ line }</span>
+							}
+						</p>
 					}
 				} else {
 					<p>It runs once its first deploy succeeds.</p>
@@ -1048,6 +1052,7 @@ templ appRuntimeForm(d AppDetailData) {
 				tab.
 			</p>
 		</section>
+		@appDeploySection(a)
 		<section id="scale" class="settings-section">
 			<div class="settings-section-head">
 				<span class="settings-section-mark">@icon("cpu")</span>
@@ -1079,6 +1084,44 @@ templ appRuntimeForm(d AppDetailData) {
 			</span>
 		</div>
 	</form>
+}
+
+// appDeploySection is how a new version starts: what runs before it takes
+// traffic, and what it runs.
+//
+// Part of the runtime form rather than a form of its own, because both are
+// part of the release and saving either rolls the app out like an image
+// change does. The pre-deploy command comes first because that is the order
+// they run in.
+templ appDeploySection(a app.App) {
+	<section id="deploy" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("rocket")</span>
+			<h2 class="settings-section-title">Deploy</h2>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="pre_deploy_command">Pre-deploy command</label>
+			<p class="field-note">
+				Runs once before each new version takes traffic, in the new image with
+				this app's variables. Database migrations go here. If it fails, the
+				deploy fails and the running version keeps running.
+			</p>
+			<input class="control mono mt-1.5" id="pre_deploy_command" name="pre_deploy_command" value={ a.PreDeployCommand } placeholder="bin/migrate" autocomplete="off" spellcheck="false"/>
+			<p class="field-note mt-1.5">
+				It runs again when a deploy is retried, so it should be safe to run twice.
+				Volumes are not attached while it runs.
+			</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="start_command">Start command</label>
+			<p class="field-note">
+				Runs instead of the image's own command. Empty starts the image the way
+				it was built.
+			</p>
+			<input class="control mono mt-1.5" id="start_command" name="start_command" value={ a.StartCommand } placeholder="bin/server start" autocomplete="off" spellcheck="false"/>
+		</div>
+		<p class="field-note">Both run through <code class="mono">/bin/sh -c</code>, so the image needs a shell.</p>
+	</section>
 }
 
 // ---- domains tab
@@ -1121,6 +1164,7 @@ templ appSettings(d AppDetailData) {
 				<a href="#push">Deploy on push</a>
 			}
 			<a href="#networking">Networking</a>
+			<a href="#deploy">Deploy</a>
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
 			<a href="#replicas">Replicas</a>

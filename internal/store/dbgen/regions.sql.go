@@ -238,7 +238,7 @@ const setAppRegion = `-- name: SetAppRegion :one
 UPDATE apps
 SET region = $1, config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $2 AND id = $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command
 `
 
 type SetAppRegionParams struct {
@@ -296,6 +296,8 @@ func (q *Queries) SetAppRegion(ctx context.Context, arg SetAppRegionParams) (App
 		&i.GithubInstallationID,
 		&i.GithubRepoID,
 		&i.GithubPaused,
+		&i.StartCommand,
+		&i.PreDeployCommand,
 	)
 	return i, err
 }

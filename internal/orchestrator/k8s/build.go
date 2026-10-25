@@ -376,8 +376,13 @@ func buildJobName(req orchestrator.BuildRequest) string {
 }
 
 func (o *Orchestrator) deleteBuildJob(ctx context.Context, name string) error {
+	return o.deleteJob(ctx, BuildNamespace, name)
+}
+
+// deleteJob removes a Job and its pods, and waits until the name is free.
+func (o *Orchestrator) deleteJob(ctx context.Context, namespace, name string) error {
 	policy := metav1.DeletePropagationBackground
-	err := o.client.BatchV1().Jobs(BuildNamespace).
+	err := o.client.BatchV1().Jobs(namespace).
 		Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &policy})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
@@ -387,7 +392,7 @@ func (o *Orchestrator) deleteBuildJob(ctx context.Context, name string) error {
 	// for rather than raced.
 	return wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true,
 		func(ctx context.Context) (bool, error) {
-			_, err := o.client.BatchV1().Jobs(BuildNamespace).Get(ctx, name, metav1.GetOptions{})
+			_, err := o.client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 			return apierrors.IsNotFound(err), nil
 		})
 }

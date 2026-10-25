@@ -104,6 +104,13 @@ type (
 	// where it is, empty on an install in one place — its region, and its
 	// room.
 	NodeInfo = orchestrator.NodeInfo
+	// PreDeployer is what an Orchestrator also implements to run an app's
+	// pre-deploy command, with the request and result that cross it. A
+	// wrapper that supplies its own Orchestrator implements it to deploy apps
+	// that have one; without it, their deploys fail with the reason.
+	PreDeployer      = orchestrator.PreDeployer
+	PreDeployRequest = orchestrator.PreDeployRequest
+	PreDeployResult  = orchestrator.PreDeployResult
 
 	// Role is a team role, for a wrapper gating pages of its own.
 	Role = account.Role

@@ -84,14 +84,18 @@ SET image          = @image,
     repo_url       = @repo_url,
     repo_branch    = @repo_branch,
     repo_subdir    = @repo_subdir,
+    start_command      = @start_command,
+    pre_deploy_command = @pre_deploy_command,
     config_version = config_version + 1,
     updated_at     = now()
 WHERE owner_id = @owner_id AND id = @id
   AND (image, port, cpu_request, cpu_limit, memory_request, memory_limit,
-       internal, repo_url, repo_branch, repo_subdir)
+       internal, repo_url, repo_branch, repo_subdir,
+       start_command, pre_deploy_command)
       IS DISTINCT FROM
       (@image, @port, @cpu_request, @cpu_limit, @memory_request, @memory_limit,
-       @internal, @repo_url, @repo_branch, @repo_subdir)
+       @internal, @repo_url, @repo_branch, @repo_subdir,
+       @start_command, @pre_deploy_command)
 RETURNING *;
 
 -- name: SetAppReplicas :one

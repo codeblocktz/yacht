@@ -8,6 +8,7 @@ INSERT INTO app_releases (
     replicas, port, cpu_request, cpu_limit, memory_request, memory_limit,
     internal, run_as_user, fs_group, scratch_paths,
     writable_root_filesystem, health_path, health_liveness,
+    start_command, pre_deploy_command,
     env, secret_keys, config_version, origin
 )
 VALUES (
@@ -15,6 +16,7 @@ VALUES (
     @replicas, @port, @cpu_request, @cpu_limit, @memory_request, @memory_limit,
     @internal, @run_as_user, @fs_group, @scratch_paths,
     @writable_root_filesystem, @health_path, @health_liveness,
+    @start_command, @pre_deploy_command,
     @env, @secret_keys, @config_version, @origin
 )
 RETURNING *;
@@ -116,6 +118,8 @@ SET image           = r.image_ref,
     internal        = r.internal,
     health_path     = r.health_path,
     health_liveness = r.health_liveness,
+    start_command      = r.start_command,
+    pre_deploy_command = r.pre_deploy_command,
     run_as_user     = CASE WHEN apps.source = 'git' THEN r.run_as_user ELSE apps.run_as_user END,
     config_version  = apps.config_version + 1,
     updated_at      = now()

@@ -414,6 +414,18 @@ func TestSpecHash(t *testing.T) {
 		}
 	})
 
+	t.Run("changes with a start command, and not for none", func(t *testing.T) {
+		other := testSpec()
+		other.StartCommand = "bin/web start"
+		if specHash(base) == specHash(other) {
+			t.Error("hash must change when the start command changes")
+		}
+		other.StartCommand = ""
+		if specHash(base) != specHash(other) {
+			t.Error("no start command must hash as it did before there were any")
+		}
+	})
+
 	t.Run("changes with env value", func(t *testing.T) {
 		other := testSpec()
 		other.Env = map[string]string{"LOG_LEVEL": "debug", "APP_ENV": "prod"}
