@@ -1947,3 +1947,51 @@
     @apply text-success;
   }
 }
+
+@layer components {
+  /* The Console tab: a terminal in one of the app's containers.
+
+     Dark in both themes, like every terminal people already use. A shell's
+     programs choose their colours assuming a dark background, and a light one
+     turns half of them unreadable. The colours themselves are xterm.js's to
+     draw; this is only the frame around it. */
+  .console {
+    @apply flex flex-col overflow-hidden rounded-lg border border-border bg-[#0c0c0e];
+  }
+  .console-bar {
+    @apply flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2
+           text-[12px] text-zinc-300;
+  }
+  .console-bar .btn {
+    @apply border-white/15 bg-white/5 text-zinc-200 hover:bg-white/10;
+  }
+  /* Railway's "Connected", with a dot that says it before the word is read. */
+  .console-status {
+    @apply inline-flex items-center gap-1.5 font-medium;
+  }
+  .console-status::before {
+    @apply size-1.5 rounded-full bg-zinc-500;
+    content: "";
+  }
+  .console-status[data-state="connected"]::before { @apply bg-success; }
+  .console-status[data-state="connecting"]::before { @apply bg-warning; }
+  .console-status[data-state="closed"]::before { @apply bg-destructive; }
+  .console-pod { @apply truncate text-[11.5px] text-zinc-400; }
+  .console-picker { @apply flex items-center gap-2; }
+  /* Tall enough for a full screen of `top`; the fit addon decides how many
+     rows that is. */
+  .console-screen {
+    @apply h-[460px] min-h-0 px-2 py-1.5;
+  }
+  .console-note {
+    @apply border-t border-white/10 px-3 py-2 text-[12px] text-zinc-300;
+  }
+  /* Full screen is the frame, not the terminal alone, so the status and the
+     way back out stay on screen with it. */
+  .console:fullscreen {
+    @apply rounded-none border-0;
+  }
+  .console:fullscreen .console-screen {
+    @apply h-auto flex-1;
+  }
+}
