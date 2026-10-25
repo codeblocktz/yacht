@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,8 @@ type fakeGitHub struct {
 	// token) they reach.
 	tokens map[string][2]int64
 	minted int
+	// files by repository and path: "acme/web/Dockerfile".
+	files map[string]string
 }
 
 type fakeInstallation struct {
@@ -55,7 +58,7 @@ func newFakeGitHub(t *testing.T) (*fakeGitHub, *github.App) {
 	t.Helper()
 	f := &fakeGitHub{
 		t: t, installations: map[int64]*fakeInstallation{},
-		people: map[string]fakePerson{}, tokens: map[string][2]int64{},
+		people: map[string]fakePerson{}, tokens: map[string][2]int64{}, files: map[string]string{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -192,6 +195,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		f.write(w, 404, map[string]string{"message": "Not Found"})
+	case strings.HasPrefix(path, "/repos/") && strings.Contains(path, "/contents/"):
+		reach, ok := f.tokens[strings.TrimPrefix(auth, "token ")]
+		full, file, _ := strings.Cut(strings.TrimPrefix(path, "/repos/"), "/contents/")
+		content, found := f.files[full+"/"+file]
+		if !ok || reach[1] == 0 || !found {
+			f.write(w, 404, map[string]string{"message": "Not Found"})
+			return
+		}
+		f.write(w, 200, map[string]any{"type": "file", "encoding": "base64", "size": len(content),
+			"content": base64.StdEncoding.EncodeToString([]byte(content))})
 	default:
 		http.NotFound(w, r)
 	}

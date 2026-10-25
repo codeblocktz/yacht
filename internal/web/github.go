@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/github"
@@ -37,6 +38,10 @@ type GitHub interface {
 	GitHubRepos(ctx context.Context, ownerID string) ([]app.GitHubRepo, []string, error)
 	GitHubBranches(ctx context.Context, ownerID string, ref app.GitHubRef, query string) ([]string, error)
 	GitHubDirectories(ctx context.Context, ownerID string, ref app.GitHubRef, path string) ([]string, error)
+
+	// DeployFromGitHub is the one-click deploy: the repository, built from
+	// its default branch with nothing asked, into the project.
+	DeployFromGitHub(ctx context.Context, ownerID string, ref app.GitHubRef, projectID uuid.UUID) (app.App, error)
 
 	// DeliverGitHub is a delivery to the App's webhook, checked against its
 	// signature before anything in it is read.

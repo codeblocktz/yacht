@@ -109,7 +109,7 @@ type OverviewData struct {
 }
 
 templ Overview(d OverviewData) {
-	@pageHead("Overview", "Signed in as "+d.OwnerName, deployButton())
+	@pageHead("Overview", "Signed in as "+d.OwnerName, deployButton(""))
 	if !d.ClusterOK {
 		@clusterCallout(d.ClusterError)
 	}
@@ -142,7 +142,7 @@ templ Overview(d OverviewData) {
 			</a>
 		</div>
 		if len(d.Apps) == 0 {
-			@emptyApps()
+			@emptyApps("")
 		} else {
 			@appRows(d.Apps)
 		}
@@ -235,18 +235,25 @@ templ legendItem(class, label string, n int) {
 	</span>
 }
 
-templ deployButton() {
-	<a class="btn btn-primary" href="/apps/new">Deploy app</a>
+// deployButton starts a deploy; on a project's canvas, into that project.
+templ deployButton(project string) {
+	<a class="btn btn-primary" href={ templ.SafeURL(newAppHref(project)) }>
+		if project != "" {
+			+ New
+		} else {
+			Deploy app
+		}
+	</a>
 }
 
-templ emptyApps() {
+templ emptyApps(project string) {
 	<div class="empty">
 		<span class="empty-mark" aria-hidden="true">
 			@icon("box")
 		</span>
 		<p class="font-medium text-foreground">No apps yet</p>
 		<p>Connect a repository or run an image you already have.</p>
-		<a class="btn btn-primary mt-3" href="/apps/new">Deploy app</a>
+		<a class="btn btn-primary mt-3" href={ templ.SafeURL(newAppHref(project)) }>Deploy app</a>
 	</div>
 }
 
@@ -320,10 +327,10 @@ templ checklist(c Checklist) {
 
 // ---------------------------------------------------------------- apps list
 templ AppList(apps []app.App) {
-	@pageHead("Apps", "Workloads managed by this install.", deployButton())
+	@pageHead("Apps", "Workloads managed by this install.", deployButton(""))
 	<div class="panel">
 		if len(apps) == 0 {
-			@emptyApps()
+			@emptyApps("")
 		} else {
 			@appRows(apps)
 		}
@@ -1390,6 +1397,10 @@ type NewAppData struct {
 	Error string
 	Form  NewAppForm
 
+	// Project is the slug of the project the app goes into, and ProjectName
+	// what it is called; empty is the default project.
+	Project, ProjectName string
+
 	// Source is what the person picked. Empty shows the picker instead of a
 	// form: there is no sensible default, and choosing for them is how you end
 	// up with a database deployed as a bare image.
@@ -1451,7 +1462,11 @@ templ NewApp(d NewAppData) {
 // out. A menu that silently omits things reads as a product that never
 // considered them, and somebody will ask anyway.
 templ sourcePicker(d NewAppData) {
-	@pageHead("Deploy", "What would you like to run?", nil)
+	if d.ProjectName != "" {
+		@pageHead("Deploy", "Into "+d.ProjectName+". What would you like to run?", nil)
+	} else {
+		@pageHead("Deploy", "What would you like to run?", nil)
+	}
 	if d.RoomShort {
 		<div class="max-w-2xl">
 			@roomNotice()
@@ -1459,9 +1474,23 @@ templ sourcePicker(d NewAppData) {
 	}
 	<div class="panel max-w-2xl">
 		<div class="rows">
+			// The one-click path first: pick a repository, and it is building.
+			// The Git source below is the same with every option asked first.
+			if d.GitHubOn {
+				<a href={ templ.SafeURL(githubDeployHref(d.Project)) } class="row-link">
+					<span class="text-muted-foreground">
+						@icon("github")
+					</span>
+					<span class="min-w-0 flex-1">
+						<span class="block font-medium">GitHub repository</span>
+						<span class="block text-muted-foreground">Pick one and it builds and deploys. Change anything afterwards.</span>
+					</span>
+					<span class="text-muted-foreground">&rsaquo;</span>
+				</a>
+			}
 			for _, b := range d.Sources {
 				if b.Available {
-					<a href={ templ.SafeURL(sourceHref(b.Source)) } class="row-link">
+					<a href={ templ.SafeURL(sourceHref(b.Source, d.Project)) } class="row-link">
 						<span class="text-muted-foreground">
 							@icon(sourceIcon(b.Source))
 						</span>
@@ -1616,6 +1645,7 @@ templ newAppForm(d NewAppData) {
 	}
 	<form method="post" action="/apps" class="max-w-2xl">
 		<input type="hidden" name="source" value={ string(d.Blueprint.Source) }/>
+		<input type="hidden" name="project" value={ d.Project }/>
 		<div class="panel">
 			<div class="panel-header">
 				<span class="panel-title">Source</span>

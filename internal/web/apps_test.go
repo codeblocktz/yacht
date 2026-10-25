@@ -23,6 +23,8 @@ import (
 // Scoped by owner like the real one, so a test that leaks across owners fails
 // here rather than passing and failing in production.
 type fakeApps struct {
+	// projects are those besides the default one.
+	projects    []app.Project
 	byOwner     map[string][]app.App
 	created     []app.CreateInput
 	deleted     []string
@@ -778,6 +780,12 @@ func (f *fakeApps) Projects(_ context.Context, ownerID string) ([]app.Project, e
 }
 
 func (f *fakeApps) Project(_ context.Context, ownerID, slug string) (app.Project, error) {
+	for _, p := range f.projects {
+		if p.Slug == slug {
+			p.OwnerID = ownerID
+			return p, nil
+		}
+	}
 	if slug != "" && slug != app.DefaultProjectSlug {
 		return app.Project{}, app.ErrProjectNotFound
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -205,11 +206,15 @@ func TestApplyApp(t *testing.T) {
 
 	// Environment must be sorted, or every reconcile produces a different pod
 	// template and restarts the workload.
-	if len(c.Env) != 2 {
-		t.Fatalf("got %d env vars, want 2", len(c.Env))
+	// PORT comes last, after the app's own, which are sorted.
+	if len(c.Env) != 3 {
+		t.Fatalf("got %d env vars, want the app's 2 and PORT", len(c.Env))
 	}
 	if c.Env[0].Name != "APP_ENV" || c.Env[1].Name != "LOG_LEVEL" {
 		t.Errorf("env not sorted: got %s, %s", c.Env[0].Name, c.Env[1].Name)
+	}
+	if c.Env[2].Name != "PORT" || c.Env[2].Value != strconv.Itoa(int(spec.Port)) {
+		t.Errorf("PORT = %s=%s, want the app's port", c.Env[2].Name, c.Env[2].Value)
 	}
 
 	// Selector must match the pod labels, or the Deployment adopts nothing.

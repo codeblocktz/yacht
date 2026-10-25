@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -39,6 +41,27 @@ type fakeGitHubSurface struct {
 
 	deliveries []app.GitHubDelivery
 	deliverErr error
+
+	deploys   []fakeDeploy
+	deployErr error
+}
+
+type fakeDeploy struct {
+	owner   string
+	ref     app.GitHubRef
+	project uuid.UUID
+}
+
+func (f *fakeGitHubSurface) DeployFromGitHub(
+	_ context.Context, owner string, ref app.GitHubRef, project uuid.UUID,
+) (app.App, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.deployErr != nil {
+		return app.App{}, f.deployErr
+	}
+	f.deploys = append(f.deploys, fakeDeploy{owner, ref, project})
+	return app.App{Name: "web"}, nil
 }
 
 type fakeConnect struct {
