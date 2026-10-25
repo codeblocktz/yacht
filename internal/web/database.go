@@ -55,7 +55,7 @@ func (s *Server) backupsService() Backups {
 func (s *Server) mountDatabases(r chi.Router) {
 	if s.databases() != nil {
 		r.Get("/apps/new/database", s.databaseNew)
-		r.Post("/apps/new/database", s.databaseDeploy)
+		r.Post("/apps/new/database", s.inEnvironment(s.databaseDeploy))
 		r.Get("/apps/{name}/database", s.databaseTab)
 		r.Post("/apps/{name}/database/query", s.databaseQuery)
 	}

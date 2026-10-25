@@ -155,7 +155,30 @@ func (s *Server) renderCanvasWith(
 		return
 	}
 
-	apps, err := s.apps.ListInProject(ctx, owner.ID, project.ID)
+	// The environment drawn: the open app's, or the one asked for, or the
+	// one last looked at in this project. An environment the project does
+	// not have is production rather than an empty canvas that looks lost.
+	env := chosenEnv(r, project.Slug)
+	if open != nil {
+		env = open.App.Environment()
+	}
+	var (
+		apps []app.App
+		envs []app.Environment
+	)
+	if es, ok := s.environments(); ok {
+		if has, err := es.HasEnvironment(ctx, owner.ID, project, env); err != nil || !has {
+			env = app.DefaultEnvironment
+		}
+		apps, err = es.ListInEnvironment(ctx, owner.ID, project, env)
+		if listed, listErr := es.Environments(ctx, owner.ID, project.Slug); listErr == nil {
+			envs = listed
+		}
+		rememberEnv(w, project.Slug, env)
+	} else {
+		env = app.DefaultEnvironment
+		apps, err = s.apps.ListInProject(ctx, owner.ID, project.ID)
+	}
 	if err != nil {
 		s.log.Error("list apps for canvas", slog.String("error", err.Error()))
 		http.Error(w, "could not load apps", http.StatusInternalServerError)
@@ -171,6 +194,7 @@ func (s *Server) renderCanvasWith(
 
 	data := layout(apps, links)
 	data.Project = project
+	data.Env = env
 	data.Open = open
 	s.attachStaged(ctx, owner.ID, &data)
 	if projects, err := s.apps.Projects(ctx, owner.ID); err == nil {
@@ -178,6 +202,10 @@ func (s *Server) renderCanvasWith(
 	}
 
 	slots := s.slots.Slots(ctx, r)
+	if slots.Project != nil {
+		slots.Project.Environment = env
+		slots.Project.Environments = envChoices(project.Slug, envs, env)
+	}
 	slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: project.Name, Href: "/projects/" + project.Slug})
 	if open != nil {
 		slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: open.App.Name})

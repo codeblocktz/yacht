@@ -851,6 +851,9 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if in.Source == "" {
 		in.Source = SourceImage
 	}
+	if err := s.placeInEnvironment(ctx, ownerID, &in); err != nil {
+		return App{}, err
+	}
 	blueprint, err := BlueprintForWith(in.Source, s.Capabilities(ctx))
 	if err != nil {
 		return App{}, err

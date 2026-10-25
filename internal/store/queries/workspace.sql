@@ -24,7 +24,7 @@ ORDER BY name;
 -- (see deployment_operations_one_live_per_app), so the EXISTS is one index
 -- probe.
 -- name: WorkspaceApps :many
-SELECT a.name, a.project_id, a.replicas,
+SELECT a.name, a.project_id, a.replicas, a.environment,
        (a.active_release_id IS NOT NULL)::boolean AS serving,
        COALESCE(d.status, '')::text AS last_deploy,
        EXISTS (

@@ -21,6 +21,11 @@ type ProjectBar struct {
 	// Projects are the team's, for the switcher.
 	Projects []ProjectChoice
 
+	// Environments are the project's, for the environment switcher. Empty
+	// where the page did not read them; the bar then names the environment
+	// without offering others.
+	Environments []EnvChoice
+
 	// Section is which of the rail's entries is showing.
 	Section string
 }
@@ -83,4 +88,24 @@ func projectHref(b ProjectBar, section string) string {
 		return "/projects/" + b.Slug + "/settings"
 	}
 	return "/projects/" + b.Slug
+}
+
+// EnvChoice is one environment in the switcher.
+type EnvChoice struct {
+	Slug   string
+	Name   string
+	Href   string
+	Apps   int
+	Active bool
+}
+
+func envChoices(projectSlug string, envs []app.Environment, current string) []EnvChoice {
+	out := make([]EnvChoice, 0, len(envs))
+	for _, e := range envs {
+		out = append(out, EnvChoice{
+			Slug: e.Slug, Name: e.Name, Href: envHref(projectSlug, e.Slug),
+			Apps: e.Apps, Active: e.Slug == current,
+		})
+	}
+	return out
 }

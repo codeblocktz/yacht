@@ -29,10 +29,7 @@ templ projectShell(s Slots, page templ.Component) {
 			<span class="project-bar-rule" aria-hidden="true"></span>
 			@projectSwitcher(bar)
 			<span class="crumb-sep" aria-hidden="true">/</span>
-			<span class="project-bar-env" title="Environments are coming: each a separate copy of every service">
-				<span class="tree-dot status-ok" aria-hidden="true"></span>
-				{ bar.Environment }
-			</span>
+			@envSwitcher(bar)
 			<div class="flex-1"></div>
 			if s.HeaderTools != nil {
 				<div class="flex items-center gap-2">
@@ -111,6 +108,44 @@ templ projectSwitcher(bar ProjectBar) {
 					<span class="flex-1">All projects</span>
 				</a>
 			</div>
+		}
+	}
+}
+
+// envSwitcher is the environment being looked at, and the project's others:
+// Railway's "production ▾".
+templ envSwitcher(bar ProjectBar) {
+	if len(bar.Environments) == 0 {
+		<span class="project-bar-env">
+			<span class="tree-dot status-ok" aria-hidden="true"></span>
+			{ bar.Environment }
+		</span>
+	} else {
+		@popover.Root() {
+			@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+				<button type="button" class="project-bar-switch" aria-label={ "Environment: " + bar.Environment + ". Switch environment" }>
+					<span class={ "tree-dot", envDot(bar.Environment) } aria-hidden="true"></span>
+					<span class="truncate">{ bar.Environment }</span>
+					@icon("chevrons-up-down")
+				</button>
+			}
+			@popover.Content(popover.ContentProps{Placement: popover.PlacementBottomStart, Exclusive: true}) {
+				<div class="flex min-w-[220px] flex-col gap-px p-1">
+					<div class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Environments</div>
+					for _, e := range bar.Environments {
+						<a class={ "switcher-item", templ.KV("switcher-item-active", e.Active) } href={ templ.URL(e.Href) }>
+							<span class={ "tree-dot", envDot(e.Slug) } aria-hidden="true"></span>
+							<span class="min-w-0 flex-1 truncate">{ e.Name }</span>
+							<span class="text-[11px] tabular-nums text-muted-foreground">{ strconv.Itoa(e.Apps) }</span>
+						</a>
+					}
+					<div class="my-1 h-px bg-border"></div>
+					<a class="switcher-item" href={ templ.URL("/projects/" + bar.Slug + "/settings#environments") }>
+						@icon("plus")
+						<span class="flex-1">New environment</span>
+					</a>
+				</div>
+			}
 		}
 	}
 }

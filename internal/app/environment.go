@@ -421,3 +421,49 @@ func (s *Service) DeleteEnvironment(ctx context.Context, ownerID, projectSlug, s
 	}
 	return nil
 }
+
+type environmentKey struct{}
+
+// WithEnvironment is a request's environment for whatever it creates: an app
+// added on staging's canvas is staging's, by whichever path it was added —
+// a form, Add › Database, a one-click GitHub deploy — without each of them
+// having to carry it.
+func WithEnvironment(ctx context.Context, env string) context.Context {
+	return context.WithValue(ctx, environmentKey{}, env)
+}
+
+func environmentFrom(ctx context.Context) string {
+	env, _ := ctx.Value(environmentKey{}).(string)
+	return env
+}
+
+// placeInEnvironment settles which environment a new app is in and what it
+// is called there: a service added outside production is that environment's
+// alone, named <service>-<environment> so it cannot take the name production
+// would give the same service.
+func (s *Service) placeInEnvironment(ctx context.Context, ownerID string, in *CreateInput) error {
+	if in.Environment == "" {
+		in.Environment = environmentFrom(ctx)
+	}
+	if in.Environment == "" || in.Environment == DefaultEnvironment {
+		in.Environment = ""
+		return nil
+	}
+	if in.ProjectID == uuid.Nil {
+		return errors.New("an app in an environment other than production needs its project")
+	}
+	p, err := s.ProjectByID(ctx, ownerID, in.ProjectID)
+	if err != nil {
+		return err
+	}
+	if ok, err := s.HasEnvironment(ctx, ownerID, p, in.Environment); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("%w: %s", ErrEnvironmentNotFound, in.Environment)
+	}
+	if in.Service == "" {
+		in.Service = in.Name
+		in.Name = copyName(in.Name, in.Environment, nil)
+	}
+	return nil
+}

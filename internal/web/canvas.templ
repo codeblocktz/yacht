@@ -101,7 +101,7 @@ templ Canvas(d CanvasData) {
 									@sourceMark(n.App.Source)
 								</span>
 								<span class="min-w-0 flex-1">
-									<span class="block truncate font-semibold">{ n.App.Name }</span>
+									<span class="block truncate font-semibold">{ n.App.ServiceName() }</span>
 									if n.App.Host != "" {
 										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.Host }</span>
 									}
@@ -188,7 +188,10 @@ templ appPanelBody(d AppDetailData) {
 		@sheet.Title() {
 			<span class="flex min-w-0 items-center gap-2.5">
 				@sourceMark(d.App.Source)
-				<span class="truncate">{ d.App.Name }</span>
+				<span class="truncate">{ d.App.ServiceName() }</span>
+				if d.App.Environment() != app.DefaultEnvironment {
+					<span class="tag">{ d.App.Environment() }</span>
+				}
 				@appStatus(d.App)
 			</span>
 		}

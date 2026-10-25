@@ -746,14 +746,14 @@ func (s *Server) Handler() http.Handler {
 			// Moving an app between canvases is arranging, like the above.
 			r.Post("/apps/{name}/project", s.appMoveProject)
 			r.Get("/apps", s.appList)
-			r.Post("/apps", s.appCreate)
+			r.Post("/apps", s.inEnvironment(s.appCreate))
 			r.Get("/apps/new", s.appNew)
 			if s.stacks != nil {
 				// Member, like creating an app. A stack is several apps and
 				// nothing a person could not do one at a time from the same
 				// page, so a stricter gate here would only be theatre.
 				r.Get("/templates", s.templateList)
-				r.Post("/templates", s.templateDeploy)
+				r.Post("/templates", s.inEnvironment(s.templateDeploy))
 			}
 			r.Get("/apps/{name}", s.appDetail)
 			r.Get("/apps/{name}/variables", s.appDetail)
@@ -782,7 +782,7 @@ func (s *Server) Handler() http.Handler {
 				// The one-click deploy: pick a repository, and it builds.
 				r.Get("/apps/new/github", s.appNewGitHub)
 				r.Get("/apps/new/github/repositories", s.appNewGitHubRepos)
-				r.Post("/apps/github", s.appDeployGitHub)
+				r.Post("/apps/github", s.inEnvironment(s.appDeployGitHub))
 			}
 			if s.nets != nil {
 				// Domains get a tab of their own rather than a section inside
@@ -874,6 +874,10 @@ func (s *Server) Handler() http.Handler {
 			// A project's name and its deletion are the team's admins', like
 			// deleting an app — which deleting a project does, to every one.
 			r.Post("/projects/{slug}/rename", s.projectRename)
+			// Environments copy or delete every service in them, which is
+			// the admins' to do, like deleting an app.
+			r.Post("/projects/{slug}/environments", s.environmentCreate)
+			r.Post("/projects/{slug}/environments/{env}/delete", s.environmentDelete)
 			r.Post("/projects/{slug}/delete", s.projectDelete)
 
 			// Storage sits with the admin actions rather than the member ones:
@@ -1335,7 +1339,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = s.apps.Create(ctx, owner.ID, app.CreateInput{
+	created, err := s.apps.Create(ctx, owner.ID, app.CreateInput{
 		Source:   source,
 		Name:     form.Name,
 		Image:    form.Image,
@@ -1356,7 +1360,13 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/apps/"+form.Name, http.StatusSeeOther)
+	// The created app's own name: in an environment beside production it is
+	// <name>-<environment>, not what was typed.
+	name := created.Name
+	if name == "" {
+		name = form.Name
+	}
+	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 }
 
 // renderErrFor keeps the chosen source on a failed submission, so a typo in

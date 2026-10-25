@@ -889,3 +889,12 @@ func deploymentBadge(dep app.Deployment) (label, class string) {
 func hasSleepActions(d AppDetailData) bool {
 	return d.Sleep != nil && (d.App.Sleep.Asleep() || d.Sleep.Unavailable == nil)
 }
+
+// envDot colours an environment's dot: production green, as the one serving
+// people, and every other environment the colour of work in progress.
+func envDot(slug string) string {
+	if slug == "" || slug == app.DefaultEnvironment {
+		return "status-ok"
+	}
+	return "status-info"
+}
