@@ -9,11 +9,14 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
@@ -61,6 +64,50 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("store: ping: %w", err)
 	}
 	return pool, nil
+}
+
+// WaitForDatabase waits, up to wait, for the database to take connections.
+//
+// Started together with its database, as after a restart of the whole
+// install, Yacht finds it refusing connections for a few seconds and would
+// exit, to be restarted by its supervisor and counted as a crash. Only the
+// network is waited out: a database that answers and refuses, a wrong
+// password or a missing database, fails at once.
+func WaitForDatabase(ctx context.Context, dsn string, wait time.Duration, log *slog.Logger) error {
+	if log == nil {
+		log = slog.Default()
+	}
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return fmt.Errorf("store: parse dsn: %w", err)
+	}
+	deadline := time.Now().Add(wait)
+	for logged := false; ; {
+		attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := pgx.ConnectConfig(attempt, cfg)
+		cancel()
+		if err == nil {
+			_ = conn.Close(ctx)
+			if logged {
+				log.Info("the database is taking connections")
+			}
+			return nil
+		}
+		var netErr *net.OpError
+		if !errors.As(err, &netErr) || time.Now().After(deadline) {
+			return fmt.Errorf("store: connect: %w", err)
+		}
+		if !logged {
+			log.Info("waiting for the database", slog.String("host", cfg.Host),
+				slog.Duration("up_to", wait), slog.String("error", err.Error()))
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // Migrate applies any pending migrations.

@@ -306,6 +306,9 @@ func githubSentence(err error) string {
 		return "GitHub did not accept the sign-in. Start again from the Team page."
 	case errors.Is(err, github.ErrInstallationGone):
 		return "The GitHub App is no longer installed on that account."
+	case errors.Is(err, github.ErrUnreachable):
+		// What failed on the way is for the log, not the page.
+		return "Could not reach GitHub. Try again in a minute."
 	}
 	msg := strings.TrimPrefix(strings.TrimPrefix(err.Error(), "app: "), "github: ")
 	if msg != "" {

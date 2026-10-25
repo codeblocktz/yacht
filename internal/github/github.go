@@ -59,6 +59,11 @@ var (
 	// ErrNotAuthorized is a user authorization GitHub refused: a code that
 	// was spent, expired or never issued.
 	ErrNotAuthorized = errors.New("github: GitHub did not accept the authorization")
+
+	// ErrUnreachable is a request that never got an answer from GitHub: a
+	// name that did not resolve, a connection refused or timed out. The
+	// wrapped error says which, for the log; people are told to try again.
+	ErrUnreachable = errors.New("github: could not reach GitHub")
 )
 
 // Config is the App as registered on GitHub.
@@ -504,7 +509,7 @@ func (a *App) do(
 	}
 	resp, err := a.cfg.HTTP.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("github: could not reach GitHub: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))

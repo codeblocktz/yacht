@@ -444,6 +444,9 @@ func New(ctx context.Context, cfg Config, ov Overrides) (*Engine, error) {
 		slog.String("config", cfg.String()),
 	)
 
+	if err := store.WaitForDatabase(ctx, cfg.DatabaseURL, time.Minute, log); err != nil {
+		return nil, err
+	}
 	if err := store.Migrate(ctx, cfg.DatabaseURL, log); err != nil {
 		return nil, err
 	}
