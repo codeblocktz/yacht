@@ -768,7 +768,7 @@ templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
 			@deploymentStatus(dep)
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
+			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(a, dep) }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }

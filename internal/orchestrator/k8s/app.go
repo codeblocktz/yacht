@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
@@ -589,7 +591,73 @@ func (o *Orchestrator) AppStatus(
 		}
 	}
 
+	// A container that cannot start fails the rollout now, not at the
+	// progress deadline ten minutes on: its start script not executable,
+	// its config missing, a crash on every start. Only the release being
+	// rolled out is looked at; an old pod's trouble is not this deploy's.
+	if !status.Terminal && status.Ready < desired && status.ReleaseID != "" {
+		if reason, message, ok := o.unstartable(ctx, ref, status.ReleaseID); ok {
+			status.Terminal = true
+			status.Reason, status.Message = reason, message
+		}
+	}
+
 	return status, nil
+}
+
+// crashesBeforeFailing is how many times a release's container may crash
+// and be restarted before its rollout is given up: enough for one that
+// waits on a database still starting, few enough not to wait out the
+// deadline for one that never will.
+const crashesBeforeFailing = 3
+
+// unstartable reports why a release's container cannot start, if it
+// cannot: a reason Kubernetes will not get past by trying again.
+func (o *Orchestrator) unstartable(ctx context.Context, ref orchestrator.Ref, releaseID string) (string, string, bool) {
+	pods, err := o.client.CoreV1().Pods(ref.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
+	})
+	if err != nil {
+		return "", "", false
+	}
+	for _, p := range pods.Items {
+		if p.Annotations[orchestrator.AnnotationReleaseID] != releaseID {
+			continue
+		}
+		for _, cs := range p.Status.ContainerStatuses {
+			if reason, message, ok := containerCannotStart(cs); ok {
+				return reason, message, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// containerCannotStart reads one container's state for a failure that
+// trying again will not cure.
+func containerCannotStart(cs corev1.ContainerStatus) (string, string, bool) {
+	w := cs.State.Waiting
+	if w == nil {
+		return "", "", false
+	}
+	switch w.Reason {
+	case "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "InvalidImageName":
+		return w.Reason, w.Message, true
+	case "CrashLoopBackOff":
+		last := cs.LastTerminationState.Terminated
+		// Never started at all, which no restart changes.
+		if last != nil && last.Reason == "StartError" {
+			return "StartError", last.Message, true
+		}
+		if cs.RestartCount >= crashesBeforeFailing {
+			if last != nil {
+				return "CrashLoopBackOff", fmt.Sprintf("the container exited %d times; the last time with code %d (%s)",
+					cs.RestartCount, last.ExitCode, cmp.Or(last.Reason, "no reason given")), true
+			}
+			return "CrashLoopBackOff", fmt.Sprintf("the container exited %d times", cs.RestartCount), true
+		}
+	}
+	return "", "", false
 }
 
 // specHash is a stable fingerprint of the fields that should trigger a rollout.

@@ -7,17 +7,22 @@ import (
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
-// A build that failed says so, rather than "building…" for ever.
+// A build that failed says so, rather than "building…" for ever, and one
+// that built says it is deploying.
 func TestDeploymentImageLabel(t *testing.T) {
+	unbuilt := app.App{Image: app.PendingImage}
+	built := app.App{Image: "registry/apps/web:new"}
 	for _, tc := range []struct {
+		a    app.App
 		dep  app.Deployment
 		want string
 	}{
-		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed}, "build failed"},
-		{app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "building…"},
-		{app.Deployment{Image: "registry/apps/web:abc", Status: app.DeployFailed}, "registry/apps/web:abc"},
+		{unbuilt, app.Deployment{Image: app.PendingImage, Status: app.DeployFailed}, "build failed"},
+		{unbuilt, app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "building…"},
+		{built, app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "deploying registry/apps/web:new"},
+		{built, app.Deployment{Image: "registry/apps/web:abc", Status: app.DeployFailed}, "registry/apps/web:abc"},
 	} {
-		if got := deploymentImageLabel(tc.dep); got != tc.want {
+		if got := deploymentImageLabel(tc.a, tc.dep); got != tc.want {
 			t.Errorf("deploymentImageLabel(%+v) = %q, want %q", tc.dep, got, tc.want)
 		}
 	}

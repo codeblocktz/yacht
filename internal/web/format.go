@@ -685,11 +685,19 @@ func containerFailing(reason string) bool {
 	return false
 }
 
-// deploymentImageLabel is what a deployment row shows where its image goes:
-// a build that never produced one failed, rather than is still building.
-func deploymentImageLabel(dep app.Deployment) string {
-	if imageIsPending(dep.Image) && dep.Status == app.DeployFailed {
+// deploymentImageLabel is what a deployment row shows where its image goes.
+// A deploy records its image only when it finishes, so one without is
+// building, or — once the app has an image from this build — rolling it out;
+// and one that failed without ever having one failed to build.
+func deploymentImageLabel(a app.App, dep app.Deployment) string {
+	if !imageIsPending(dep.Image) {
+		return dep.Image
+	}
+	switch {
+	case dep.Status == app.DeployFailed:
 		return "build failed"
+	case dep.Status == app.DeployRunning && !imageIsPending(a.Image):
+		return "deploying " + a.Image
 	}
 	return imageLabel(dep.Image)
 }

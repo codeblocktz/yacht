@@ -2783,9 +2783,9 @@ func deploymentRow(a app.App, dep app.Deployment, rollback bool) templ.Component
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var119 string
-		templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.JoinStringErrs(deploymentImageLabel(dep))
+		templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.JoinStringErrs(deploymentImageLabel(a, dep))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/pages.templ`, Line: 771, Col: 137}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/pages.templ`, Line: 771, Col: 140}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var119))
 		if templ_7745c5c3_Err != nil {
