@@ -675,6 +675,9 @@ templ AppDeploymentsBody(d AppDetailData) {
 				} else {
 					<p>It runs once its first deploy succeeds.</p>
 				}
+				<div class="mt-3">
+					@redeployButton(d.App.Name)
+				</div>
 			</div>
 		</div>
 	}
@@ -746,6 +749,7 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 				</div>
 			</div>
 			@deployLogsButton(d.App.Name, dep)
+			@redeployButton(d.App.Name)
 		</div>
 		<div class="deploy-card-foot">
 			@icon("check")
@@ -2370,4 +2374,11 @@ templ deploymentsHeader(d AppDetailData) {
 			{ plural(int(d.App.Replicas), "Replica") }
 		</span>
 	</div>
+}
+
+// redeployButton deploys the app again, from its source.
+templ redeployButton(name string) {
+	<form method="post" action={ templ.URL("/apps/" + name + "/redeploy") }>
+		<button class="btn btn-sm" type="submit">Redeploy</button>
+	</form>
 }

@@ -198,21 +198,15 @@ templ appPanelBody(d AppDetailData) {
 			}
 		}
 	}
-	<div class="canvas-sheet-actions">
-		@sleepActions(d)
-		<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/redeploy") }>
-			<button class="btn btn-sm" type="submit">Redeploy</button>
-		</form>
-		<form
-			method="post"
-			action={ templ.URL("/apps/" + d.App.Name + "/delete") }
-			data-confirm="This deletes the app and its namespace. This cannot be undone."
-			data-confirm-title={ "Delete " + d.App.Name + "?" }
-			data-confirm-label="Delete app"
-		>
-			<button class="btn btn-danger btn-sm" type="submit">Delete</button>
-		</form>
-	</div>
+	// Railway's header is the service and nothing else. Redeploy is on the
+	// live deployment and Delete is in Settings › Danger, where each is
+	// next to what it acts on; sleeping and waking stay here, since they are
+	// about the app as a whole and have nowhere better.
+	if hasSleepActions(d) {
+		<div class="canvas-sheet-actions">
+			@sleepActions(d)
+		</div>
+	}
 	@appTabs(d.App.Name, d.Tab)
 	<div class="canvas-sheet-body">
 		@sleepCallout(d)

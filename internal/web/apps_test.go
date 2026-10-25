@@ -293,10 +293,14 @@ func TestAppDetailRendersScaleAndPods(t *testing.T) {
 	body := get(t, h, "/apps/web").Body.String()
 
 	// Deployments is the default tab, showing live state and history.
-	for _, want := range []string{"web", "Redeploy", "Delete", "Deployments", "History"} {
+	for _, want := range []string{"web", "Redeploy", "Deployments", "History"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail page missing %q", want)
 		}
+	}
+	// Deleting is in Settings › Danger, as on Railway, not beside Redeploy.
+	if settings := get(t, h, "/apps/web/settings").Body.String(); !strings.Contains(settings, `action="/apps/web/delete"`) {
+		t.Error("the settings do not offer deleting the app")
 	}
 	if !strings.Contains(body, "12 minutes ago") {
 		t.Error("expected a relative deploy time")
@@ -916,10 +920,17 @@ func TestAnAppURLRendersItsCanvasWithThePanelOpen(t *testing.T) {
 	if !strings.Contains(body, `data-tui-dialog-open="true"`) {
 		t.Error("the panel is not open on a URL that names an app")
 	}
-	// Everything the app page used to be able to do, it can still do.
-	for _, want := range []string{"Redeploy", "Delete", "Variables", "Metrics", "Storage", "Settings"} {
+	// Everything the app page used to be able to do, it can still do — with
+	// Delete, Domains and Storage now in Settings, as on Railway.
+	for _, want := range []string{"Redeploy", "Variables", "Metrics", "Settings"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the panel lost the app page's %q", want)
+		}
+	}
+	settings := get(t, h, "/apps/web/settings").Body.String()
+	for _, want := range []string{`action="/apps/web/delete"`, `id="volumes"`, `id="domains"`} {
+		if !strings.Contains(settings, want) {
+			t.Errorf("the settings lost %q", want)
 		}
 	}
 }

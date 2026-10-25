@@ -797,3 +797,9 @@ func deploymentBadge(dep app.Deployment) (label, class string) {
 	}
 	return "REMOVED", "badge-idle"
 }
+
+// hasSleepActions reports whether the panel has a Sleep now or Wake now to
+// show, so an empty actions bar is not drawn when it has neither.
+func hasSleepActions(d AppDetailData) bool {
+	return d.Sleep != nil && (d.App.Sleep.Asleep() || d.Sleep.Unavailable == nil)
+}
