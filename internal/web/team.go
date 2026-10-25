@@ -213,6 +213,10 @@ type TeamPageData struct {
 	// GitHub is the team's connections to the install's GitHub App, nil
 	// where the install has none.
 	GitHub *TeamGitHubData
+
+	// Tabs is which of the team's other pages — API tokens, Audit log —
+	// exist for this viewer.
+	Tabs TeamTabs
 }
 
 // teamPage shows who is in the team and who has been invited.
@@ -259,6 +263,7 @@ func (s *Server) teamPage(w http.ResponseWriter, r *http.Request) {
 		Members:     members,
 		Invitations: invitations,
 		Error:       r.URL.Query().Get("error"),
+		Tabs:        s.teamTabs(r, "members"),
 	}
 	data.GitHub = s.teamGitHub(ctx, owner.ID, viewer.CanAdminister())
 	if s.sleep != nil && s.sleep.CanSleep() {

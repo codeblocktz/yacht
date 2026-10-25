@@ -201,6 +201,13 @@ type Config struct {
 	// to put in the link, so there is no way to sign in.
 	BaseURL string
 
+	// BuildSourceURL is where a build fetches source the CLI uploaded, as
+	// a build pod reaches the engine. Empty is BaseURL, which a build reaches
+	// through the cluster's own ingress as it reaches anything public; set it
+	// where that is not true — an engine behind a proxy the cluster cannot
+	// loop back through, say.
+	BuildSourceURL string
+
 	// SMTP describes a relay to send sign-in links through. SMTPAddr empty
 	// means no relay is configured.
 	SMTPAddr     string
@@ -350,6 +357,7 @@ func Load() (Config, error) {
 		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
 		Operators:                envList("YACHT_OPERATORS"),
 		BaseURL:                  strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
+		BuildSourceURL:           strings.TrimRight(env("YACHT_BUILD_SOURCE_URL", ""), "/"),
 		SMTPAddr:                 env("YACHT_SMTP_ADDR", ""),
 		SMTPUsername:             env("YACHT_SMTP_USER", ""),
 		SMTPPassword:             env("YACHT_SMTP_PASSWORD", ""),

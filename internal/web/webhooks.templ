@@ -1,0 +1,212 @@
+package web
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/checkbox"
+	"github.com/codeblocktz/yacht/internal/webhook"
+)
+
+// projectWebhooksSection is Project Settings › Webhooks: where the project's
+// events are sent, Railway's way, with Discord and Slack spoken natively.
+templ projectWebhooksSection(slug string, d ProjectWebhooksData) {
+	<section id="webhooks" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("link")</span>
+			<h2 class="settings-section-title">Webhooks</h2>
+		</div>
+		<p class="field-note">
+			Each event is sent as a signed POST — a Discord or Slack webhook URL gets a message in their own format —
+			and retried with backoff when it is not answered with a 2xx.
+		</p>
+		if !d.Configured {
+			<p class="hint mt-3">This install has no secret key, so it cannot keep a webhook's headers or signing secret.</p>
+		} else {
+			if d.New != nil {
+				<div class="callout callout-ok mt-3" role="status">
+					<div class="min-w-0 flex-1">
+						<div class="font-medium">Webhook added — copy its signing secret now</div>
+						<p class="mt-0.5 text-muted-foreground">
+							Every delivery carries <code class="mono">webhook-signature</code>, an HMAC-SHA256 of
+							<code class="mono">webhook-id.webhook-timestamp.body</code> with this secret, in the Standard Webhooks format.
+							It is not shown again.
+						</p>
+						<div class="mt-2 flex items-center gap-2">
+							<code class="mono min-w-0 flex-1 truncate rounded border border-border bg-muted px-2 py-1 text-[12.5px]">{ d.New.Secret }</code>
+							@copyButton(d.New.Secret, "signing secret")
+						</div>
+					</div>
+				</div>
+			}
+			<div class="panel mt-3">
+				if len(d.Hooks) == 0 {
+					<div class="empty"><p>No webhooks yet.</p></div>
+				} else {
+					for _, h := range d.Hooks {
+						<div class="panel-body border-b border-border last:border-b-0">
+							<div class="flex flex-wrap items-start justify-between gap-3">
+								<div class="min-w-0">
+									<div class="flex items-center gap-2">
+										<span class="mono truncate text-[12.5px]">{ webhookDisplayURL(h) }</span>
+										if h.Kind != "json" {
+											@statusDot(h.Kind, "status-info")
+										}
+									</div>
+									<div class="mt-1 text-[12.5px] text-muted-foreground">{ strings.Join(h.Events, ", ") }</div>
+									if len(h.HeaderNames) > 0 {
+										<div class="mt-0.5 text-[12.5px] text-muted-foreground">Headers: <span class="mono">{ strings.Join(h.HeaderNames, ", ") }</span> (values hidden)</div>
+									}
+									if last, ok := d.Recent[h.ID]; ok {
+										<div class="mt-0.5 text-[12.5px]">
+											@deliveryStatus(last)
+											<span class="text-muted-foreground">{ last.Event } { relativeTime(last.CreatedAt) }</span>
+										</div>
+									}
+								</div>
+								<div class="flex items-center gap-2">
+									<a class="btn btn-sm" href={ templ.SafeURL("/projects/" + slug + "/webhooks/" + h.ID.String()) }>Deliveries</a>
+									<form method="post" action={ templ.SafeURL("/projects/" + slug + "/webhooks/" + h.ID.String() + "/test") }>
+										<button class="btn btn-sm" type="submit">Test Webhook</button>
+									</form>
+									<form method="post" action={ templ.SafeURL("/projects/" + slug + "/webhooks/" + h.ID.String() + "/delete") }>
+										<button class="btn btn-sm btn-danger" type="submit">Delete</button>
+									</form>
+								</div>
+							</div>
+						</div>
+					}
+				}
+			</div>
+			<form method="post" action={ templ.SafeURL("/projects/" + slug + "/webhooks") } class="panel mt-4">
+				<div class="panel-body flex flex-col gap-4">
+					<div class="field">
+						<label class="label" for="webhook-url">URL</label>
+						<input class="control mono" id="webhook-url" name="url" type="url" required maxlength="2048" placeholder="https://discord.com/api/webhooks/…"/>
+					</div>
+					<fieldset class="field">
+						<legend class="label mb-2">Events</legend>
+						<div class="grid gap-2 sm:grid-cols-2">
+							for _, e := range d.Events {
+								<label class="flex items-start gap-2.5" for={ "webhook-event-" + e.Name }>
+									<span class="mt-0.5">
+										@checkbox.Checkbox(checkbox.Props{ID: "webhook-event-" + e.Name, Name: "events", Value: e.Name, Checked: e.Name != "deploy.removed"})
+									</span>
+									<span class="min-w-0">
+										<span class="block font-medium">{ e.Label }</span>
+										<span class="block text-[12.5px] text-muted-foreground">{ e.Description }</span>
+									</span>
+								</label>
+							}
+						</div>
+					</fieldset>
+					<div class="field">
+						<span class="label">Custom headers</span>
+						<p class="field-note">Sealed with the install's key and never shown again — only their names are.</p>
+						for i := range 3 {
+							<div class="mt-1.5 flex gap-2">
+								<input class="control mono w-56" name="header_name" aria-label={ "Header " + strconv.Itoa(i+1) + " name" } placeholder="Authorization" autocomplete="off"/>
+								<input class="control mono grow" name="header_value" type="password" aria-label={ "Header " + strconv.Itoa(i+1) + " value" } placeholder="Bearer …" autocomplete="off"/>
+							</div>
+						}
+					</div>
+					<div>
+						<button class="btn btn-primary" type="submit">Add webhook</button>
+					</div>
+				</div>
+			</form>
+		}
+	</section>
+}
+
+templ deliveryStatus(d webhook.Delivery) {
+	switch {
+		case d.Status == webhook.StatusSucceeded:
+			@statusDot(deliveryCode(d), "status-ok")
+		case d.Status == webhook.StatusFailed:
+			@statusDot(deliveryCode(d), "status-err")
+		default:
+			@statusDot("retrying", "status-warn")
+	}
+}
+
+// WebhookDetailPage is one webhook's deliveries log: every attempt's status
+// code, what the receiver said, and when the next try is.
+templ WebhookDetailPage(d WebhookDetailData) {
+	<div class="project-page">
+		<div class="project-page-inner">
+			@webhookDeliveries(d)
+		</div>
+	</div>
+}
+
+templ webhookDeliveries(d WebhookDetailData) {
+	@pageHead("Webhook deliveries", d.Project.Name+" · "+webhookDisplayURL(d.Hook), nil)
+	<div class="mb-4 flex gap-2">
+		<a class="btn btn-sm" href={ templ.SafeURL("/projects/" + d.Project.Slug + "/settings#webhooks") }>Back to settings</a>
+		<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/webhooks/" + d.Hook.ID.String() + "/test") }>
+			<button class="btn btn-sm" type="submit">Test Webhook</button>
+		</form>
+	</div>
+	<div class="panel">
+		if len(d.Deliveries) == 0 {
+			<div class="empty"><p>Nothing sent yet. Test Webhook sends one now.</p></div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[760px]">
+					<thead><tr><th>When</th><th>Event</th><th>Status</th><th>Attempts</th><th>Took</th><th>Answer</th></tr></thead>
+					<tbody>
+						for _, x := range d.Deliveries {
+							<tr>
+								<td class="whitespace-nowrap text-muted-foreground"><span title={ absoluteTime(x.CreatedAt) }>{ relativeTime(x.CreatedAt) }</span></td>
+								<td><code class="mono text-[12.5px]">{ x.Event }</code></td>
+								<td>@deliveryStatus(x)</td>
+								<td>
+									if x.Status == webhook.StatusPending && x.Attempts > 0 {
+										{ strconv.Itoa(x.Attempts) + ", " }<span class="text-[12px] text-muted-foreground">next { untilTime(x.NextAttemptAt) }</span>
+									} else {
+										{ strconv.Itoa(x.Attempts) }
+									}
+								</td>
+								<td class="text-muted-foreground">
+									if x.Attempts > 0 {
+										{ strconv.FormatInt(x.LastDuration.Milliseconds(), 10) } ms
+									}
+								</td>
+								<td class="max-w-[360px] text-[12.5px]">
+									if x.LastError != "" {
+										<div>{ x.LastError }</div>
+									}
+									if x.LastResponse != "" {
+										<pre class="mono mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-[11.5px] text-muted-foreground">{ x.LastResponse }</pre>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
+
+// webhookDisplayURL hides the token Discord and Slack keep in the path, so a
+// page shown on a screen-share is not a page that hands it out. The URL is
+// whole in the form that made it and nowhere after.
+func webhookDisplayURL(h webhook.Webhook) string {
+	if h.Kind == "json" {
+		return h.URL
+	}
+	u := h.URL
+	if i := strings.LastIndex(u, "/"); i > 0 && len(u)-i > 6 {
+		return u[:i+1] + "…" + u[len(u)-4:]
+	}
+	return u
+}
+
+func deliveryCode(d webhook.Delivery) string {
+	if d.LastStatus != nil {
+		return strconv.Itoa(*d.LastStatus)
+	}
+	return "no answer"
+}

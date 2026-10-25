@@ -77,9 +77,9 @@ const buildTimeout = 30 * time.Minute
 func (o *Orchestrator) Build(
 	ctx context.Context, req orchestrator.BuildRequest,
 ) (orchestrator.BuildResult, error) {
-	if req.Image == "" || req.RepoURL == "" {
+	if req.Image == "" || (req.RepoURL == "" && req.SourceURL == "") {
 		return orchestrator.BuildResult{}, fmt.Errorf(
-			"k8s: a build needs a repository and an image to push to")
+			"k8s: a build needs a repository or uploaded source, and an image to push to")
 	}
 	if req.Log == nil {
 		req.Log = func(string) {}
@@ -105,10 +105,15 @@ func (o *Orchestrator) Build(
 	// only the clone step mounts, rather than anywhere in the Job: a Job's
 	// spec is readable by anyone who can list Jobs, and its env and args are
 	// echoed by every tool that describes a pod.
+	//
+	// An upload's fetch credential travels the same way, in the same Secret:
+	// it is the one thing the first step needs that the steps after it must
+	// not see, which is exactly what a repository token is.
+	credential := buildCredential(req)
 	var repoSecret string
-	if req.RepoToken != "" {
+	if credential != "" {
 		repoSecret = repoSecretName(name)
-		if err := o.putRepoSecret(ctx, repoSecret, req.RepoToken); err != nil {
+		if err := o.putRepoSecret(ctx, repoSecret, credential); err != nil {
 			return orchestrator.BuildResult{}, err
 		}
 		defer func() { _ = o.deleteRepoSecret(context.WithoutCancel(ctx), repoSecret) }()
@@ -128,7 +133,7 @@ func (o *Orchestrator) Build(
 	if repoSecret != "" {
 		o.ownRepoSecret(ctx, repoSecret, created)
 	}
-	req.Log = redactingLog(req.Log, req.RepoToken)
+	req.Log = redactingLog(req.Log, credential)
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
@@ -144,7 +149,7 @@ func (o *Orchestrator) Build(
 	result, seen := o.streamBuildLog(ctx, pod, req.Log)
 
 	if err := o.waitForBuildResult(ctx, name); err != nil {
-		return result, redactError(err, req.RepoToken)
+		return result, redactError(err, credential)
 	}
 	// The live log can end before the build does: the kubelet stops
 	// following a log it cannot watch ("failed to create fsnotify watcher:
@@ -207,6 +212,16 @@ func (o *Orchestrator) recoverBuildMarkers(
 	if *seen != before {
 		logf("The live log was cut short; what the deployment needs was read from the finished build.\n")
 	}
+}
+
+// buildCredential is what the first step of a build needs to read its
+// source: the fetch token for an upload, the repository token for a private
+// clone, or nothing.
+func buildCredential(req orchestrator.BuildRequest) string {
+	if req.SourceURL != "" {
+		return req.SourceToken
+	}
+	return req.RepoToken
 }
 
 // repoSecretName is the Secret a build's repository token is in.

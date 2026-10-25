@@ -211,6 +211,8 @@ func (d Deployment) Source() string {
 		return "rollback"
 	case strings.HasPrefix(d.Revision, PushTriggerPrefix):
 		return "push"
+	case strings.HasPrefix(d.Revision, UploadTriggerPrefix):
+		return "CLI"
 	case d.Revision == "initial", d.Revision == "":
 		return "image"
 	}
@@ -365,6 +367,18 @@ type Options struct {
 	// app reads DATAHURU_PUBLIC_DOMAIN rather than the engine's name for it.
 	// See platform.go.
 	PlatformVariablePrefix string
+
+	// Events is told when a deploy finishes and when an app is deleted, for
+	// a project's webhooks. Nil tells nobody. See events.go.
+	Events EventSink
+
+	// SourceFetchURL is where a build fetches source uploaded by the CLI,
+	// as the build pod reaches the engine: the engine's base URL and the
+	// fetch path, since a build reaches the cluster's own ingress as it
+	// reaches the internet. Empty leaves uploads off. MaxUploadBytes bounds
+	// one archive; zero is DefaultMaxUploadBytes. See upload.go.
+	SourceFetchURL string
+	MaxUploadBytes int64
 }
 
 // Service manages app lifecycle.
@@ -1873,6 +1887,7 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 		return fmt.Errorf("app: read delete target: %w", err)
 	}
 	a := toApp(row)
+	var serving uuid.UUID
 	if err := s.withAppConvergenceLock(ctx, a.ID, func() error {
 		current, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
 			OwnerID: ownerID, ID: a.ID,
@@ -1889,6 +1904,7 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 		} else if !errors.Is(err, ErrNotFound) {
 			return err
 		}
+		serving = s.servingDeployment(ctx, a)
 		if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
 			return err
 		}
@@ -1908,6 +1924,12 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 	s.log.Info("app deleted",
 		slog.String("owner", ownerID), slog.String("name", name))
 	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
+	// Its deployments went with it, so the one that was serving is removed
+	// in Railway's sense. Read before the rows went, as servingDeployment.
+	s.emit(ctx, Event{
+		Kind: EventDeployRemoved, OwnerID: ownerID, ProjectID: a.ProjectID,
+		AppID: a.ID, AppName: a.Name, DeploymentID: serving,
+	})
 	return nil
 }
 

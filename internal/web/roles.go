@@ -57,6 +57,13 @@ func (s *Server) Allows(r *http.Request, role account.Role) bool {
 // that says what its holder may do. Nothing here reads the request's own
 // account of itself.
 func (s *Server) roleOf(r *http.Request) (account.Role, bool) {
+	// An API request's role is its token's, as resolved by apiAuthenticate —
+	// the lesser of the token's and its maker's. Read first, and only from
+	// the key that authentication alone can set, so a cookie riding along
+	// on an API call is never what decides.
+	if p, ok := apiPrincipalFrom(r.Context()); ok {
+		return p.role, true
+	}
 	owner, ok := identity.FromContext(r.Context())
 	if !ok {
 		// Only reachable if a gate is ever mounted outside the authenticated
@@ -133,6 +140,11 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // Exported so a wrapping application gates its own install-wide pages the
 // same way.
 func (s *Server) IsOperator(r *http.Request) bool {
+	// A token is a team's, never the install's: nothing it does is an
+	// operator's, whoever made it.
+	if p, ok := apiPrincipalFrom(r.Context()); ok && p.token != nil {
+		return false
+	}
 	if s.accounts == nil {
 		_, ok := identity.FromContext(r.Context())
 		return ok

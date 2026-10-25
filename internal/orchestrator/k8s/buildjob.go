@@ -204,7 +204,7 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret
 					},
 					Volumes: volumes,
 					InitContainers: []corev1.Container{
-						cloneStep(req, repoSecret != ""),
+						sourceStep(req, repoSecret != ""),
 						dockerfileStep(req),
 					},
 					Containers: []corev1.Container{buildpackStep(req)},
@@ -264,6 +264,57 @@ else
 fi
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"
 echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
+`},
+		SecurityContext: hardened(buildUID),
+		VolumeMounts:    mounts,
+	}
+}
+
+// sourceStep puts the source in /workspace/src: a clone of the repository,
+// or the archive the CLI uploaded.
+func sourceStep(req orchestrator.BuildRequest, withCredential bool) corev1.Container {
+	if req.SourceURL != "" {
+		return fetchStep(req, withCredential)
+	}
+	return cloneStep(req, withCredential)
+}
+
+// fetchStep downloads an uploaded archive from the engine and unpacks it.
+//
+// The same container name and image as the clone. Everything after this step
+// reads /workspace/src and nothing else, so an upload is a build like any
+// other from there on; and the image is alpine, whose busybox has wget, TLS
+// and a tar that reads gzip, so there is nothing new to pin.
+//
+// The URL is an environment variable, like a repository URL, and the token a
+// file from the build's own Secret, like a repository token, sent as a header
+// rather than in the URL so it is never in an access log. The engine checked
+// the archive when it was uploaded — no path outside the directory, no
+// devices — so unpacking it here is unpacking something already looked at.
+func fetchStep(req orchestrator.BuildRequest, withToken bool) corev1.Container {
+	env := []corev1.EnvVar{{Name: "SOURCE_URL", Value: req.SourceURL}}
+	mounts := []corev1.VolumeMount{{Name: buildVolume, MountPath: "/workspace"}}
+	if withToken {
+		env = append(env, corev1.EnvVar{Name: "SOURCE_TOKEN_FILE", Value: repoCredentialPath + "/" + repoTokenKey})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name: repoCredentialVolume, MountPath: repoCredentialPath, ReadOnly: true,
+		})
+	}
+	return corev1.Container{
+		Name:    cloneContainer,
+		Image:   gitImage,
+		Env:     env,
+		Command: []string{"/bin/sh", "-euc"},
+		Args: []string{`
+echo "Fetching the uploaded source"
+mkdir -p /workspace/src
+if ! wget -q -T 60 --header "Authorization: Bearer $(cat "$SOURCE_TOKEN_FILE")"     -O /workspace/source.tar.gz "$SOURCE_URL"; then
+  echo "Could not fetch the uploaded source from the engine — a build reaches it at its base URL."
+  exit 1
+fi
+tar -xzf /workspace/source.tar.gz -C /workspace/src
+rm -f /workspace/source.tar.gz
+echo "Fetched $(find /workspace/src -type f | wc -l | tr -d ' ') files"
 `},
 		SecurityContext: hardened(buildUID),
 		VolumeMounts:    mounts,

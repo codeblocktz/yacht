@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -18,6 +19,11 @@ type Querier interface {
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
+	ApproveCLILogin(ctx context.Context, arg ApproveCLILoginParams) (int64, error)
+	// Teams with somebody listening for app.crashed, so the watcher only looks
+	// at apps whose failing somebody would be told about.
+	AppsWatchedForCrashes(ctx context.Context) ([]AppsWatchedForCrashesRow, error)
+	AttachSourceUpload(ctx context.Context, arg AttachSourceUploadParams) (int64, error)
 	CancelDeploymentOperation(ctx context.Context, arg CancelDeploymentOperationParams) (DeploymentOperation, error)
 	ClaimDeploymentOperation(ctx context.Context, arg ClaimDeploymentOperationParams) (DeploymentOperation, error)
 	// Claims the domains whose next check is due, and leases them.
@@ -37,11 +43,16 @@ type Querier interface {
 	// dies mid-pass simply lets the lease expire, and the next pass picks the row
 	// up again.
 	ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsDueForCheckParams) ([]Domain, error)
+	// Claimed with SKIP LOCKED and a lease, so replicas share the queue without
+	// sending anything twice; a process that dies mid-send leaves a lease that
+	// runs out and the delivery is tried again.
+	ClaimDueWebhookDeliveries(ctx context.Context, batch int32) ([]WebhookDelivery, error)
 	ClaimNextDeploymentOperation(ctx context.Context, arg ClaimNextDeploymentOperationParams) (DeploymentOperation, error)
 	// Applying and verifying are recovered from workload observation, never by
 	// the ordinary admission worker. The checkpoint tells this claimant which
 	// stage the dead worker had durably entered.
 	ClaimRecoverableDeploymentOperation(ctx context.Context, arg ClaimRecoverableDeploymentOperationParams) (DeploymentOperation, error)
+	ClaimWebhookDelivery(ctx context.Context, id uuid.UUID) (WebhookDelivery, error)
 	ClearClusterJoin(ctx context.Context) (int64, error)
 	ClearPlatformRegistry(ctx context.Context) error
 	// Forget every saved position in a project, so the next render lays it out
@@ -58,6 +69,7 @@ type Querier interface {
 	// Connecting again is how somebody else on the team takes it over, so the
 	// record of who connected it follows the latest proof.
 	ConnectTeamGitHubInstallation(ctx context.Context, arg ConnectTeamGitHubInstallationParams) error
+	ConsumeCLILogin(ctx context.Context, id uuid.UUID) error
 	// Marking consumed and reading the user are one statement, so there is no
 	// window between the two in which a second request can also find the link
 	// unconsumed. Expiry is in the same condition for the same reason: a link that
@@ -73,6 +85,10 @@ type Querier interface {
 	CountCapacityRefusalsSince(ctx context.Context, since time.Time) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CountPendingReleaseBackfills(ctx context.Context) (int64, error)
+	// API tokens are a team's, like everything else scoped by owner_id. What a
+	// token may do is the lesser of its own role and its maker's current one, so
+	// the lookup joins the maker's membership: no membership, no token.
+	CreateAPIToken(ctx context.Context, arg CreateAPITokenParams) (ApiToken, error)
 	CreateApp(ctx context.Context, arg CreateAppParams) (App, error)
 	CreateAppLink(ctx context.Context, arg CreateAppLinkParams) error
 	// Release snapshots are owner-scoped at every read and write, like every
@@ -83,6 +99,7 @@ type Querier interface {
 	// the log is readable output and the scoping has to be checkable in the query
 	// that reads it.
 	CreateBuild(ctx context.Context, arg CreateBuildParams) (Build, error)
+	CreateCLILogin(ctx context.Context, arg CreateCLILoginParams) (CliLogin, error)
 	// ---------------------------------------------------------- custom domains
 	// Claims a hostname for an app, unverified.
 	//
@@ -108,11 +125,18 @@ type Querier interface {
 	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
 	// the check, not a duplicate of one.
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
+	// A project's webhooks and their deliveries, scoped by owner like every
+	// other table, and by project where a page reads them.
+	CreateProjectWebhook(ctx context.Context, arg CreateProjectWebhookParams) (ProjectWebhook, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateSignupLink(ctx context.Context, arg CreateSignupLinkParams) (SignupLink, error)
 	// A push that changed no watched file: recorded, already finished, and never
 	// queued, because there is nothing for a worker to do.
 	CreateSkippedDeployment(ctx context.Context, arg CreateSkippedDeploymentParams) (Deployment, error)
+	// Source the CLI uploaded for one build. Owner-scoped like the build it is
+	// for; the fetch is the one read that is not, because a build pod has no
+	// team — it has the fetch token, which is checked instead.
+	CreateSourceUpload(ctx context.Context, arg CreateSourceUploadParams) (CreateSourceUploadRow, error)
 	// TCP proxies: a public port on every machine for one app's own port.
 	// Claims a port for an app.
 	//
@@ -135,6 +159,7 @@ type Querier interface {
 	// another team's storage.
 	CreateVolume(ctx context.Context, arg CreateVolumeParams) (Volume, error)
 	CreateVolumeAndBump(ctx context.Context, arg CreateVolumeAndBumpParams) (CreateVolumeAndBumpRow, error)
+	CreateWebhookDelivery(ctx context.Context, arg CreateWebhookDeliveryParams) (WebhookDelivery, error)
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
 	DeleteAppHook(ctx context.Context, arg DeleteAppHookParams) (int64, error)
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
@@ -142,6 +167,7 @@ type Querier interface {
 	// settler finds it.
 	DeleteDatabaseBackup(ctx context.Context, arg DeleteDatabaseBackupParams) (int64, error)
 	DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentParams) (int64, error)
+	DeleteExpiredCLILogins(ctx context.Context) error
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
@@ -177,6 +203,7 @@ type Querier interface {
 	DeletePassword(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
 	DeleteProjectVariable(ctx context.Context, arg DeleteProjectVariableParams) (int64, error)
+	DeleteProjectWebhook(ctx context.Context, arg DeleteProjectWebhookParams) (int64, error)
 	// Signing out ends an impersonation with the session, so the durable record
 	// gets its stop in the same statement that removes the row — there is no
 	// moment afterwards at which the session could still be asked what it was
@@ -190,6 +217,7 @@ type Querier interface {
 	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
 	DeleteVolumeAndBump(ctx context.Context, arg DeleteVolumeAndBumpParams) (DeleteVolumeAndBumpRow, error)
+	DenyCLILogin(ctx context.Context, userCode string) (int64, error)
 	// Deploys per day and outcome, for the overview chart.
 	//
 	// Counted in the database rather than by reading rows and tallying them in Go:
@@ -223,6 +251,7 @@ type Querier interface {
 	// A delivery that failed half way is forgotten, so GitHub's redelivery of it
 	// is acted on rather than answered as a duplicate.
 	ForgetGitHubDelivery(ctx context.Context, id string) error
+	GetAPIToken(ctx context.Context, arg GetAPITokenParams) (ApiToken, error)
 	GetApp(ctx context.Context, arg GetAppParams) (App, error)
 	GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, error)
 	// The app a hostname routes to. Not owner-scoped, and it cannot be: the waker
@@ -239,6 +268,7 @@ type Querier interface {
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
 	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
+	GetCLILoginByUserCode(ctx context.Context, userCode string) (CliLogin, error)
 	// The install's capacity policy and the changes refused for it.
 	//
 	// Install-wide, so unlike most queries here these take no owner_id — the same
@@ -313,6 +343,7 @@ type Querier interface {
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetProjectVariable(ctx context.Context, arg GetProjectVariableParams) (ProjectVariable, error)
+	GetProjectWebhook(ctx context.Context, arg GetProjectWebhookParams) (ProjectWebhook, error)
 	GetRegion(ctx context.Context, name string) (Region, error)
 	GetReleaseBackfillState(ctx context.Context, arg GetReleaseBackfillStateParams) (AppReleaseBackfill, error)
 	// When the release an app is running went live: its newest successful
@@ -352,6 +383,8 @@ type Querier interface {
 	// become one. Whether they may still act is not a fact in this row at all — the
 	// identity provider asks the install on every request.
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
+	GetSourceUploadArchive(ctx context.Context, id uuid.UUID) (GetSourceUploadArchiveRow, error)
+	GetSourceUploadForDeployment(ctx context.Context, arg GetSourceUploadForDeploymentParams) (GetSourceUploadForDeploymentRow, error)
 	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTCPProxy(ctx context.Context, arg GetTCPProxyParams) (TcpProxy, error)
@@ -400,7 +433,11 @@ type Querier interface {
 	// manufacturing release history. A sleeping app is re-applied at zero
 	// replicas and wakes onto the pool.
 	IncrementTeamAppConfigVersions(ctx context.Context, ownerID string) (int64, error)
+	// The audit log is written here and read by audit.List, which composes its
+	// filters at runtime — the hybrid sqlc.yaml describes.
+	InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) error
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
+	ListAPITokens(ctx context.Context, ownerID string) ([]ListAPITokensRow, error)
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.
 	ListAdmissiblePushes(ctx context.Context, resultLimit int32) ([]ListAdmissiblePushesRow, error)
@@ -480,6 +517,7 @@ type Querier interface {
 	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
 	ListPendingReleaseBackfills(ctx context.Context, resultLimit int32) ([]ListPendingReleaseBackfillsRow, error)
 	ListProjectVariables(ctx context.Context, arg ListProjectVariablesParams) ([]ProjectVariable, error)
+	ListProjectWebhooks(ctx context.Context, arg ListProjectWebhooksParams) ([]ProjectWebhook, error)
 	ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
@@ -519,6 +557,10 @@ type Querier interface {
 	ListUnplacedApps(ctx context.Context) ([]ListUnplacedAppsRow, error)
 	ListVariablesForApp(ctx context.Context, appID uuid.UUID) ([]Variable, error)
 	ListVolumesForApp(ctx context.Context, appID uuid.UUID) ([]Volume, error)
+	ListWebhookDeliveries(ctx context.Context, arg ListWebhookDeliveriesParams) ([]WebhookDelivery, error)
+	// Taken under lock, so the token is minted once however many polls arrive
+	// together.
+	LockCLILoginByDevice(ctx context.Context, deviceHash []byte) (CliLogin, error)
 	// Taken inside the transaction that commits a change, after the team's quota
 	// row, when the install enforces its capacity. Every change that would raise
 	// what the install has committed then runs one after another, so two creates
@@ -579,6 +621,7 @@ type Querier interface {
 	MarkDomainRouted(ctx context.Context, id uuid.UUID) (int64, error)
 	MarkGitHubInstallationRemoved(ctx context.Context, id int64) (int64, error)
 	MarkHookPending(ctx context.Context, arg MarkHookPendingParams) error
+	MarkSourceUploadFetched(ctx context.Context, id uuid.UUID) error
 	// A verified domain becomes routed only after the app reconciler has observed
 	// or produced the matching workload convergence key. This app-scoped form
 	// closes the asynchronous handoff from the DNS checker.
@@ -594,10 +637,16 @@ type Querier interface {
 	// A team letting go of an installation stops its apps building from it.
 	// Whatever paused them already stays the reason.
 	PauseTeamGitHubApps(ctx context.Context, arg PauseTeamGitHubAppsParams) (int64, error)
+	ProjectBelongsToTeam(ctx context.Context, arg ProjectBelongsToTeamParams) (bool, error)
 	// Every project that builds a repository in production and makes an
 	// environment for its pull requests: one row a project, whichever team.
 	ProjectsForPullRequest(ctx context.Context, arg ProjectsForPullRequestParams) ([]ProjectsForPullRequestRow, error)
 	PruneGitHubDeliveries(ctx context.Context) (int64, error)
+	PruneWebhookDeliveries(ctx context.Context, before pgtype.Timestamptz) error
+	PurgeSourceUpload(ctx context.Context, arg PurgeSourceUploadParams) error
+	// Archives nobody will build any more: never attached to a deploy, or kept
+	// past any build that could still want them.
+	PurgeStaleSourceUploads(ctx context.Context, before time.Time) (int64, error)
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	// Records the region an app already lives in, once. Not versioned: recording
 	// where an app is changes nothing about it, and the affinity reaches its pods
@@ -624,6 +673,7 @@ type Querier interface {
 	// in either direction is a request: up is traffic, and down is the controller
 	// having restarted, which is not a reason to believe nobody came.
 	RecordRequestCount(ctx context.Context, arg RecordRequestCountParams) (App, error)
+	RecordWebhookAttempt(ctx context.Context, arg RecordWebhookAttemptParams) error
 	RecoverBuiltDeploymentOperation(ctx context.Context, arg RecoverBuiltDeploymentOperationParams) (DeploymentOperation, error)
 	// A push carries the repository's current name. A renamed repository still
 	// clones from its old address, but the page should show the new one.
@@ -644,6 +694,7 @@ type Querier interface {
 	// A deploy restarts the idle clock: somebody who has just shipped a change is
 	// about to go and look at it.
 	ResetIdleClock(ctx context.Context, arg ResetIdleClockParams) error
+	ResolveAPIToken(ctx context.Context, tokenHash []byte) (ResolveAPITokenRow, error)
 	// Rollback makes the app's desired state the release's again, so the next edit
 	// builds on what is running rather than quietly rolling forward to what was
 	// replaced. Only release-owned fields: hostnames, networking, storage and the
@@ -654,6 +705,7 @@ type Querier interface {
 	ResumeGitHubRepoApps(ctx context.Context, arg ResumeGitHubRepoAppsParams) (int64, error)
 	// And connecting it again resumes what disconnecting paused, nothing else.
 	ResumeTeamGitHubApps(ctx context.Context, arg ResumeTeamGitHubAppsParams) (int64, error)
+	RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (int64, error)
 	// Hostnames that may actually be routed to.
 	//
 	// A managed host is routable because the platform issued it; a custom one only
@@ -663,6 +715,9 @@ type Querier interface {
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
 	// Where an app made by Create belongs, written in Create's transaction.
 	SetAppEnvironment(ctx context.Context, arg SetAppEnvironmentParams) error
+	// Flips the app's recorded health, returning the row only when it changed,
+	// so of every replica looking at the same app only one hears it start failing.
+	SetAppFailing(ctx context.Context, arg SetAppFailingParams) (SetAppFailingRow, error)
 	// Choosing a repository, or pasting a URL in its place, which clears it.
 	// Either way builds resume: whatever paused them was about the repository
 	// that was there before.
@@ -708,6 +763,7 @@ type Querier interface {
 	// very next page, which is the opposite of what they asked for. The stop is
 	// recorded by the caller, which reads the row under lock first.
 	SetSessionTeam(ctx context.Context, arg SetSessionTeamParams) error
+	SetSourceUploadFetch(ctx context.Context, arg SetSourceUploadFetchParams) (int64, error)
 	// ---------------------------------------------------------------------------
 	// Impersonation: an operator acting as a team
 	//
@@ -726,6 +782,9 @@ type Querier interface {
 	// Cleared in the same transaction that admits the deploy, so a push is either
 	// still waiting or has a deployment — never neither.
 	TakeHookPending(ctx context.Context, appID uuid.UUID) (int64, error)
+	// Throttled in the statement, so two requests racing to record the same
+	// minute write once and the second does nothing.
+	TouchAPIToken(ctx context.Context, arg TouchAPITokenParams) error
 	// A request the waker answered, for an app the counter cannot see because
 	// its route is the waker's.
 	TouchAppRequest(ctx context.Context, arg TouchAppRequestParams) error
@@ -810,6 +869,7 @@ type Querier interface {
 	// caller to know which case they are in.
 	UpsertVariable(ctx context.Context, arg UpsertVariableParams) (Variable, error)
 	UpsertVariableAndBump(ctx context.Context, arg UpsertVariableAndBumpParams) (UpsertVariableAndBumpRow, error)
+	WebhooksForEvent(ctx context.Context, arg WebhooksForEventParams) ([]ProjectWebhook, error)
 	// One row per app, with what it takes to say how the app stands without
 	// asking the cluster. deployment_operations holds at most one live row per app
 	// (see deployment_operations_one_live_per_app), so the EXISTS is one index

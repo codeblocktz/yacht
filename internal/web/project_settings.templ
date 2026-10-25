@@ -1,6 +1,7 @@
 package web
 
 import (
+	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 )
@@ -33,6 +34,11 @@ type ProjectSettingsData struct {
 	// Usage is what the project costs, where a wrapping application prices
 	// it; nil leaves the section out.
 	Usage *ProjectUsage
+	// Tokens and Webhooks are the project's, nil where the install has
+	// neither or the viewer is not an admin; each section is left out then.
+	Tokens   *ProjectTokensData
+	Webhooks *ProjectWebhooksData
+	Viewer   account.Role
 }
 
 // ProjectSettings is the project's own settings, reached from the rail, as
@@ -57,6 +63,12 @@ templ ProjectSettings(d ProjectSettingsData) {
 					}
 					if d.Usage != nil {
 						<a href="#usage">Usage</a>
+					}
+					if d.Tokens != nil {
+						<a href="#tokens">Tokens</a>
+					}
+					if d.Webhooks != nil {
+						<a href="#webhooks">Webhooks</a>
 					}
 					<a href="#danger">Danger</a>
 				</nav>
@@ -89,6 +101,12 @@ templ ProjectSettings(d ProjectSettingsData) {
 					}
 					if d.Usage != nil {
 						@projectUsageSection(d.Usage)
+					}
+					if d.Tokens != nil {
+						@projectTokensSection(d.Project.Slug, *d.Tokens, d.Viewer)
+					}
+					if d.Webhooks != nil {
+						@projectWebhooksSection(d.Project.Slug, *d.Webhooks)
 					}
 					<section id="danger" class="settings-section">
 						<div class="settings-section-head">

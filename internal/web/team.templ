@@ -13,6 +13,7 @@ import (
 // as the invitee.
 templ TeamPage(d TeamPageData) {
 	@pageHead("Team", d.TeamName, nil)
+	@teamTabs(d.Tabs)
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">{ d.Error }</div>

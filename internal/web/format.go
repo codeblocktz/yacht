@@ -867,6 +867,9 @@ func deploymentTitle(dep app.Deployment) string {
 		return "Set " + strings.TrimPrefix(rev, "variable:")
 	case strings.HasPrefix(rev, "git:"):
 		return "Build " + strings.TrimPrefix(rev, "git:")
+	case strings.HasPrefix(rev, app.UploadTriggerPrefix):
+		// Railway's words for `railway up`, for the CLI's `up`.
+		return "Deploy via CLI"
 	}
 	// Settings changes are recorded as what changed ("port:8080 cpu:…");
 	// the first part is enough for a title, and the rest is in the logs.

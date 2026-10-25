@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ApiToken struct {
+	ID         uuid.UUID
+	OwnerID    string
+	ProjectID  pgtype.UUID
+	Name       string
+	Role       string
+	TokenHash  []byte
+	Hint       string
+	Origin     string
+	CreatedBy  uuid.UUID
+	CreatedAt  time.Time
+	LastUsedAt pgtype.Timestamptz
+	LastUsedIp string
+	RevokedAt  pgtype.Timestamptz
+}
+
 type App struct {
 	ID                   uuid.UUID
 	OwnerID              string
@@ -141,6 +157,21 @@ type AppSleep struct {
 	WokeBy      *string
 }
 
+type AuditEvent struct {
+	ID         uuid.UUID
+	OwnerID    string
+	At         time.Time
+	ActorKind  string
+	ActorID    string
+	ActorName  string
+	Ip         string
+	UserAgent  string
+	Action     string
+	TargetKind string
+	Target     string
+	Detail     []byte
+}
+
 type Build struct {
 	ID           uuid.UUID
 	OwnerID      string
@@ -176,6 +207,21 @@ type CapacityRefusal struct {
 	Resource  string
 	Shortfall int64
 	At        time.Time
+}
+
+type CliLogin struct {
+	ID         uuid.UUID
+	DeviceHash []byte
+	UserCode   string
+	ClientName string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	ApprovedBy pgtype.UUID
+	OwnerID    *string
+	Role       *string
+	ApprovedAt pgtype.Timestamptz
+	ConsumedAt pgtype.Timestamptz
+	Denied     bool
 }
 
 type ClusterJoin struct {
@@ -371,6 +417,19 @@ type ProjectVariable struct {
 	UpdatedAt time.Time
 }
 
+type ProjectWebhook struct {
+	ID            uuid.UUID
+	OwnerID       string
+	ProjectID     uuid.UUID
+	Url           string
+	Events        []string
+	HeaderNames   []string
+	HeadersSealed []byte
+	SecretSealed  []byte
+	CreatedBy     pgtype.UUID
+	CreatedAt     time.Time
+}
+
 type Region struct {
 	Name          string
 	DisplayName   string
@@ -403,6 +462,21 @@ type SignupLink struct {
 	ExpiresAt  time.Time
 	ConsumedAt pgtype.Timestamptz
 	CreatedAt  time.Time
+}
+
+type SourceUpload struct {
+	ID             uuid.UUID
+	OwnerID        string
+	AppID          uuid.UUID
+	DeploymentID   pgtype.UUID
+	SizeBytes      int64
+	Sha256         string
+	Archive        []byte
+	FetchHash      []byte
+	FetchExpiresAt pgtype.Timestamptz
+	FetchedAt      pgtype.Timestamptz
+	CreatedAt      time.Time
+	PurgedAt       pgtype.Timestamptz
 }
 
 type StagedVariable struct {
@@ -503,4 +577,29 @@ type Volume struct {
 	Class     string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type WebhookAppHealth struct {
+	AppID     uuid.UUID
+	OwnerID   string
+	Failing   bool
+	ChangedAt time.Time
+}
+
+type WebhookDelivery struct {
+	ID             uuid.UUID
+	WebhookID      uuid.UUID
+	OwnerID        string
+	Event          string
+	Payload        []byte
+	Status         string
+	Attempts       int32
+	NextAttemptAt  time.Time
+	LastStatus     *int32
+	LastError      string
+	LastResponse   string
+	LastDurationMs *int32
+	LockedUntil    pgtype.Timestamptz
+	CreatedAt      time.Time
+	FinishedAt     pgtype.Timestamptz
 }
