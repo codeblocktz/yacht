@@ -64,3 +64,26 @@ type InstallationRepositoriesEvent struct {
 	Added   []EventRepository `json:"repositories_added"`
 	Removed []EventRepository `json:"repositories_removed"`
 }
+
+// PullRequestEvent is a pull request opened, updated, or closed: what a
+// project's PR environments are made and taken down by.
+type PullRequestEvent struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Title string `json:"title"`
+		Head  struct {
+			Ref  string          `json:"ref"`
+			SHA  string          `json:"sha"`
+			Repo EventRepository `json:"repo"`
+		} `json:"head"`
+		Base struct {
+			Ref  string          `json:"ref"`
+			Repo EventRepository `json:"repo"`
+		} `json:"base"`
+	} `json:"pull_request"`
+	Repository   EventRepository `json:"repository"`
+	Installation struct {
+		ID int64 `json:"id"`
+	} `json:"installation"`
+}

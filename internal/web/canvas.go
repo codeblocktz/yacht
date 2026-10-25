@@ -67,6 +67,9 @@ type CanvasData struct {
 	Project  app.Project
 	Projects []app.Project
 
+	// Env is the environment drawn: production, or one made beside it.
+	Env string
+
 	// Open is the app whose panel is showing, nil when none is. It is the same
 	// data the app page used to render, because the panel IS the app page now.
 	Open *AppDetailData

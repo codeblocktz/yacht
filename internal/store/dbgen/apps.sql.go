@@ -31,7 +31,7 @@ INSERT INTO apps (
     repo_url, repo_branch, repo_subdir, region
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service
 `
 
 type CreateAppParams struct {
@@ -127,6 +127,8 @@ func (q *Queries) CreateApp(ctx context.Context, arg CreateAppParams) (App, erro
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
@@ -376,7 +378,7 @@ func (q *Queries) FinishDeployment(ctx context.Context, arg FinishDeploymentPara
 }
 
 const getApp = `-- name: GetApp :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE owner_id = $1 AND name = $2
 `
 
@@ -440,12 +442,14 @@ func (q *Queries) GetApp(ctx context.Context, arg GetAppParams) (App, error) {
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
 
 const getAppByID = `-- name: GetAppByID :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -509,6 +513,8 @@ func (q *Queries) GetAppByID(ctx context.Context, arg GetAppByIDParams) (App, er
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
@@ -590,7 +596,7 @@ func (q *Queries) IncrementGitAppConfigVersions(ctx context.Context) error {
 }
 
 const listApps = `-- name: ListApps :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE owner_id = $1
 ORDER BY name
 `
@@ -656,6 +662,8 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 			&i.HealthTimeoutSeconds,
 			&i.DockerfilePath,
 			&i.WatchPaths,
+			&i.Environment,
+			&i.Service,
 		); err != nil {
 			return nil, err
 		}
@@ -668,7 +676,7 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 }
 
 const listAppsForReconciliation = `-- name: ListAppsForReconciliation :many
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE active_release_id IS NOT NULL
    OR EXISTS (
        SELECT 1 FROM deployment_operations o
@@ -742,6 +750,8 @@ func (q *Queries) ListAppsForReconciliation(ctx context.Context) ([]App, error) 
 			&i.HealthTimeoutSeconds,
 			&i.DockerfilePath,
 			&i.WatchPaths,
+			&i.Environment,
+			&i.Service,
 		); err != nil {
 			return nil, err
 		}
@@ -754,7 +764,7 @@ func (q *Queries) ListAppsForReconciliation(ctx context.Context) ([]App, error) 
 }
 
 const listAppsWithLastDeploy = `-- name: ListAppsWithLastDeploy :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, d.status AS last_deploy_status
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, a.environment, a.service, d.status AS last_deploy_status
 FROM apps a
 LEFT JOIN LATERAL (
     -- A skipped push is not how the last deploy ended: nothing was
@@ -843,6 +853,8 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 			&i.App.HealthTimeoutSeconds,
 			&i.App.DockerfilePath,
 			&i.App.WatchPaths,
+			&i.App.Environment,
+			&i.App.Service,
 			&i.LastDeployStatus,
 		); err != nil {
 			return nil, err
@@ -985,7 +997,7 @@ SET health_path     = $1,
 WHERE owner_id = $3 AND id = $4
   AND (health_path, health_liveness)
       IS DISTINCT FROM ($1, $2)
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service
 `
 
 type SetAppHealthParams struct {
@@ -1055,6 +1067,8 @@ func (q *Queries) SetAppHealth(ctx context.Context, arg SetAppHealthParams) (App
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
@@ -1063,7 +1077,7 @@ const setAppImage = `-- name: SetAppImage :one
 UPDATE apps
 SET image = $3, config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $1 AND id = $2 AND image IS DISTINCT FROM $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service
 `
 
 type SetAppImageParams struct {
@@ -1130,6 +1144,8 @@ func (q *Queries) SetAppImage(ctx context.Context, arg SetAppImageParams) (App, 
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
@@ -1166,7 +1182,7 @@ const setAppReplicas = `-- name: SetAppReplicas :one
 UPDATE apps
 SET replicas = $3, config_version = config_version + 1, updated_at = now()
 WHERE owner_id = $1 AND id = $2 AND replicas IS DISTINCT FROM $3
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service
 `
 
 type SetAppReplicasParams struct {
@@ -1230,6 +1246,8 @@ func (q *Queries) SetAppReplicas(ctx context.Context, arg SetAppReplicasParams) 
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }
@@ -1289,7 +1307,7 @@ WHERE owner_id = $19 AND id = $20
        $11, $12,
        $13, $14, $15::integer,
        $16::integer, $17, $18::text[])
-RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths
+RETURNING id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service
 `
 
 type UpdateAppParams struct {
@@ -1400,6 +1418,8 @@ func (q *Queries) UpdateApp(ctx context.Context, arg UpdateAppParams) (App, erro
 		&i.HealthTimeoutSeconds,
 		&i.DockerfilePath,
 		&i.WatchPaths,
+		&i.Environment,
+		&i.Service,
 	)
 	return i, err
 }

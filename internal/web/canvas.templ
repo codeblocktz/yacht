@@ -16,8 +16,20 @@ import (
 // step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
 	if d.Empty {
-		<div class="canvas-empty">
-			@emptyApps(d.Project.Slug)
+		// An empty project is still a canvas, as Railway's is: the grid, Add
+		// in its corner, and a word in the middle about what to put on it.
+		<div class="canvas canvas-is-empty">
+			<div class="canvas-empty">
+				<div class="empty">
+					<span class="empty-mark" aria-hidden="true">
+						@icon("boxes")
+					</span>
+					<p class="font-medium text-foreground">Nothing here yet</p>
+					<p>Add a GitHub repository, a database or an image — Add is at the top right.</p>
+					<a class="btn btn-primary mt-3" href={ templ.SafeURL(newAppHref(d.Project.Slug)) }>Add a service</a>
+				</div>
+			</div>
+			@canvasAdd(d.Project.Slug)
 		</div>
 	} else {
 		// The geometry lives here, in one place, so the script that re-routes
@@ -31,6 +43,7 @@ templ Canvas(d CanvasData) {
 			data-card-h={ strconv.Itoa(cardH) }
 			data-volume-h={ strconv.Itoa(volumeH) }
 			data-project={ d.Project.Slug }
+			data-environment={ d.Env }
 		>
 			// What the drawing joins, for the script. The cards below are still
 			// the server's, and are what a browser without the script shows.
@@ -89,7 +102,7 @@ templ Canvas(d CanvasData) {
 									@sourceMark(n.App.Source)
 								</span>
 								<span class="min-w-0 flex-1">
-									<span class="block truncate font-semibold">{ n.App.Name }</span>
+									<span class="block truncate font-semibold">{ n.App.ServiceName() }</span>
 									if n.App.Host != "" {
 										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.Host }</span>
 									}
@@ -176,7 +189,10 @@ templ appPanelBody(d AppDetailData) {
 		@sheet.Title() {
 			<span class="flex min-w-0 items-center gap-2.5">
 				@sourceMark(d.App.Source)
-				<span class="truncate">{ d.App.Name }</span>
+				<span class="truncate">{ d.App.ServiceName() }</span>
+				if d.App.Environment() != app.DefaultEnvironment {
+					<span class="tag">{ d.App.Environment() }</span>
+				}
 				@appStatus(d.App)
 			</span>
 		}

@@ -287,20 +287,21 @@ func (s *Service) envFor(
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: list variables: %w", err)
 	}
-	// The project a ${{shared.KEY}} is read from. Only asked for when a
-	// reference needs it, so an app with none costs no extra read.
-	var projectID uuid.UUID
-	projectRead := false
-	project := func() (uuid.UUID, error) {
-		if projectRead {
-			return projectID, nil
+	// Where this app's references are read from: its project, for
+	// ${{shared.KEY}}, and its environment, for ${{db.KEY}}. Only asked for
+	// when a reference needs it, so an app with none costs no extra read.
+	var scope refScope
+	scopeRead := false
+	project := func() (refScope, error) {
+		if scopeRead {
+			return scope, nil
 		}
 		row, err := q.GetAppByID(ctx, dbgen.GetAppByIDParams{OwnerID: ownerID, ID: appID})
 		if err != nil {
-			return uuid.Nil, fmt.Errorf("app: read the app's project: %w", err)
+			return refScope{}, fmt.Errorf("app: read the app's project: %w", err)
 		}
-		projectID, projectRead = toApp(row).ProjectID, true
-		return projectID, nil
+		scope, scopeRead = scopeOf(toApp(row)), true
+		return scope, nil
 	}
 
 	plain = make(map[string]string)

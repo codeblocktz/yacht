@@ -859,9 +859,16 @@ func (s *Service) projectApps(ctx context.Context, ownerID, projectSlug string) 
 	if err != nil {
 		return nil, fmt.Errorf("app: list the project's apps: %w", err)
 	}
+	// One environment's, when the request names one: the bar on staging's
+	// canvas is staging's changes, and its Deploy deploys staging's alone.
+	env := environmentFrom(ctx)
 	out := make([]App, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, toApp(row))
+		a := toApp(row)
+		if env != "" && a.Environment() != env {
+			continue
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }

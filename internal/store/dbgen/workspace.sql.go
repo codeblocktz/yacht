@@ -30,7 +30,7 @@ func (q *Queries) DismissOnboarding(ctx context.Context, ownerID string) error {
 }
 
 const workspaceApps = `-- name: WorkspaceApps :many
-SELECT a.name, a.project_id, a.replicas,
+SELECT a.name, a.project_id, a.replicas, a.environment,
        (a.active_release_id IS NOT NULL)::boolean AS serving,
        COALESCE(d.status, '')::text AS last_deploy,
        EXISTS (
@@ -52,12 +52,13 @@ ORDER BY a.name
 `
 
 type WorkspaceAppsRow struct {
-	Name       string
-	ProjectID  pgtype.UUID
-	Replicas   int32
-	Serving    bool
-	LastDeploy string
-	Deploying  bool
+	Name        string
+	ProjectID   pgtype.UUID
+	Replicas    int32
+	Environment string
+	Serving     bool
+	LastDeploy  string
+	Deploying   bool
 }
 
 // One row per app, with what it takes to say how the app stands without
@@ -77,6 +78,7 @@ func (q *Queries) WorkspaceApps(ctx context.Context, ownerID string) ([]Workspac
 			&i.Name,
 			&i.ProjectID,
 			&i.Replicas,
+			&i.Environment,
 			&i.Serving,
 			&i.LastDeploy,
 			&i.Deploying,

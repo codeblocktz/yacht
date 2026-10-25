@@ -2,6 +2,8 @@ package web
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"net/url"
@@ -852,6 +854,13 @@ func deploymentTitle(dep app.Deployment) string {
 			sha = sha[:7]
 		}
 		return "Push " + sha
+	case strings.HasPrefix(rev, "changes:"):
+		// Staged changes deployed together, as Railway's "N changes".
+		keys := strings.Split(strings.TrimPrefix(rev, "changes:"), ",")
+		if len(keys) == 1 {
+			return "Deployed " + keys[0]
+		}
+		return fmt.Sprintf("Deployed %d changes", len(keys))
 	case strings.HasPrefix(rev, "variable-delete:"):
 		return "Removed " + strings.TrimPrefix(rev, "variable-delete:")
 	case strings.HasPrefix(rev, "variable:"):
@@ -888,4 +897,39 @@ func deploymentBadge(dep app.Deployment) (label, class string) {
 // show, so an empty actions bar is not drawn when it has neither.
 func hasSleepActions(d AppDetailData) bool {
 	return d.Sleep != nil && (d.App.Sleep.Asleep() || d.Sleep.Unavailable == nil)
+}
+
+// envDot colours an environment's dot: production green, as the one serving
+// people, and every other environment the colour of work in progress.
+func envDot(slug string) string {
+	if slug == "" || slug == app.DefaultEnvironment {
+		return "status-ok"
+	}
+	return "status-info"
+}
+
+// deploymentsToken is a fingerprint of what the deployments tab shows: each
+// deployment's state, the pods' and the app's. The tab polls with it, and an
+// answer for the same fingerprint is "nothing changed" — no body, no swap —
+// so a panel left open costs a request, not a re-render.
+func deploymentsToken(d AppDetailData) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s|%v|%s\n", d.App.Status.Phase, d.App.StatusKnown, d.App.Host)
+	for _, dep := range d.Deployments {
+		fmt.Fprintf(h, "%s|%s|%s|%v|%s\n", dep.ID, dep.Status, dep.Image, dep.IsActive, dep.Message)
+	}
+	for _, p := range d.Pods {
+		fmt.Fprintf(h, "%s|%s|%v|%d|%s\n", p.Name, p.Phase, p.Healthy(), p.Restarts, p.Reason)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// deploymentsPoll is how often an open deployments tab asks: often while a
+// deploy is under way, and still now and then, because a deploy is as often
+// started by a push as by a click here.
+func deploymentsPoll(d AppDetailData) string {
+	if deploymentsInFlight(d) {
+		return "every 3s"
+	}
+	return "every 10s"
 }

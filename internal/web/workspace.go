@@ -101,6 +101,11 @@ func sidebarProjects(ws app.Workspace, path string) *SidebarProjects {
 		}
 		for _, a := range p.Apps {
 			current := a.Name == activeApp
+			// The tree is production's services; another environment's
+			// copies are on its canvas, behind the environment switcher.
+			if a.Environment != "" && a.Environment != app.DefaultEnvironment && !current {
+				continue
+			}
 			entry.Apps = append(entry.Apps, SidebarApp{
 				Name: a.Name, Href: "/apps/" + a.Name, State: string(a.State), Active: current,
 			})

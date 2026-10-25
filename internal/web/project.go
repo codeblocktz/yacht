@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -155,7 +157,30 @@ func (s *Server) renderCanvasWith(
 		return
 	}
 
-	apps, err := s.apps.ListInProject(ctx, owner.ID, project.ID)
+	// The environment drawn: the open app's, or the one asked for, or the
+	// one last looked at in this project. An environment the project does
+	// not have is production rather than an empty canvas that looks lost.
+	env := chosenEnv(r, project.Slug)
+	if open != nil {
+		env = open.App.Environment()
+	}
+	var (
+		apps []app.App
+		envs []app.Environment
+	)
+	if es, ok := s.environments(); ok {
+		if has, err := es.HasEnvironment(ctx, owner.ID, project, env); err != nil || !has {
+			env = app.DefaultEnvironment
+		}
+		apps, err = es.ListInEnvironment(ctx, owner.ID, project, env)
+		if listed, listErr := es.Environments(ctx, owner.ID, project.Slug); listErr == nil {
+			envs = listed
+		}
+		rememberEnv(w, project.Slug, env)
+	} else {
+		env = app.DefaultEnvironment
+		apps, err = s.apps.ListInProject(ctx, owner.ID, project.ID)
+	}
 	if err != nil {
 		s.log.Error("list apps for canvas", slog.String("error", err.Error()))
 		http.Error(w, "could not load apps", http.StatusInternalServerError)
@@ -171,6 +196,7 @@ func (s *Server) renderCanvasWith(
 
 	data := layout(apps, links)
 	data.Project = project
+	data.Env = env
 	data.Open = open
 	s.attachStaged(ctx, owner.ID, &data)
 	if projects, err := s.apps.Projects(ctx, owner.ID); err == nil {
@@ -178,6 +204,10 @@ func (s *Server) renderCanvasWith(
 	}
 
 	slots := s.slots.Slots(ctx, r)
+	if slots.Project != nil {
+		slots.Project.Environment = env
+		slots.Project.Environments = envChoices(project.Slug, envs, env)
+	}
 	slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: project.Name, Href: "/projects/" + project.Slug})
 	if open != nil {
 		slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: open.App.Name})
@@ -260,7 +290,14 @@ func (s *Server) deploymentsFragment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := appDeployments(*s.appPanel(ctx, a, "")).Render(ctx, w); err != nil {
+	d := s.appPanel(ctx, a, "")
+	// Nothing changed since the tab last drew: no body, and htmx leaves the
+	// tab as it is.
+	if r.URL.Query().Get("token") == deploymentsToken(*d) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := appDeployments(*d).Render(ctx, w); err != nil {
 		s.log.Error("render deployments fragment", slog.String("error", err.Error()))
 	}
 }
@@ -319,4 +356,49 @@ func (s *Server) canvasArrange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/projects/"+project.Slug, http.StatusSeeOther)
+}
+
+// projectStatus is each card's state, for the canvas to keep itself current
+// without a reload: Railway's cards go from Building to Online while you
+// watch, and a card that said "Deploying" until somebody refreshed looked
+// like a deploy that had hung.
+func (s *Server) projectStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	if s.apps == nil {
+		http.NotFound(w, r)
+		return
+	}
+	project, err := s.apps.Project(ctx, owner.ID, chi.URLParam(r, "slug"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	env := strings.TrimSpace(r.URL.Query().Get("environment"))
+	var apps []app.App
+	if es, ok := s.environments(); ok {
+		if env == "" {
+			env = app.DefaultEnvironment
+		}
+		apps, err = es.ListInEnvironment(ctx, owner.ID, project, env)
+	} else {
+		apps, err = s.apps.ListInProject(ctx, owner.ID, project.ID)
+	}
+	if err != nil {
+		http.Error(w, "could not read the apps", http.StatusInternalServerError)
+		return
+	}
+	type card struct {
+		Label string `json:"label"`
+		Class string `json:"class"`
+		Host  string `json:"host"`
+	}
+	out := map[string]card{}
+	for _, a := range apps {
+		label, class := cardStatus(a)
+		out[a.Name] = card{Label: label, Class: class, Host: a.Host}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"apps": out})
 }

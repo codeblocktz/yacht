@@ -654,11 +654,9 @@ templ appTab(name, active, slug, label string) {
 templ appDeployments(d AppDetailData) {
 	<div
 		id="app-deployments"
-		if deploymentsInFlight(d) {
-			hx-get={ "/apps/" + d.App.Name + "/deployments/fragment" }
-			hx-trigger="every 3s"
-			hx-swap="outerHTML"
-		}
+		hx-get={ "/apps/" + d.App.Name + "/deployments/fragment?token=" + deploymentsToken(d) }
+		hx-trigger={ deploymentsPoll(d) }
+		hx-swap="outerHTML"
 		aria-busy={ boolAttr(deploymentsInFlight(d)) }
 	>
 		@AppDeploymentsBody(d)

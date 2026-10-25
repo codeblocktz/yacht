@@ -125,6 +125,13 @@ type App struct {
 	// ProjectID is the canvas this app belongs to.
 	ProjectID uuid.UUID
 
+	// EnvSlug is the environment the app is in — production, or one made
+	// beside it — and Service what the canvas calls it there. The name is
+	// what addresses the app; web in staging is the app web-staging, and its
+	// Service is web.
+	EnvSlug string
+	Service string
+
 	// X and Y are where somebody dragged the card to, nil when nobody has.
 	// Nil rather than zero because (0,0) is a position a person can choose,
 	// and an app pinned to the corner must not be re-laid-out on every render.
@@ -461,6 +468,23 @@ type CreateInput struct {
 	// Source decides what the app is. Empty means an image the person chose,
 	// which is what every app was before sources existed.
 	Source Source
+
+	// Environment and Service put the app in an environment beside
+	// production, as that environment's copy of a service. Empty is
+	// production, and the app's own name as its service.
+	Environment string
+	Service     string
+
+	// Variables are written with the app, in its transaction, so its first
+	// deploy has them: secrets sealed, references kept as written. For an
+	// environment's copy of a service, which has to start the way the
+	// original runs rather than be configured after its first deploy.
+	Variables []VariableInput
+
+	// Settings is an app whose runtime settings this one starts with —
+	// health check, commands, schedule, restarts, build — for the same
+	// reason. Its image, repository and variables are not taken from it.
+	Settings *App
 
 	// ProjectID is the canvas this app is drawn on. Zero leaves it unassigned,
 	// and the next read of the team's projects adopts it into the default one —
@@ -827,6 +851,9 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if in.Source == "" {
 		in.Source = SourceImage
 	}
+	if err := s.placeInEnvironment(ctx, ownerID, &in); err != nil {
+		return App{}, err
+	}
 	blueprint, err := BlueprintForWith(in.Source, s.Capabilities(ctx))
 	if err != nil {
 		return App{}, err
@@ -954,6 +981,32 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		}
 		row.GithubInstallationID, row.GithubRepoID = &ref.InstallationID, &ref.RepoID
 	}
+	// Its environment and service, and the settings it starts with, in the
+	// same transaction: the release recorded below is made from this row.
+	env := strings.TrimSpace(in.Environment)
+	if env == "" {
+		env = DefaultEnvironment
+	}
+	service := strings.TrimSpace(in.Service)
+	if service == "" {
+		service = in.Name
+	}
+	if env != row.Environment || service != row.Service {
+		if err := q.SetAppEnvironment(ctx, dbgen.SetAppEnvironmentParams{
+			OwnerID: ownerID, ID: row.ID, Environment: env, Service: service,
+		}); err != nil {
+			if isUniqueViolation(err) {
+				return App{}, fmt.Errorf("%w: %s already has a service called %s", ErrNameTaken, env, service)
+			}
+			return App{}, fmt.Errorf("app: record the environment: %w", err)
+		}
+		row.Environment, row.Service = env, service
+	}
+	if from := in.Settings; from != nil {
+		if row, err = s.copySettings(ctx, q, row, *from); err != nil {
+			return App{}, err
+		}
+	}
 	created := toApp(row)
 
 	// The source's own settings first, so anything the person typed with the
@@ -1046,6 +1099,32 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
 			OwnerID: ownerID, AppID: created.ID, Key: v.Key, Value: v.Value,
 		}); err != nil {
+			return App{}, fmt.Errorf("app: create variable %s: %w", v.Key, err)
+		}
+	}
+
+	// Variables given whole, secrets among them, for a copy that has to start
+	// configured. Written last, so one with the same name as a source's
+	// default replaces it, as a person's would.
+	for _, v := range in.Variables {
+		v.Key = strings.TrimSpace(v.Key)
+		if err := v.Validate(); err != nil {
+			return App{}, fmt.Errorf("app: variable %q: %w", v.Key, err)
+		}
+		params := dbgen.UpsertVariableParams{OwnerID: ownerID, AppID: created.ID, Key: v.Key, Secret: v.Secret}
+		if v.Secret {
+			if !s.keeper.Configured() {
+				return App{}, ErrNoSecretKey
+			}
+			sealed, err := s.keeper.Seal(v.Value)
+			if err != nil {
+				return App{}, err
+			}
+			params.Sealed = sealed
+		} else {
+			params.Value = v.Value
+		}
+		if _, err := q.UpsertVariable(ctx, params); err != nil {
 			return App{}, fmt.Errorf("app: create variable %s: %w", v.Key, err)
 		}
 	}
@@ -1201,10 +1280,10 @@ func (s *Service) applyRelease(
 		HTTPSOnly:    a.HTTPSOnly && len(hosts) > 0,
 		CNAMETarget:  cnameTargetFor(a, target),
 		TCPProxyPort: proxyPort,
-		Asleep:      a.Sleep.State == SleepAsleep,
-		Waker:       s.wakerFor(a, hosts),
-		Pool:        pool,
-		Region:      a.Region,
+		Asleep:       a.Sleep.State == SleepAsleep,
+		Waker:        s.wakerFor(a, hosts),
+		Pool:         pool,
+		Region:       a.Region,
 	})
 	s.addPlatformVariables(ctx, q, a, hosts, &spec)
 	return s.orch.ApplyApp(ctx, spec)
@@ -1847,6 +1926,8 @@ func Namespace(ownerID, name string) string {
 func toApp(row dbgen.App) App {
 	a := App{
 		ID:            row.ID,
+		EnvSlug:       row.Environment,
+		Service:       row.Service,
 		OwnerID:       row.OwnerID,
 		Name:          row.Name,
 		Namespace:     row.Namespace,
@@ -1859,30 +1940,30 @@ func toApp(row dbgen.App) App {
 		Repo: Repo{
 			URL: row.RepoUrl, Branch: row.RepoBranch, Subdir: row.RepoSubdir,
 		},
-		GitHubPaused:     row.GithubPaused,
-		Internal:         row.Internal,
-		HealthPath:       row.HealthPath,
-		Liveness:         row.HealthLiveness,
-		StartCommand:     row.StartCommand,
-		PreDeployCommand: row.PreDeployCommand,
+		GitHubPaused:         row.GithubPaused,
+		Internal:             row.Internal,
+		HealthPath:           row.HealthPath,
+		Liveness:             row.HealthLiveness,
+		StartCommand:         row.StartCommand,
+		PreDeployCommand:     row.PreDeployCommand,
 		CronSchedule:         row.CronSchedule,
 		RestartPolicy:        orchestrator.RestartPolicy(row.RestartPolicy),
 		RestartMaxRetries:    row.RestartMaxRetries,
 		HealthTimeoutSeconds: row.HealthTimeoutSeconds,
 		DockerfilePath:       row.DockerfilePath,
 		WatchPaths:           row.WatchPaths,
-		CPURequest:       row.CpuRequest,
-		CPULimit:         row.CpuLimit,
-		MemoryRequest:    row.MemoryRequest,
-		MemoryLimit:      row.MemoryLimit,
-		CreatedAt:        row.CreatedAt,
-		UpdatedAt:        row.UpdatedAt,
-		HTTPSOnly:        row.HttpsOnly,
-		CNAMEOnly:        row.CnameOnly,
-		ProjectID:        row.ProjectID.Bytes,
-		X:                row.CanvasX,
-		Y:                row.CanvasY,
-		Sleep:            toSleep(row),
+		CPURequest:           row.CpuRequest,
+		CPULimit:             row.CpuLimit,
+		MemoryRequest:        row.MemoryRequest,
+		MemoryLimit:          row.MemoryLimit,
+		CreatedAt:            row.CreatedAt,
+		UpdatedAt:            row.UpdatedAt,
+		HTTPSOnly:            row.HttpsOnly,
+		CNAMEOnly:            row.CnameOnly,
+		ProjectID:            row.ProjectID.Bytes,
+		X:                    row.CanvasX,
+		Y:                    row.CanvasY,
+		Sleep:                toSleep(row),
 	}
 	if row.Region != nil {
 		a.Region = *row.Region

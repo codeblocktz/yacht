@@ -63,6 +63,8 @@ type App struct {
 	HealthTimeoutSeconds int32
 	DockerfilePath       string
 	WatchPaths           []string
+	Environment          string
+	Service              string
 }
 
 type AppHook struct {
@@ -265,6 +267,17 @@ type Domain struct {
 	Generated     bool
 }
 
+type Environment struct {
+	ID         uuid.UUID
+	OwnerID    string
+	ProjectID  uuid.UUID
+	Slug       string
+	Name       string
+	CopiedFrom string
+	CreatedAt  time.Time
+	PrNumber   *int32
+}
+
 type GithubDelivery struct {
 	ID         string
 	Event      string
@@ -337,12 +350,13 @@ type PlatformRegistry struct {
 }
 
 type Project struct {
-	ID        uuid.UUID
-	OwnerID   string
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             uuid.UUID
+	OwnerID        string
+	Slug           string
+	Name           string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	PrEnvironments bool
 }
 
 type ProjectVariable struct {

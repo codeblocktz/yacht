@@ -46,6 +46,9 @@ type WorkspaceProject struct {
 type WorkspaceApp struct {
 	Name  string
 	State AppState
+	// Environment is the app's, so the sidebar can list production's
+	// services and leave each environment's copies to its canvas.
+	Environment string
 }
 
 // AppState is how an app stands according to the database: what the
@@ -145,8 +148,9 @@ func assembleWorkspace(
 	}
 	for _, a := range apps {
 		entry := WorkspaceApp{
-			Name:  a.Name,
-			State: appStateOf(a.Deploying, a.Replicas, a.Serving, a.LastDeploy),
+			Name:        a.Name,
+			Environment: a.Environment,
+			State:       appStateOf(a.Deploying, a.Replicas, a.Serving, a.LastDeploy),
 		}
 		if a.ProjectID.Valid {
 			if i, ok := index[uuid.UUID(a.ProjectID.Bytes)]; ok {

@@ -109,15 +109,32 @@ func (s *Service) ReferenceTargets(ctx context.Context, ownerID, appName string)
 			out = append(out, t)
 		}
 	}
-	for _, a := range apps {
+	var self App
+	for _, row := range apps {
+		if row.Name == appName {
+			self = toApp(row)
+		}
+	}
+	for _, row := range apps {
+		a := toApp(row)
 		if a.Name == appName {
 			continue
+		}
+		// Only this environment's services from this app's own project:
+		// staging's api reaches staging's db, and the picker offers no other.
+		// Another project's apps are offered by name, as before environments.
+		label := a.Name
+		if self.ProjectID != uuid.Nil && a.ProjectID == self.ProjectID {
+			if a.Environment() != self.Environment() {
+				continue
+			}
+			label = a.ServiceName()
 		}
 		vars, err := s.desiredVariablesFor(ctx, s.q, ownerID, a.ID)
 		if err != nil {
 			return nil, err
 		}
-		t := ReferenceTarget{App: a.Name}
+		t := ReferenceTarget{App: label}
 		for _, v := range vars {
 			t.Keys = append(t.Keys, ReferenceKey{Key: v.Key, Secret: v.Secret || v.Reference})
 		}
@@ -142,10 +159,10 @@ func (s *Service) checkReferences(ctx context.Context, ownerID string, self App,
 			}
 			continue
 		}
-		if r.App == self.Name {
+		if r.App == self.Name || r.App == self.ServiceName() {
 			return fmt.Errorf("%s refers to this app itself; use the variable's value instead", r)
 		}
-		target, err := s.q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: r.App})
+		target, err := s.referencedApp(ctx, s.q, ownerID, scopeOf(self), r.App)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%s refers to %s, and there is no app called that", r, r.App)
 		}
@@ -220,7 +237,7 @@ func (s *Service) hasDesiredVariable(ctx context.Context, ownerID string, appID 
 // the app the value belongs to, which changes as a chain of references
 // passes from one app to another.
 func (s *Service) resolveReferences(
-	ctx context.Context, q *dbgen.Queries, ownerID string, projectID uuid.UUID,
+	ctx context.Context, q *dbgen.Queries, ownerID string, scope refScope,
 	key, value string, depth int,
 ) (string, error) {
 	if depth > referenceDepth {
@@ -233,7 +250,7 @@ func (s *Service) resolveReferences(
 		}
 		sub := referenceRE.FindStringSubmatch(m)
 		r := Reference{App: sub[1], Key: sub[2]}
-		resolved, err := s.referenceValue(ctx, q, ownerID, projectID, r, depth)
+		resolved, err := s.referenceValue(ctx, q, ownerID, scope, r, depth)
 		if err != nil {
 			failed = fmt.Errorf("app: %s: %w", key, err)
 			return m
@@ -244,12 +261,12 @@ func (s *Service) resolveReferences(
 }
 
 func (s *Service) referenceValue(
-	ctx context.Context, q *dbgen.Queries, ownerID string, projectID uuid.UUID, r Reference, depth int,
+	ctx context.Context, q *dbgen.Queries, ownerID string, scope refScope, r Reference, depth int,
 ) (string, error) {
 	if r.App == SharedScope {
-		return s.sharedReferenceValue(ctx, q, ownerID, projectID, r, depth)
+		return s.sharedReferenceValue(ctx, q, ownerID, scope, r, depth)
 	}
-	target, err := q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: r.App})
+	target, err := s.referencedApp(ctx, q, ownerID, scope, r.App)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("%s refers to %s, which no longer exists", r, r.App)
 	}
@@ -285,7 +302,7 @@ func (s *Service) referenceValue(
 		}
 	}
 	if HasReference(value) {
-		return s.resolveReferences(ctx, q, ownerID, toApp(target).ProjectID, r.App+"."+r.Key, value, depth+1)
+		return s.resolveReferences(ctx, q, ownerID, scopeOf(toApp(target)), r.App+"."+r.Key, value, depth+1)
 	}
 	return value, nil
 }
@@ -309,4 +326,37 @@ func (s *Service) platformReferenceValue(
 		return "", fmt.Errorf("%s refers to %s, which %s does not have", r, r.Key, target.Name)
 	}
 	return value, nil
+}
+
+// refScope is where a reference is read from: the project whose shared
+// variables ${{shared.KEY}} means, and the environment whose services
+// ${{db.KEY}} means — so a reference written in staging reaches staging's db,
+// not production's.
+type refScope struct {
+	Project uuid.UUID
+	Env     string
+}
+
+func scopeOf(a App) refScope { return refScope{Project: a.ProjectID, Env: a.Environment()} }
+
+// referencedApp is the app a reference names: the service by that name in
+// the referring app's environment, or else the app by that name — which is
+// how every reference written before environments reads, and how one to
+// another project's app does.
+func (s *Service) referencedApp(
+	ctx context.Context, q *dbgen.Queries, ownerID string, scope refScope, name string,
+) (dbgen.App, error) {
+	if scope.Project != uuid.Nil {
+		row, err := q.GetAppByService(ctx, dbgen.GetAppByServiceParams{
+			OwnerID: ownerID, ProjectID: pgUUID(scope.Project),
+			Environment: scope.Env, Service: name,
+		})
+		if err == nil {
+			return row, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return dbgen.App{}, fmt.Errorf("app: read referenced service: %w", err)
+		}
+	}
+	return q.GetApp(ctx, dbgen.GetAppParams{OwnerID: ownerID, Name: name})
 }

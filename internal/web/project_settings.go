@@ -29,6 +29,12 @@ func (s *Server) projectSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderProjectSettings(w http.ResponseWriter, r *http.Request, status int, fail string) {
+	s.renderProjectSettingsWith(w, r, status, fail, nil)
+}
+
+func (s *Server) renderProjectSettingsWith(
+	w http.ResponseWriter, r *http.Request, status int, fail string, decorate func(*ProjectSettingsData),
+) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 	if s.apps == nil {
@@ -49,13 +55,80 @@ func (s *Server) renderProjectSettings(w http.ResponseWriter, r *http.Request, s
 	if err != nil {
 		s.log.Warn("list the project's apps", slog.String("error", err.Error()))
 	}
+	role, ok := s.roleOf(r)
+	roleAdmin := ok && role.AtLeast(account.RoleAdmin)
 	_, admin := s.apps.(projectAdmin)
-	if role, ok := s.roleOf(r); !ok || !role.AtLeast(account.RoleAdmin) {
-		admin = false
-	}
-	d := ProjectSettingsData{Project: p, Apps: len(apps), Error: fail, CanAdmin: admin}
+	d := ProjectSettingsData{Project: p, Apps: len(apps), Error: fail, CanAdmin: admin && roleAdmin, RoleAdmin: roleAdmin}
 	s.attachSharedVariables(r, owner.ID, &d)
+	_, d.PROn = s.apps.(prEnvironments)
+	if es, ok := s.environments(); ok {
+		d.EnvironmentsOn = true
+		if envs, err := es.Environments(ctx, owner.ID, p.Slug); err == nil {
+			d.Environments = envs
+		} else {
+			s.log.Warn("list environments", slog.String("error", err.Error()))
+		}
+	}
+	if decorate != nil {
+		decorate(&d)
+	}
 	s.renderStatus(w, r, status, ProjectSettings(d))
+}
+
+// environmentCreate makes an environment, empty or a copy of another, and
+// shows what became of each service it copied.
+func (s *Server) environmentCreate(w http.ResponseWriter, r *http.Request) {
+	es, ok := s.environments()
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	slug := chi.URLParam(r, "slug")
+	from := strings.TrimSpace(r.FormValue("from"))
+	switch from {
+	case "-":
+		from = ""
+	case "":
+		from = app.DefaultEnvironment
+	}
+	env, copies, err := es.CreateEnvironment(ctx, owner.ID, slug, r.FormValue("name"), from)
+	if err != nil && env.Slug == "" {
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		return
+	}
+	if err != nil {
+		s.log.Warn("copy environment", slog.String("environment", env.Slug), slog.String("error", err.Error()))
+	}
+	rememberEnv(w, slug, env.Slug)
+	if len(copies) == 0 {
+		s.flashOK(w, r, env.Name+" created.")
+		http.Redirect(w, r, envHref(slug, env.Slug), http.StatusSeeOther)
+		return
+	}
+	s.renderProjectSettingsWith(w, r, http.StatusOK, "", func(d *ProjectSettingsData) {
+		d.Copied, d.CopiedEnv = copies, env.Name
+	})
+}
+
+// environmentDelete deletes an environment and its services.
+func (s *Server) environmentDelete(w http.ResponseWriter, r *http.Request) {
+	es, ok := s.environments()
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	slug, env := chi.URLParam(r, "slug"), chi.URLParam(r, "env")
+	if err := es.DeleteEnvironment(ctx, owner.ID, slug, env); err != nil {
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		return
+	}
+	rememberEnv(w, slug, app.DefaultEnvironment)
+	s.flashOK(w, r, env+" deleted.")
+	http.Redirect(w, r, "/projects/"+slug+"/settings#environments", http.StatusSeeOther)
 }
 
 // projectRename changes a project's display name.
@@ -104,4 +177,31 @@ func (s *Server) projectDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.flashOK(w, r, p.Name+" deleted.")
 	http.Redirect(w, r, "/projects", http.StatusSeeOther)
+}
+
+// prEnvironments is the PR Environments toggle, asserted like the rest.
+type prEnvironments interface {
+	SetPREnvironments(ctx context.Context, ownerID, projectSlug string, enabled bool) error
+}
+
+// projectPREnvironments turns a project's pull-request environments on or off.
+func (s *Server) projectPREnvironments(w http.ResponseWriter, r *http.Request) {
+	pe, ok := s.apps.(prEnvironments)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	owner := identity.MustFromContext(r.Context())
+	slug := chi.URLParam(r, "slug")
+	enabled := formChecked(r, "enabled")
+	if err := pe.SetPREnvironments(r.Context(), owner.ID, slug, enabled); err != nil {
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		return
+	}
+	if enabled {
+		s.flashOK(w, r, "PR Environments on. The GitHub App has to send pull request events for them to start.")
+	} else {
+		s.flashOK(w, r, "PR Environments off.")
+	}
+	http.Redirect(w, r, "/projects/"+slug+"/settings#environments", http.StatusSeeOther)
 }

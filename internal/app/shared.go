@@ -219,9 +219,9 @@ func (s *Service) RevealSharedVariable(ctx context.Context, ownerID, projectSlug
 // sharedReferenceValue is ${{shared.KEY}}, read from the project's current
 // shared variables at the moment of the deploy.
 func (s *Service) sharedReferenceValue(
-	ctx context.Context, q *dbgen.Queries, ownerID string, projectID uuid.UUID, r Reference, depth int,
+	ctx context.Context, q *dbgen.Queries, ownerID string, scope refScope, r Reference, depth int,
 ) (string, error) {
-	project, err := s.projectFor(ctx, q, ownerID, projectID)
+	project, err := s.projectFor(ctx, q, ownerID, scope.Project)
 	if err != nil {
 		return "", fmt.Errorf("read the project for %s: %w", r, err)
 	}
@@ -241,7 +241,7 @@ func (s *Service) sharedReferenceValue(
 		}
 	}
 	if HasReference(value) {
-		return s.resolveReferences(ctx, q, ownerID, project.ID, r.String(), value, depth+1)
+		return s.resolveReferences(ctx, q, ownerID, refScope{Project: project.ID, Env: scope.Env}, r.String(), value, depth+1)
 	}
 	return value, nil
 }

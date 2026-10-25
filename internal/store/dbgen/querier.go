@@ -103,6 +103,7 @@ type Querier interface {
 	CreateDatabaseBackup(ctx context.Context, arg CreateDatabaseBackupParams) (DatabaseBackup, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateDeploymentOperation(ctx context.Context, arg CreateDeploymentOperationParams) (DeploymentOperation, error)
+	CreateEnvironment(ctx context.Context, arg CreateEnvironmentParams) (Environment, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
 	// Every query filters by owner_id, for the reason apps.sql gives: the scope is
 	// the check, not a duplicate of one.
@@ -140,6 +141,7 @@ type Querier interface {
 	// Never a running one: its Job is still writing, and the row is how the
 	// settler finds it.
 	DeleteDatabaseBackup(ctx context.Context, arg DeleteDatabaseBackupParams) (int64, error)
+	DeleteEnvironment(ctx context.Context, arg DeleteEnvironmentParams) (int64, error)
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
@@ -228,6 +230,9 @@ type Querier interface {
 	// what it knows. It returns only what the ingress controller would have
 	// routed there anyway — a managed name, or a custom one that was proven.
 	GetAppByRoutableHost(ctx context.Context, host string) (App, error)
+	// The app that is a service in an environment, for a reference: ${{db.KEY}}
+	// written in staging means staging's db.
+	GetAppByService(ctx context.Context, arg GetAppByServiceParams) (App, error)
 	GetAppForReleaseBackfill(ctx context.Context, arg GetAppForReleaseBackfillParams) (App, error)
 	GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook, error)
 	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
@@ -248,6 +253,7 @@ type Querier interface {
 	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
 	GetDeploymentOperation(ctx context.Context, arg GetDeploymentOperationParams) (DeploymentOperation, error)
 	GetDeploymentOperationByDeployment(ctx context.Context, arg GetDeploymentOperationByDeploymentParams) (DeploymentOperation, error)
+	GetEnvironment(ctx context.Context, arg GetEnvironmentParams) (Environment, error)
 	// By app id alone: a delivery carries no session and no owner. The signature,
 	// checked against the secret read here, is what authorises it. A row with no
 	// secret holds pushes from the GitHub App and is no webhook at all.
@@ -419,6 +425,7 @@ type Querier interface {
 	// This is intentionally install-scoped: the reconciler acts from stored
 	// ownership rather than from an authenticated request.
 	ListAppsForReconciliation(ctx context.Context) ([]App, error)
+	ListAppsInEnvironment(ctx context.Context, arg ListAppsInEnvironmentParams) ([]App, error)
 	ListAppsInProject(ctx context.Context, arg ListAppsInProjectParams) ([]App, error)
 	// Every app, with how its most recent deployment ended.
 	//
@@ -452,6 +459,7 @@ type Querier interface {
 	// in the last day — less a few minutes, so a schedule that ran at 03:00:05
 	// yesterday still runs at about 03:00 today rather than drifting later.
 	ListDueDatabaseBackups(ctx context.Context) ([]ListDueDatabaseBackupsRow, error)
+	ListEnvironments(ctx context.Context, arg ListEnvironmentsParams) ([]Environment, error)
 	// The scheduled backups past the number kept, oldest last. Only succeeded
 	// ones count toward the number: a failed night should not push a good backup
 	// out.
@@ -586,6 +594,9 @@ type Querier interface {
 	// A team letting go of an installation stops its apps building from it.
 	// Whatever paused them already stays the reason.
 	PauseTeamGitHubApps(ctx context.Context, arg PauseTeamGitHubAppsParams) (int64, error)
+	// Every project that builds a repository in production and makes an
+	// environment for its pull requests: one row a project, whichever team.
+	ProjectsForPullRequest(ctx context.Context, arg ProjectsForPullRequestParams) ([]ProjectsForPullRequestRow, error)
 	PruneGitHubDeliveries(ctx context.Context) (int64, error)
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	// Records the region an app already lives in, once. Not versioned: recording
@@ -650,6 +661,8 @@ type Querier interface {
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
+	// Where an app made by Create belongs, written in Create's transaction.
+	SetAppEnvironment(ctx context.Context, arg SetAppEnvironmentParams) error
 	// Choosing a repository, or pasting a URL in its place, which clears it.
 	// Either way builds resume: whatever paused them was about the repository
 	// that was there before.
@@ -683,9 +696,11 @@ type Querier interface {
 	// The release's image becomes the deployment's: for a deploy that built,
 	// the first moment there is one to name.
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
+	SetEnvironmentPR(ctx context.Context, arg SetEnvironmentPRParams) error
 	SetGitHubInstallationSuspended(ctx context.Context, arg SetGitHubInstallationSuspendedParams) (int64, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
+	SetProjectPREnvironments(ctx context.Context, arg SetProjectPREnvironmentsParams) (int64, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
 	// Switching team ends any impersonation, in the same statement. Somebody who
 	// picks one of their own teams has said which team they mean to be in; leaving

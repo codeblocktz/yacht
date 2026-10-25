@@ -271,7 +271,7 @@ func (s *Service) recordRelease(
 		RestartPolicy:        string(cmp.Or(a.RestartPolicy, orchestrator.RestartOnFailure)),
 		RestartMaxRetries:    a.RestartMaxRetries,
 		HealthTimeoutSeconds: a.HealthTimeoutSeconds,
-		Env: env, SecretKeys: append([]string{}, secretKeys...),
+		Env:                  env, SecretKeys: append([]string{}, secretKeys...),
 		ConfigVersion: a.ConfigVersion, Origin: origin,
 	})
 	if err != nil {
@@ -359,7 +359,7 @@ func toRelease(row dbgen.AppRelease) Release {
 		RestartPolicy:        orchestrator.RestartPolicy(row.RestartPolicy),
 		RestartMaxRetries:    row.RestartMaxRetries,
 		HealthTimeoutSeconds: row.HealthTimeoutSeconds,
-		Env: env, SecretKeys: append([]string(nil), row.SecretKeys...),
+		Env:                  env, SecretKeys: append([]string(nil), row.SecretKeys...),
 		ConfigVersion: row.ConfigVersion, CreatedAt: row.CreatedAt,
 		Origin: row.Origin,
 	}

@@ -54,7 +54,7 @@ func (q *Queries) GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook
 }
 
 const getHookForDelivery = `-- name: GetHookForDelivery :one
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, h.secret
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, a.environment, a.service, h.secret
 FROM app_hooks h
 JOIN apps a ON a.id = h.app_id AND a.owner_id = h.owner_id
 WHERE h.app_id = $1 AND h.secret IS NOT NULL
@@ -123,13 +123,15 @@ func (q *Queries) GetHookForDelivery(ctx context.Context, appID uuid.UUID) (GetH
 		&i.App.HealthTimeoutSeconds,
 		&i.App.DockerfilePath,
 		&i.App.WatchPaths,
+		&i.App.Environment,
+		&i.App.Service,
 		&i.Secret,
 	)
 	return i, err
 }
 
 const listAdmissiblePushes = `-- name: ListAdmissiblePushes :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, h.pending_revision
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, a.environment, a.service, h.pending_revision
 FROM app_hooks h
 JOIN apps a ON a.id = h.app_id AND a.owner_id = h.owner_id
 WHERE h.pending_at IS NOT NULL
@@ -210,6 +212,8 @@ func (q *Queries) ListAdmissiblePushes(ctx context.Context, resultLimit int32) (
 			&i.App.HealthTimeoutSeconds,
 			&i.App.DockerfilePath,
 			&i.App.WatchPaths,
+			&i.App.Environment,
+			&i.App.Service,
 			&i.PendingRevision,
 		); err != nil {
 			return nil, err

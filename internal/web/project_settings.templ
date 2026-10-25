@@ -1,6 +1,9 @@
 package web
 
-import "github.com/codeblocktz/yacht/internal/app"
+import (
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
 
 // ProjectSettingsData is a project's settings page.
 type ProjectSettingsData struct {
@@ -9,12 +12,24 @@ type ProjectSettingsData struct {
 	Apps     int
 	Error    string
 	CanAdmin bool
+	// RoleAdmin is the viewer being an admin of the team, whatever the
+	// service supports: what making and deleting environments asks.
+	RoleAdmin bool
 
 	// Shared is the project's shared variables, and SharedOn whether the
 	// service has them at all; without, the section is left out.
 	Shared      []app.Variable
 	SharedOn    bool
 	SharedAdmin bool
+
+	// Environments are the project's, production first; EnvironmentsOn says
+	// the service has them, and Copied is what creating one just did.
+	Environments   []app.Environment
+	EnvironmentsOn bool
+	Copied         []app.EnvironmentCopy
+	CopiedEnv      string
+	// PROn says the service makes environments for pull requests.
+	PROn bool
 }
 
 // ProjectSettings is the project's own settings, reached from the rail, as
@@ -31,6 +46,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 			<div class="settings-shell mt-6">
 				<nav class="settings-nav" aria-label="Settings sections">
 					<a href="#general">General</a>
+					if d.EnvironmentsOn {
+						<a href="#environments">Environments</a>
+					}
 					if d.SharedOn {
 						<a href="#shared-variables">Shared Variables</a>
 					}
@@ -59,6 +77,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 					</section>
 					if d.SharedOn {
 						@sharedVariablesSection(d)
+					}
+					if d.EnvironmentsOn {
+						@projectEnvironments(d)
 					}
 					<section id="danger" class="settings-section">
 						<div class="settings-section-head">
@@ -102,4 +123,116 @@ templ ProjectSettings(d ProjectSettingsData) {
 			</div>
 		</div>
 	</div>
+}
+
+// projectEnvironments is Railway's Project Settings › Environments: each an
+// isolated copy of the project's services.
+templ projectEnvironments(d ProjectSettingsData) {
+	<section id="environments" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Environments</h2>
+		</div>
+		<p class="field-note mb-3">
+			Each environment is its own copy of the project's services, with its own variables, domains,
+			databases and deploys. Nothing in one reaches another.
+		</p>
+		if len(d.Copied) > 0 {
+			<div class="callout mb-4">
+				<div class="min-w-0">
+					<div class="font-medium">{ d.CopiedEnv } is being deployed</div>
+					<ul class="mt-1 list-disc pl-5 text-[12.5px] text-muted-foreground">
+						for _, c := range d.Copied {
+							<li>
+								<span class="mono text-foreground">{ c.Service }</span>
+								if c.Err != nil {
+									<span class="text-destructive">{ " — not copied: " + c.Err.Error() }</span>
+								} else if c.Note != "" {
+									{ " — " + c.Note }
+								}
+							</li>
+						}
+					</ul>
+				</div>
+			</div>
+		}
+		<div class="panel">
+			<div class="rows">
+				for _, e := range d.Environments {
+					<div class="row-item">
+						<span class={ "tree-dot", envDot(e.Slug) } aria-hidden="true"></span>
+						<a class="min-w-0 flex-1 truncate font-medium hover:underline" href={ templ.URL(envHref(d.Project.Slug, e.Slug)) }>{ e.Name }</a>
+						<span class="text-[12px] tabular-nums text-muted-foreground">{ plural(e.Apps, "service") }</span>
+						if e.CopiedFrom != "" {
+							<span class="tag">{ "copied from " + e.CopiedFrom }</span>
+						}
+						if !e.Production && d.RoleAdmin {
+							<form
+								method="post"
+								action={ templ.URL("/projects/" + d.Project.Slug + "/environments/" + e.Slug + "/delete") }
+								data-confirm={ "Deletes " + e.Name + " and its " + plural(e.Apps, "service") + " — their data, domains and deploys. Production is not touched." }
+								data-confirm-title={ "Delete " + e.Name + "?" }
+								data-confirm-label="Delete environment"
+							>
+								<button class="btn btn-sm btn-danger" type="submit">Delete</button>
+							</form>
+						}
+					</div>
+				}
+			</div>
+		</div>
+		if d.PROn {
+			<div class="panel mt-4">
+				<div class="panel-body flex flex-wrap items-center justify-between gap-3">
+					<div class="min-w-0">
+						<div class="font-medium">PR Environments</div>
+						<p class="hint mt-0.5">
+							An environment for each pull request opened against a repository this project builds — production
+							copied, building the pull request's branch — taken down when it closes. A fork's pull request is
+							never built: its code would run with this project's variables.
+						</p>
+					</div>
+					if d.RoleAdmin {
+						<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/pr-environments") }>
+							if d.Project.PREnvironments {
+								<button class="btn btn-sm" type="submit">Disable</button>
+							} else {
+								<input type="hidden" name="enabled" value="1"/>
+								<button class="btn btn-sm btn-primary" type="submit">Enable PR Environments</button>
+							}
+						</form>
+					} else if d.Project.PREnvironments {
+						<span class="tag">on</span>
+					}
+				</div>
+			</div>
+		}
+		if d.RoleAdmin {
+			<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/environments") } class="mt-4 flex flex-wrap items-end gap-3">
+				<div class="field">
+					<label class="label" for="env-name">New environment</label>
+					<input class="control w-56" id="env-name" name="name" placeholder="staging" required maxlength="30"/>
+				</div>
+				<div class="field">
+					<label class="label" for="env-from">Start as</label>
+					@selectbox.SelectBox(selectbox.Props{Class: "w-56"}) {
+						@selectbox.Trigger(selectbox.TriggerProps{ID: "env-from", Name: "from"}) {
+							@selectbox.Value(selectbox.ValueProps{Placeholder: "A copy of production"})
+						}
+						@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+							for _, e := range d.Environments {
+								@selectbox.Item(selectbox.ItemProps{Value: e.Slug, Selected: e.Production}) {
+									{ "A copy of " + e.Name }
+								}
+							}
+							@selectbox.Item(selectbox.ItemProps{Value: "-"}) {
+								Empty
+							}
+						}
+					}
+				</div>
+				<button class="btn btn-primary" type="submit">Create</button>
+			</form>
+		}
+	</section>
 }

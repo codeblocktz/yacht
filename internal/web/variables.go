@@ -300,6 +300,7 @@ func (s *Server) projectDeployStaged(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 	slug := chi.URLParam(r, "slug")
+	ctx = app.WithEnvironment(ctx, chosenEnv(r, slug))
 	deployed, err := ps.DeployProjectStaged(ctx, owner.ID, slug)
 	switch {
 	case errors.Is(err, app.ErrProjectNotFound):
@@ -328,6 +329,7 @@ func (s *Server) projectDiscardStaged(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 	slug := chi.URLParam(r, "slug")
+	ctx = app.WithEnvironment(ctx, chosenEnv(r, slug))
 	kept, err := ps.DiscardProjectStaged(ctx, owner.ID, slug)
 	switch {
 	case errors.Is(err, app.ErrProjectNotFound):
@@ -467,6 +469,9 @@ func (s *Server) attachStaged(ctx context.Context, ownerID string, d *CanvasData
 	ps, ok := s.apps.(projectStager)
 	if !ok {
 		return
+	}
+	if d.Env != "" {
+		ctx = app.WithEnvironment(ctx, d.Env)
 	}
 	changes, err := ps.ProjectStagedChanges(ctx, ownerID, d.Project.Slug)
 	if err != nil {

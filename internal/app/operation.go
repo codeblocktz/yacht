@@ -635,7 +635,7 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		Owner: orchestrator.OwnerID(op.OwnerID), App: a.Name, Image: image,
 		RepoURL: a.Repo.URL, Ref: a.Repo.Ref(), Subdir: a.Repo.Subdir,
 		Dockerfile: a.DockerfilePath,
-		Insecure: s.images.Insecure(ctx), RegistryAuth: auth,
+		Insecure:   s.images.Insecure(ctx), RegistryAuth: auth,
 		RepoToken: repoToken,
 		Log:       s.buildLogger(ctx, row.ID),
 	}

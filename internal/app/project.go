@@ -36,6 +36,10 @@ type Project struct {
 	// Apps is how many apps it holds. Populated by List, because a list of
 	// projects that does not say how big each one is gives no reason to pick.
 	Apps int64
+
+	// PREnvironments is an environment made for each pull request against a
+	// repository the project builds, and taken down when it closes.
+	PREnvironments bool
 }
 
 var slugRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
@@ -254,7 +258,7 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 }
 
 func toProject(row dbgen.Project) Project {
-	return Project{ID: row.ID, OwnerID: row.OwnerID, Slug: row.Slug, Name: row.Name}
+	return Project{ID: row.ID, OwnerID: row.OwnerID, Slug: row.Slug, Name: row.Name, PREnvironments: row.PrEnvironments}
 }
 
 // MoveToProject draws an app on another of the team's projects. Only the
@@ -263,6 +267,12 @@ func (s *Service) MoveToProject(ctx context.Context, ownerID, name, projectSlug 
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
 		return Project{}, err
+	}
+	// A copy in another environment belongs to its environment as much as
+	// to its project; moving it alone would leave it in an environment the
+	// other project may not have.
+	if a.Environment() != DefaultEnvironment {
+		return Project{}, fmt.Errorf("%s is %s's copy in %s; move the service from production", a.Name, a.ServiceName(), a.Environment())
 	}
 	p, err := s.Project(ctx, ownerID, projectSlug)
 	if err != nil {
