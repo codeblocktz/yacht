@@ -141,12 +141,72 @@ func (o *Orchestrator) Build(
 	// Streamed rather than fetched at the end: this is the several minutes
 	// somebody is actually watching, and a log that arrives afterwards is a
 	// post-mortem rather than progress.
-	result := o.streamBuildLog(ctx, pod, req.Log)
+	result, seen := o.streamBuildLog(ctx, pod, req.Log)
 
 	if err := o.waitForBuildResult(ctx, name); err != nil {
 		return result, redactError(err, req.RepoToken)
 	}
+	// The live log can end before the build does: the kubelet stops
+	// following a log it cannot watch ("failed to create fsnotify watcher:
+	// too many open files" when the machine's inotify instances run out),
+	// and the API closes long streams. The markers are data the deployment
+	// needs — without the uid an image whose USER is a name is refused by
+	// runAsNonRoot — so a finished build's logs are read once more, whole,
+	// for whichever was not seen. The pod is still there: the Job goes only
+	// when this returns.
+	if !seen.commit || !seen.uid {
+		o.recoverBuildMarkers(ctx, pod, &result, &seen, req.Log)
+	}
 	return result, nil
+}
+
+// markersSeen records which of the build's markers the log has shown.
+type markersSeen struct{ commit, uid bool }
+
+// scanBuildLog reads one container's log: the markers into result, every
+// other line to logf when it is given.
+func scanBuildLog(r io.Reader, logf func(string), result *orchestrator.BuildResult, seen *markersSeen) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := sc.Text()
+		if sha, ok := strings.CutPrefix(line, commitMarker); ok {
+			result.CommitSHA = strings.TrimSpace(sha)
+			seen.commit = true
+			continue
+		}
+		if uid, ok := strings.CutPrefix(line, uidMarker); ok {
+			if n, err := strconv.ParseInt(strings.TrimSpace(uid), 10, 64); err == nil {
+				result.RunAsUser = n
+				seen.uid = true
+			}
+			continue
+		}
+		if logf != nil {
+			logf(line + "\n")
+		}
+	}
+}
+
+// recoverBuildMarkers reads the finished build's logs without following
+// them, which needs nothing of the kubelet but the file, for the markers the
+// live log did not show. A buildpack build prints no uid, and finds none.
+func (o *Orchestrator) recoverBuildMarkers(
+	ctx context.Context, pod string, result *orchestrator.BuildResult, seen *markersSeen, logf func(string),
+) {
+	before := *seen
+	for _, c := range []string{cloneContainer, dockerfileContainer} {
+		stream, err := o.client.CoreV1().Pods(BuildNamespace).GetLogs(pod,
+			&corev1.PodLogOptions{Container: c}).Stream(ctx)
+		if err != nil {
+			continue
+		}
+		scanBuildLog(stream, nil, result, seen)
+		_ = stream.Close()
+	}
+	if *seen != before {
+		logf("The live log was cut short; what the deployment needs was read from the finished build.\n")
+	}
 }
 
 // repoSecretName is the Secret a build's repository token is in.
@@ -394,9 +454,11 @@ func startedAnyContainer(p corev1.Pod) bool {
 // opened this to read.
 func (o *Orchestrator) streamBuildLog(
 	ctx context.Context, pod string, logf func(string),
-) orchestrator.BuildResult {
-	var result orchestrator.BuildResult
-
+) (orchestrator.BuildResult, markersSeen) {
+	var (
+		result orchestrator.BuildResult
+		seen   markersSeen
+	)
 	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer} {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
@@ -405,26 +467,10 @@ func (o *Orchestrator) streamBuildLog(
 			// strategy was not used.
 			continue
 		}
-
-		sc := bufio.NewScanner(stream)
-		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for sc.Scan() {
-			line := sc.Text()
-			if sha, ok := strings.CutPrefix(line, commitMarker); ok {
-				result.CommitSHA = strings.TrimSpace(sha)
-				continue
-			}
-			if uid, ok := strings.CutPrefix(line, uidMarker); ok {
-				if n, err := strconv.ParseInt(strings.TrimSpace(uid), 10, 64); err == nil {
-					result.RunAsUser = n
-				}
-				continue
-			}
-			logf(line + "\n")
-		}
+		scanBuildLog(stream, logf, &result, &seen)
 		_ = stream.Close()
 	}
-	return result
+	return result, seen
 }
 
 // openContainerLog waits until a container has output, or until it is clear it
