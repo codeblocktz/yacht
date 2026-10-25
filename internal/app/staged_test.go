@@ -437,6 +437,18 @@ func TestThePlatformVariablesReachEveryApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A public address only once asked for, as on Railway; generating one
+	// re-applies the app, with the variable that names it.
+	if _, err := s.GenerateDomain(ctx, id, "web", 0); err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
+	// The route reaches the workload on the reconciler's next pass.
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
+	}
+	if a, err = s.Get(ctx, id, "web"); err != nil {
+		t.Fatal(err)
+	}
 	env := orch.lastAppSpec().Env
 	want := map[string]string{
 		"DATAHURU_PRIVATE_DOMAIN": "web." + a.Namespace + ".svc.cluster.local",
