@@ -49,6 +49,12 @@ type Querier interface {
 	ClearProjectPositions(ctx context.Context, arg ClearProjectPositionsParams) (int64, error)
 	ClearSessionActing(ctx context.Context, id uuid.UUID) error
 	CloseAppSleep(ctx context.Context, arg CloseAppSleepParams) error
+	// Moves every staged edit into the variables a deploy reads, in one
+	// statement so a deploy can never see half of them. The app's config version
+	// moves with them, as any variable edit's does; nothing is returned, and
+	// nothing bumped, when there was nothing staged.
+	//
+	CommitStagedVariables(ctx context.Context, arg CommitStagedVariablesParams) ([]CommitStagedVariablesRow, error)
 	// Connecting again is how somebody else on the team takes it over, so the
 	// record of who connected it follows the latest proof.
 	ConnectTeamGitHubInstallation(ctx context.Context, arg ConnectTeamGitHubInstallationParams) error
@@ -149,6 +155,7 @@ type Querier interface {
 	// stops looking for the one that is still there.
 	DeletePassword(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteProject(ctx context.Context, arg DeleteProjectParams) (int64, error)
+	DeleteProjectVariable(ctx context.Context, arg DeleteProjectVariableParams) (int64, error)
 	// Signing out ends an impersonation with the session, so the durable record
 	// gets its stop in the same statement that removes the row — there is no
 	// moment afterwards at which the session could still be asked what it was
@@ -156,6 +163,7 @@ type Querier interface {
 	DeleteSessionByHash(ctx context.Context, tokenHash []byte) error
 	// Records the stop for the same reason DeleteSessionByHash does.
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
+	DeleteStagedVariable(ctx context.Context, arg DeleteStagedVariableParams) (int64, error)
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
@@ -169,6 +177,7 @@ type Querier interface {
 	// Days with no deploys are absent from this result. The caller fills them in;
 	// see app.DeployActivity for why that cannot be skipped.
 	DeployActivity(ctx context.Context, arg DeployActivityParams) ([]DeployActivityRow, error)
+	DiscardStagedVariables(ctx context.Context, arg DiscardStagedVariablesParams) ([]string, error)
 	DisconnectTeamGitHubInstallation(ctx context.Context, arg DisconnectTeamGitHubInstallationParams) (int64, error)
 	// Puts the checklist away for the whole team.
 	//
@@ -272,8 +281,15 @@ type Querier interface {
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
+	GetProjectVariable(ctx context.Context, arg GetProjectVariableParams) (ProjectVariable, error)
 	GetRegion(ctx context.Context, name string) (Region, error)
 	GetReleaseBackfillState(ctx context.Context, arg GetReleaseBackfillStateParams) (AppReleaseBackfill, error)
+	// When the release an app is running went live: its newest successful
+	// deployment. A rollback reuses an old release, and what it resolved its
+	// secrets and references from is what was current when it ran, not when the
+	// release was first made.
+	//
+	GetReleaseLiveSince(ctx context.Context, arg GetReleaseLiveSinceParams) (time.Time, error)
 	// Expiry is filtered here for the reason GetSessionByHash gives: so that an
 	// expired row can never be treated as valid by a caller that forgets to check.
 	// This one used to be the caller that forgot. It was not reachable with a dead
@@ -305,6 +321,7 @@ type Querier interface {
 	// become one. Whether they may still act is not a fact in this row at all — the
 	// identity provider asks the install on every request.
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
+	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	// The check every use of an installation goes through: a team reads the
@@ -416,6 +433,7 @@ type Querier interface {
 	// cannot be rendered into it by a template that innocently prints a struct.
 	ListPendingInvitations(ctx context.Context, ownerID string) ([]ListPendingInvitationsRow, error)
 	ListPendingReleaseBackfills(ctx context.Context, resultLimit int32) ([]ListPendingReleaseBackfillsRow, error)
+	ListProjectVariables(ctx context.Context, arg ListProjectVariablesParams) ([]ProjectVariable, error)
 	ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error)
 	// Joined to apps so the activity feed can name the workload without a second
 	// round trip per row. The join is on app_id AND owner_id: joining on app_id
@@ -439,6 +457,7 @@ type Querier interface {
 	// name as it is now.
 	ListSleepIntervals(ctx context.Context, arg ListSleepIntervalsParams) ([]ListSleepIntervalsRow, error)
 	ListSleepingApps(ctx context.Context) ([]App, error)
+	ListStagedVariablesForApp(ctx context.Context, arg ListStagedVariablesForAppParams) ([]StagedVariable, error)
 	// Wakes whose process went away: a restart, or a replica that stopped.
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
 	ListTeamGitHubInstallations(ctx context.Context, ownerID string) ([]ListTeamGitHubInstallationsRow, error)
@@ -708,7 +727,11 @@ type Querier interface {
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go
 	// struct for no reason at all, which is the shortest route to it being logged.
 	UpsertPassword(ctx context.Context, arg UpsertPasswordParams) (uuid.UUID, error)
+	UpsertProjectVariable(ctx context.Context, arg UpsertProjectVariableParams) (ProjectVariable, error)
 	UpsertRegion(ctx context.Context, arg UpsertRegionParams) (Region, error)
+	// Variable edits waiting for a deploy, and a project's shared variables.
+	// Every query filters by owner_id, for the reason apps.sql gives.
+	UpsertStagedVariable(ctx context.Context, arg UpsertStagedVariableParams) (StagedVariable, error)
 	UpsertTeamPool(ctx context.Context, arg UpsertTeamPoolParams) (TeamPool, error)
 	UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error)
 	UpsertTeamSleepDefault(ctx context.Context, arg UpsertTeamSleepDefaultParams) (TeamSleepDefault, error)

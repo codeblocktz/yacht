@@ -323,6 +323,21 @@ type Options struct {
 	// repository is a pasted URL, cloned anonymously, and nothing about
 	// connecting GitHub is offered.
 	GitHub *github.App
+
+	// StageChanges saves a person's edits — variables, and the settings that
+	// roll out — without deploying them. They collect until DeployStaged
+	// ships them as one deployment, or DiscardStaged throws them away, the
+	// way Railway's "N changes" bar does. Off, every save deploys at once,
+	// which is what the engine did before and what its tests are written
+	// against. See staged.go.
+	StageChanges bool
+
+	// PlatformVariablePrefix begins the names of the variables the platform
+	// gives every app — its domains, its name, its project's. Empty is
+	// DefaultPlatformVariablePrefix; a wrapper sets its own product's, so an
+	// app reads DATAHURU_PUBLIC_DOMAIN rather than the engine's name for it.
+	// See platform.go.
+	PlatformVariablePrefix string
 }
 
 // Service manages app lifecycle.
@@ -397,6 +412,9 @@ func NewService(
 	}
 	if opts.SleepCheckInterval == 0 {
 		opts.SleepCheckInterval = DefaultSleepCheckInterval
+	}
+	if opts.PlatformVariablePrefix == "" {
+		opts.PlatformVariablePrefix = DefaultPlatformVariablePrefix
 	}
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
@@ -672,6 +690,14 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	if updated.Image == PendingImage {
 		return updated, nil
 	}
+	// Saved, and left for the next deploy to carry. The release the app is
+	// running still has the old values, which is what StagedChanges compares
+	// against to say what is waiting.
+	if s.opts.StageChanges {
+		s.log.Info("app update staged", slog.String("app", name),
+			slog.String("change", updateReason(a, updated)))
+		return updated, nil
+	}
 
 	err = s.deployCurrentRelease(ctx, ownerID, updated, updateReason(a, updated))
 	if err != nil {
@@ -759,6 +785,10 @@ func (in CreateInput) Validate() error {
 		return errors.New("name must be at most 40 characters")
 	case !nameRE.MatchString(in.Name):
 		return errors.New("name must be lowercase letters, numbers and dashes")
+	case in.Name == SharedScope:
+		// ${{shared.KEY}} is a project's shared variable. An app with this
+		// name would make every such reference mean two things.
+		return errors.New(`"shared" is reserved for a project's shared variables — choose another name`)
 	case in.Image == "":
 		return errors.New("image is required")
 	case in.Replicas < 0 || in.Replicas > 50:
@@ -1132,6 +1162,7 @@ func (s *Service) applyRelease(
 		Pool:        pool,
 		Region:      a.Region,
 	})
+	s.addPlatformVariables(ctx, q, a, hosts, &spec)
 	return s.orch.ApplyApp(ctx, spec)
 }
 
@@ -1345,7 +1376,9 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	// Read on the same pass. Storage changes what the app page can offer —
 	// scaling, and whether a deploy will recreate — so a caller holding an App
 	// without it would be deciding from a partial picture.
-	if vars, err := s.variablesFor(ctx, s.q, a.ID); err == nil {
+	// As they will deploy, staged edits included: a page lists what
+	// somebody typed, marked with whether it is deployed yet.
+	if vars, err := s.desiredVariablesFor(ctx, s.q, a.OwnerID, a.ID); err == nil {
 		a.Variables = vars
 	}
 	if vols, err := s.volumesFor(ctx, s.q, a.ID); err == nil {
@@ -1575,6 +1608,10 @@ func (s *Service) deployReleaseOperation(
 }
 
 // Scale changes the replica count and reapplies.
+//
+// Never staged, even with StageChanges on. Scaling is also how the platform
+// stops a team's apps and starts them again — a wrapper's billing does — and
+// a stop that waited for somebody to press Deploy would not be one.
 func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int32) (App, error) {
 	if replicas < 0 || replicas > 50 {
 		return App{}, errors.New("replicas must be between 0 and 50")
@@ -1875,6 +1912,12 @@ func (s *Service) SetHealth(
 	}
 
 	updated := toApp(row)
+	if s.opts.StageChanges {
+		s.log.Info("health probe staged",
+			slog.String("app", name), slog.String("path", probe.HealthPath),
+			slog.Bool("liveness", probe.Liveness))
+		return nil
+	}
 	if err := s.deployCurrentRelease(ctx, ownerID, updated, "health"); err != nil {
 		return err
 	}

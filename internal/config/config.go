@@ -232,6 +232,11 @@ type Config struct {
 	// the first. Ignored on a cluster whose nodes carry no region.
 	DefaultRegion string
 
+	// StageChanges holds a person's edits to an app's variables and to the
+	// settings that roll out until they press Deploy, as Railway does, rather
+	// than deploying each one as it is saved. On unless set false.
+	StageChanges bool
+
 	// MaxConcurrentBuilds is the install-wide admission ceiling. It is paired
 	// with per-container bounds in the build namespace so the count represents
 	// a bounded amount of node capacity rather than an arbitrary pod count.
@@ -299,6 +304,7 @@ func Load() (Config, error) {
 		WakerListen:              strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
 		WakeTimeout:              envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
 		DefaultRegion:            strings.TrimSpace(env("YACHT_DEFAULT_REGION", "")),
+		StageChanges:             envBool("YACHT_STAGE_CHANGES", true),
 		GitHubAppID:              envInt64("YACHT_GITHUB_APP_ID"),
 		GitHubAppSlug:            strings.TrimSpace(env("YACHT_GITHUB_APP_SLUG", "")),
 		GitHubAppPrivateKey:      env("YACHT_GITHUB_APP_PRIVATE_KEY", ""),

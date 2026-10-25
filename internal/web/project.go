@@ -172,6 +172,7 @@ func (s *Server) renderCanvasWith(
 	data := layout(apps, links)
 	data.Project = project
 	data.Open = open
+	s.attachStaged(ctx, owner.ID, &data)
 	if projects, err := s.apps.Projects(ctx, owner.ID); err == nil {
 		data.Projects = projects
 	}

@@ -9,6 +9,12 @@ type ProjectSettingsData struct {
 	Apps     int
 	Error    string
 	CanAdmin bool
+
+	// Shared is the project's shared variables, and SharedOn whether the
+	// service has them at all; without, the section is left out.
+	Shared      []app.Variable
+	SharedOn    bool
+	SharedAdmin bool
 }
 
 // ProjectSettings is the project's own settings, reached from the rail, as
@@ -25,6 +31,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 			<div class="settings-shell mt-6">
 				<nav class="settings-nav" aria-label="Settings sections">
 					<a href="#general">General</a>
+					if d.SharedOn {
+						<a href="#shared-variables">Shared Variables</a>
+					}
 					<a href="#danger">Danger</a>
 				</nav>
 				<div class="min-w-0 flex-1">
@@ -48,6 +57,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 							<p class="mono mt-1 text-[12.5px] text-muted-foreground">{ d.Project.ID.String() }</p>
 						</div>
 					</section>
+					if d.SharedOn {
+						@sharedVariablesSection(d)
+					}
 					<section id="danger" class="settings-section">
 						<div class="settings-section-head">
 							<span class="settings-section-mark">@icon("minus")</span>

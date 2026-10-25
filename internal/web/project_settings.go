@@ -53,9 +53,9 @@ func (s *Server) renderProjectSettings(w http.ResponseWriter, r *http.Request, s
 	if role, ok := s.roleOf(r); !ok || !role.AtLeast(account.RoleAdmin) {
 		admin = false
 	}
-	s.renderStatus(w, r, status, ProjectSettings(ProjectSettingsData{
-		Project: p, Apps: len(apps), Error: fail, CanAdmin: admin,
-	}))
+	d := ProjectSettingsData{Project: p, Apps: len(apps), Error: fail, CanAdmin: admin}
+	s.attachSharedVariables(r, owner.ID, &d)
+	s.renderStatus(w, r, status, ProjectSettings(d))
 }
 
 // projectRename changes a project's display name.

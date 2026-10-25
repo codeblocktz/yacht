@@ -228,7 +228,9 @@ func (s *Service) copyConnection(ctx context.Context, ownerID string, from, to A
 		return fmt.Errorf("app: %s has no %s to give", from.Name, blueprint.ConnectionKey)
 	}
 
-	return s.SetVariable(ctx, ownerID, to.Name, VariableInput{
+	// Applied now rather than staged: the stack is being deployed, and
+	// there is nobody to press Deploy for the wiring that is its point.
+	return s.setVariableNow(ctx, ownerID, to.Name, VariableInput{
 		Key: blueprint.ConnectionKey, Value: value, Secret: true,
 	})
 }

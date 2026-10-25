@@ -1361,6 +1361,59 @@
   }
   .ref-chip svg { @apply size-3.5; }
 
+  /* ---- variables: masked values, staged changes, the Raw Editor ------- */
+
+  /* Every value is dots until its eye is pressed (variables.js). The value
+     sits beside the mask, hidden, so showing it moves nothing else. */
+  .var-cell { @apply inline-flex min-w-0 max-w-full items-center gap-2; }
+  .var-mask { @apply select-none tracking-[0.15em] text-muted-foreground; }
+  .var-value { @apply hidden min-w-0 break-all; }
+  [data-revealed] > .var-value { @apply inline; }
+  [data-revealed] > .var-mask { @apply hidden; }
+  .var-eye {
+    @apply inline-flex shrink-0 items-center rounded p-1 text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground focus-visible:outline-none
+           focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .var-eye svg { @apply size-3.5; }
+  .var-eye-hide { @apply hidden; }
+  [data-revealed] .var-eye-hide { @apply inline-flex; }
+  [data-revealed] .var-eye-show { @apply hidden; }
+
+  /* Not deployed yet: the warning tone, the colour of "this is not what is
+     running", rather than the info blue a secret already uses. */
+  .staged-tag { @apply border-warning/40 bg-warning/10 text-warning; }
+  .staged-callout { @apply border-warning/35 bg-warning/[0.07]; }
+  .staged-list { @apply flex flex-col gap-1; }
+  .staged-item { @apply flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]; }
+  .staged-kind { @apply w-[58px] shrink-0 text-[11px] font-medium uppercase tracking-wide; }
+  .staged-added { @apply text-success; }
+  .staged-changed { @apply text-warning; }
+  .staged-removed { @apply text-destructive; }
+  .staged-note { @apply basis-full pl-[66px] text-[11.5px] text-muted-foreground; }
+
+  /* Railway's bar: floating at the top centre of the canvas, over the
+     drawing, for as long as anything is waiting. */
+  .staged-bar {
+    @apply absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center gap-1.5
+           rounded-lg border border-border bg-card py-1 pl-3 pr-1 text-[13px] shadow-md;
+  }
+  .staged-bar-dot { @apply size-2 shrink-0 rounded-full bg-warning; }
+  .staged-bar-count { @apply mr-1 font-medium tabular-nums whitespace-nowrap; }
+  .staged-details { @apply flex max-h-[60vh] w-[340px] flex-col gap-3 overflow-y-auto p-3; }
+  .staged-details-app { @apply flex flex-col gap-1.5; }
+  .staged-details-name { @apply flex items-center justify-between text-[13px] font-medium hover:underline; }
+  /* A card's marker sits in its header's flow: nothing inside a drawn card
+     may be positioned (see .canvas-card-host). */
+  .staged-marker { @apply inline-block size-2 shrink-0 rounded-full bg-warning; }
+
+  .platform-vars-summary { @apply cursor-pointer list-none select-none; }
+  .platform-vars-summary::-webkit-details-marker { @apply hidden; }
+  .platform-vars-summary svg { @apply transition-transform; }
+  .platform-vars[open] .platform-vars-summary svg { @apply rotate-90; }
+  .raw-editor[open] .platform-vars-summary svg { @apply rotate-0; }
+  .raw-editor-text { @apply h-auto min-h-[140px] w-full resize-y py-2 text-[12.5px] leading-relaxed; }
+
   /* The panel over the canvas. Wider than a default sheet because it holds the
      app's whole detail — a variables table at 24rem wraps every row. */
   .canvas-sheet {

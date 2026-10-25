@@ -48,7 +48,18 @@ type Variable struct {
 	// Reference means the value is ${{app.KEY}} references, which Value
 	// carries as typed: the names, never what they resolve to.
 	Reference bool
+
+	// Staged is how this variable differs from what the app has deployed —
+	// StagedAdded or StagedChanged — and empty when it does not. A variable
+	// staged for removal is not listed at all; StagedChanges names it.
+	Staged string
 }
+
+// How a listed variable differs from what is deployed.
+const (
+	StagedAdded   = "added"
+	StagedChanged = "changed"
+)
 
 // Refs lists what a reference variable points at.
 func (v Variable) Refs() []Reference {
@@ -80,8 +91,27 @@ func (in VariableInput) Validate() error {
 	return nil
 }
 
-// SetVariable stores a variable and applies the app.
+// SetVariable stores a variable. With StageChanges on it waits for
+// DeployStaged; otherwise the app is applied with it at once.
 func (s *Service) SetVariable(
+	ctx context.Context, ownerID, appName string, in VariableInput,
+) error {
+	if s.opts.StageChanges {
+		return s.stageVariable(ctx, ownerID, appName, in)
+	}
+	return s.setVariableNow(ctx, ownerID, appName, in)
+}
+
+// StagesChanges reports whether edits wait for DeployStaged, so a page can
+// say "saved, deploy to apply" rather than "deploying".
+func (s *Service) StagesChanges() bool { return s.opts.StageChanges }
+
+// setVariableNow stores a variable and applies the app.
+//
+// The path every save took before staging, and still the one the engine's
+// own writes take: a template wiring its apps together has nobody to press
+// Deploy.
+func (s *Service) setVariableNow(
 	ctx context.Context, ownerID, appName string, in VariableInput,
 ) error {
 	in.Key = strings.TrimSpace(in.Key)
@@ -170,11 +200,15 @@ func (s *Service) SetVariable(
 	return nil
 }
 
-// DeleteVariable removes a variable and applies the app.
+// DeleteVariable removes a variable: staged, with StageChanges on, and
+// otherwise applied at once.
 func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key string) error {
 	a, err := s.Get(ctx, ownerID, appName)
 	if err != nil {
 		return err
+	}
+	if s.opts.StageChanges {
+		return s.stageRemoval(ctx, s.q, a, key)
 	}
 
 	row, err := s.q.DeleteVariableAndBump(ctx, dbgen.DeleteVariableAndBumpParams{
@@ -212,7 +246,7 @@ func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key stri
 	return nil
 }
 
-// variablesFor reads an app's variables without opening any secret.
+// variablesFor reads an app's deployed variables without opening any secret.
 //
 // This is what a page gets. Opening happens only in envFor, on the path to the
 // cluster, so a value cannot reach a template by being carried somewhere it was
@@ -253,13 +287,32 @@ func (s *Service) envFor(
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: list variables: %w", err)
 	}
+	// The project a ${{shared.KEY}} is read from. Only asked for when a
+	// reference needs it, so an app with none costs no extra read.
+	var projectID uuid.UUID
+	projectRead := false
+	project := func() (uuid.UUID, error) {
+		if projectRead {
+			return projectID, nil
+		}
+		row, err := q.GetAppByID(ctx, dbgen.GetAppByIDParams{OwnerID: ownerID, ID: appID})
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("app: read the app's project: %w", err)
+		}
+		projectID, projectRead = toApp(row).ProjectID, true
+		return projectID, nil
+	}
 
 	plain = make(map[string]string)
 	secrets = make(map[string]string)
 	for _, row := range rows {
 		if !row.Secret {
 			if HasReference(row.Value) {
-				if secrets[row.Key], err = s.resolveReferences(ctx, q, ownerID, row.Key, row.Value, 0); err != nil {
+				pid, err := project()
+				if err != nil {
+					return nil, nil, err
+				}
+				if secrets[row.Key], err = s.resolveReferences(ctx, q, ownerID, pid, row.Key, row.Value, 0); err != nil {
 					return nil, nil, err
 				}
 				continue

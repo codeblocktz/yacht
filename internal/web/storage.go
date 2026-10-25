@@ -160,6 +160,9 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		s.variableFailed(w, r, name, err)
 		return
 	}
+	if s.stages() {
+		s.flashSaved(w, r, "Saved "+strings.TrimSpace(in.Key)+".")
+	}
 	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
 }
 
@@ -178,6 +181,9 @@ func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.variableFailed(w, r, name, err)
 		return
+	}
+	if s.stages() {
+		s.flashSaved(w, r, "Removed "+chi.URLParam(r, "key")+".")
 	}
 	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
 }

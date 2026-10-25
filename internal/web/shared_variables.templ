@@ -1,0 +1,72 @@
+package web
+
+// sharedVariablesSection is Project Settings › Shared Variables: what every
+// app in the project can use as ${{shared.KEY}}, masked like an app's own.
+templ sharedVariablesSection(d ProjectSettingsData) {
+	<section id="shared-variables" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Shared Variables</h2>
+		</div>
+		<p class="field-note">
+			Set once for the whole project, and used by any of its apps as
+			<code class="mono">{ "${{shared.KEY}}" }</code> — add one from an app's Variables tab with
+			Add a reference. An app reads the value when it next deploys.
+		</p>
+		<div class="panel mt-3">
+			if len(d.Shared) == 0 {
+				<div class="empty">
+					<p>No shared variables yet.</p>
+				</div>
+			} else {
+				<div class="table-scroll">
+					<table class="dtable min-w-[480px]">
+						<thead>
+							<tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr>
+						</thead>
+						<tbody>
+							for _, v := range d.Shared {
+								<tr>
+									<td class="mono">{ v.Key }</td>
+									<td class="mono">
+										if v.Secret {
+											<span class="flex items-center gap-2">
+												@maskedValue("var-shared-"+v.Key, v.Key, "", "/projects/"+d.Project.Slug+"/variables/"+v.Key+"/value")
+												@statusDot("secret", "status-info")
+											</span>
+										} else {
+											@maskedValue("var-shared-"+v.Key, v.Key, v.Value, "")
+										}
+									</td>
+									<td class="text-right">
+										if d.SharedAdmin {
+											<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/variables/" + v.Key + "/delete") }>
+												<button class="btn btn-sm btn-danger" type="submit">Remove</button>
+											</form>
+										}
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</div>
+		if d.SharedAdmin {
+			<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/variables") } class="mt-4 flex flex-wrap items-end gap-4">
+				<div class="field">
+					<label class="label" for="shared-key">Key</label>
+					<input class="control mono" id="shared-key" name="key" required placeholder="REGION"/>
+				</div>
+				<div class="field grow">
+					<label class="label" for="shared-value">Value</label>
+					<input class="control mono" id="shared-value" name="value" placeholder="eu-central"/>
+				</div>
+				@checkField("secret", "1", "Secret", false)
+				<button class="btn btn-primary" type="submit">Save</button>
+			</form>
+		} else {
+			<p class="hint mt-3">Only an admin of the team can change shared variables.</p>
+		}
+	</section>
+}

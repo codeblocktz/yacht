@@ -416,7 +416,10 @@ type AppDetailData struct {
 	Projects    []app.Project
 	// RefTargets are the other apps a variable can refer to, for the
 	// variables tab's picker; empty leaves the picker out.
-	RefTargets  []app.ReferenceTarget
+	RefTargets []app.ReferenceTarget
+	// Vars is the rest of the variables tab: what is staged, what the
+	// platform adds, and which of its controls the service supports.
+	Vars        VariablesView
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -840,88 +843,9 @@ templ deploymentStatus(dep app.Deployment) {
 }
 
 // ---- variables tab
+// appVariables is the Variables tab; see variables.templ.
 templ appVariables(d AppDetailData) {
-	if d.Error != "" {
-		<div class="callout callout-err mb-5">
-			<div class="min-w-0">{ d.Error }</div>
-		</div>
-	}
-	<div class="panel mb-5">
-		<div class="panel-header">
-			<span class="panel-title">Environment</span>
-			<span class="text-[12px] text-muted-foreground tabular-nums">
-				{ strconv.Itoa(len(d.App.Variables)) }
-			</span>
-		</div>
-		if len(d.App.Variables) == 0 {
-			<div class="empty">
-				<p>No environment variables set.</p>
-			</div>
-		} else {
-			<div class="table-scroll">
-			<table class="dtable min-w-[520px]">
-				<thead>
-					<tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr>
-				</thead>
-				<tbody>
-					for _, v := range d.App.Variables {
-						<tr>
-							<td class="mono">{ v.Key }</td>
-							<td class="mono">
-								if v.Secret {
-									// The value is not in the struct this page was
-									// given, so there is nothing here to reveal.
-									// A page that could show it is one an
-									// onlooker can read.
-									<span class="text-muted-foreground">••••••••</span>
-									<span class="ml-2">
-										@statusDot("secret", "status-info")
-									</span>
-								} else if v.Reference {
-									@variableReference(v)
-								} else {
-									{ v.Value }
-								}
-							</td>
-							<td class="text-right">
-								<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/" + v.Key + "/delete") }>
-									<button class="btn btn-sm btn-danger" type="submit">Remove</button>
-								</form>
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-			</div>
-		}
-	</div>
-	if len(d.RefTargets) > 0 {
-		@addReference(d)
-	}
-	<div class="panel">
-		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
-		<div class="panel-body">
-			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
-				<div class="field">
-					<label class="label" for="var-key">Key</label>
-					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
-				</div>
-				<div class="field grow">
-					<label class="label" for="var-value">Value</label>
-					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
-				</div>
-				@checkField("secret", "1", "Secret", false)
-				<button class="btn btn-primary" type="submit">Save</button>
-			</form>
-			<p class="mt-3 text-[12px] text-muted-foreground">
-				A secret is encrypted before it is stored and mounted from a Kubernetes
-				Secret, so it appears neither in a database dump nor in
-				<code class="mono">kubectl get deploy -o yaml</code>. It cannot be shown
-				again afterwards — replace it instead. Setting one requires
-				<code class="mono">YACHT_SECRET_KEY</code>.
-			</p>
-		</div>
-	</div>
+	@variablesTab(d)
 }
 
 // ---- metrics tab

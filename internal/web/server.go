@@ -757,6 +757,10 @@ func (s *Server) Handler() http.Handler {
 			}
 			r.Get("/apps/{name}", s.appDetail)
 			r.Get("/apps/{name}/variables", s.appDetail)
+			// Opening one value is reading, like the rest of the tab, and
+			// each one is logged with who asked.
+			r.Get("/apps/{name}/variables/{key}/value", s.variableReveal)
+			r.Get("/projects/{slug}/variables/{key}/value", s.sharedVariableReveal)
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
@@ -798,6 +802,10 @@ func (s *Server) Handler() http.Handler {
 			}
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
+			// Deploying what is staged is a deploy like any other: a member's,
+			// and undone by deploying again.
+			r.Post("/apps/{name}/changes/deploy", s.appDeployStaged)
+			r.Post("/projects/{slug}/changes/deploy", s.projectDeployStaged)
 			// A member's, like redeploying: it is undone by deploying again.
 			r.Post("/apps/{name}/rollback", s.appRollback)
 			r.Post("/apps/{name}/deployments/cancel", s.appDeployCancel)
@@ -883,7 +891,14 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/apps/{name}/hook/delete", s.hookDisable)
 			}
 			r.Post("/apps/{name}/variables", s.variableSet)
+			r.Post("/apps/{name}/variables/raw", s.variablesRaw)
 			r.Post("/apps/{name}/variables/{key}/delete", s.variableDelete)
+			// Discarding rewrites the saved variables and settings, which is
+			// setting them; the shared variables are the project's own.
+			r.Post("/apps/{name}/changes/discard", s.appDiscardStaged)
+			r.Post("/projects/{slug}/changes/discard", s.projectDiscardStaged)
+			r.Post("/projects/{slug}/variables", s.sharedVariableSet)
+			r.Post("/projects/{slug}/variables/{key}/delete", s.sharedVariableDelete)
 
 			if s.nets != nil {
 				r.Post("/apps/{name}/networking", s.networkingSet)
