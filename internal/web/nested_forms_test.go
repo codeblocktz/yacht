@@ -1,6 +1,8 @@
 package web
 
 import (
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -62,5 +64,23 @@ func TestTheSettingsPageHasNoFormInsideAForm(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the settings page does not have %q", want)
 		}
+	}
+}
+
+// Saving settings says what happened: a change that reaches the cluster is
+// rolling out, and a save that changed nothing says so and stays put.
+func TestSavingSettingsSaysWhatHappened(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	h := testServer(t, Options{Apps: newFakeApps(a)})
+	form := url.Values{"image": {a.Image}, "port": {"8080"}}
+
+	rec := post(t, h, "/apps/web/runtime", form)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web/settings" {
+		t.Errorf("a save that changed nothing = %d to %q", rec.Code, rec.Header().Get("Location"))
+	}
+	form.Set("port", "4000")
+	rec = post(t, h, "/apps/web/runtime", form)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web" {
+		t.Errorf("a port change = %d to %q", rec.Code, rec.Header().Get("Location"))
 	}
 }

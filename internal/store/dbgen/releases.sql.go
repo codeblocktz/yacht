@@ -546,7 +546,8 @@ func (q *Queries) SetActiveRelease(ctx context.Context, arg SetActiveReleasePara
 
 const setDeploymentRelease = `-- name: SetDeploymentRelease :execrows
 UPDATE deployments
-SET release_id = $1
+SET release_id = $1,
+    image = COALESCE((SELECT r.image_ref FROM app_releases r WHERE r.id = $1), deployments.image)
 WHERE deployments.owner_id = $2 AND deployments.id = $3
   AND deployments.release_id IS NULL
   AND EXISTS (
@@ -562,6 +563,8 @@ type SetDeploymentReleaseParams struct {
 	DeploymentID uuid.UUID
 }
 
+// The release's image becomes the deployment's: for a deploy that built,
+// the first moment there is one to name.
 func (q *Queries) SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setDeploymentRelease, arg.ReleaseID, arg.OwnerID, arg.DeploymentID)
 	if err != nil {

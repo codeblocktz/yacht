@@ -76,6 +76,10 @@ func TestARolloutWhoseContainerCannotStartFailsAtOnce(t *testing.T) {
 			if tc.says != "" && !strings.Contains(st.Reason+": "+st.Message, tc.says) {
 				t.Errorf("says %q: %q, want %q", st.Reason, st.Message, tc.says)
 			}
+			// Nothing ready and not getting there is failing, not pending.
+			if want := map[bool]orchestrator.Phase{true: orchestrator.PhaseFailing, false: orchestrator.PhasePending}[tc.terminal]; st.Phase != want {
+				t.Errorf("phase = %s, want %s", st.Phase, want)
+			}
 		})
 	}
 }

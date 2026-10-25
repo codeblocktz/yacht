@@ -93,10 +93,16 @@ func (s *Service) DeploymentLogs(
 	}
 
 	out := DeployLogs{Deployment: d}
-	out.Live = out.Deployment.IsActive
+	// The latest deploy's containers are the ones there, failed or not: one
+	// that could not start is still being retried, and what it printed
+	// before dying is the reason somebody opened this.
+	out.Live = d.IsActive || (d.Status == DeployFailed && s.isLatestDeployment(ctx, ownerID, d))
 	if !out.Live {
 		out.Logs.Note = "This deployment has been replaced. Its containers are gone, and " +
 			"their output went with them — nothing here stores logs off the cluster."
+		if d.Status == DeployFailed {
+			out.Logs.Note = "A later deploy replaced this one, and its containers' output went with them."
+		}
 		return out, nil
 	}
 
@@ -104,6 +110,12 @@ func (s *Service) DeploymentLogs(
 		return DeployLogs{}, err
 	}
 	return out, nil
+}
+
+// isLatestDeployment reports whether nothing has been deployed since d.
+func (s *Service) isLatestDeployment(ctx context.Context, ownerID string, d Deployment) bool {
+	rows, err := s.q.ListDeployments(ctx, dbgen.ListDeploymentsParams{OwnerID: ownerID, AppID: d.AppID, Limit: 1})
+	return err == nil && len(rows) == 1 && rows[0].ID == d.ID
 }
 
 // Logs is an app's container output, and which pods it could have come from.

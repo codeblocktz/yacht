@@ -56,6 +56,8 @@ func phaseClass(phase string) string {
 		return "status-warn"
 	case string(orchestrator.PhasePending):
 		return "status-info"
+	case string(orchestrator.PhaseFailing):
+		return "status-err"
 	}
 	return "status-neutral"
 }
@@ -686,20 +688,20 @@ func containerFailing(reason string) bool {
 }
 
 // deploymentImageLabel is what a deployment row shows where its image goes.
-// A deploy records its image only when it finishes, so one without is
-// building, or — once the app has an image from this build — rolling it out;
-// and one that failed without ever having one failed to build.
-func deploymentImageLabel(a app.App, dep app.Deployment) string {
+// A deploy that builds records its image once the build has made one, so
+// one without is building, or its build failed, or it was given up before
+// the build finished.
+func deploymentImageLabel(dep app.Deployment) string {
 	if !imageIsPending(dep.Image) {
 		return dep.Image
 	}
-	switch {
-	case dep.Status == app.DeployFailed:
+	switch dep.Status {
+	case app.DeployFailed:
 		return "build failed"
-	case dep.Status == app.DeployRunning && !imageIsPending(a.Image):
-		return "deploying " + a.Image
+	case app.DeployRunning, "pending":
+		return "building…"
 	}
-	return imageLabel(dep.Image)
+	return "not built"
 }
 
 // deploymentSource is where a deployment came from, as a person would say
@@ -714,6 +716,16 @@ func deploymentSource(a app.App, dep app.Deployment) string {
 		return "Git"
 	}
 	return src
+}
+
+// failureReason is a failed deployment's message as a person reads it: the
+// package prefixes the service wraps it in are for logs, not for them.
+func failureReason(message string) string {
+	message = strings.TrimSpace(message)
+	for _, prefix := range []string{"app: ", "rollout failed: "} {
+		message = strings.TrimPrefix(message, prefix)
+	}
+	return message
 }
 
 // lastDeployFailed reports whether the most recent deployment failed.

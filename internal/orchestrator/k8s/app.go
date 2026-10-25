@@ -601,6 +601,9 @@ func (o *Orchestrator) AppStatus(
 			status.Reason, status.Message = reason, message
 		}
 	}
+	if status.Terminal && status.Phase == orchestrator.PhasePending {
+		status.Phase = orchestrator.PhaseFailing
+	}
 
 	return status, nil
 }

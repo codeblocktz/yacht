@@ -30,8 +30,11 @@ ORDER BY created_at DESC, id DESC
 LIMIT @result_limit;
 
 -- name: SetDeploymentRelease :execrows
+-- The release's image becomes the deployment's: for a deploy that built,
+-- the first moment there is one to name.
 UPDATE deployments
-SET release_id = @release_id
+SET release_id = @release_id,
+    image = COALESCE((SELECT r.image_ref FROM app_releases r WHERE r.id = @release_id), deployments.image)
 WHERE deployments.owner_id = @owner_id AND deployments.id = @deployment_id
   AND deployments.release_id IS NULL
   AND EXISTS (

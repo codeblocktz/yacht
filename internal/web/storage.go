@@ -417,7 +417,13 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if _, err := s.apps.Update(ctx, owner.ID, name, in); err != nil {
+	before, err := s.apps.Get(ctx, owner.ID, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	updated, err := s.apps.Update(ctx, owner.ID, name, in)
+	if err != nil {
 		if errors.Is(err, app.ErrNotFound) {
 			http.NotFound(w, r)
 			return
@@ -432,8 +438,19 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.flashOK(w, r, "Saved. "+name+" is rolling out.")
-	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+	// Said as it happened: a save that changed nothing, or only what the
+	// next build reads, rolls nothing out.
+	switch {
+	case app.RollsOut(before, updated) && !imageIsPending(updated.Image):
+		s.flashOK(w, r, "Saved. "+name+" is rolling out.")
+		http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+		return
+	case app.RollsOut(before, updated), before.Repo != updated.Repo:
+		s.flashOK(w, r, "Saved. The next deploy uses it.")
+	default:
+		s.flashOK(w, r, "Nothing changed.")
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 }
 
 // appActionNoticed re-renders a tab with something worth saying.

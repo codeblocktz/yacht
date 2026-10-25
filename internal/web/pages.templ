@@ -666,7 +666,10 @@ templ AppDeploymentsBody(d AppDetailData) {
 				if d.App.BaselineError != "" {
 					<p>{ d.App.BaselineError }</p>
 				} else if lastDeployFailed(d.Deployments) {
-					<p>The last deploy failed. Its logs, below, say why; fix it and redeploy.</p>
+					<p>The last deploy failed. Fix this and redeploy:</p>
+					if reason := failureReason(d.Deployments[0].Message); reason != "" {
+						<p class="mono mt-2 break-words text-[12px] text-destructive">{ reason }</p>
+					}
 				} else {
 					<p>It runs once its first deploy succeeds.</p>
 				}
@@ -768,7 +771,7 @@ templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
 			@deploymentStatus(dep)
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(a, dep) }</span>
+			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
 			{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }

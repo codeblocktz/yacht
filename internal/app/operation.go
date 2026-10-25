@@ -117,8 +117,14 @@ func (s *Service) admitDeploymentTx(
 	if err := s.wakeForDeploy(ctx, q, ownerID, a.ID); err != nil {
 		return Operation{}, err
 	}
+	// A deploy that builds has no image until the build makes one; the app's
+	// current image is the last build's, which this deploy may never run.
+	image := a.Image
+	if requiresBuild {
+		image = PendingImage
+	}
 	deployment, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
-		OwnerID: ownerID, AppID: a.ID, Image: a.Image,
+		OwnerID: ownerID, AppID: a.ID, Image: image,
 		Revision: trigger, Status: DeployRunning,
 		ReleaseID: pgUUID(releaseID), Trigger: trigger, ActorKind: actorKind,
 	})

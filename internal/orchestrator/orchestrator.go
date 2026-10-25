@@ -458,6 +458,10 @@ const (
 	PhaseRunning  Phase = "running"
 	PhaseDegraded Phase = "degraded"
 	PhaseStopped  Phase = "stopped"
+	// PhaseFailing is an app with nothing ready whose container cannot
+	// start, or whose rollout Kubernetes has given up on: not on its way
+	// up, the way pending is.
+	PhaseFailing Phase = "failing"
 )
 
 // AppStatus is the observed state of a workload.

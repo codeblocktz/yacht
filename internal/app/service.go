@@ -583,7 +583,7 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	// A repository change alone reaches no cluster: it decides what the next
 	// build reads. Recording a deployment for it would put a rollout in the
 	// history that never happened.
-	if !rollsOut(a, updated) {
+	if !RollsOut(a, updated) {
 		s.log.Info("app updated", slog.String("app", name), slog.String("change", "repo"))
 		return updated, nil
 	}
@@ -600,12 +600,12 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	return updated, nil
 }
 
-// rollsOut reports whether a change reaches the cluster.
+// RollsOut reports whether a change reaches the cluster.
 //
 // The port and the internal flag are here because they change the Service and
 // the Ingress as well as the Deployment — a port change that only rewrote the
 // container's port would leave the Service routing to nothing.
-func rollsOut(before, after App) bool {
+func RollsOut(before, after App) bool {
 	return before.Image != after.Image ||
 		before.Port != after.Port ||
 		before.Internal != after.Internal ||
