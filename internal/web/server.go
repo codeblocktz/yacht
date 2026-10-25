@@ -764,6 +764,8 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/metrics", s.appDetail)
 			r.Get("/apps/{name}/storage", s.appDetail)
 			r.Get("/apps/{name}/settings", s.appDetail)
+			// The Console tab and its socket; console.go says why a member's.
+			s.mountConsole(r)
 			// Polled while a deploy or a build is in flight, and not otherwise.
 			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
 			// Reads the remote with ls-remote while somebody types a branch.

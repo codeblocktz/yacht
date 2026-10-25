@@ -50,6 +50,16 @@ type Orchestrator struct {
 	// prerequisite for managing workloads.
 	metrics metricsv.Interface
 
+	// restConfig is how the client reached the cluster, kept for the one call
+	// a clientset cannot make: an exec upgrades its connection to a stream,
+	// which needs the transport rather than a typed client. Nil with the fake
+	// clientset, which has no apiserver to stream from.
+	restConfig *rest.Config
+
+	// execStream stands in for the apiserver's exec stream in tests; nil
+	// streams for real. See streamFunc.
+	execStream streamFunc
+
 	// isolation is the network isolation every namespace is given; team
 	// isolation unless WithIsolation or SetIsolation says otherwise. Read
 	// through Isolation: SetIsolation changes it while the engine runs.
@@ -83,6 +93,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 	}
 
 	o := NewWithClient(client, log).WithIsolation(cfg.Isolation)
+	o.restConfig = restCfg
 
 	// Best effort, like the metrics client: a cluster this cannot build a
 	// dynamic client for is still perfectly usable, it just cannot be asked to

@@ -217,6 +217,8 @@ templ appPanelBody(d AppDetailData) {
 				@appVariables(d)
 			case "metrics":
 				@appMetrics(d)
+			case "console":
+				@appConsole(d)
 			case "settings", "domains", "storage":
 				// The old Domains and Storage addresses, and the forms that answer
 				// to them, land on Settings, where both now live.

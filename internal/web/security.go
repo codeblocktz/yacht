@@ -20,7 +20,10 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", strings.Join([]string{
 			"default-src 'self'",
 			"base-uri 'self'",
-			"connect-src 'self'",
+			// The socket's own origin as well as 'self'. CSP 3 says 'self'
+			// covers ws: and wss: on the same host, and Safari has long not
+			// agreed; see consoleSocketSource.
+			"connect-src 'self'" + consoleSocketSource(s.baseURL, r),
 			"form-action 'self'",
 			"frame-ancestors 'none'",
 			"img-src 'self' data:",
