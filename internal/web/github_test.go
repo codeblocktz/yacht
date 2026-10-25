@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -263,8 +265,9 @@ func TestGitHubRefusalsReadAsSentences(t *testing.T) {
 		github.ErrStateInvalid:  "expired",
 		app.ErrGitHubNotYours:   "GitHub does not list that installation",
 		github.ErrNotAuthorized: "did not accept",
+		fmt.Errorf("%w: %w", github.ErrUnreachable, errors.New("lookup github.com: i/o timeout")): "Try again",
 	} {
-		if got := githubSentence(err); !strings.Contains(got, want) || strings.HasPrefix(got, "app:") {
+		if got := githubSentence(err); !strings.Contains(got, want) || strings.HasPrefix(got, "app:") || strings.Contains(got, "lookup") {
 			t.Errorf("githubSentence(%v) = %q", err, got)
 		}
 	}

@@ -315,6 +315,26 @@ func TestUserInstallationsExchangesTheCode(t *testing.T) {
 	}
 }
 
+// A GitHub that never answers is told apart from one that refused, and the
+// log learns why.
+func TestUnreachableGitHubKeepsTheCause(t *testing.T) {
+	a, _ := newTestApp(t, http.NotFoundHandler())
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	a.cfg.APIURL, a.cfg.WebURL = dead.URL, dead.URL
+
+	_, _, err := a.UserInstallations(t.Context(), "good")
+	if !errors.Is(err, ErrUnreachable) || errors.Is(err, ErrNotAuthorized) {
+		t.Fatalf("err = %v, want ErrUnreachable", err)
+	}
+	if !strings.Contains(err.Error(), "finish signing in") || !strings.Contains(err.Error(), "connect") {
+		t.Errorf("err = %q, want what failed on the way", err)
+	}
+	if _, err := a.Installation(t.Context(), 7); !errors.Is(err, ErrUnreachable) {
+		t.Errorf("an API call: err = %v, want ErrUnreachable", err)
+	}
+}
+
 func TestStateIsBoundAndExpires(t *testing.T) {
 	a, c := newTestApp(t, http.NotFoundHandler())
 	raw := a.SignState("team-1", "user-1")

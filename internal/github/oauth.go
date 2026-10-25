@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -90,7 +91,7 @@ func (a *App) exchangeCode(ctx context.Context, code string) (string, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.cfg.HTTP.Do(req)
 	if err != nil {
-		return "", errors.New("github: could not reach GitHub to finish signing in")
+		return "", fmt.Errorf("%w to finish signing in: %w", ErrUnreachable, err)
 	}
 	defer resp.Body.Close()
 	var out struct {
