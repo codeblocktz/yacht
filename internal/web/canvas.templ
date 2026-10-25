@@ -86,7 +86,7 @@ templ Canvas(d CanvasData) {
 							// top, whether it is up at the foot.
 							<span class="canvas-card-head">
 								<span class="canvas-card-icon">
-									@icon(sourceIcon(n.App.Source))
+									@sourceMark(n.App.Source)
 								</span>
 								<span class="min-w-0 flex-1">
 									<span class="block truncate font-semibold">{ n.App.Name }</span>
@@ -175,7 +175,7 @@ templ appPanelBody(d AppDetailData) {
 	@sheet.Header(sheet.HeaderProps{Class: "canvas-sheet-head"}) {
 		@sheet.Title() {
 			<span class="flex min-w-0 items-center gap-2.5">
-				@icon(sourceIcon(d.App.Source))
+				@sourceMark(d.App.Source)
 				<span class="truncate">{ d.App.Name }</span>
 				@appStatus(d.App)
 			</span>
@@ -209,7 +209,9 @@ templ appPanelBody(d AppDetailData) {
 			@sleepActions(d)
 		</div>
 	}
-	@appTabs(d.App.Name, d.Tab)
+	@appTabs(d.App.Name, d.Tab) {
+		@databaseTabs(d)
+	}
 	<div class="canvas-sheet-body">
 		@sleepCallout(d)
 		switch d.Tab {
@@ -223,6 +225,10 @@ templ appPanelBody(d AppDetailData) {
 				// The old Domains and Storage addresses, and the forms that answer
 				// to them, land on Settings, where both now live.
 				@appSettings(d)
+			case "database":
+				@appDatabase(d)
+			case "backups":
+				@appBackups(d)
 			default:
 				@appDeployments(d)
 		}
@@ -332,10 +338,7 @@ templ canvasAdd(project string) {
 						@icon("github")
 						<span class="flex-1">GitHub Repository</span>
 					</a>
-					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourcePostgres, project)) }>
-						@icon("storage")
-						<span class="flex-1">Database</span>
-					</a>
+					@canvasAddDatabase(project)
 					<a class="switcher-item" href={ templ.URL("/templates" + projectQuery("?", project)) }>
 						@icon("layers")
 						<span class="flex-1">Template</span>

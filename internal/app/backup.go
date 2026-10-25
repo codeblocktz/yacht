@@ -193,7 +193,13 @@ func (s *Service) Backups(ctx context.Context, ownerID, name string) (BackupOver
 		out.Location, out.Where = BackupInS3, s.opts.BackupS3.Where()
 	}
 	if _, _, err := s.backupsFor(a); err != nil {
-		out.Supported, out.Because = false, strings.TrimPrefix(err.Error(), "app: ")
+		// The detail after the sentinel's own words, which the tab's heading
+		// already says.
+		msg := err.Error()
+		if i := strings.LastIndex(msg, ": "); i >= 0 {
+			msg = msg[i+2:]
+		}
+		out.Supported, out.Because = false, strings.ToUpper(msg[:1])+msg[1:]
 	}
 
 	s.settleBackups(ctx, a.ID)

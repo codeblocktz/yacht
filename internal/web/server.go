@@ -802,6 +802,9 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/apps/{name}/logs/stream", s.appLogsStream)
 				r.Get("/apps/{name}/deployments/{id}/logs", s.deployLogs)
 			}
+			// A database's Database and Backups tabs, and Add › Database.
+			s.mountDatabases(r)
+
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
 			// Deploying what is staged is a deploy like any other: a member's,
@@ -865,6 +868,9 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleAdmin))
 
 			r.Post("/apps/{name}/delete", s.appDelete)
+			// A database's connection string, a restore over its data, and
+			// deleting a backup: a credential, and two that cannot be undone.
+			s.mountDatabaseAdmin(r)
 			// A project's name and its deletion are the team's admins', like
 			// deleting an app — which deleting a project does, to every one.
 			r.Post("/projects/{slug}/rename", s.projectRename)

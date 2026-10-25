@@ -478,6 +478,12 @@ type AppDetailData struct {
 	// Region is where the app lives, on an install with regions; nil on one
 	// without, which draws nothing about regions at all.
 	Region *AppRegionData
+
+	// Database and Backups are a database's two extra tabs, loaded only when
+	// one of them is open: each dials the database or reads its jobs. See
+	// database.go.
+	Database *DatabaseData
+	Backups  *BackupsData
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -619,6 +625,8 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "metrics", "Metrics")
 		@appTab(name, active, "console", "Console")
 		@appTab(name, settingsTab(active), "settings", "Settings")
+		// The tabs only some apps have — a database's — passed in by the caller.
+		{ children... }
 	</nav>
 }
 
@@ -1598,7 +1606,10 @@ templ sourcePicker(d NewAppData) {
 					<span class="text-muted-foreground">&rsaquo;</span>
 				</a>
 			}
-			for _, b := range d.Sources {
+			// The databases are one choice, as Railway's Add › Database is, and
+			// each engine a click on the page it opens.
+			@databaseSourceRow(d.Project)
+			for _, b := range nonDatabaseSources(d.Sources) {
 				if b.Available {
 					<a href={ templ.SafeURL(sourceHref(b.Source, d.Project)) } class="row-link">
 						<span class="text-muted-foreground">

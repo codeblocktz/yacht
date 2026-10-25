@@ -1,0 +1,620 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/database"
+)
+
+// engineMark is a database engine's logo, in its own colour. A fill rather
+// than currentColor, so the drawn canvas, which dims every icon it holds, does
+// not grey a logo whose colour is how it is recognised.
+templ engineMark(src app.Source) {
+	if l, ok := engineLogos[src]; ok {
+		<svg class="engine-logo" viewBox="0 0 24 24" role="img" aria-label={ sourceLabel(src) }>
+			<path fill={ l.Color } d={ l.Path }></path>
+		</svg>
+	}
+}
+
+// sourceMark is what an app is shown with: its engine's logo for a
+// database, as Railway draws one, and the source's icon for anything else.
+templ sourceMark(src app.Source) {
+	if _, ok := engineLogos[src]; ok {
+		@engineMark(src)
+	} else {
+		@icon(sourceIcon(src))
+	}
+}
+
+// canvasAddDatabase is Add › Database inside the canvas's Add: the engines,
+// each deployed by one click. A disclosure rather than a second popover, so
+// it opens with no script and closes with the menu.
+templ canvasAddDatabase(project string) {
+	<details class="canvas-add-db">
+		<summary class="switcher-item">
+			@icon("storage")
+			<span class="flex-1">Database</span>
+			<span class="canvas-add-db-chevron">
+				@icon("chevron-right")
+			</span>
+		</summary>
+		<div class="flex flex-col gap-px pl-3">
+			for _, src := range []app.Source{app.SourcePostgres, app.SourceMySQL, app.SourceRedis, app.SourceMongo} {
+				<form method="post" action="/apps/new/database">
+					<input type="hidden" name="engine" value={ string(src) }/>
+					<input type="hidden" name="project" value={ project }/>
+					<button type="submit" class="switcher-item w-full">
+						@engineMark(src)
+						<span class="flex-1 text-left">Add { sourceLabel(src) }</span>
+					</button>
+				</form>
+			}
+		</div>
+	</details>
+}
+
+// databaseSourceRow is the deploy picker's one entry for every database.
+templ databaseSourceRow(project string) {
+	<a href={ templ.SafeURL(newDatabaseHref(project)) } class="row-link">
+		<span class="text-muted-foreground">
+			@icon("storage")
+		</span>
+		<span class="min-w-0 flex-1">
+			<span class="block font-medium">Database</span>
+			<span class="block text-muted-foreground">PostgreSQL, MySQL, Redis or MongoDB, with its storage and credentials set up.</span>
+		</span>
+		<span class="text-muted-foreground">&rsaquo;</span>
+	</a>
+}
+
+// NewDatabase is Add › Database as a page: each engine is a button that
+// deploys it, and a link to the form for whoever wants to name it first.
+templ NewDatabase(d NewDatabaseData) {
+	if d.ProjectName != "" {
+		@pageHead("Add a database", "Into "+d.ProjectName+". It deploys with its storage and credentials; nothing to fill in.", backToSources())
+	} else {
+		@pageHead("Add a database", "It deploys with its storage and credentials; nothing to fill in.", backToSources())
+	}
+	if d.Error != "" {
+		<div class="callout callout-err mb-5 max-w-2xl">
+			<div class="min-w-0">
+				<div class="font-medium">Could not add the database</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	<div class="panel max-w-2xl">
+		<div class="rows">
+			for _, b := range d.Engines {
+				<div class="row-item">
+					@engineMark(b.Source)
+					<span class="min-w-0 flex-1">
+						<span class="block font-medium">{ b.Label }</span>
+						<span class="block text-muted-foreground">{ b.Description }</span>
+					</span>
+					if b.Available {
+						<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(sourceHref(b.Source, d.Project)) }>Options</a>
+						<form method="post" action="/apps/new/database">
+							<input type="hidden" name="engine" value={ string(b.Source) }/>
+							<input type="hidden" name="project" value={ d.Project }/>
+							<button class="btn btn-primary btn-sm" type="submit">Deploy</button>
+						</form>
+					} else {
+						<span class="text-[12px] text-muted-foreground">Not yet — { b.Because }.</span>
+					}
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// databaseTabs are the two tabs a database has beyond every app's.
+templ databaseTabs(d AppDetailData) {
+	if d.App.Source.Database() {
+		@appTab(d.App.Name, d.Tab, "database", "Database")
+		@appTab(d.App.Name, d.Tab, "backups", "Backups")
+	}
+}
+
+// ---------------------------------------------------------------- database tab
+
+templ appDatabase(d AppDetailData) {
+	if db := d.Database; db == nil || !d.App.Source.Database() {
+		<div class="panel">
+			<div class="empty">
+				<p>Only a database has this tab.</p>
+			</div>
+		</div>
+	} else {
+		<nav class="tabs mb-4" aria-label="Database">
+			@databaseSubTab(d.App.Name, db.View, dbViewData, "Data")
+			@databaseSubTab(d.App.Name, db.View, dbViewStats, "Stats")
+			@databaseSubTab(d.App.Name, db.View, dbViewConfig, "Config")
+			@databaseSubTab(d.App.Name, db.View, dbViewConnect, "Connect")
+		</nav>
+		if db.View != dbViewConnect && !db.Browsable {
+			<div class="callout mb-4">
+				<div class="min-w-0">
+					<div class="font-medium">{ sourceLabel(d.App.Source) } has no tables to browse here</div>
+					<p class="mt-0.5 text-muted-foreground">
+						The data browser reads SQL databases; PostgreSQL first. Connect from an app with
+						the address under Connect, or from your machine with the engine's own client.
+					</p>
+				</div>
+			</div>
+		} else if db.View != dbViewConnect && db.Unreachable != "" {
+			<div class="callout callout-err mb-4">
+				<div class="min-w-0">
+					<div class="font-medium">Could not reach the database</div>
+					<p class="mt-0.5 text-muted-foreground">{ db.Unreachable }</p>
+					<p class="mt-1 text-muted-foreground">
+						A database that is starting, redeploying or asleep has nothing answering yet.
+					</p>
+				</div>
+			</div>
+		}
+		switch db.View {
+			case dbViewStats:
+				if db.Stats != nil {
+					@databaseStats(*db.Stats)
+				}
+			case dbViewConfig:
+				@databaseConfig(d.App, *db)
+			case dbViewConnect:
+				@databaseConnect(d.App, *db)
+			default:
+				if db.Browsable && db.Unreachable == "" {
+					@databaseData(d.App.Name, *db)
+				}
+		}
+	}
+}
+
+templ databaseSubTab(name, active, view, label string) {
+	<a
+		href={ templ.SafeURL(dbHref(name, view, "", "", 0)) }
+		class={ "tab", templ.KV("tab-active", active == view) }
+	>{ label }</a>
+}
+
+// databaseData is Railway's Data view: the tables, the open one's rows, and
+// a box for one read-only statement.
+templ databaseData(name string, db DatabaseData) {
+	<div class="panel mb-4">
+		<div class="panel-header">
+			<span class="panel-title">Tables</span>
+			<span class="text-[12px] tabular-nums text-muted-foreground">{ strconv.Itoa(len(db.Tables)) }</span>
+		</div>
+		if len(db.Tables) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No tables yet</p>
+				<p>Whatever the app creates appears here.</p>
+			</div>
+		} else {
+			<div class="db-tables">
+				for _, t := range db.Tables {
+					<a
+						class={ "db-table-link", templ.KV("db-table-link-active", t.Schema == db.Schema && t.Name == db.Table) }
+						href={ templ.SafeURL(dbHref(name, dbViewData, t.Schema, t.Name, 0)) }
+					>
+						<span class="min-w-0 flex-1 truncate">
+							if t.Schema != "public" {
+								<span class="text-muted-foreground">{ t.Schema }.</span>
+							}
+							{ t.Name }
+						</span>
+						if t.Kind != "table" {
+							<span class="text-[11px] text-muted-foreground">{ t.Kind }</span>
+						}
+						<span class="tabular-nums text-[11.5px] text-muted-foreground" title="The planner's estimate, not a count">
+							{ estimateLabel(t.Rows) }
+						</span>
+					</a>
+				}
+			</div>
+		}
+	</div>
+	if db.Table != "" {
+		<div class="panel mb-4">
+			<div class="panel-header">
+				<span class="panel-title mono truncate">{ qualified(db.Schema, db.Table) }</span>
+				<span class="flex items-center gap-1">
+					if db.Page > 0 {
+						<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(dbHref(name, dbViewData, db.Schema, db.Table, db.Page-1)) }>Previous</a>
+					}
+					<span class="text-[12px] tabular-nums text-muted-foreground">Page { strconv.Itoa(db.Page + 1) }</span>
+					if db.Rows != nil && db.Rows.More {
+						<a class="btn btn-ghost btn-sm" href={ templ.SafeURL(dbHref(name, dbViewData, db.Schema, db.Table, db.Page+1)) }>Next</a>
+					}
+				</span>
+			</div>
+			if db.RowsError != "" {
+				<div class="empty">
+					<p>{ db.RowsError }</p>
+				</div>
+			} else if db.Rows != nil {
+				@resultTable(*db.Rows, "No rows on this page.")
+			}
+		</div>
+	}
+	<form method="post" action={ templ.SafeURL("/apps/" + name + "/database/query") } class="panel" id="query">
+		<div class="panel-header">
+			<span class="panel-title">Query</span>
+			<span class="text-[12px] text-muted-foreground">Read-only</span>
+		</div>
+		<div class="panel-body flex flex-col gap-3">
+			<textarea
+				class="control mono"
+				name="sql"
+				rows="4"
+				spellcheck="false"
+				aria-label="SQL"
+				placeholder="SELECT * FROM users ORDER BY created_at DESC LIMIT 20"
+			>{ db.Query }</textarea>
+			<div class="flex items-center gap-3">
+				<button class="btn btn-sm" type="submit">Run</button>
+				<span class="text-[12px] text-muted-foreground">
+					One statement, in a read-only transaction that is rolled back, for at most
+					{ strconv.Itoa(int(database.DefaultLimits.Statement.Seconds())) } seconds and
+					{ strconv.Itoa(database.DefaultLimits.Rows) } rows.
+				</span>
+			</div>
+			if db.QueryError != "" {
+				<div class="callout callout-err">
+					<div class="min-w-0 mono text-[12px]">{ db.QueryError }</div>
+				</div>
+			}
+		</div>
+		if db.Result != nil {
+			<div class="border-t border-border">
+				@resultTable(*db.Result, "The statement returned no rows.")
+			</div>
+		}
+	</form>
+}
+
+// resultTable draws a result as the server printed it. NULL is set apart
+// from an empty string, and a cut value says it was cut.
+templ resultTable(res database.Result, none string) {
+	if len(res.Columns) == 0 {
+		<div class="empty">
+			<p class="mono">{ orDash(res.Command) }</p>
+		</div>
+	} else if len(res.Rows) == 0 {
+		<div class="empty">
+			<p>{ none }</p>
+		</div>
+	} else {
+		<div class="table-scroll">
+			<table class="dtable db-grid">
+				<thead>
+					<tr>
+						for _, c := range res.Columns {
+							<th>{ c }</th>
+						}
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range res.Rows {
+						<tr>
+							for _, v := range row {
+								<td>
+									if v.Null {
+										<span class="db-null">NULL</span>
+									} else {
+										{ v.Text }
+										if v.Cut {
+											<span class="db-null">…</span>
+										}
+									}
+								</td>
+							}
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+	if res.Truncated || res.Elapsed > 0 {
+		<div class="px-5 py-2 text-[11.5px] text-muted-foreground">
+			{ plural(len(res.Rows), "row") } in { durationLabel(res.Elapsed) }
+			if res.Truncated {
+				— there was more, which the browser does not keep. Narrow the query to see it.
+			}
+		</div>
+	}
+}
+
+templ databaseStats(st database.Stats) {
+	<div class="metrics mb-4">
+		@metric("Size", formatBytes(st.SizeBytes), "on disk, indexes included")
+		@metric("Connections", strconv.FormatInt(st.Connections, 10), "of "+strconv.FormatInt(st.MaxConns, 10)+" allowed")
+		@metric("Tables", strconv.FormatInt(st.Tables, 10), "")
+		@metric("Cache hits", cacheHitLabel(st.CacheHit), "reads served from memory")
+	</div>
+	<div class="panel mb-4">
+		<div class="record">
+			@statRow("Version", st.Version)
+			@statRow("Up for", durationLabel(st.Uptime))
+			@statRow("Commits", strconv.FormatInt(st.Commits, 10))
+		</div>
+	</div>
+	if len(st.Largest) > 0 {
+		<div class="panel">
+			<div class="panel-header">
+				<span class="panel-title">Largest tables</span>
+			</div>
+			<table class="dtable">
+				<tbody>
+					for _, t := range st.Largest {
+						<tr>
+							<td class="mono">{ qualified(t.Schema, t.Name) }</td>
+							<td class="tabular-nums text-muted-foreground">{ estimateLabel(t.Rows) }</td>
+							<td class="tabular-nums text-right">{ formatBytes(t.Bytes) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	}
+}
+
+templ statRow(k, v string) {
+	<div class="record-row">
+		<span class="record-k db-record-k">{ k }</span>
+		<span class="record-v">{ v }</span>
+	</div>
+}
+
+// databaseConfig is what the database runs with: how Yacht deployed it, and
+// the server's own settings.
+templ databaseConfig(a app.App, db DatabaseData) {
+	<div class="panel mb-4">
+		<div class="panel-header">
+			<span class="panel-title">Deployment</span>
+		</div>
+		<div class="record">
+			@statRow("Image", imageLabel(a.Image))
+			if db.Blueprint.Volume != nil {
+				@statRow("Data", db.Blueprint.Volume.MountPath)
+			}
+			@statRow("Runs as", "uid "+strconv.FormatInt(db.Blueprint.RunAsUser, 10)+", read-only root filesystem")
+		</div>
+	</div>
+	if db.Config != nil {
+		<div class="panel mb-4">
+			<div class="panel-header">
+				<span class="panel-title">Settings</span>
+			</div>
+			<div class="table-scroll">
+				<table class="dtable">
+					<tbody>
+						for _, st := range db.Config.Settings {
+							<tr title={ st.About }>
+								<td class="mono">{ st.Name }</td>
+								<td class="mono">{ st.Value }{ st.Unit }</td>
+								<td class="text-muted-foreground">{ st.About }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<div class="panel">
+			<div class="panel-header">
+				<span class="panel-title">Extensions</span>
+			</div>
+			<div class="record">
+				for _, e := range db.Config.Extensions {
+					@statRow(e.Name, e.Version)
+				}
+			</div>
+		</div>
+	}
+}
+
+// databaseConnect is Railway's Connect: the address on the cluster's private
+// network, as parts and as one URL, and the public one where there is one.
+//
+// The URL carries the password, so it is masked unless an admin asked for it
+// — and the reference, which another app should use instead of a copy, is
+// what the copy button beside the mask gives.
+templ databaseConnect(a app.App, db DatabaseData) {
+	<div class="panel mb-4">
+		<div class="panel-header">
+			<span class="panel-title">Private network</span>
+			<span class="text-[12px] text-muted-foreground">From apps on this install</span>
+		</div>
+		<div class="record">
+			@recordRow("Host", db.Creds.Host)
+			@recordRow("Port", strconv.Itoa(int(db.Creds.Port)))
+			@recordRow("User", db.Creds.User)
+			if db.Creds.Database != "" {
+				@recordRow("Database", db.Creds.Database)
+			}
+			if db.Creds.URLKey != "" {
+				if db.Revealed {
+					@recordRow("URL", db.Creds.URL)
+				} else {
+					<div class="record-row">
+						<span class="record-k">URL</span>
+						<span class="record-v">{ db.Creds.URL }</span>
+						if db.CanAdmin {
+							<form method="post" action={ templ.SafeURL("/apps/" + a.Name + "/database/reveal") }>
+								<button class="btn btn-ghost btn-sm" type="submit">Show</button>
+							</form>
+						}
+					</div>
+				}
+			}
+		</div>
+	</div>
+	if db.Creds.URLKey != "" {
+		<div class="panel mb-4">
+			<div class="panel-header">
+				<span class="panel-title">From another app</span>
+			</div>
+			<div class="panel-body flex flex-col gap-3">
+				<p class="text-muted-foreground">
+					Give the app that connects a variable with this value. It is resolved at each deploy, so the
+					app follows the password if it changes, and the password is never pasted anywhere.
+				</p>
+				<div class="record">
+					@recordRow(db.Creds.URLKey, "${{"+a.Name+"."+db.Creds.URLKey+"}}")
+				</div>
+			</div>
+		</div>
+	}
+	<div class="panel">
+		<div class="panel-header">
+			<span class="panel-title">Public network</span>
+		</div>
+		if db.Public != "" {
+			<div class="record">
+				@recordRow("Address", db.Public)
+			</div>
+		} else {
+			<div class="empty">
+				<p class="font-medium text-foreground">Not reachable from the internet</p>
+				<p>
+					A TCP proxy gives a database an address outside the cluster; this install does not
+					have one yet. Until then, reach it from an app on the install.
+				</p>
+			</div>
+		}
+	</div>
+}
+
+// ---------------------------------------------------------------- backups tab
+
+templ appBackups(d AppDetailData) {
+	if b := d.Backups; b == nil {
+		<div class="panel">
+			<div class="empty">
+				<p>Only a database has this tab.</p>
+			</div>
+		</div>
+	} else if !b.Supported {
+		<div class="callout">
+			<div class="min-w-0">
+				<div class="font-medium">No backups for this database yet</div>
+				<p class="mt-0.5 text-muted-foreground">{ b.Because }.</p>
+				<p class="mt-1 text-muted-foreground">Its data is on its volume, under Storage.</p>
+			</div>
+		</div>
+	} else {
+		<div class="panel mb-4">
+			<div class="panel-header">
+				<span class="panel-title">Backups</span>
+				<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/backups") }>
+					<button class="btn btn-sm" type="submit" disabled?={ b.Running }>Back up now</button>
+				</form>
+			</div>
+			<div class="panel-body flex flex-col gap-3">
+				if b.Location == app.BackupInS3 {
+					<p class="text-muted-foreground">
+						Each backup is a dump of the database, kept in the install's bucket at
+						<code class="mono">{ b.Where }</code>, away from the cluster.
+					</p>
+				} else {
+					<p class="text-muted-foreground">
+						Each backup is a dump of the database, kept on a volume beside it. That survives a
+						dropped table or a bad migration, and not losing the cluster: an operator can send
+						backups off it by giving the install a bucket.
+					</p>
+				}
+				<form
+					method="post"
+					action={ templ.SafeURL("/apps/" + d.App.Name + "/backups/schedule") }
+					class="flex flex-wrap items-center gap-3"
+				>
+					@checkField("daily", "on", "Back up every day", b.Daily)
+					<span class="text-[12px] text-muted-foreground">
+						Keeps the last { strconv.Itoa(int(b.Keep)) }; older ones are deleted as each new one finishes.
+					</span>
+					<button class="btn btn-ghost btn-sm" type="submit">Save</button>
+				</form>
+			</div>
+		</div>
+		@backupList(d.App.Name, *b)
+	}
+}
+
+// backupList is polled while a backup or restore runs, and not otherwise —
+// the render that finds nothing running comes back without the trigger.
+templ backupList(name string, b BackupsData) {
+	<div
+		id="backup-list"
+		class="panel"
+		if b.Running {
+			hx-get={ "/apps/" + name + "/backups/fragment" }
+			hx-trigger="every 3s"
+			hx-swap="outerHTML"
+		}
+		aria-busy={ boolAttr(b.Running) }
+	>
+		if len(b.Items) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No backups yet</p>
+				<p>Back up now, or turn on the daily backup.</p>
+			</div>
+		} else {
+			<div class="table-scroll">
+				<table class="dtable min-w-[520px]">
+					<thead>
+						<tr><th>When</th><th>What</th><th>Status</th><th>Size</th><th class="text-right">Actions</th></tr>
+					</thead>
+					<tbody>
+						for _, it := range b.Items {
+							<tr>
+								<td class="whitespace-nowrap" title={ absoluteTime(it.StartedAt) }>{ relativeTime(it.StartedAt) }</td>
+								<td class="text-muted-foreground">{ backupWhat(it) }</td>
+								<td>
+									@statusDot(it.Status, backupClass(it.Status))
+								</td>
+								<td class="tabular-nums text-muted-foreground">
+									if it.SizeBytes > 0 {
+										{ formatBytes(it.SizeBytes) }
+									} else {
+										—
+									}
+								</td>
+								<td class="text-right">
+									if b.CanAdmin && it.Kind == app.BackupKindBackup && it.Status == app.BackupSucceeded {
+										<span class="inline-flex gap-1">
+											<form
+												method="post"
+												action={ templ.SafeURL("/apps/" + name + "/backups/" + it.ID.String() + "/restore") }
+												data-confirm="Every table in this backup is replaced with its contents as they were then. Tables created since are left alone. This cannot be undone, so back up first if what is there now matters."
+												data-confirm-title={ "Restore " + name + "?" }
+												data-confirm-label="Restore"
+											>
+												<button class="btn btn-ghost btn-sm" type="submit" disabled?={ b.Running }>Restore</button>
+											</form>
+											<form
+												method="post"
+												action={ templ.SafeURL("/apps/" + name + "/backups/" + it.ID.String() + "/delete") }
+												data-confirm="This deletes the backup. It cannot be recovered."
+												data-confirm-title="Delete this backup?"
+												data-confirm-label="Delete backup"
+											>
+												<button class="btn btn-ghost btn-sm" type="submit">Delete</button>
+											</form>
+										</span>
+									}
+								</td>
+							</tr>
+							if it.Error != "" {
+								<tr>
+									<td class="!pt-0 mono text-[11.5px] text-muted-foreground" colspan="5">{ it.Error }</td>
+								</tr>
+							}
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}
