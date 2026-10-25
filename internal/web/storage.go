@@ -391,8 +391,8 @@ func (s *Server) appSourceDisconnect(w http.ResponseWriter, r *http.Request) {
 		Repo:          app.Repo{},
 		// Carried as they are: disconnecting a repository is not a reason
 		// to forget how the image it built is started.
-		StartCommand:     a.StartCommand,
-		PreDeployCommand: a.PreDeployCommand,
+		StartCommand:         a.StartCommand,
+		PreDeployCommand:     a.PreDeployCommand,
 		CronSchedule:         a.CronSchedule,
 		RestartPolicy:        a.RestartPolicy,
 		RestartMaxRetries:    a.RestartMaxRetries,

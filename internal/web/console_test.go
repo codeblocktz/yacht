@@ -365,7 +365,9 @@ func limitedConsole(t *testing.T, lim consoleLimits, shell func() *fakeShell) *h
 func TestAnIdleConsoleIsClosed(t *testing.T) {
 	srv := limitedConsole(t,
 		consoleLimits{Idle: 150 * time.Millisecond, Max: time.Minute, Ping: time.Second},
-		func() *fakeShell { return &fakeShell{pod: "web-1", hang: true, sizes: make(chan orchestrator.TerminalSize, 8)} })
+		func() *fakeShell {
+			return &fakeShell{pod: "web-1", hang: true, sizes: make(chan orchestrator.TerminalSize, 8)}
+		})
 
 	c, _, err := dialConsole(t, srv, "/apps/web/console/ws", srv.URL)
 	if err != nil {

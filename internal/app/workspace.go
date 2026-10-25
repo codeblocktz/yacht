@@ -150,7 +150,7 @@ func assembleWorkspace(
 		entry := WorkspaceApp{
 			Name:        a.Name,
 			Environment: a.Environment,
-			State: appStateOf(a.Deploying, a.Replicas, a.Serving, a.LastDeploy),
+			State:       appStateOf(a.Deploying, a.Replicas, a.Serving, a.LastDeploy),
 		}
 		if a.ProjectID.Valid {
 			if i, ok := index[uuid.UUID(a.ProjectID.Bytes)]; ok {
