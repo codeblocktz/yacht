@@ -323,6 +323,12 @@ func (s *Service) DeleteProject(ctx context.Context, ownerID, slug string) error
 		return fmt.Errorf("app: list the project's apps: %w", err)
 	}
 	for _, a := range apps {
+		// A deploy in flight would refuse the delete. Deleting the project is
+		// the stronger request, so the deploy is stopped first — the way
+		// somebody would by hand with Stop deploy, then Delete.
+		if err := s.CancelLiveDeployment(ctx, ownerID, a.Name); err != nil && !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("app: stop %s's deploy: %w", a.Name, err)
+		}
 		if err := s.Delete(ctx, ownerID, a.Name); err != nil && !errors.Is(err, ErrNotFound) {
 			return fmt.Errorf("app: delete %s: %w", a.Name, err)
 		}

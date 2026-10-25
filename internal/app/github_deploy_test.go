@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -121,5 +122,38 @@ func TestMoveToProject(t *testing.T) {
 	}
 	if _, err := s.MoveToProject(ctx, team, "gone", p.Slug); err == nil {
 		t.Error("moved an app that does not exist")
+	}
+}
+
+// Deleting a project deletes its apps with it; the default project is not
+// deleted at all.
+func TestDeleteProjectTakesItsApps(t *testing.T) {
+	ctx := context.Background()
+	s, _ := githubFixture(t, nil)
+	team := owner(t, s, s.pool, "delete-project")
+	p, err := s.CreateProject(ctx, team, "Shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, team, CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080, ProjectID: p.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RenameProject(ctx, team, p.Slug, "  Shop Front "); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Project(ctx, team, p.Slug); got.Name != "Shop Front" {
+		t.Errorf("renamed to %q", got.Name)
+	}
+	if err := s.DeleteProject(ctx, team, p.Slug); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(ctx, team, "web"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the project's app survived it: %v", err)
+	}
+	if _, err := s.Project(ctx, team, p.Slug); !errors.Is(err, ErrProjectNotFound) {
+		t.Errorf("the project survived: %v", err)
+	}
+	if err := s.DeleteProject(ctx, team, DefaultProjectSlug); err == nil {
+		t.Error("the default project was deleted")
 	}
 }

@@ -1140,6 +1140,10 @@
   .project-rail-link:focus-visible .nav-tip { @apply block; }
   .project-main { @apply flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden; }
   .switcher-item-active { @apply bg-accent text-foreground; }
+  /* A project page that is not the canvas: scrolls inside the project's
+     chrome, at the width the dashboard's own pages use. */
+  .project-page { @apply min-h-0 flex-1 overflow-y-auto; }
+  .project-page-inner { @apply mx-auto w-full max-w-[1100px] px-6 py-8; }
 
   /* ---------------------------------------------------------------- canvas */
 

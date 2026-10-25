@@ -736,6 +736,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/projects", s.projectList)
 			r.Post("/projects", s.projectCreate)
 			r.Get("/projects/{slug}", s.projectCanvas)
+			r.Get("/projects/{slug}/settings", s.projectSettings)
 
 			// Arranging the canvas sits with the member actions, alongside
 			// deploying: moving a card changes a picture, not a workload, and
@@ -854,6 +855,10 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleAdmin))
 
 			r.Post("/apps/{name}/delete", s.appDelete)
+			// A project's name and its deletion are the team's admins', like
+			// deleting an app — which deleting a project does, to every one.
+			r.Post("/projects/{slug}/rename", s.projectRename)
+			r.Post("/projects/{slug}/delete", s.projectDelete)
 
 			// Storage sits with the admin actions rather than the member ones:
 			// attaching changes how the app deploys, and deleting destroys what
