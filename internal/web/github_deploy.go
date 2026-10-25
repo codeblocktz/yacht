@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
@@ -135,4 +136,41 @@ func (s *Server) projectID(ctx context.Context, ownerID, slug string) (uuid.UUID
 		return uuid.Nil, err
 	}
 	return p.ID, nil
+}
+
+// attachProjects gives the settings the team's projects, to move the app
+// between. Read only for the settings tab, and left out on failure: the
+// rest of the page does not need it.
+func (s *Server) attachProjects(ctx context.Context, d *AppDetailData) {
+	if d.Tab != "settings" || s.apps == nil {
+		return
+	}
+	projects, err := s.apps.Projects(ctx, d.App.OwnerID)
+	if err != nil {
+		s.log.Warn("list projects", slog.String("error", err.Error()))
+		return
+	}
+	d.Projects = projects
+}
+
+// appMoveProject moves an app to another of the team's projects.
+func (s *Server) appMoveProject(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name := chi.URLParam(r, "name")
+	slug := strings.TrimSpace(r.FormValue("project"))
+	p, err := s.apps.MoveToProject(ctx, owner.ID, name, slug)
+	switch {
+	case errors.Is(err, app.ErrNotFound):
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, app.ErrProjectNotFound):
+		s.flashErr(w, r, "That project no longer exists.")
+	case err != nil:
+		s.log.Error("move app to project", slog.String("app", name), slog.String("error", err.Error()))
+		s.flashErr(w, r, "Could not move the app.")
+	default:
+		s.flashOK(w, r, "Moved to "+p.Name+".")
+	}
+	http.Redirect(w, r, "/apps/"+name+"/settings#project", http.StatusSeeOther)
 }

@@ -1,5 +1,7 @@
 package web
 
+import "github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+
 // NewAppGitHub is the one-click deploy: the team's repositories, and a
 // click on one is a deploy. Nothing is asked first. The name is the
 // repository's, the branch its default, the port what its Dockerfile
@@ -102,4 +104,38 @@ templ githubDeployRows(d NewAppGitHubData) {
 			<div class="panel-foot text-xs text-muted-foreground">{ p }</div>
 		}
 	</div>
+}
+
+// appProjectSection moves the app to another of the team's projects: only
+// the canvas it is drawn on changes, not where or how it runs.
+templ appProjectSection(d AppDetailData) {
+	if len(d.Projects) > 1 {
+		<section id="project" class="settings-section">
+			<div class="settings-section-head">
+				<span class="settings-section-mark">
+					@icon("layers")
+				</span>
+				<h2 class="settings-section-title">Project</h2>
+			</div>
+			<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/project") } class="field-group">
+				<label class="field-label" for="project">Shown in</label>
+				<p class="field-note">Which project's canvas this app is on. Nothing about how it runs changes.</p>
+				<div class="mt-1.5 flex items-center gap-2">
+					@selectbox.SelectBox(selectbox.Props{Class: "w-56"}) {
+						@selectbox.Trigger(selectbox.TriggerProps{ID: "project", Name: "project"}) {
+							@selectbox.Value(selectbox.ValueProps{Placeholder: "Choose a project"})
+						}
+						@selectbox.Content(selectbox.ContentProps{NoSearch: len(d.Projects) < 8, SearchPlaceholder: "Search projects"}) {
+							for _, p := range d.Projects {
+								@selectbox.Item(selectbox.ItemProps{Value: p.Slug, Selected: p.ID == d.App.ProjectID}) {
+									{ p.Name }
+								}
+							}
+						}
+					}
+					<button class="btn" type="submit">Move</button>
+				</div>
+			</form>
+		</section>
+	}
 }

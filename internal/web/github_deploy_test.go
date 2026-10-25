@@ -117,3 +117,32 @@ func TestOneClickWithoutGitHubSaysWhere(t *testing.T) {
 		t.Errorf("the page does not say GitHub is not connected: %s", body)
 	}
 }
+
+// An app is moved to another project from its settings; with only one
+// project there is nowhere to move it, and no section.
+func TestAnAppMovesToAnotherProject(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	h := testServer(t, Options{Apps: apps})
+	if body := get(t, h, "/apps/web/settings").Body.String(); strings.Contains(body, `action="/apps/web/project"`) {
+		t.Error("a team with one project is offered a move")
+	}
+
+	apps.projects = []app.Project{dominionProject()}
+	body := get(t, h, "/apps/web/settings").Body.String()
+	if !strings.Contains(body, `action="/apps/web/project"`) || !strings.Contains(body, `value="dominion"`) {
+		t.Fatal("the settings do not offer the move")
+	}
+	if nested := nestedForms(t, body); len(nested) > 0 {
+		t.Errorf("forms inside forms: %v", nested)
+	}
+	rec := post(t, h, "/apps/web/project", url.Values{"project": {"dominion"}})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("move = %d", rec.Code)
+	}
+	if got := apps.byOwner["owner-1"][0].ProjectID; got != dominionProject().ID {
+		t.Errorf("project = %s, want dominion's", got)
+	}
+	if rec := post(t, h, "/apps/nope/project", url.Values{"project": {"dominion"}}); rec.Code != http.StatusNotFound {
+		t.Errorf("moving an app that does not exist = %d", rec.Code)
+	}
+}

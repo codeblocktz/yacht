@@ -776,7 +776,7 @@ func (f *fakeApps) Projects(_ context.Context, ownerID string) ([]app.Project, e
 	p := fakeProject
 	p.OwnerID = ownerID
 	p.Apps = int64(len(f.byOwner[ownerID]))
-	return []app.Project{p}, nil
+	return append([]app.Project{p}, f.projects...), nil
 }
 
 func (f *fakeApps) Project(_ context.Context, ownerID, slug string) (app.Project, error) {
@@ -926,4 +926,18 @@ func (f *fakeApps) Directories(_ context.Context, repoURL, path string) ([]strin
 		return nil, f.branchErr
 	}
 	return f.directories, nil
+}
+
+func (f *fakeApps) MoveToProject(_ context.Context, ownerID, name, slug string) (app.Project, error) {
+	p, err := f.Project(context.Background(), ownerID, slug)
+	if err != nil {
+		return app.Project{}, err
+	}
+	for i, a := range f.byOwner[ownerID] {
+		if a.Name == name {
+			f.byOwner[ownerID][i].ProjectID = p.ID
+			return p, nil
+		}
+	}
+	return app.Project{}, app.ErrNotFound
 }

@@ -408,6 +408,9 @@ templ appStatus(a app.App) {
 // ---------------------------------------------------------------- app detail
 
 type AppDetailData struct {
+	// Projects are the team's, for the settings' move; empty leaves the
+	// section out.
+	Projects    []app.Project
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -659,11 +662,13 @@ templ AppDeploymentsBody(d AppDetailData) {
 	} else {
 		<div class="panel">
 			<div class="empty">
-				<p class="font-medium text-foreground">No baseline release yet</p>
+				<p class="font-medium text-foreground">Not running yet</p>
 				if d.App.BaselineError != "" {
 					<p>{ d.App.BaselineError }</p>
+				} else if lastDeployFailed(d.Deployments) {
+					<p>The last deploy failed. Its logs, below, say why; fix it and redeploy.</p>
 				} else {
-					<p>The first successful deploy, or the resumable upgrade backfill, will create one.</p>
+					<p>It runs once its first deploy succeeds.</p>
 				}
 			</div>
 		</div>
@@ -736,7 +741,7 @@ templ activeDeployment(d AppDetailData, dep app.Deployment) {
 					@deploymentStatus(dep)
 					<span class="tag">active release</span>
 					<span class="text-[12px] text-muted-foreground">
-						{ relativeTime(dep.StartedAt) } via { dep.Source() }
+						{ relativeTime(dep.StartedAt) } via { deploymentSource(d.App, dep) }
 					</span>
 				</div>
 				if d.App.Port > 0 {
@@ -763,10 +768,10 @@ templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
 			@deploymentStatus(dep)
 		</span>
 		<span class="min-w-0 flex-1">
-			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ imageLabel(dep.Image) }</span>
+			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
 		</span>
 		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
-			{ relativeTime(dep.StartedAt) } via { dep.Source() }
+			{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }
 		</span>
 		if rollback && canRollBackTo(a, dep) {
 			@rollbackButton(a, dep)
@@ -945,6 +950,11 @@ templ appMetrics(d AppDetailData) {
 // to, and what still works with no JavaScript at all.
 templ appRuntimeForm(d AppDetailData) {
 	{{ a := d.App }}
+	// sourceCard's Disconnect button submits this one, from inside the
+	// settings form below, where a form of its own cannot be.
+	if a.Source == app.SourceGit && a.Repo.URL != "" {
+		<form id={ sourceDisconnectForm } method="post" action={ templ.URL("/apps/" + a.Name + "/source/disconnect") }></form>
+	}
 	<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") }>
 		<section id="source" class="settings-section">
 			<div class="settings-section-head">
@@ -1117,6 +1127,9 @@ templ appSettings(d AppDetailData) {
 			if d.Region != nil {
 				<a href="#region">Region</a>
 			}
+			if len(d.Projects) > 1 {
+				<a href="#project">Project</a>
+			}
 			<a href="#danger">Danger</a>
 		</nav>
 		<div class="settings-main">
@@ -1129,6 +1142,7 @@ templ appSettings(d AppDetailData) {
 			@appLegacySettings(d)
 			@appSleepSection(d)
 			@appRegionSection(d)
+			@appProjectSection(d)
 		</div>
 	</div>
 }
@@ -1861,7 +1875,7 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						<td class="tabular-nums text-muted-foreground">{ strconv.Itoa(int(p.Restarts)) }</td>
 						<td class="max-w-[160px] truncate text-muted-foreground">{ orDash(p.Node) }</td>
 						<td>
-							@statusDot(p.Phase, podPhaseClass(p))
+							@statusDot(podStatusLabel(p), podPhaseClass(p))
 						</td>
 					</tr>
 					if p.Reason != "" {

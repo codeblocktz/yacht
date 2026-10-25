@@ -208,15 +208,19 @@ templ sourceCard(d AppDetailData) {
 			// Disconnect rather than clearing a field. Emptying an input is
 			// not obviously an action, and it is not obviously undoable;
 			// a named control is both.
-			<form method="post" action={ templ.URL("/apps/" + d.App.Name + "/source/disconnect") }>
-				<button
-					class="btn btn-sm"
-					type="submit"
-					data-confirm="The app keeps running on the image its last build produced. Nothing new is built until a repository is connected again."
-					data-confirm-title="Disconnect this repository?"
-					data-confirm-label="Disconnect"
-				>Disconnect</button>
-			</form>
+			//
+			// The button names its form rather than sitting in one: this card
+			// is inside the settings form, and a form inside a form is closed
+			// by the inner one's end tag, which left the port, the limits and
+			// "Save and roll out" outside any form at all.
+			<button
+				class="btn btn-sm"
+				type="submit"
+				form={ sourceDisconnectForm }
+				data-confirm="The app keeps running on the image its last build produced. Nothing new is built until a repository is connected again."
+				data-confirm-title="Disconnect this repository?"
+				data-confirm-label="Disconnect"
+			>Disconnect</button>
 		</div>
 		if d.RepoError != "" {
 			<p class="mt-1.5 flex items-center gap-1.5 text-[12px] text-destructive">

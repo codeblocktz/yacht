@@ -469,5 +469,6 @@ func (s *Server) detailWith(
 	s.attachHook(r.Context(), r, &d)
 	s.attachSleep(r.Context(), &d)
 	s.attachRegion(r.Context(), &d)
+	s.attachProjects(r.Context(), &d)
 	return d
 }
