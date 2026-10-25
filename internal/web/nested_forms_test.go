@@ -5,10 +5,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/html"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // nestedForms finds forms inside forms. A browser ignores the inner start
@@ -118,5 +120,67 @@ func TestTheSettingsFormSavesTheDeployCommands(t *testing.T) {
 	got := apps.updated[0]
 	if got.PreDeployCommand != "bin/app eval 'App.Release.migrate()'" || got.StartCommand != "bin/app start" {
 		t.Errorf("saved pre-deploy %q and start %q", got.PreDeployCommand, got.StartCommand)
+	}
+}
+
+// The rest of Deploy, and Build for a Git app, save with the form: a
+// schedule, a restart policy and its retries, a healthcheck timeout, a
+// Dockerfile path and watch paths.
+func TestTheSettingsFormSavesTheDeployAndBuildSettings(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.Source = app.SourceGit
+	a.Repo = app.Repo{URL: "https://github.com/acme/web.git", Branch: "main"}
+	a.CronSchedule, a.RestartPolicy, a.RestartMaxRetries = "0 3 * * *", orchestrator.RestartNever, 0
+	a.WatchPaths = []string{"/backend/**", "!/backend/**/*.md"}
+	apps := newFakeApps(a)
+	h := testServer(t, Options{Apps: apps})
+
+	body := get(t, h, "/apps/web/settings").Body.String()
+	for _, want := range []string{
+		`id="build"`, `name="dockerfile_path"`, `name="watch_paths"`,
+		`name="cron_schedule"`, `value="0 3 * * *"`, `name="restart_policy"`,
+		`name="restart_max_retries"`, `name="health_timeout"`,
+		"/backend/**\n!/backend/**/*.md</textarea>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the settings page does not have %q", want)
+		}
+	}
+
+	form := url.Values{
+		"port": {"8080"}, "repo_url": {a.Repo.URL}, "repo_branch": {"main"},
+		"cron_schedule": {"*/30 * * * *"}, "restart_policy": {"on_failure"},
+		"restart_max_retries": {"5"}, "health_timeout": {"120"},
+		"dockerfile_path": {"docker/web.Dockerfile"}, "watch_paths": {"/web/**"},
+	}
+	post(t, h, "/apps/web/runtime", form)
+	if len(apps.updated) != 1 {
+		t.Fatalf("updates = %d, want 1", len(apps.updated))
+	}
+	got := apps.updated[0]
+	if got.CronSchedule != "*/30 * * * *" || got.RestartPolicy != orchestrator.RestartOnFailure ||
+		got.RestartMaxRetries != 5 || got.HealthTimeoutSeconds != 120 ||
+		got.DockerfilePath != "docker/web.Dockerfile" || len(got.WatchPaths) != 1 || got.WatchPaths[0] != "/web/**" {
+		t.Errorf("saved %+v", got)
+	}
+
+	// The policy's picker is filled by script; a form sent without it keeps
+	// the policy rather than resetting it.
+	form.Del("restart_policy")
+	post(t, h, "/apps/web/runtime", form)
+	if got := apps.updated[1].RestartPolicy; got != orchestrator.RestartOnFailure {
+		t.Errorf("policy without the field = %q, want the app's kept", got)
+	}
+}
+
+func TestACronAppSaysWhenItNextRuns(t *testing.T) {
+	now := time.Date(2026, 10, 25, 2, 50, 0, 0, time.UTC)
+	st := orchestrator.AppStatus{Phase: orchestrator.PhaseScheduled, Schedule: "0 3 * * *"}
+	if got, want := cronStatusAt(st, now), "Cron · next run in 10 minutes"; got != want {
+		t.Errorf("cronStatusAt = %q, want %q", got, want)
+	}
+	st.Message = "the last run did not succeed"
+	if got := cronStatusAt(st, now); !strings.HasSuffix(got, "· the last run did not succeed") {
+		t.Errorf("after a failed run = %q, want it said", got)
 	}
 }

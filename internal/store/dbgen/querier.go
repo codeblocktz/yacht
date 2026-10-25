@@ -96,6 +96,9 @@ type Querier interface {
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateSignupLink(ctx context.Context, arg CreateSignupLinkParams) (SignupLink, error)
+	// A push that changed no watched file: recorded, already finished, and never
+	// queued, because there is nothing for a worker to do.
+	CreateSkippedDeployment(ctx context.Context, arg CreateSkippedDeploymentParams) (Deployment, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//

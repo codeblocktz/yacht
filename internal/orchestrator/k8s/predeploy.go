@@ -336,7 +336,7 @@ func (o *Orchestrator) waitForPreDeploy(
 				return false, nil
 			}
 			for _, cs := range pod.Status.ContainerStatuses {
-				if reason, message, ok := containerCannotStart(cs); ok {
+				if reason, message, ok := containerCannotStart(cs, 0); ok {
 					result = orchestrator.PreDeployResult{
 						Reason: "could not start (" + strings.TrimSpace(reason+": "+message) + ")",
 					}

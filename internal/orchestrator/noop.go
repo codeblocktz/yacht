@@ -79,6 +79,14 @@ func (n *Noop) AppStatus(_ context.Context, ref Ref) (AppStatus, error) {
 	if !ok {
 		return AppStatus{}, ErrNotFound
 	}
+	if spec.Schedule != "" && spec.Replicas > 0 {
+		// Between runs, which is all an in-memory orchestrator ever is.
+		return AppStatus{
+			Phase: PhaseScheduled, ReleaseID: spec.ReleaseID,
+			ConfigVersion: spec.ConfigVersion, AvailableCondition: true,
+			Schedule: spec.Schedule,
+		}, nil
+	}
 	if spec.Replicas == 0 {
 		return AppStatus{
 			Phase: PhaseStopped, ReleaseID: spec.ReleaseID,

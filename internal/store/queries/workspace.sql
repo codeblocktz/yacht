@@ -34,8 +34,10 @@ SELECT a.name, a.project_id, a.replicas,
        ) AS deploying
 FROM apps a
 LEFT JOIN LATERAL (
+    -- A skipped push is not how the last deploy ended: nothing was
+    -- deployed, and the one before it still says how that went.
     SELECT status FROM deployments
-    WHERE app_id = a.id
+    WHERE app_id = a.id AND status <> 'skipped'
     ORDER BY started_at DESC
     LIMIT 1
 ) d ON true

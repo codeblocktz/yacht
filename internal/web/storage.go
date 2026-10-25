@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 // gib is the unit the form works in. Bytes are what the engine stores, because
@@ -369,6 +372,12 @@ func (s *Server) appSourceDisconnect(w http.ResponseWriter, r *http.Request) {
 		// to forget how the image it built is started.
 		StartCommand:     a.StartCommand,
 		PreDeployCommand: a.PreDeployCommand,
+		CronSchedule:         a.CronSchedule,
+		RestartPolicy:        a.RestartPolicy,
+		RestartMaxRetries:    a.RestartMaxRetries,
+		HealthTimeoutSeconds: a.HealthTimeoutSeconds,
+		DockerfilePath:       a.DockerfilePath,
+		WatchPaths:           a.WatchPaths,
 	}); err != nil {
 		s.flashErr(w, r, err.Error())
 		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
@@ -421,6 +430,13 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		},
 		StartCommand:     r.FormValue("start_command"),
 		PreDeployCommand: r.FormValue("pre_deploy_command"),
+		CronSchedule:     r.FormValue("cron_schedule"),
+		// Out of range is refused by the service, with the bounds, rather
+		// than clamped here into something nobody typed.
+		RestartMaxRetries:    int32(min(formNumber(r, "restart_max_retries"), math.MaxInt32)),
+		HealthTimeoutSeconds: int32(min(formNumber(r, "health_timeout"), math.MaxInt32)),
+		DockerfilePath:       r.FormValue("dockerfile_path"),
+		WatchPaths:           []string{r.FormValue("watch_paths")},
 	}
 
 	before, err := s.apps.Get(ctx, owner.ID, name)
@@ -428,6 +444,12 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The policy's picker fills its field from script. A form sent without
+	// it keeps the policy the app has, rather than quietly resetting it to
+	// the default.
+	in.RestartPolicy = cmp.Or(
+		orchestrator.RestartPolicy(strings.TrimSpace(r.FormValue("restart_policy"))),
+		before.RestartPolicy)
 	updated, err := s.apps.Update(ctx, owner.ID, name, in)
 	if err != nil {
 		if errors.Is(err, app.ErrNotFound) {
@@ -451,7 +473,9 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		s.flashOK(w, r, "Saved. "+name+" is rolling out.")
 		http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 		return
-	case app.RollsOut(before, updated), before.Repo != updated.Repo:
+	case app.RollsOut(before, updated), before.Repo != updated.Repo,
+		before.DockerfilePath != updated.DockerfilePath,
+		!slices.Equal(before.WatchPaths, updated.WatchPaths):
 		s.flashOK(w, r, "Saved. The next deploy uses it.")
 	default:
 		s.flashOK(w, r, "Nothing changed.")

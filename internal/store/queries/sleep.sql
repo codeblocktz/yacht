@@ -33,6 +33,10 @@ LEFT JOIN team_sleep_defaults d ON d.owner_id = a.owner_id
 WHERE a.sleep_state = 'awake'
   AND a.active_release_id IS NOT NULL
   AND (a.sleep_mode = 'on' OR (a.sleep_mode = 'inherit' AND coalesce(d.enabled, false)))
+  -- An app on a schedule takes no requests and runs on its clock, not on
+  -- traffic: by the sleeper's measure it is always idle, and it must never
+  -- be put to sleep for it.
+  AND a.cron_schedule = ''
 ORDER BY a.id;
 
 -- Records the ingress controller's counter for an app. A counter that moved

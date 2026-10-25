@@ -328,7 +328,100 @@ type AppSpec struct {
 	// so it reads the way somebody would type it. Empty runs the image as it
 	// was built, which is every app that has never set one.
 	StartCommand string
+
+	// Schedule, when set, runs the workload on a cron schedule instead of
+	// keeping it running: each run starts the container, which exits when it
+	// is done. A five-field cron expression, or one of the @hourly family, in
+	// UTC — the grammar Kubernetes accepts, checked with the parser it uses.
+	//
+	// A scheduled workload takes no traffic: it has no Service and no
+	// Ingress, since between runs there is nothing to route to. Replicas
+	// zero pauses the schedule rather than meaning nothing.
+	Schedule string
+
+	// RestartPolicy is what happens when the container exits: one of the
+	// Restart constants, empty being RestartOnFailure. MaxRestarts bounds
+	// RestartOnFailure; zero is DefaultMaxRestarts. See RestartPolicy for
+	// what each can honestly mean for a workload that always runs.
+	RestartPolicy RestartPolicy
+	MaxRestarts   int32
+
+	// HealthTimeoutSeconds is how long a new version has to become ready
+	// before its deploy counts as failed. Zero is the engine's own budget.
+	HealthTimeoutSeconds int32
 }
+
+// RestartPolicy is what happens to a container that exits.
+//
+// Railway's three choices, made to mean what they can on Kubernetes, which
+// restarts every container a Deployment runs whatever it is asked: a pod
+// template there accepts restartPolicy Always and nothing else. So for an app
+// that always runs, the policy cannot stop a restart. What it decides is how
+// many crashes a new version may have before its deploy fails — and with it,
+// the reconciler returns the app to the version before, which is what does
+// stop the crashing one — and when a running app counts as failing.
+//
+// A scheduled run is a Job, which can be told not to restart, and there the
+// policy is the Job's own.
+type RestartPolicy string
+
+const (
+	// RestartOnFailure gives a crashing container MaxRestarts restarts
+	// before it is failing: a new version's deploy fails, and a running app
+	// is reported failing while Kubernetes goes on retrying with its
+	// back-off. A run on a schedule is retried MaxRestarts times.
+	RestartOnFailure RestartPolicy = "on_failure"
+
+	// RestartAlways never gives up: a crashing container is never what fails
+	// a deploy, only a version that does not become ready in time does. A
+	// run on a schedule is retried, as on failure, since a Job cannot be
+	// restarted after it succeeds.
+	RestartAlways RestartPolicy = "always"
+
+	// RestartNever fails a new version's deploy on its first crash, and
+	// reports a running app failing from its first. It does not stop
+	// Kubernetes restarting a running app's container — that would mean
+	// scaling the app to nothing, which is a decision about the app rather
+	// than about one crash — but nothing calls it healthy while it does. A
+	// run on a schedule is not retried.
+	RestartNever RestartPolicy = "never"
+)
+
+// DefaultMaxRestarts is how many times a container may crash before
+// RestartOnFailure counts it failing, when an app has not said: enough for one
+// that waits on a database still starting, few enough not to wait out a
+// deadline for one that never will.
+const DefaultMaxRestarts = 3
+
+// CrashLimit is how many restarts a container may have before it is failing.
+// Zero is no limit.
+func (s AppSpec) CrashLimit() int32 {
+	switch s.RestartPolicy {
+	case RestartAlways:
+		return 0
+	case RestartNever:
+		return 1
+	}
+	if s.MaxRestarts > 0 {
+		return s.MaxRestarts
+	}
+	return DefaultMaxRestarts
+}
+
+// ValidateRestartPolicy reports whether p is one of the Restart constants, or
+// empty for the default.
+func ValidateRestartPolicy(p RestartPolicy) error {
+	switch p {
+	case "", RestartOnFailure, RestartAlways, RestartNever:
+		return nil
+	}
+	return fmt.Errorf("restart policy %q is not on_failure, always or never", p)
+}
+
+// MaxHealthTimeoutSeconds is the longest a new version may be given to
+// become ready: half an hour, past which a deploy nobody can tell from a hung
+// one is worse than one that fails and says why.
+const MaxHealthTimeoutSeconds = 1800
 
 // VolumeSpec is one piece of storage attached to a workload.
 //
@@ -381,6 +474,19 @@ func (s AppSpec) Validate() error {
 	}
 	if err := s.validateHealth(); err != nil {
 		return err
+	}
+	if err := ValidateSchedule(s.Schedule); err != nil {
+		return fmt.Errorf("app spec: %w", err)
+	}
+	if err := ValidateRestartPolicy(s.RestartPolicy); err != nil {
+		return fmt.Errorf("app spec: %w", err)
+	}
+	if s.MaxRestarts < 0 {
+		return fmt.Errorf("app spec: max restarts must be >= 0, got %d", s.MaxRestarts)
+	}
+	if s.HealthTimeoutSeconds < 0 || s.HealthTimeoutSeconds > MaxHealthTimeoutSeconds {
+		return fmt.Errorf("app spec: health timeout must be within 0-%d seconds, got %d",
+			MaxHealthTimeoutSeconds, s.HealthTimeoutSeconds)
 	}
 	return s.validateWaker()
 }
@@ -534,6 +640,10 @@ const (
 	// start, or whose rollout Kubernetes has given up on: not on its way
 	// up, the way pending is.
 	PhaseFailing Phase = "failing"
+	// PhaseScheduled is an app that runs on a schedule rather than all the
+	// time, with its schedule in force. Between runs nothing is running, and
+	// that is the healthy state for it.
+	PhaseScheduled Phase = "scheduled"
 )
 
 // AppStatus is the observed state of a workload.
@@ -551,6 +661,12 @@ type AppStatus struct {
 	Terminal           bool
 	Reason             string
 	Message            string
+
+	// Schedule is the cron expression a scheduled workload is running on,
+	// as the cluster has it; empty for one that always runs. LastRun is when
+	// it last started a run, zero for never.
+	Schedule string
+	LastRun  time.Time
 }
 
 // Orchestrator applies desired state to a runtime and reports back what it
@@ -765,6 +881,12 @@ type BuildRequest struct {
 	RepoURL string
 	Ref     string
 	Subdir  string
+
+	// Dockerfile is the Dockerfile to build, relative to Subdir. Empty builds
+	// the one named Dockerfile there, and falls back to buildpacks when there
+	// is none; a path that is set and missing fails the build instead, since
+	// somebody named a file and a buildpack guess is not what they asked for.
+	Dockerfile string
 
 	// Insecure means the registry speaks plain HTTP, so the push has to be
 	// told not to expect TLS. Both build strategies need it and neither

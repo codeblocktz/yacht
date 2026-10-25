@@ -9,6 +9,7 @@ INSERT INTO app_releases (
     internal, run_as_user, fs_group, scratch_paths,
     writable_root_filesystem, health_path, health_liveness,
     start_command, pre_deploy_command,
+    cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds,
     env, secret_keys, config_version, origin
 )
 VALUES (
@@ -17,6 +18,7 @@ VALUES (
     @internal, @run_as_user, @fs_group, @scratch_paths,
     @writable_root_filesystem, @health_path, @health_liveness,
     @start_command, @pre_deploy_command,
+    @cron_schedule, @restart_policy, @restart_max_retries, @health_timeout_seconds,
     @env, @secret_keys, @config_version, @origin
 )
 RETURNING *;
@@ -120,6 +122,10 @@ SET image           = r.image_ref,
     health_liveness = r.health_liveness,
     start_command      = r.start_command,
     pre_deploy_command = r.pre_deploy_command,
+    cron_schedule          = r.cron_schedule,
+    restart_policy         = r.restart_policy,
+    restart_max_retries    = r.restart_max_retries,
+    health_timeout_seconds = r.health_timeout_seconds,
     run_as_user     = CASE WHEN apps.source = 'git' THEN r.run_as_user ELSE apps.run_as_user END,
     config_version  = apps.config_version + 1,
     updated_at      = now()

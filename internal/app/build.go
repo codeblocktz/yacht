@@ -190,6 +190,8 @@ func (s *Service) runBuild(
 		Ref:     a.Repo.Ref(),
 		Subdir:  a.Repo.Subdir,
 
+		Dockerfile: a.DockerfilePath,
+
 		Insecure:     s.images.Insecure(ctx),
 		RegistryAuth: auth,
 		Log:          s.buildLogger(ctx, row.ID),
@@ -298,5 +300,7 @@ func (s *Service) pullAuth(ctx context.Context, a App) []byte {
 // that follows it — a deploy that timed out while applying an image that built
 // fine would be the most confusing possible failure. The pre-deploy command's
 // own cap sits between the two, for the same reason: a migration that was
-// given ten minutes must not be cut off by the deploy around it at nine.
-const deployTimeout = 50 * time.Minute
+// given ten minutes must not be cut off by the deploy around it at nine. And
+// the rollout's is the longest healthcheck timeout an app may choose, so an
+// app given half an hour to become ready is given it.
+const deployTimeout = 75 * time.Minute
