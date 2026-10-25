@@ -739,3 +739,61 @@ func failureReason(message string) string {
 func lastDeployFailed(deps []app.Deployment) bool {
 	return len(deps) > 0 && deps[0].Status == app.DeployFailed
 }
+
+// settingsTab is which tab is lit for a tab name: Domains and Storage are
+// sections of Settings now, so their addresses light Settings.
+func settingsTab(active string) string {
+	if active == "domains" || active == "storage" {
+		return "settings"
+	}
+	return active
+}
+
+// deploymentTitle is what a deployment row is called, in Railway's place
+// for the commit message: what caused it, said the way a person would.
+func deploymentTitle(dep app.Deployment) string {
+	rev := dep.Revision
+	switch {
+	case rev == "" || rev == "initial":
+		return "Initial deploy"
+	case rev == "redeploy":
+		return "Redeploy"
+	case rev == app.RollbackTrigger:
+		return "Rollback"
+	case strings.HasPrefix(rev, app.PushTriggerPrefix):
+		sha := strings.TrimPrefix(rev, app.PushTriggerPrefix)
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
+		return "Push " + sha
+	case strings.HasPrefix(rev, "variable-delete:"):
+		return "Removed " + strings.TrimPrefix(rev, "variable-delete:")
+	case strings.HasPrefix(rev, "variable:"):
+		return "Set " + strings.TrimPrefix(rev, "variable:")
+	case strings.HasPrefix(rev, "git:"):
+		return "Build " + strings.TrimPrefix(rev, "git:")
+	}
+	// Settings changes are recorded as what changed ("port:8080 cpu:…");
+	// the first part is enough for a title, and the rest is in the logs.
+	first, _, _ := strings.Cut(rev, " ")
+	return "Changed " + strings.ReplaceAll(first, ":", " → ")
+}
+
+// deploymentBadge is the word Railway puts in a deployment's badge — ACTIVE
+// for the one serving, REMOVED for one it replaced — with its colour.
+func deploymentBadge(dep app.Deployment) (label, class string) {
+	switch {
+	case dep.IsActive:
+		return "ACTIVE", "badge-ok"
+	case dep.Status == app.DeployFailed:
+		return "FAILED", "badge-err"
+	case dep.Status == app.DeployRunning || dep.Status == "pending":
+		if imageIsPending(dep.Image) {
+			return "BUILDING", "badge-busy"
+		}
+		return "DEPLOYING", "badge-busy"
+	case dep.Status == "cancelled":
+		return "CANCELLED", "badge-idle"
+	}
+	return "REMOVED", "badge-idle"
+}

@@ -118,16 +118,24 @@ func TestTheDomainsTabOffersDomainControls(t *testing.T) {
 	}
 }
 
-// And the tab is reachable from the app's own navigation, which is the half
-// that was missing when this lived on a page of its own.
+// And domains are reachable from the app's own navigation, which is the
+// half that was missing when this lived on a page of its own. They are a
+// section of Settings now, as on Railway, and the old address lands there.
 func TestTheDomainsTabIsLinkedFromTheApp(t *testing.T) {
 	h := netServer(t, &fakeNets{net: app.Networking{
 		Managed: "web.apps.test", Target: "edge.yacht.test",
 	}})
 
 	body := do(h, signedIn(http.MethodGet, "/apps/web")).Body.String()
-	if !strings.Contains(body, `href="/apps/web/domains"`) {
-		t.Error("nothing on the app page links to its domains")
+	if !strings.Contains(body, `href="/apps/web/settings"`) {
+		t.Error("nothing on the app page links to its settings")
+	}
+	settings := do(h, signedIn(http.MethodGet, "/apps/web/settings")).Body.String()
+	if !strings.Contains(settings, `href="#domains"`) || !strings.Contains(settings, `id="domains"`) {
+		t.Error("the settings do not hold the domains")
+	}
+	if old := do(h, signedIn(http.MethodGet, "/apps/web/domains")).Body.String(); !strings.Contains(old, `id="domains"`) {
+		t.Error("the old Domains address no longer shows them")
 	}
 }
 

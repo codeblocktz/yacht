@@ -611,9 +611,7 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "", "Deployments")
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
-		@appTab(name, active, "storage", "Storage")
-		@appTab(name, active, "domains", "Domains")
-		@appTab(name, active, "settings", "Settings")
+		@appTab(name, settingsTab(active), "settings", "Settings")
 	</nav>
 }
 
@@ -654,6 +652,7 @@ templ AppDeploymentsBody(d AppDetailData) {
 		@deployInFlight(d)
 	}
 	if active, ok := activeDeploymentOf(d.Deployments); ok {
+		@deploymentsHeader(d)
 		@activeDeployment(d, active)
 	} else if d.App.ActiveReleaseID != nil {
 		<div class="panel border-l-2 border-l-success p-4">
@@ -680,18 +679,16 @@ templ AppDeploymentsBody(d AppDetailData) {
 		</div>
 	}
 	if len(d.Deployments) > 0 {
-		<div class="panel mt-4">
-			<div class="panel-header">
-				<span class="panel-title">History</span>
-			</div>
-			<div class="rows">
+		<details class="deploy-history" open>
+			<summary class="deploy-history-head">History</summary>
+			<div class="flex flex-col gap-2">
 				for _, dep := range d.Deployments {
 					if !dep.IsActive {
 						@deploymentRow(d.App, dep, !deploymentsInFlight(d))
 					}
 				}
 			</div>
-		</div>
+		</details>
 	}
 	<div class="panel mt-4">
 		<div class="panel-header">
@@ -739,51 +736,57 @@ templ deployInFlight(d AppDetailData) {
 }
 
 templ activeDeployment(d AppDetailData, dep app.Deployment) {
-	<div class={ "panel border-l-2 p-4", activeDeploymentBorder(dep) }>
-		<div class="flex flex-wrap items-center justify-between gap-3">
-			@deployLogsButton(d.App.Name, dep)
-			<div class="min-w-0">
-				<div class="flex items-center gap-2">
-					@deploymentStatus(dep)
-					<span class="tag">active release</span>
-					<span class="text-[12px] text-muted-foreground">
-						{ relativeTime(dep.StartedAt) } via { deploymentSource(d.App, dep) }
-					</span>
+	<div class="deploy-card deploy-card-active">
+		<div class="flex items-center gap-4">
+			@deploymentBadgeTag(dep)
+			<div class="min-w-0 flex-1">
+				<div class="truncate font-medium text-foreground">{ deploymentTitle(dep) }</div>
+				<div class="text-[12px] text-muted-foreground">
+					{ relativeTime(dep.StartedAt) } via { deploymentSource(d.App, dep) }
 				</div>
-				if d.App.Port > 0 {
-					<p class="mono mt-1.5 truncate text-muted-foreground">
-						{ d.App.Namespace }.svc.cluster.local:80
-					</p>
-				}
-				if dep.Message != "" {
-					<p class="mt-1.5 text-[12.5px] text-muted-foreground">{ dep.Message }</p>
-				}
 			</div>
-			<div class="flex items-center gap-2">
-				<span class="tag">{ dep.Revision }</span>
-			</div>
+			@deployLogsButton(d.App.Name, dep)
+		</div>
+		<div class="deploy-card-foot">
+			@icon("check")
+			if dep.Message != "" {
+				<span class="min-w-0 truncate">{ dep.Message }</span>
+			} else {
+				<span>Deployment successful</span>
+			}
+			<span class={ "mono ml-auto truncate text-[11.5px] text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
 		</div>
 	</div>
 }
 
+// deploymentRow is one past deployment, as Railway lists them: a badge for
+// what became of it, what caused it and when, and its logs. Rolling back to
+// it is in the row's menu rather than a button on every row.
+//
 // rollback is false while a deploy is in flight: the engine would refuse it,
-// and a button whose only answer is "not now" is one to leave off until then.
+// and an item whose only answer is "not now" is one to leave off until then.
 templ deploymentRow(a app.App, dep app.Deployment, rollback bool) {
-	<div class="row-item !py-2.5">
-		<span class="w-24 shrink-0">
-			@deploymentStatus(dep)
-		</span>
-		<span class="min-w-0 flex-1">
-			<span class={ "mono block truncate text-muted-foreground", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
-		</span>
-		<span class="shrink-0 text-right text-[12px] text-muted-foreground">
-			{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }
-		</span>
-		if rollback && canRollBackTo(a, dep) {
-			@rollbackButton(a, dep)
-		}
-		@deployLogsButton(a.Name, dep)
+	<div class="deploy-card">
+		<div class="flex items-center gap-4">
+			@deploymentBadgeTag(dep)
+			<div class="min-w-0 flex-1">
+				<div class="truncate font-medium text-foreground">{ deploymentTitle(dep) }</div>
+				<div class="truncate text-[12px] text-muted-foreground">
+					{ relativeTime(dep.StartedAt) } via { deploymentSource(a, dep) }
+					<span class={ "mono ml-2", templ.KV("italic", imageIsPending(dep.Image)) }>{ deploymentImageLabel(dep) }</span>
+				</div>
+			</div>
+			@deployLogsButton(a.Name, dep)
+			if rollback && canRollBackTo(a, dep) {
+				@rollbackButton(a, dep)
+			}
+		</div>
 	</div>
+}
+
+templ deploymentBadgeTag(dep app.Deployment) {
+	{{ label, class := deploymentBadge(dep) }}
+	<span class={ "deploy-badge", class }>{ label }</span>
 }
 
 // rollbackButton puts the app back on the release this row ran.
@@ -1129,6 +1132,8 @@ templ appSettings(d AppDetailData) {
 				<a href="#push">Deploy on push</a>
 			}
 			<a href="#networking">Networking</a>
+			<a href="#domains">Domains</a>
+			<a href="#volumes">Volumes</a>
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
 			<a href="#replicas">Replicas</a>
@@ -1150,6 +1155,23 @@ templ appSettings(d AppDetailData) {
 			if d.HooksOn {
 				@appPushSection(d)
 			}
+			// Domains and volumes are settings, as on Railway, rather than tabs
+			// of their own: they are things set once and looked at rarely, and
+			// a tab apiece pushed the ones looked at every day off the bar.
+			<section id="domains" class="settings-section">
+				<div class="settings-section-head">
+					<span class="settings-section-mark">@icon("globe")</span>
+					<h2 class="settings-section-title">Domains</h2>
+				</div>
+				@appDomains(d)
+			</section>
+			<section id="volumes" class="settings-section">
+				<div class="settings-section-head">
+					<span class="settings-section-mark">@icon("disk")</span>
+					<h2 class="settings-section-title">Volumes</h2>
+				</div>
+				@appStorage(d)
+			</section>
 			@appLegacySettings(d)
 			@appSleepSection(d)
 			@appRegionSection(d)
@@ -2324,4 +2346,28 @@ templ appStorage(d AppDetailData) {
 
 templ backToSources() {
 	<a class="btn btn-ghost" href="/apps/new">Change source</a>
+}
+
+// deploymentsHeader is the line Railway puts over a service's deployments:
+// where it answers, where it runs, and how many of it there are.
+templ deploymentsHeader(d AppDetailData) {
+	<div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
+		if d.App.Host != "" {
+			<a class="inline-flex min-w-0 items-center gap-1.5 text-foreground hover:underline" href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) } target="_blank" rel="noreferrer">
+				@icon("globe")
+				<span class="truncate">{ d.App.Host }</span>
+			</a>
+		}
+		<span class="flex-1"></span>
+		if d.App.Region != "" {
+			<span class="inline-flex items-center gap-1.5 text-muted-foreground">
+				@icon("map-pin")
+				{ d.App.Region }
+			</span>
+		}
+		<span class="inline-flex items-center gap-1.5 text-muted-foreground">
+			@icon("layers")
+			{ plural(int(d.App.Replicas), "Replica") }
+		</span>
+	</div>
 }

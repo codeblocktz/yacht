@@ -103,7 +103,7 @@ templ Canvas(d CanvasData) {
 						</a>
 						if n.Volume != nil {
 							<a
-								href={ templ.URL("/apps/" + n.App.Name + "/storage") }
+								href={ templ.URL("/apps/" + n.App.Name + "/settings#volumes") }
 								class="canvas-volume"
 							>
 								@icon("disk")
@@ -221,11 +221,9 @@ templ appPanelBody(d AppDetailData) {
 				@appVariables(d)
 			case "metrics":
 				@appMetrics(d)
-			case "storage":
-				@appStorage(d)
-			case "domains":
-				@appDomains(d)
-			case "settings":
+			case "settings", "domains", "storage":
+				// The old Domains and Storage addresses, and the forms that answer
+				// to them, land on Settings, where both now live.
 				@appSettings(d)
 			default:
 				@appDeployments(d)

@@ -89,3 +89,31 @@ func TestAFailedDeploySaysWhyOnTheAppPage(t *testing.T) {
 		t.Error("the reason keeps the service's prefixes")
 	}
 }
+
+// A deployment is titled by what caused it, and badged by what became of
+// it, in Railway's words.
+func TestDeploymentTitlesAndBadges(t *testing.T) {
+	for rev, want := range map[string]string{
+		"initial": "Initial deploy", "redeploy": "Redeploy", app.RollbackTrigger: "Rollback",
+		app.PushTriggerPrefix + "2fdc9db0123": "Push 2fdc9db", "variable:DATABASE_URL": "Set DATABASE_URL",
+		"variable-delete:OLD": "Removed OLD", "port:8080 internal:false": "Changed port → 8080",
+	} {
+		if got := deploymentTitle(app.Deployment{Revision: rev}); got != want {
+			t.Errorf("deploymentTitle(%q) = %q, want %q", rev, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		dep  app.Deployment
+		want string
+	}{
+		{app.Deployment{IsActive: true, Status: app.DeploySucceeded}, "ACTIVE"},
+		{app.Deployment{Status: app.DeploySuperseded}, "REMOVED"},
+		{app.Deployment{Status: app.DeployFailed}, "FAILED"},
+		{app.Deployment{Status: app.DeployRunning, Image: app.PendingImage}, "BUILDING"},
+		{app.Deployment{Status: app.DeployRunning, Image: "registry/web:1"}, "DEPLOYING"},
+	} {
+		if got, _ := deploymentBadge(tc.dep); got != tc.want {
+			t.Errorf("deploymentBadge(%+v) = %q, want %q", tc.dep.Status, got, tc.want)
+		}
+	}
+}

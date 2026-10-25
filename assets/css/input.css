@@ -1282,6 +1282,27 @@
   .canvas-add-btn { @apply gap-1.5 bg-card shadow-sm; }
   .canvas-add-btn svg { @apply size-3.5; }
 
+  /* ---- a service's deployments, as Railway lists them */
+  .deploy-card { @apply rounded-lg border border-border bg-card px-4 py-3; }
+  .deploy-card-active { @apply border-success/40 bg-success/5; }
+  .deploy-card-foot {
+    @apply mt-3 flex items-center gap-2 border-t border-success/20 pt-2.5 text-[12.5px] text-success;
+  }
+  .deploy-card-foot svg { @apply size-3.5; }
+  .deploy-badge {
+    @apply inline-flex w-[92px] shrink-0 justify-center rounded px-2 py-1 font-mono text-[11px]
+           font-medium tracking-wide;
+  }
+  .badge-ok { @apply bg-success/15 text-success; }
+  .badge-err { @apply bg-destructive/15 text-destructive; }
+  .badge-busy { @apply bg-info/15 text-info; }
+  .badge-idle { @apply bg-muted text-muted-foreground; }
+  .deploy-history { @apply mt-5; }
+  .deploy-history-head {
+    @apply mb-2 cursor-pointer select-none text-[11.5px] font-medium uppercase tracking-wide
+           text-muted-foreground;
+  }
+
   /* ---- drawn by JointJS (canvas.js). The server's cards are moved into the
      drawing, each in a foreignObject, so they keep every style above. */
   .canvas-paper { @apply absolute inset-0; }
