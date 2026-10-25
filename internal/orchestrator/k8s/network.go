@@ -237,6 +237,11 @@ func (o *Orchestrator) EnsureIsolation(ctx context.Context) error {
 		if err := o.applyIsolation(ctx, iso, p); err != nil {
 			return err
 		}
+		if ns.Name != BuildNamespace {
+			if err := o.syncTCPProxyPolicies(ctx, ns.Name, iso); err != nil {
+				return err
+			}
+		}
 		n++
 	}
 	o.log.Info("network isolation in place",

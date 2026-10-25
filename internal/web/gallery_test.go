@@ -442,6 +442,36 @@ func galleryPages() []galleryPage {
 			),
 		},
 		{
+			// Networking as Railway draws it, in each state an app's
+			// address can be in. A domain that is kept but not routed, and an
+			// install without TCP proxies, are reached only by changing an
+			// app's settings or the install's, so nobody sees them by clicking.
+			file: "states-networking.html", path: "/apps/web/domains",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "web"}, {Label: "Domains"}},
+			page: stack(
+				section("Not public yet", "Generate Domain, with the port picker",
+					NetworkingSection(networkingGallery(app.PublicDomain{
+						Domain: "up.apps.example.com", Suggested: "web-production",
+						Port: 3000, Suggestions: []int32{3000, 8080},
+					}, app.TCPProxy{Available: true, Host: "proxy.apps.example.com", Target: 3000}))),
+				section("Generated, with a TCP proxy", "the address, its port, and a public TCP port",
+					NetworkingSection(networkingGallery(app.PublicDomain{
+						Host: "web-production.up.apps.example.com", Label: "web-production",
+						Generated: true, Routed: true, Domain: "up.apps.example.com",
+						Port: 5001, Suggestions: []int32{5001, 8080},
+					}, app.TCPProxy{Available: true, Host: "proxy.apps.example.com", Port: 30042, Target: 5001}))),
+				section("Issued before names were generated", "kept where it is, and not answering without a port",
+					NetworkingSection(networkingGallery(app.PublicDomain{
+						Host: "web.apps.example.com", Label: "web", Domain: "up.apps.example.com",
+					}, app.TCPProxy{Available: true, Host: "proxy.apps.example.com"}))),
+				section("Internal, on an install without proxies", "what cannot be done, said",
+					NetworkingSection(networkingGallery(app.PublicDomain{
+						Unavailable: "This app is internal: it speaks something other than HTTP, on its own port. " +
+							"Use a TCP proxy to reach it from outside, or make it public in its settings.",
+					}, app.TCPProxy{}))),
+			),
+		},
+		{
 			// The install's DNS surface, with a target that does not resolve and
 			// a domain that has drifted. Both are states an operator has to find
 			// quickly and neither is reachable by clicking without owning a
@@ -1190,6 +1220,22 @@ func domainGallery(c domain.Custom) NetworkingData {
 			HTTPSOnly: true,
 			Custom:    []domain.Custom{c},
 			Namespace: app.Namespace("owner-local", "web"),
+		},
+	}
+}
+
+// networkingGallery is an app's networking with pub as its public domain and
+// proxy as its TCP proxy.
+func networkingGallery(pub app.PublicDomain, proxy app.TCPProxy) NetworkingData {
+	return NetworkingData{
+		App: "web", Settled: true,
+		Net: app.Networking{
+			Managed: pub.Host, Target: "edge.example.com",
+			Public: pub, TCPProxy: proxy,
+			Private: app.PrivateEndpoint{
+				Host: "web." + app.Namespace("owner-local", "web") + ".svc.cluster.local",
+				Port: pub.Port,
+			},
 		},
 	}
 }

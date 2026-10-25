@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +26,47 @@ type fakeNets struct {
 	removed      []uuid.UUID
 	err          error
 	targetBroken bool
+
+	// What the public networking forms asked for.
+	generated []int32
+	set       []string
+	unset     int
+	proxied   int
+	unproxied int
+}
+
+func (f *fakeNets) GenerateDomain(_ context.Context, _, _ string, port int32) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	f.generated = append(f.generated, port)
+	return "web-production.up.apps.test", nil
+}
+
+func (f *fakeNets) SetPublicDomain(_ context.Context, _, _, label string, port int32) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.set = append(f.set, label+":"+strconv.Itoa(int(port)))
+	return nil
+}
+
+func (f *fakeNets) RemovePublicDomain(context.Context, string, string) error {
+	f.unset++
+	return f.err
+}
+
+func (f *fakeNets) EnableTCPProxy(context.Context, string, string) (app.TCPProxy, error) {
+	if f.err != nil {
+		return app.TCPProxy{}, f.err
+	}
+	f.proxied++
+	return app.TCPProxy{Available: true, Host: "proxy.apps.test", Port: 30042, Target: 5432}, nil
+}
+
+func (f *fakeNets) DisableTCPProxy(context.Context, string, string) error {
+	f.unproxied++
+	return f.err
 }
 
 func (f *fakeNets) Networking(context.Context, string, string) (app.Networking, error) {
@@ -400,5 +444,126 @@ func TestARefusedDomainStillShowsThePanel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `action="/apps/web/domains"`) {
 		t.Error("the refusal dropped the panel the question was asked on")
+	}
+}
+
+// An app with no public domain is offered Generate Domain, with the port
+// picker and the name it will get, rather than an address it does not have.
+func TestNetworkingOffersGenerateDomain(t *testing.T) {
+	h := netServer(t, &fakeNets{net: app.Networking{
+		Public: app.PublicDomain{
+			Domain: "up.apps.test", Suggested: "web-production",
+			Port: 3000, Suggestions: []int32{3000, 8080},
+		},
+		Private:  app.PrivateEndpoint{Host: "web.yacht-abc.svc.cluster.local", Port: 80},
+		TCPProxy: app.TCPProxy{Available: true, Host: "proxy.apps.test", Target: 3000},
+	}})
+
+	body := do(h, signedIn(http.MethodGet, "/apps/web/domains")).Body.String()
+	for _, want := range []string{
+		`action="/apps/web/networking/domain/generate"`,
+		"web-production.up.apps.test",
+		`name="port"`, `value="3000"`, `data-port="8080"`,
+		`name="tab" value="domains"`,
+		// Private networking, copyable.
+		"web.yacht-abc.svc.cluster.local", `data-copy="web.yacht-abc.svc.cluster.local"`,
+		"${{web.PRIVATE_HOST}}",
+		// The TCP proxy on offer.
+		`action="/apps/web/networking/tcp-proxy"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the networking section is missing %q", want)
+		}
+	}
+	if strings.Contains(body, `action="/apps/web/networking/domain"`) {
+		t.Error("an app with no domain was offered the form to edit one")
+	}
+}
+
+// With a domain: the address, copyable, its port, and the edit form; with a
+// proxy: its address and the way to remove it.
+func TestNetworkingShowsTheDomainAndProxy(t *testing.T) {
+	h := netServer(t, &fakeNets{net: app.Networking{
+		Managed: "web-production.up.apps.test",
+		Public: app.PublicDomain{
+			Host: "web-production.up.apps.test", Label: "web-production", Generated: true, Routed: true,
+			Domain: "up.apps.test", Port: 5001, Suggestions: []int32{5001},
+		},
+		TCPProxy: app.TCPProxy{Available: true, Host: "proxy.apps.test", Port: 30042, Target: 5001},
+	}})
+
+	body := do(h, signedIn(http.MethodGet, "/apps/web/domains")).Body.String()
+	for _, want := range []string{
+		`href="https://web-production.up.apps.test"`,
+		`data-copy="web-production.up.apps.test"`,
+		`action="/apps/web/networking/domain"`, `value="web-production"`, ".up.apps.test",
+		`action="/apps/web/networking/domain/delete"`,
+		"proxy.apps.test:30042", `action="/apps/web/networking/tcp-proxy/delete"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the networking section is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "/networking/domain/generate") {
+		t.Error("an app with a domain was offered another")
+	}
+}
+
+// What cannot be done is said, rather than offered and refused.
+func TestNetworkingSaysWhyThereIsNoDomain(t *testing.T) {
+	h := netServer(t, &fakeNets{net: app.Networking{
+		Public: app.PublicDomain{Unavailable: "This app is internal."},
+	}})
+	body := do(h, signedIn(http.MethodGet, "/apps/web/domains")).Body.String()
+	if !strings.Contains(body, "This app is internal.") || strings.Contains(body, "/networking/domain/generate") {
+		t.Error("an app that cannot have a domain was not told why, or was offered one anyway")
+	}
+	if !strings.Contains(body, "YACHT_TCP_PROXY_HOST") {
+		t.Error("an install without TCP proxies does not say so")
+	}
+}
+
+// The forms reach the service with what was typed, and come back to the tab
+// they were posted from.
+func TestNetworkingFormsReachTheService(t *testing.T) {
+	nets := &fakeNets{}
+	h := netServer(t, nets)
+
+	cases := []struct{ path, body string }{
+		{"/apps/web/networking/domain/generate", "port=5001"},
+		{"/apps/web/networking/domain", url.Values{"label": {"shop"}, "port": {"3000"}, "tab": {"settings"}}.Encode()},
+		{"/apps/web/networking/domain/delete", ""},
+		{"/apps/web/networking/tcp-proxy", ""},
+		{"/apps/web/networking/tcp-proxy/delete", "tab=elsewhere"},
+	}
+	wantTab := []string{"domains", "settings", "domains", "domains", "domains"}
+	for i, c := range cases {
+		rec := do(h, signedInForm(http.MethodPost, c.path, c.body))
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web/"+wantTab[i] {
+			t.Errorf("POST %s = %d to %q, want a redirect to /apps/web/%s",
+				c.path, rec.Code, rec.Header().Get("Location"), wantTab[i])
+		}
+	}
+	if len(nets.generated) != 1 || nets.generated[0] != 5001 {
+		t.Errorf("generated = %v, want one at 5001", nets.generated)
+	}
+	if len(nets.set) != 1 || nets.set[0] != "shop:3000" {
+		t.Errorf("set = %v, want shop:3000", nets.set)
+	}
+	if nets.unset != 1 || nets.proxied != 1 || nets.unproxied != 1 {
+		t.Errorf("removed %d, proxied %d, unproxied %d; want one each", nets.unset, nets.proxied, nets.unproxied)
+	}
+
+	if rec := do(h, signedInForm(http.MethodPost, "/apps/web/networking/domain/generate", "port=eighty")); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a port that is not a number = %d, want 422", rec.Code)
+	}
+}
+
+// A refusal is shown on the section it came from.
+func TestANetworkingRefusalKeepsTheSection(t *testing.T) {
+	h := netServer(t, &fakeNets{err: errors.New("every TCP proxy port on this install is in use")})
+	rec := do(h, signedInForm(http.MethodPost, "/apps/web/networking/tcp-proxy", ""))
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "every TCP proxy port") {
+		t.Errorf("refusal = %d, without the reason on the page", rec.Code)
 	}
 }

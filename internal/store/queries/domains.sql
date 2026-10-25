@@ -14,11 +14,15 @@
 -- name we already control. verified follows from it and is not written here —
 -- it is generated from state, so that the routing gate and the state on screen
 -- cannot disagree.
+--
+-- generated says which kind of platform hostname this is — one under
+-- up.<app domain>, or the <name>.<app domain> every app used to be given — and
+-- is written on every call, because changing a name moves it under up.
 -- name: UpsertManagedDomain :one
-INSERT INTO domains (owner_id, app_id, host, tls, state, managed)
-VALUES (@owner_id, @app_id, lower(@host), @tls, 'routed', true)
+INSERT INTO domains (owner_id, app_id, host, tls, state, managed, generated)
+VALUES (@owner_id, @app_id, lower(@host), @tls, 'routed', true, @generated)
 ON CONFLICT (app_id) WHERE managed
-DO UPDATE SET host = lower(@host), tls = @tls
+DO UPDATE SET host = lower(@host), tls = @tls, generated = @generated
 RETURNING *;
 
 -- name: ListDomainsByApp :many

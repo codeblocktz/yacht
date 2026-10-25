@@ -105,6 +105,15 @@ type Querier interface {
 	// A push that changed no watched file: recorded, already finished, and never
 	// queued, because there is nothing for a worker to do.
 	CreateSkippedDeployment(ctx context.Context, arg CreateSkippedDeploymentParams) (Deployment, error)
+	// TCP proxies: a public port on every machine for one app's own port.
+	// Claims a port for an app.
+	//
+	// Not an upsert on port: the unique index is what makes two apps reaching for
+	// the same port an error the caller retries with another, rather than one app
+	// quietly taking the other's. An app that already has a proxy keeps it — the
+	// port is what somebody's connection string says, and turning the proxy on
+	// twice must not change it.
+	CreateTCPProxy(ctx context.Context, arg CreateTCPProxyParams) (TcpProxy, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//
@@ -164,6 +173,7 @@ type Querier interface {
 	// Records the stop for the same reason DeleteSessionByHash does.
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteStagedVariable(ctx context.Context, arg DeleteStagedVariableParams) (int64, error)
+	DeleteTCPProxy(ctx context.Context, arg DeleteTCPProxyParams) (int64, error)
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
@@ -323,6 +333,10 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
+	GetTCPProxy(ctx context.Context, arg GetTCPProxyParams) (TcpProxy, error)
+	// Read by the apply, which has the app and not always its owner's scope in
+	// hand separately; the app id is unique on its own.
+	GetTCPProxyByApp(ctx context.Context, appID uuid.UUID) (TcpProxy, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	// The check every use of an installation goes through: a team reads the
 	// repositories of an installation only if it is connected to it.
@@ -460,6 +474,8 @@ type Querier interface {
 	ListStagedVariablesForApp(ctx context.Context, arg ListStagedVariablesForAppParams) ([]StagedVariable, error)
 	// Wakes whose process went away: a restart, or a replica that stopped.
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
+	// Every port in use, so a new one is picked from those that are not.
+	ListTCPProxyPorts(ctx context.Context) ([]int32, error)
 	ListTeamGitHubInstallations(ctx context.Context, ownerID string) ([]ListTeamGitHubInstallationsRow, error)
 	// Every team with its quota, its pool, its storage and how many people are in
 	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
@@ -722,6 +738,10 @@ type Querier interface {
 	// name we already control. verified follows from it and is not written here —
 	// it is generated from state, so that the routing gate and the state on screen
 	// cannot disagree.
+	//
+	// generated says which kind of platform hostname this is — one under
+	// up.<app domain>, or the <name>.<app domain> every app used to be given — and
+	// is written on every call, because changing a name moves it under up.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go

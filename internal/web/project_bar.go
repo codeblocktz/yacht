@@ -54,7 +54,7 @@ func projectBarFor(ws app.Workspace, ok bool, path string) *ProjectBar {
 		}
 	}
 
-	bar := &ProjectBar{Environment: "production", Section: section}
+	bar := &ProjectBar{Environment: app.DefaultEnvironment, Section: section}
 	for _, p := range ws.Projects {
 		current := p.Slug == slug
 		if appName != "" {

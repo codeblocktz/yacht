@@ -166,6 +166,20 @@ func (s *Service) DeployTemplateIn(
 		}
 		made[spec.Name] = created
 
+		// A template's website is public from the start, as Railway's are: the
+		// stack was chosen as a thing to visit, and a website nobody can open
+		// until they find a button is a template that looks broken. Anything
+		// internal — the database — gets none, and an app deployed any other
+		// way waits for somebody to ask.
+		if servesHTTP(created) && s.opts.AppDomain != "" {
+			if _, err := s.issueSuggested(ctx, created); err != nil {
+				return project, fmt.Errorf("app: public domain for %s in stack %s: %w", spec.Name, stack, err)
+			}
+			if err := s.routingChanged(ctx, created); err != nil {
+				return project, err
+			}
+		}
+
 		if spec.NeedsFrom == "" {
 			continue
 		}

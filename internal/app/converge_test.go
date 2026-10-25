@@ -101,6 +101,7 @@ func TestLiveOverlayMutationsWaitForTheAppReconciler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	a = publicApp(t, s, ownerID, a.Name)
 	initialCalls := orch.applyCalls.Load()
 	if err := s.SetVariable(ctx, ownerID, a.Name, VariableInput{
 		Key: "TOKEN", Value: "current-secret", Secret: true,

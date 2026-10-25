@@ -566,6 +566,12 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		return err
 	}
 
+	// Validated at Load; read again here only to have the numbers.
+	proxyFirst, proxyLast, err := cfg.TCPProxyRange()
+	if err != nil {
+		return err
+	}
+
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		Builder:             builder,
 		Images:              images,
@@ -574,6 +580,9 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		AppDomain:           cfg.AppDomain,
 		WildcardTLS:         cfg.WildcardTLS,
 		CertIssuer:          cfg.CertIssuer,
+		TCPProxyHost:        cfg.TCPProxyHost,
+		TCPProxyPortFirst:   proxyFirst,
+		TCPProxyPortLast:    proxyLast,
 		Keeper:              e.Keeper,
 		ReservedDomains:     cfg.ReservedDomains,
 		Resolver:            e.resolver,
@@ -606,7 +615,13 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if cfg.AppDomain != "" {
 		log.Info("per-app hostnames enabled",
 			slog.String("app_domain", cfg.AppDomain),
-			slog.String("dns", "point *."+cfg.AppDomain+" at this cluster"))
+			slog.String("dns", "point *."+cfg.AppDomain+" and *.up."+cfg.AppDomain+" at this cluster"))
+	}
+	if cfg.TCPProxyHost != "" {
+		log.Info("tcp proxies enabled",
+			slog.String("host", cfg.TCPProxyHost),
+			slog.String("ports", cfg.TCPProxyPorts),
+			slog.String("needs", "those ports open to the internet on every machine"))
 	}
 
 	if err := e.Apps.EnsureOwner(ctx, cfg.OwnerID, cfg.OwnerName, ""); err != nil {

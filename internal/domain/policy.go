@@ -55,6 +55,69 @@ func Issue(appName, appDomain string) (string, error) {
 	return host, nil
 }
 
+// generatedLabel is the label generated hostnames live under:
+// <name>.up.<app domain>.
+//
+// One label down from the app domain rather than at its top, because the top
+// is shared with everything else the install answers on — its dashboard, its
+// registry, the hostnames apps were issued before names were generated — and a
+// name somebody picks for their app must not be able to land on one of those.
+// Railway keeps its own the same way, under up.railway.app.
+const generatedLabel = "up"
+
+// MaxLabel is the DNS limit on one label of a name.
+const MaxLabel = 63
+
+// GeneratedDomain is the domain generated hostnames live under, or "" when
+// there is no app domain to put it under.
+func GeneratedDomain(appDomain string) string {
+	d := normalize(appDomain)
+	if d == "" {
+		return ""
+	}
+	return generatedLabel + "." + d
+}
+
+// ValidateLabel checks the part of a generated hostname somebody chooses: one
+// DNS label, which is what a wildcard certificate for the generated domain can
+// cover and the most a name in it may be.
+func ValidateLabel(label string) error {
+	switch l := normalize(label); {
+	case l == "":
+		return errors.New("a name is required")
+	case len(l) > MaxLabel:
+		return fmt.Errorf("%q is %d characters; a name can be at most %d", l, len(l), MaxLabel)
+	case !labelRE.MatchString(l):
+		return fmt.Errorf("%q is not a valid name: use lowercase letters, numbers and dashes, "+
+			"starting and ending with a letter or number", l)
+	}
+	return nil
+}
+
+// SuggestLabel is the name Generate Domain proposes for an app in an
+// environment: <app>-<environment>, the way Railway spells it, shortened to fit
+// in one label when the two together do not.
+func SuggestLabel(appName, environment string) string {
+	return fitLabel(normalize(appName), "-"+normalize(environment))
+}
+
+// WithSuffix is label with -suffix on the end, shortened to fit in one label:
+// what a suggested name becomes when somebody already holds it.
+func WithSuffix(label, suffix string) string {
+	return fitLabel(normalize(label), "-"+normalize(suffix))
+}
+
+// fitLabel joins head and tail, trimming head rather than tail when the two do
+// not fit, so what distinguishes the name — the environment, or the suffix
+// that made it unique — survives. A trailing dash left by the cut is dropped,
+// since a label may not end in one.
+func fitLabel(head, tail string) string {
+	if len(head)+len(tail) > MaxLabel {
+		head = strings.TrimRight(head[:max(0, MaxLabel-len(tail))], "-")
+	}
+	return strings.TrimLeft(head+tail, "-")
+}
+
 // Reserved reports whether host falls under the platform domain or any
 // additionally reserved domain.
 //
@@ -110,11 +173,25 @@ func CoveredByWildcard(host, appDomain string) bool {
 	return label != "" && !strings.Contains(label, ".")
 }
 
-// WildcardHosts keeps only the hosts a *.<appDomain> certificate can serve.
+// CoveredByPlatformWildcard reports whether the install's wildcard
+// certificate can serve this hostname: one carrying both *.<appDomain> and
+// *.up.<appDomain>, the second for generated hostnames, which sit one label
+// further down than the first can reach.
+func CoveredByPlatformWildcard(host, appDomain string) bool {
+	if CoveredByWildcard(host, appDomain) {
+		return true
+	}
+	gen := GeneratedDomain(appDomain)
+	return gen != "" && CoveredByWildcard(host, gen)
+}
+
+// WildcardHosts keeps only the hosts the platform wildcard certificate can
+// serve: those one label under the app domain, or one label under its
+// generated domain.
 func WildcardHosts(hosts []string, appDomain string) []string {
 	covered := make([]string, 0, len(hosts))
 	for _, h := range hosts {
-		if CoveredByWildcard(h, appDomain) {
+		if CoveredByPlatformWildcard(h, appDomain) {
 			covered = append(covered, h)
 		}
 	}

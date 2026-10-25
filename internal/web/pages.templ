@@ -1164,8 +1164,7 @@ templ appDomains(d AppDetailData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
-	@publicNetworking(netOf(d))
-	@customDomains(netOf(d))
+	@NetworkingSection(netOf(d))
 	@routingOptions(netOf(d))
 }
 

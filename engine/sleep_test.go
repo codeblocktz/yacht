@@ -97,6 +97,11 @@ func TestAWrapperPutsItsSmallPlansToSleepAndMetersTheirAwakeTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	// Sleeping needs a public address for a request to wake it at, and an app
+	// has one only once somebody asks.
+	if _, err := e.Apps.GenerateDomain(ctx, team, created.Name, 0); err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
 	blog := waitDeployed(t, e, team, created.Name)
 
 	st, err := e.Apps.SleepStatus(ctx, team, blog.Name)

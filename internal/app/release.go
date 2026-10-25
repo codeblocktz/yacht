@@ -93,6 +93,11 @@ type ReleaseOverlays struct {
 	HTTPSOnly     bool
 	CNAMETarget   string
 
+	// TCPProxyPort is the app's public TCP port, zero for none. Routing, like
+	// Hosts: a rollback must not take away a proxy somebody's database
+	// connection string depends on, or bring back one they turned off.
+	TCPProxyPort int32
+
 	// Asleep runs none of the release's replicas, and Waker routes its hosts
 	// to the waker; see sleep.go. The one overlay that reaches into a field
 	// the release owns: a sleeping app is still running that release, at
@@ -152,6 +157,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		CertIssuer:             overlays.CertIssuer,
 		CNAMETarget:            overlays.CNAMETarget,
 		HTTPSOnly:              overlays.HTTPSOnly,
+		TCPProxyPort:           overlays.TCPProxyPort,
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
 		Waker:                  waker,
 		Pool:                   overlays.Pool,

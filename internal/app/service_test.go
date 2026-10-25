@@ -105,6 +105,9 @@ type recordingOrchestrator struct {
 	events     []string
 	preDeploys []orchestrator.PreDeployRequest
 	preDeploy  func(orchestrator.PreDeployRequest) (orchestrator.PreDeployResult, error)
+	// byName is the last spec applied for each app, for a test that applies
+	// several and asks about one.
+	byName map[string]orchestrator.AppSpec
 }
 
 type deleteRaceOrchestrator struct {
@@ -151,6 +154,10 @@ func (r *recordingOrchestrator) ApplyApp(ctx context.Context, spec orchestrator.
 	r.mu.Lock()
 	r.last = spec
 	r.events = append(r.events, "apply")
+	if r.byName == nil {
+		r.byName = map[string]orchestrator.AppSpec{}
+	}
+	r.byName[spec.Name] = spec
 	r.mu.Unlock()
 	return r.Noop.ApplyApp(ctx, spec)
 }
@@ -182,6 +189,17 @@ func (r *recordingOrchestrator) lastAppSpec() orchestrator.AppSpec {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.last
+}
+
+func (r *recordingOrchestrator) lastAppSpecFor(t *testing.T, name string) orchestrator.AppSpec {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	spec, ok := r.byName[name]
+	if !ok {
+		t.Fatalf("%s was never applied", name)
+	}
+	return spec
 }
 
 // owner registers an owner and removes it (and its apps, by cascade) after.
@@ -585,28 +603,30 @@ func TestListToleratesUnreachableCluster(t *testing.T) {
 	}
 }
 
-func TestCreateIssuesAManagedHostname(t *testing.T) {
+func TestGeneratingADomainShowsItOnTheApp(t *testing.T) {
 	ctx := context.Background()
 	s, _, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
 	id := owner(t, s, pool, "svc-host")
 
-	created, err := createAndDeploy(t, s, ctx, id, CreateInput{
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
 		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
-	if created.Host != "web.apps.example.com" {
-		t.Fatalf("Host = %q, want web.apps.example.com", created.Host)
+	host, err := s.GenerateDomain(ctx, id, "web", 0)
+	if err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
+	if host != "web-production.up.apps.example.com" {
+		t.Fatalf("Host = %q, want web-production.up.apps.example.com", host)
 	}
 
 	got, err := s.Get(ctx, id, "web")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Host != "web.apps.example.com" {
-		t.Errorf("Host on read = %q, want web.apps.example.com", got.Host)
+	if got.Host != host {
+		t.Errorf("Host on read = %q, want %s", got.Host, host)
 	}
 	if got.URLScheme() != "https" {
 		t.Errorf("URLScheme = %q, want https when wildcard TLS is on", got.URLScheme())
@@ -629,38 +649,6 @@ func TestCreateWithoutAnAppDomainIssuesNoHostname(t *testing.T) {
 	}
 }
 
-// Changing the app domain moves each app's URL the next time it is applied,
-// rather than all at once at startup. The managed column is what makes that
-// safe: the reconcile rewrites only rows Yacht issued.
-func TestApplyReissuesWhenTheAppDomainChanges(t *testing.T) {
-	ctx := context.Background()
-	s, _, pool := testService(t, Options{AppDomain: "apps.example.com"})
-	id := owner(t, s, pool, "svc-reissue")
-
-	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
-		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
-	}); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	s.opts.AppDomain = "apps.acme.com"
-
-	if err := s.Redeploy(ctx, id, "web"); err != nil {
-		t.Fatalf("Redeploy: %v", err)
-	}
-	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
-		t.Fatalf("worker redeploy: %v", err)
-	}
-
-	got, err := s.Get(ctx, id, "web")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if got.Host != "web.apps.acme.com" {
-		t.Fatalf("Host = %q, want it reissued to web.apps.acme.com", got.Host)
-	}
-}
-
 func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	ctx := context.Background()
 	s, orch, pool := testService(t, Options{AppDomain: "apps.example.com", WildcardTLS: true})
@@ -671,12 +659,13 @@ func TestApplyPassesHostsToTheOrchestrator(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	publicApp(t, s, id, "web")
 
 	spec := orch.lastAppSpec()
-	if len(spec.Hosts) != 1 || spec.Hosts[0] != "web.apps.example.com" {
-		t.Fatalf("spec.Hosts = %v, want [web.apps.example.com]", spec.Hosts)
+	if len(spec.Hosts) != 1 || spec.Hosts[0] != "web-production.up.apps.example.com" {
+		t.Fatalf("spec.Hosts = %v, want [web-production.up.apps.example.com]", spec.Hosts)
 	}
-	if len(spec.TLSHosts) != 1 || spec.TLSHosts[0] != "web.apps.example.com" {
+	if len(spec.TLSHosts) != 1 || spec.TLSHosts[0] != "web-production.up.apps.example.com" {
 		t.Fatalf("spec.TLSHosts = %v, want the platform host when wildcard TLS is on", spec.TLSHosts)
 	}
 }
@@ -807,6 +796,7 @@ func TestRetiringTheAppDomainReleasesTheHostname(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	publicApp(t, s, id, "web")
 
 	s.opts.AppDomain = ""
 

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -148,5 +149,61 @@ func TestReservedWithNoAppDomainStillHonoursExtras(t *testing.T) {
 	}
 	if Reserved("anything.test", "", nil) {
 		t.Fatal("nothing is reserved when neither is configured")
+	}
+}
+
+// Generated names are <app>-<environment>, one label, and keep what tells
+// them apart when they have to be cut to fit.
+func TestGeneratedLabels(t *testing.T) {
+	if got := SuggestLabel("Web", "production"); got != "web-production" {
+		t.Errorf("SuggestLabel = %q, want web-production", got)
+	}
+	long := strings.Repeat("a", 60)
+	if got := SuggestLabel(long, "production"); len(got) != MaxLabel || !strings.HasSuffix(got, "-production") {
+		t.Errorf("SuggestLabel(60 a's) = %q (%d), want 63 characters ending -production", got, len(got))
+	}
+	// A cut that lands on a dash must not leave two in a row, or end in one.
+	dashed := strings.Repeat("ab-", 20)
+	if got := WithSuffix(dashed, "x1y2"); strings.Contains(got, "--") || len(got) > MaxLabel || ValidateLabel(got) != nil {
+		t.Errorf("WithSuffix = %q, want a valid label", got)
+	}
+	if got := WithSuffix("web-production", "a1b2"); got != "web-production-a1b2" {
+		t.Errorf("WithSuffix = %q", got)
+	}
+
+	for label, ok := range map[string]bool{
+		"web-production":        true,
+		strings.Repeat("a", 63): true,
+		strings.Repeat("a", 64): false,
+		"":                      false,
+		"-web":                  false,
+		"web-":                  false,
+		"we_b":                  false,
+		"a.b":                   false,
+	} {
+		if err := ValidateLabel(label); (err == nil) != ok {
+			t.Errorf("ValidateLabel(%q) = %v, want ok=%t", label, err, ok)
+		}
+	}
+}
+
+// The platform wildcard carries *.<domain> and *.up.<domain>: a generated
+// name is covered, and still nothing deeper is.
+func TestThePlatformWildcardCoversGeneratedNames(t *testing.T) {
+	const d = "apps.example.com"
+	for host, want := range map[string]bool{
+		"web.apps.example.com":               true,
+		"web-production.up.apps.example.com": true,
+		"up.apps.example.com":                true,
+		"a.b.up.apps.example.com":            false,
+		"a.b.apps.example.com":               false,
+		"shop.customer.test":                 false,
+	} {
+		if got := CoveredByPlatformWildcard(host, d); got != want {
+			t.Errorf("CoveredByPlatformWildcard(%q) = %t, want %t", host, got, want)
+		}
+	}
+	if GeneratedDomain("") != "" || GeneratedDomain("Apps.Example.com.") != "up.apps.example.com" {
+		t.Error("GeneratedDomain does not normalise, or invents one with no app domain")
 	}
 }

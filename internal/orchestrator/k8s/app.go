@@ -94,6 +94,12 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
+	// Applied or pruned on every apply, like the Service: turning a proxy off
+	// has to take the port off every machine, not merely stop renewing it.
+	if err := o.applyTCPProxy(ctx, spec); err != nil {
+		return err
+	}
+
 	switch {
 	case spec.Waker != nil:
 		// Already pointed at the waker, above.
@@ -544,6 +550,10 @@ func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) erro
 	}
 
 	if err := o.deleteCronJob(ctx, ref); err != nil {
+		return err
+	}
+
+	if err := o.deleteTCPProxy(ctx, ref); err != nil {
 		return err
 	}
 

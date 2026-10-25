@@ -423,3 +423,40 @@ func TestDefaultRegionLoadsAndIsValidated(t *testing.T) {
 		}
 	}
 }
+
+// TCP proxies are off until the operator names where they are reached, and
+// take the NodePort range's low band unless told otherwise.
+func TestTCPProxyLoads(t *testing.T) {
+	setEnv(t, nil)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TCPProxyHost != "" {
+		t.Errorf("TCPProxyHost = %q, want empty by default", c.TCPProxyHost)
+	}
+	if first, last, err := c.TCPProxyRange(); err != nil || first != 30000 || last != 30085 {
+		t.Errorf("TCPProxyRange = %d-%d, %v; want the default 30000-30085", first, last, err)
+	}
+
+	setEnv(t, map[string]string{
+		"YACHT_TCP_PROXY_HOST":  "Proxy.Example.com.",
+		"YACHT_TCP_PROXY_PORTS": "31000-31009",
+	})
+	if c, err = Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TCPProxyHost != "proxy.example.com" {
+		t.Errorf("TCPProxyHost = %q, want it normalised", c.TCPProxyHost)
+	}
+	if first, last, _ := c.TCPProxyRange(); first != 31000 || last != 31009 {
+		t.Errorf("TCPProxyRange = %d-%d, want 31000-31009", first, last)
+	}
+
+	for _, bad := range []string{"30085-30000", "0-10", "30000-70000", "thirty"} {
+		setEnv(t, map[string]string{"YACHT_TCP_PROXY_PORTS": bad})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_TCP_PROXY_PORTS") {
+			t.Errorf("Load accepted YACHT_TCP_PROXY_PORTS=%q: %v", bad, err)
+		}
+	}
+}

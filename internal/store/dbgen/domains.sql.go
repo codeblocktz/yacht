@@ -22,7 +22,7 @@ WHERE id IN (
     LIMIT $3
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated
 `
 
 type ClaimDomainsDueForCheckParams struct {
@@ -73,6 +73,7 @@ func (q *Queries) ClaimDomainsDueForCheck(ctx context.Context, arg ClaimDomainsD
 			&i.NextCheckAt,
 			&i.CheckAttempts,
 			&i.Verified,
+			&i.Generated,
 		); err != nil {
 			return nil, err
 		}
@@ -88,7 +89,7 @@ const createCustomDomain = `-- name: CreateCustomDomain :one
 
 INSERT INTO domains (owner_id, app_id, host, tls, state, managed, verify_target)
 VALUES ($1, $2, lower($3), true, 'pending', false, $4)
-RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated
 `
 
 type CreateCustomDomainParams struct {
@@ -133,6 +134,7 @@ func (q *Queries) CreateCustomDomain(ctx context.Context, arg CreateCustomDomain
 		&i.NextCheckAt,
 		&i.CheckAttempts,
 		&i.Verified,
+		&i.Generated,
 	)
 	return i, err
 }
@@ -171,7 +173,7 @@ func (q *Queries) DeleteManagedDomain(ctx context.Context, appID uuid.UUID) erro
 }
 
 const getCustomDomain = `-- name: GetCustomDomain :one
-SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated FROM domains
 WHERE owner_id = $1 AND id = $2 AND NOT managed
 `
 
@@ -200,12 +202,13 @@ func (q *Queries) GetCustomDomain(ctx context.Context, arg GetCustomDomainParams
 		&i.NextCheckAt,
 		&i.CheckAttempts,
 		&i.Verified,
+		&i.Generated,
 	)
 	return i, err
 }
 
 const getManagedDomain = `-- name: GetManagedDomain :one
-SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated FROM domains
 WHERE app_id = $1 AND managed
 LIMIT 1
 `
@@ -230,6 +233,7 @@ func (q *Queries) GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain
 		&i.NextCheckAt,
 		&i.CheckAttempts,
 		&i.Verified,
+		&i.Generated,
 	)
 	return i, err
 }
@@ -255,7 +259,7 @@ func (q *Queries) HasVerifiedDomainsForApp(ctx context.Context, arg HasVerifiedD
 }
 
 const listCustomDomains = `-- name: ListCustomDomains :many
-SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated FROM domains
 WHERE owner_id = $1 AND app_id = $2 AND NOT managed
 ORDER BY host
 `
@@ -291,6 +295,7 @@ func (q *Queries) ListCustomDomains(ctx context.Context, arg ListCustomDomainsPa
 			&i.NextCheckAt,
 			&i.CheckAttempts,
 			&i.Verified,
+			&i.Generated,
 		); err != nil {
 			return nil, err
 		}
@@ -303,7 +308,7 @@ func (q *Queries) ListCustomDomains(ctx context.Context, arg ListCustomDomainsPa
 }
 
 const listCustomDomainsForOwner = `-- name: ListCustomDomainsForOwner :many
-SELECT d.id, d.owner_id, d.app_id, d.host, d.tls, d.created_at, d.managed, d.verified_at, d.verify_target, d.state, d.observed, d.last_error, d.last_checked_at, d.next_check_at, d.check_attempts, d.verified, a.name AS app_name
+SELECT d.id, d.owner_id, d.app_id, d.host, d.tls, d.created_at, d.managed, d.verified_at, d.verify_target, d.state, d.observed, d.last_error, d.last_checked_at, d.next_check_at, d.check_attempts, d.verified, d.generated, a.name AS app_name
 FROM domains d
 JOIN apps a ON a.id = d.app_id
 WHERE d.owner_id = $1 AND NOT d.managed
@@ -345,6 +350,7 @@ func (q *Queries) ListCustomDomainsForOwner(ctx context.Context, ownerID string)
 			&i.Domain.NextCheckAt,
 			&i.Domain.CheckAttempts,
 			&i.Domain.Verified,
+			&i.Domain.Generated,
 			&i.AppName,
 		); err != nil {
 			return nil, err
@@ -358,7 +364,7 @@ func (q *Queries) ListCustomDomainsForOwner(ctx context.Context, ownerID string)
 }
 
 const listDomainsByApp = `-- name: ListDomainsByApp :many
-SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified FROM domains
+SELECT id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated FROM domains
 WHERE app_id = $1
 ORDER BY managed DESC, host
 `
@@ -389,6 +395,7 @@ func (q *Queries) ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Doma
 			&i.NextCheckAt,
 			&i.CheckAttempts,
 			&i.Verified,
+			&i.Generated,
 		); err != nil {
 			return nil, err
 		}
@@ -552,18 +559,19 @@ func (q *Queries) RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]s
 
 const upsertManagedDomain = `-- name: UpsertManagedDomain :one
 
-INSERT INTO domains (owner_id, app_id, host, tls, state, managed)
-VALUES ($1, $2, lower($3), $4, 'routed', true)
+INSERT INTO domains (owner_id, app_id, host, tls, state, managed, generated)
+VALUES ($1, $2, lower($3), $4, 'routed', true, $5)
 ON CONFLICT (app_id) WHERE managed
-DO UPDATE SET host = lower($3), tls = $4
-RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified
+DO UPDATE SET host = lower($3), tls = $4, generated = $5
+RETURNING id, owner_id, app_id, host, tls, created_at, managed, verified_at, verify_target, state, observed, last_error, last_checked_at, next_check_at, check_attempts, verified, generated
 `
 
 type UpsertManagedDomainParams struct {
-	OwnerID string
-	AppID   uuid.UUID
-	Host    string
-	Tls     bool
+	OwnerID   string
+	AppID     uuid.UUID
+	Host      string
+	Tls       bool
+	Generated bool
 }
 
 // Platform-issued hostnames. Custom domains get their own queries when that
@@ -581,12 +589,17 @@ type UpsertManagedDomainParams struct {
 // name we already control. verified follows from it and is not written here —
 // it is generated from state, so that the routing gate and the state on screen
 // cannot disagree.
+//
+// generated says which kind of platform hostname this is — one under
+// up.<app domain>, or the <name>.<app domain> every app used to be given — and
+// is written on every call, because changing a name moves it under up.
 func (q *Queries) UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error) {
 	row := q.db.QueryRow(ctx, upsertManagedDomain,
 		arg.OwnerID,
 		arg.AppID,
 		arg.Host,
 		arg.Tls,
+		arg.Generated,
 	)
 	var i Domain
 	err := row.Scan(
@@ -606,6 +619,7 @@ func (q *Queries) UpsertManagedDomain(ctx context.Context, arg UpsertManagedDoma
 		&i.NextCheckAt,
 		&i.CheckAttempts,
 		&i.Verified,
+		&i.Generated,
 	)
 	return i, err
 }

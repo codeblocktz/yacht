@@ -195,6 +195,7 @@ func TestAnInstallWithoutRegionsIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	a = publicApp(t, s, id, a.Name)
 	if a.Region != "" || orch.lastAppSpec().Region != "" {
 		t.Fatalf("an install with no regions placed an app in %q / %q", a.Region, orch.lastAppSpec().Region)
 	}
@@ -227,7 +228,7 @@ func TestAnInstallWithoutRegionsIsUnchanged(t *testing.T) {
 	}
 	found := false
 	for _, r := range routes {
-		if r.Host == "web.apps.test" {
+		if r.Host == "web-production.up.apps.test" {
 			found = true
 			if r.Region != "" || r.Edge.Set() {
 				t.Fatalf("route %+v has a region on an install with none", r)
@@ -235,7 +236,7 @@ func TestAnInstallWithoutRegionsIsUnchanged(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("Routes = %+v, missing web.apps.test", routes)
+		t.Fatalf("Routes = %+v, missing web-production.up.apps.test", routes)
 	}
 	snap, err := s.Capacity(ctx)
 	if err != nil || len(snap.Regions) != 0 {
@@ -688,6 +689,8 @@ func TestRoutesCarryTheRegionAndItsEdge(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create api: %v", err)
 	}
+	publicApp(t, s, id, "web")
+	publicApp(t, s, id, "api")
 
 	// A custom domain on an app in fsn is told to point at fsn's edge, and
 	// one in dar, which has none, at the install's.
@@ -716,7 +719,7 @@ func TestRoutesCarryTheRegionAndItsEdge(t *testing.T) {
 			got[r.Host] = r
 		}
 	}
-	web, shop, api := got["web.apps.test"], got["shop.example.test"], got["api.apps.test"]
+	web, shop, api := got["web-production.up.apps.test"], got["shop.example.test"], got["api-production.up.apps.test"]
 	if web.Region != "fsn" || web.Custom || !web.Routable || web.App != "web" ||
 		web.Edge.Host != "edge-fsn.example.test" || !slices.Equal(web.Edge.Addresses, []string{"203.0.113.10"}) {
 		t.Errorf("web's route = %+v", web)
@@ -855,6 +858,7 @@ func TestASleeperWakesInItsOwnRegion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	a = publicApp(t, s, id, a.Name)
 	if err := s.SleepNow(ctx, id, a.Name); err != nil {
 		t.Fatalf("SleepNow: %v", err)
 	}

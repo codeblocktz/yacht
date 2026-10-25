@@ -70,6 +70,9 @@ func TestAWrapperRoutesEachAppToItsRegionsEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	if _, err := e.Apps.GenerateDomain(ctx, "wrapper-regions", "shop", 0); err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
 	if region, err := e.Apps.AppRegion(ctx, "wrapper-regions", "shop"); err != nil || region != "fsn" {
 		t.Fatalf("AppRegion = %q, %v; want the default", region, err)
 	}
@@ -84,7 +87,7 @@ func TestAWrapperRoutesEachAppToItsRegionsEdge(t *testing.T) {
 			shop = &routes[i]
 		}
 	}
-	if shop == nil || shop.Host != "shop.apps.example.test" || shop.Region != "fsn" ||
+	if shop == nil || shop.Host != "shop-production.up.apps.example.test" || shop.Region != "fsn" ||
 		shop.Edge.Host != "edge-fsn.example.test" || shop.Custom || !shop.Routable {
 		t.Fatalf("shop's route = %+v", shop)
 	}

@@ -36,7 +36,7 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"Hosts": true, "Secrets": true, "Volumes": true,
 		"TLSHosts": true, "CNAMETarget": true, "HTTPSOnly": true,
 		"RegistryAuth": true, "IssuedHosts": true, "CertIssuer": true,
-		"Waker": true, "Pool": true, "Region": true,
+		"Waker": true, "Pool": true, "Region": true, "TCPProxyPort": true,
 	}
 
 	typ := reflect.TypeOf(orchestrator.AppSpec{})

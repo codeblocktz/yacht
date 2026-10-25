@@ -235,6 +235,7 @@ type Domain struct {
 	NextCheckAt   time.Time
 	CheckAttempts int32
 	Verified      bool
+	Generated     bool
 }
 
 type GithubDelivery struct {
@@ -372,6 +373,13 @@ type StagedVariable struct {
 	Sealed    []byte
 	Secret    bool
 	UpdatedAt time.Time
+}
+
+type TcpProxy struct {
+	AppID     uuid.UUID
+	OwnerID   string
+	Port      int32
+	CreatedAt time.Time
 }
 
 type Team struct {

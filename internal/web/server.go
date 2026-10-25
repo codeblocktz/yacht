@@ -907,6 +907,14 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/apps/{name}/domains", s.domainAdd)
 				r.Post("/apps/{name}/domains/{id}/verify", s.domainVerify)
 				r.Post("/apps/{name}/domains/{id}/delete", s.domainRemove)
+				// Generate Domain and the TCP proxy sit with the custom
+				// domains: each puts the app somewhere on the internet it was
+				// not, which a redeploy does not undo.
+				r.Post("/apps/{name}/networking/domain/generate", s.publicDomainGenerate)
+				r.Post("/apps/{name}/networking/domain", s.publicDomainSet)
+				r.Post("/apps/{name}/networking/domain/delete", s.publicDomainRemove)
+				r.Post("/apps/{name}/networking/tcp-proxy", s.tcpProxyEnable)
+				r.Post("/apps/{name}/networking/tcp-proxy/delete", s.tcpProxyDisable)
 			}
 
 			r.Post("/apps/{name}/storage", s.storageAttach)
