@@ -30,9 +30,9 @@ func TestExposedPortReadsTheImagesStage(t *testing.T) {
 
 func TestRepoName(t *testing.T) {
 	for url, want := range map[string]string{
-		"https://github.com/acme/web.git":            "web",
-		"https://github.com/acme/My_Service.git":     "my-service",
-		"https://github.com/acme/" + string(make([]byte, 0)) + "---.git": "app",
+		"https://github.com/acme/web.git":                                             "web",
+		"https://github.com/acme/My_Service.git":                                      "my-service",
+		"https://github.com/acme/" + string(make([]byte, 0)) + "---.git":              "app",
 		"https://github.com/acme/a-very-long-repository-name-that-goes-on-and-on.git": "a-very-long-repository-name-that-goes-on",
 	} {
 		if got := repoName(url); got != want {

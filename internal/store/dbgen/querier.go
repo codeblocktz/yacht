@@ -613,6 +613,8 @@ type Querier interface {
 	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	// The release's image becomes the deployment's: for a deploy that built,
+	// the first moment there is one to name.
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
 	SetGitHubInstallationSuspended(ctx context.Context, arg SetGitHubInstallationSuspendedParams) (int64, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)

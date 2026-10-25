@@ -130,6 +130,16 @@ templ DeployLogPanel(d DeployLogsData) {
 		}
 	}
 	@deployLogTabs(d)
+	if d.Deploy.Deployment.Status == app.DeployFailed && d.Deploy.Deployment.Message != "" {
+		<div class="canvas-sheet-body pb-0">
+			<div class="callout callout-err">
+				<div class="min-w-0">
+					<p class="font-medium">Why it failed</p>
+					<p class="mono mt-1 break-words text-[12px]">{ failureReason(d.Deploy.Deployment.Message) }</p>
+				</div>
+			</div>
+		</div>
+	}
 	if d.Error != "" {
 		<div class="canvas-sheet-body">
 			<div class="callout callout-err">

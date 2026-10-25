@@ -1223,3 +1223,60 @@ func TestLeaseReclaimPreservesEveryStageCheckpoint(t *testing.T) {
 		})
 	}
 }
+
+// A deploy that builds names no image until its build has made one: not the
+// last build's, which it may never run, and then the one it built.
+func TestABuildingDeployNamesTheImageItBuilt(t *testing.T) {
+	ctx := context.Background()
+	builder := &blockingOperationBuilder{started: make(chan struct{}), release: make(chan struct{})}
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "operation-deploy-image")
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO apps (
+			owner_id, name, namespace, image, replicas, port, source,
+			repo_url, repo_branch
+		) VALUES ($1, 'web', 'operation-deploy-image-web',
+			'registry.test/old:web', 1, 8080, 'git',
+			'https://example.test/repo.git', 'main')`, ownerID); err != nil {
+		t.Fatalf("seed Git app: %v", err)
+	}
+	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+	image := func() (id uuid.UUID, image, status string) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `
+			SELECT id, image, status FROM deployments WHERE owner_id = $1
+			ORDER BY started_at DESC LIMIT 1`, ownerID).Scan(&id, &image, &status); err != nil {
+			t.Fatalf("read deployment: %v", err)
+		}
+		return id, image, status
+	}
+	if _, got, _ := image(); got != PendingImage {
+		t.Fatalf("while building, the deployment names %q, want the pending placeholder", got)
+	}
+
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	go s.RunOperationAdmission(workerCtx)
+	select {
+	case <-builder.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the build did not start")
+	}
+	close(builder.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		id, got, status := image()
+		if status != DeployRunning {
+			if want := "registry.test/" + ownerID + "-web:" + revisionFor(id); got != want {
+				t.Fatalf("after its build (%s), the deployment names %q, want %q", status, got, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the deploy did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

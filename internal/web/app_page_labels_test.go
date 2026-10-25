@@ -1,28 +1,29 @@
 package web
 
 import (
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
-// A build that failed says so, rather than "building…" for ever, and one
-// that built says it is deploying.
+// A build that failed says so, rather than "building…" for ever; one that
+// built names its image.
 func TestDeploymentImageLabel(t *testing.T) {
-	unbuilt := app.App{Image: app.PendingImage}
-	built := app.App{Image: "registry/apps/web:new"}
 	for _, tc := range []struct {
-		a    app.App
 		dep  app.Deployment
 		want string
 	}{
-		{unbuilt, app.Deployment{Image: app.PendingImage, Status: app.DeployFailed}, "build failed"},
-		{unbuilt, app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "building…"},
-		{built, app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "deploying registry/apps/web:new"},
-		{built, app.Deployment{Image: "registry/apps/web:abc", Status: app.DeployFailed}, "registry/apps/web:abc"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed}, "build failed"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "building…"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeploySuperseded}, "not built"},
+		{app.Deployment{Image: "registry/apps/web:abc", Status: app.DeployFailed}, "registry/apps/web:abc"},
 	} {
-		if got := deploymentImageLabel(tc.a, tc.dep); got != tc.want {
+		if got := deploymentImageLabel(tc.dep); got != tc.want {
 			t.Errorf("deploymentImageLabel(%+v) = %q, want %q", tc.dep, got, tc.want)
 		}
 	}
@@ -64,5 +65,27 @@ func TestPodStatusShowsAFailingContainer(t *testing.T) {
 	healthy := orchestrator.PodInfo{Phase: "Running", Ready: 1, Total: 1}
 	if podStatusLabel(healthy) != "Running" || podPhaseClass(healthy) != "status-ok" {
 		t.Error("a healthy pod is not Running")
+	}
+}
+
+// An app that never ran says why its last deploy failed, on its own page.
+func TestAFailedDeploySaysWhyOnTheAppPage(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	a.StatusKnown, a.Status = true, orchestrator.AppStatus{Phase: orchestrator.PhaseFailing, Desired: 1}
+	apps := newFakeApps(a)
+	apps.deploys = []app.Deployment{{
+		ID: uuid.New(), AppID: a.ID, Image: "registry/apps/web:abc", Revision: "redeploy",
+		Status: app.DeployFailed, StartedAt: time.Now(),
+		Message: `app: rollout failed: RunContainerError: exec: "/app/bin/server": permission denied`,
+	}}
+	h := testServer(t, Options{Apps: apps})
+	body := get(t, h, "/apps/web").Body.String()
+	for _, want := range []string{"The last deploy failed", "RunContainerError: exec: &#34;/app/bin/server&#34;: permission denied", "failing"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the app page does not say %q", want)
+		}
+	}
+	if strings.Contains(body, "app: rollout failed") {
+		t.Error("the reason keeps the service's prefixes")
 	}
 }

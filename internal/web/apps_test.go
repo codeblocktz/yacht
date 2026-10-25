@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -26,6 +27,7 @@ type fakeApps struct {
 	// projects are those besides the default one.
 	projects    []app.Project
 	byOwner     map[string][]app.App
+	deploys     []app.Deployment // when set, every app's history
 	created     []app.CreateInput
 	deleted     []string
 	scaled      map[string]int32
@@ -110,6 +112,21 @@ func (f *fakeApps) Update(
 		return app.App{}, f.err
 	}
 	f.updated = append(f.updated, in)
+	// The stored app with the input applied, the way the service answers,
+	// so a handler can tell what the save changed.
+	for _, apps := range f.byOwner {
+		for i, a := range apps {
+			if a.Name != name {
+				continue
+			}
+			a.Image = cmp.Or(in.Image, a.Image)
+			a.Port, a.Internal = in.Port, in.Internal
+			a.CPURequest, a.CPULimit = in.CPURequest, in.CPULimit
+			a.MemoryRequest, a.MemoryLimit = in.MemoryRequest, in.MemoryLimit
+			apps[i] = a
+			return a, nil
+		}
+	}
 	return app.App{Name: name, Image: in.Image, Port: in.Port}, nil
 }
 
@@ -156,6 +173,9 @@ func (f *fakeApps) DeployActivity(
 func (f *fakeApps) Deployments(
 	_ context.Context, _ string, appID uuid.UUID, _ int32,
 ) ([]app.Deployment, error) {
+	if f.deploys != nil {
+		return f.deploys, nil
+	}
 	return []app.Deployment{
 		{
 			ID: uuid.New(), AppID: appID, Image: "nginx:alpine",
