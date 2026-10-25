@@ -16,6 +16,7 @@ func (s *Server) attachReferenceTargets(ctx context.Context, d *AppDetailData) {
 	if d.Tab != "variables" || s.apps == nil {
 		return
 	}
+	s.attachVariables(ctx, d)
 	src, ok := s.apps.(interface {
 		ReferenceTargets(ctx context.Context, ownerID, appName string) ([]app.ReferenceTarget, error)
 	})

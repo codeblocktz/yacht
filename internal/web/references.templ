@@ -12,12 +12,23 @@ templ variableReference(v app.Variable) {
 	<span class="flex flex-col gap-1">
 		<span class="flex flex-wrap items-center gap-1.5">
 			for _, r := range v.Refs() {
-				<a class="ref-chip" href={ templ.URL("/apps/" + r.App + "/variables") } title={ "From " + r.App }>
-					@icon("link")
-					<span>{ r.App }</span>
-					<span class="text-muted-foreground">·</span>
-					<span>{ r.Key }</span>
-				</a>
+				if r.App == app.SharedScope {
+					// A project's shared variable has no app to link to; it
+					// lives under Project Settings.
+					<span class="ref-chip" title="A shared variable, set under Project Settings">
+						@icon("layers")
+						<span>shared</span>
+						<span class="text-muted-foreground">·</span>
+						<span>{ r.Key }</span>
+					</span>
+				} else {
+					<a class="ref-chip" href={ templ.URL("/apps/" + r.App + "/variables") } title={ "From " + r.App }>
+						@icon("link")
+						<span>{ r.App }</span>
+						<span class="text-muted-foreground">·</span>
+						<span>{ r.Key }</span>
+					</a>
+				}
 			}
 		</span>
 		<span class="truncate text-[11.5px] text-muted-foreground">{ v.Value }</span>
@@ -46,7 +57,11 @@ templ addReference(d AppDetailData) {
 							for _, t := range d.RefTargets {
 								for _, k := range t.Keys {
 									@selectbox.Item(selectbox.ItemProps{Value: t.App + "." + k.Key}) {
-										<span class="mono">{ t.App }</span>
+										if t.App == app.SharedScope {
+											<span>Shared</span>
+										} else {
+											<span class="mono">{ t.App }</span>
+										}
 										<span class="text-muted-foreground"> · </span>
 										<span class="mono">{ k.Key }</span>
 									}
@@ -63,7 +78,8 @@ templ addReference(d AppDetailData) {
 			</form>
 			<p class="mt-3 text-[12px] text-muted-foreground">
 				Stored as <code class="mono">{ "${{app.KEY}}" }</code> and read when this app deploys, so it follows
-				the other app's value — redeploy this one after that changes. A secret stays secret.
+				the other app's value — redeploy this one after that changes. A secret stays secret. The
+				project's shared variables are <code class="mono">{ "${{shared.KEY}}" }</code>, set under Project Settings.
 				<code class="mono">PRIVATE_HOST</code> and <code class="mono">PRIVATE_PORT</code> are where an
 				app is reached inside the cluster.
 			</p>

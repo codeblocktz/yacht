@@ -85,6 +85,7 @@ templ Canvas(d CanvasData) {
 							<span class="canvas-card-head">
 								@icon(sourceIcon(n.App.Source))
 								<span class="min-w-0 flex-1 truncate font-medium">{ n.App.Name }</span>
+								@stagedMarker(d.Staged.For(n.App.Name))
 							</span>
 							<span class="canvas-card-status">
 								@appStatus(n.App)
@@ -109,6 +110,7 @@ templ Canvas(d CanvasData) {
 				}
 			</div>
 			@canvasAdd(d.Project.Slug)
+			@stagedBar(d)
 			// Floating on the surface rather than in the bar, because they act on
 			// the view rather than on the project — and because an infinite canvas
 			// has no edge to hang them off. Hidden until the script runs: buttons

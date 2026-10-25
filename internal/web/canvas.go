@@ -69,6 +69,10 @@ type CanvasData struct {
 	// Open is the app whose panel is showing, nil when none is. It is the same
 	// data the app page used to render, because the panel IS the app page now.
 	Open *AppDetailData
+
+	// Staged is the changes waiting to deploy, for the bar across the top
+	// and the marker on each card; nil when nothing is waiting.
+	Staged *StagedBar
 }
 
 // layout places the cards and routes the edges.
