@@ -40,8 +40,10 @@ type ProjectChoice struct {
 
 // The rail's sections.
 const (
-	SectionArchitecture = "architecture"
-	SectionSettings     = "settings"
+	SectionArchitecture  = "architecture"
+	SectionObservability = "observability"
+	SectionLogs          = "logs"
+	SectionSettings      = "settings"
 )
 
 // projectBarFor works out the project a path is about: a canvas, a
@@ -54,8 +56,13 @@ func projectBarFor(ws app.Workspace, ok bool, path string) *ProjectBar {
 	slug, appName := activeInTree(path)
 	section := SectionArchitecture
 	if rest, found := strings.CutPrefix(path, "/projects/"+slug+"/"); found && slug != "" {
-		if strings.HasPrefix(rest, "settings") {
+		switch {
+		case strings.HasPrefix(rest, "settings"):
 			section = SectionSettings
+		case strings.HasPrefix(rest, "logs"):
+			section = SectionLogs
+		case strings.HasPrefix(rest, "observability"):
+			section = SectionObservability
 		}
 	}
 
@@ -84,8 +91,9 @@ func projectBarFor(ws app.Workspace, ok bool, path string) *ProjectBar {
 
 // projectHref is a project's own address, for the rail.
 func projectHref(b ProjectBar, section string) string {
-	if section == SectionSettings {
-		return "/projects/" + b.Slug + "/settings"
+	switch section {
+	case SectionSettings, SectionLogs, SectionObservability:
+		return "/projects/" + b.Slug + "/" + section
 	}
 	return "/projects/" + b.Slug
 }

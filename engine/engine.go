@@ -55,6 +55,16 @@ type (
 	// Config is the engine's configuration, read from YACHT_* variables.
 	Config = config.Config
 
+	// UsageMeter prices a project for its settings' Usage section, from a
+	// UsageRequest — the project's apps, by id, and what each sent to the
+	// internet this month where the install measures it — into a
+	// ProjectUsage written in the wrapper's own money. UsageLine is one row.
+	UsageMeter   = web.UsageMeter
+	UsageRequest = web.UsageRequest
+	UsageApp     = web.UsageApp
+	ProjectUsage = web.ProjectUsage
+	UsageLine    = web.UsageLine
+
 	// Owner is the principal a request acts as. The engine treats ID as
 	// opaque; a wrapper may make it an organisation's.
 	Owner = identity.Owner
@@ -403,6 +413,11 @@ type Overrides struct {
 	// path; a hint, so the wrapper also reconciles from Engine.Routes.
 	Routes RouteObserver
 
+	// Usage prices a project for its settings page: what it has cost this
+	// month and what the month will come to. The engine has no prices, so
+	// without one the section is left out. See UsageMeter.
+	Usage UsageMeter
+
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
 	// own migrations. They share the database; a wrapper keeps its own goose
 	// version table so the two histories never collide.
@@ -698,6 +713,11 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.BootstrapEmail = cfg.OwnerEmail
 		opts.OpenSignup = cfg.OpenSignup
 	}
+
+	if err := attachObserve(&opts, cfg, log); err != nil {
+		return err
+	}
+	opts.Usage = ov.Usage
 
 	srv, err := web.New(opts)
 	if err != nil {

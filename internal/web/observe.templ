@@ -1,0 +1,435 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/observe"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
+)
+
+// ProjectLogs is a project's log explorer, as Railway draws one: a filter box,
+// a range, live tail and download along the top, the volume of output over the
+// range as a histogram with its errors in red, and every service's lines in one
+// table of time, service and data.
+templ ProjectLogs(d ProjectLogsData) {
+	<div class="project-page">
+		<div class="project-page-inner max-w-[1280px]">
+			<div class="flex flex-wrap items-end justify-between gap-3">
+				<div>
+					<h1 class="text-[20px] font-semibold tracking-tight">Logs</h1>
+					<p class="mt-1 text-[13px] text-muted-foreground">
+						Every service in { d.Project.Name }, databases included, in one place.
+					</p>
+				</div>
+			</div>
+			<form method="get" action={ templ.URL(d.base()) } class="mt-5 flex flex-wrap items-center gap-2 lg:flex-nowrap" data-log-form data-autosubmit>
+				<label class="logx-filter">
+					<span class="sr-only">Filter and search logs</span>
+					@icon("search")
+					<input
+						class="control w-full"
+						type="search"
+						name="q"
+						value={ d.Query }
+						placeholder="Filter and search logs"
+						autocomplete="off"
+						spellcheck="false"
+						data-log-filter
+						aria-describedby="log-filter-help"
+					/>
+					<span class="kbd" aria-hidden="true">/</span>
+				</label>
+				<label class="sr-only" for="log-range">Time range</label>
+				// Live tail follows from now, so a range means nothing while it
+				// is on and the picker is held where it was.
+				<div class="w-40 shrink-0">
+					@selectbox.SelectBox() {
+						@selectbox.Trigger(selectbox.TriggerProps{ID: "log-range", Name: "range", Class: "w-40", Disabled: d.Live && d.Stored}) {
+							@selectbox.Value(selectbox.ValueProps{Placeholder: "Time range"})
+						}
+						@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+							for _, c := range d.Ranges {
+								@selectbox.Item(selectbox.ItemProps{Value: c.Key, Selected: c.Active}) {
+									{ c.Label }
+								}
+							}
+						}
+					}
+				</div>
+				if d.Live {
+					<input type="hidden" name="live" value="1"/>
+				}
+				<a
+					class={ "btn", templ.KV("live-on", d.Live) }
+					href={ templ.URL(d.href(map[string]string{"live": liveToggle(d.Live)})) }
+					aria-pressed={ boolAttr(d.Live) }
+				>
+					<span class="live-dot" aria-hidden="true"></span>
+					Live tail
+				</a>
+				<a class="btn" href={ templ.URL(d.downloadHref()) } download>
+					@icon("download")
+					Download
+				</a>
+			</form>
+			<p id="log-filter-help" class="mt-2 text-[12px] text-muted-foreground">
+				Text matches the message.
+				<code class="mono">{ "@service:name" }</code> narrows to one service,
+				<code class="mono">{ "@level:error" }</code> to errors.
+				if len(d.Services) > 0 {
+					Services: <span class="mono">{ joinNames(d.Services) }</span>.
+				}
+			</p>
+			if !d.Stored && d.Error == "" {
+				<div class="callout mt-4">
+					<div class="min-w-0">
+						<div class="font-medium">Showing the running pods</div>
+						<p class="mt-0.5 text-muted-foreground">
+							This install keeps no log history, so these are the last lines each service's current
+							pod holds, and a restart takes them with it. Its operator turns history on with a log
+							store (<code class="mono">YACHT_LOGS_URL</code>).
+						</p>
+					</div>
+				</div>
+			}
+			@projectLogResults(d)
+		</div>
+	</div>
+}
+
+// projectLogResults is the histogram and the table: the part a live page
+// without a store polls, and the part a live page with one appends to.
+templ projectLogResults(d ProjectLogsData) {
+	<div
+		id="log-results"
+		class="mt-4 flex flex-col gap-4"
+		if d.Live && d.Stored {
+			data-log-tail={ d.streamHref() }
+			data-log-services={ joinNames(d.Services) }
+		}
+		if d.Live && !d.Stored {
+			hx-get={ d.linesHref() }
+			hx-trigger="every 5s"
+			hx-swap="outerHTML"
+		}
+	>
+		if d.Error != "" {
+			<div class="callout callout-err">
+				<div class="min-w-0">{ d.Error }</div>
+			</div>
+		}
+		<section class="panel">
+			<div class="panel-header">
+				<span class="panel-title">
+					{ plural(len(d.Entries), "line") }
+					if d.Limited {
+						<span class="font-normal text-muted-foreground">{ " · the newest " + strconv.Itoa(len(d.Entries)) + " shown" }</span>
+					}
+				</span>
+				<span class="text-[12.5px] tabular-nums text-muted-foreground">
+					if n := countErrors(d.Entries); n > 0 {
+						<span class="text-destructive">{ plural(n, "error") }</span>
+					} else {
+						No errors
+					}
+					if d.Live {
+						{ " · following" }
+					} else {
+						{ " · " + d.Range.Label }
+					}
+				</span>
+			</div>
+			if hasCounts(d.Buckets) {
+				<div class="http-chart-wrap">
+					@templ.JSONScript("log-chart-data", d.Buckets)
+					<div class="http-chart" data-http-chart data-bands="logs" data-source="log-chart-data"></div>
+				</div>
+			}
+			if len(d.Entries) == 0 {
+				<div class="empty">
+					@icon("logs")
+					<p class="font-medium text-foreground">No logs</p>
+					if d.Note != "" {
+						<p>{ d.Note }</p>
+					} else if d.Query != "" {
+						<p>Nothing in { d.Range.Label } matches <span class="mono">{ d.Query }</span>.</p>
+					} else {
+						<p>No service wrote anything in { d.Range.Label }.</p>
+					}
+				</div>
+			} else {
+				<div class="logx" data-log-scroll>
+					<table>
+						<thead>
+							<tr><th scope="col">Time</th><th scope="col">Service</th><th scope="col">Data</th></tr>
+						</thead>
+						<tbody data-log-rows>
+							for _, e := range d.Entries {
+								<tr class={ templ.KV("logx-err", e.Error) }>
+									<td class="logx-time" title={ e.At.UTC().Format("2006-01-02 15:04:05.000 UTC") }>{ logTime(e) }</td>
+									<td class="logx-svc">
+										<span class="logx-dot" style={ "background:" + serviceColour(d.Services, e.Service) } aria-hidden="true"></span>
+										{ e.Service }
+									</td>
+									<td class="logx-msg">
+										@highlight(e.Message, d.Search.Text)
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</section>
+	</div>
+}
+
+// ProjectObservability is a project's dashboard: a block per measure, every
+// service on each.
+templ ProjectObservability(d ObservabilityData) {
+	<div class="project-page">
+		<div class="project-page-inner max-w-[1280px]">
+			<div class="flex flex-wrap items-end justify-between gap-3">
+				<div>
+					<h1 class="text-[20px] font-semibold tracking-tight">Observability</h1>
+					<p class="mt-1 text-[13px] text-muted-foreground">
+						How every service in { d.Project.Name } is doing: what it uses, and how its requests go.
+					</p>
+				</div>
+				if d.Stored {
+					<nav class="obs-ranges" aria-label="Time range">
+						for _, c := range d.Ranges {
+							<a
+								class={ "obs-range", templ.KV("obs-range-active", c.Active) }
+								href={ templ.URL(d.rangeHref(c.Key)) }
+								if c.Active {
+									aria-current="true"
+								}
+							>{ c.Key }</a>
+						}
+					</nav>
+				}
+			</div>
+			if d.Error != "" {
+				<div class="callout callout-err mt-5">
+					<div class="min-w-0">{ d.Error }</div>
+				</div>
+			}
+			if d.Empty {
+				<div class="panel mt-5">
+					<div class="empty">
+						@icon("activity")
+						<p class="font-medium text-foreground">Nothing to observe yet</p>
+						<p>Deploy a service to this project and its blocks appear here.</p>
+					</div>
+				</div>
+			} else if d.Stored && len(d.Panels) > 0 {
+				<div class="obs-grid mt-5">
+					for _, p := range d.Panels {
+						@chartPanel(p)
+					}
+				</div>
+				<p class="mt-3 text-[12px] text-muted-foreground">
+					Requests, errors, response times and network are what reaches each service through its
+					public domains. A service reached only on the private network has CPU and memory alone.
+				</p>
+			} else {
+				if !d.Stored {
+					<div class="callout mt-5">
+						<div class="min-w-0">
+							<div class="font-medium">No metrics history on this install</div>
+							<p class="mt-0.5 text-muted-foreground">
+								Requests, error rate, response times and charts over time need a metrics store
+								(<code class="mono">YACHT_METRICS_URL</code>), which this install's operator has not
+								set. What the cluster can say now is below.
+							</p>
+						</div>
+					</div>
+				}
+				@usageNowPanel(d.Now, d.NowKnown)
+			}
+		</div>
+	</div>
+}
+
+// chartPanel is one block.
+templ chartPanel(p ChartPanel) {
+	<section class="panel min-w-0" aria-labelledby={ p.ID + "-title" }>
+		<div class="panel-header">
+			<span class="panel-title" id={ p.ID + "-title" }>{ p.Title }</span>
+			<span class="obs-headline">{ p.Headline }</span>
+		</div>
+		if p.Empty() {
+			<div class="obs-empty">{ panelNote(p) }</div>
+		} else {
+			@templ.JSONScript(p.ID+"-data", p.payload())
+			<div class="obs-chart" data-series-chart data-source={ p.ID + "-data" }></div>
+		}
+	</section>
+}
+
+// usageNowPanel is metrics-server's one reading, for an install with nothing
+// better.
+templ usageNowPanel(now []ServiceNow, known bool) {
+	<section class="panel mt-4">
+		<div class="panel-header">
+			<span class="panel-title">Using now</span>
+			<span class="text-[12.5px] text-muted-foreground">from the cluster's metrics-server, about a minute old</span>
+		</div>
+		if !known {
+			<div class="empty">
+				<p class="font-medium text-foreground">No reading</p>
+				<p>This cluster has no metrics-server to ask.</p>
+			</div>
+		} else {
+			<table class="dtable">
+				<thead>
+					<tr><th scope="col">Service</th><th scope="col">CPU</th><th scope="col">Memory</th></tr>
+				</thead>
+				<tbody>
+					for _, n := range now {
+						<tr>
+							<td class="font-medium">{ n.Name }</td>
+							<td class="tabular-nums">{ n.CPU }</td>
+							<td class="tabular-nums">{ n.Memory }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</section>
+}
+
+// AppMetricCharts is the charts on an app's Metrics tab, fetched into the tab
+// once it is open so the panel itself opens without waiting on the store.
+templ AppMetricCharts(d AppMetricsData) {
+	<div id="app-metric-charts" class="mt-5">
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+			<span class="text-[13px] font-semibold">Over time</span>
+			if d.Stored {
+				<nav class="obs-ranges" aria-label="Time range">
+					for _, c := range d.Ranges {
+						<a
+							class={ "obs-range", templ.KV("obs-range-active", c.Active) }
+							href="#"
+							hx-get={ d.rangeHref(c.Key) }
+							hx-target="#app-metric-charts"
+							hx-swap="outerHTML"
+							if c.Active {
+								aria-current="true"
+							}
+						>{ c.Key }</a>
+					}
+				</nav>
+			}
+		</div>
+		if d.Error != "" {
+			<div class="callout callout-err mb-3">
+				<div class="min-w-0">{ d.Error }</div>
+			</div>
+		}
+		if d.Stored && len(d.Panels) > 0 {
+			<div class="flex flex-col gap-4">
+				for _, p := range appPanelOrder(d.Panels) {
+					@chartPanel(p)
+				}
+			</div>
+		} else {
+			if !d.Stored {
+				<div class="callout">
+					<div class="min-w-0">
+						<p class="text-muted-foreground">
+							Requests, error rate and response times over time need a metrics store
+							(<code class="mono">YACHT_METRICS_URL</code>), which this install does not have.
+						</p>
+					</div>
+				</div>
+			}
+			if d.Now != nil {
+				<div class="metrics mt-4">
+					@metric("CPU now", d.Now.CPU, "from metrics-server")
+					@metric("Memory now", d.Now.Memory, "from metrics-server")
+				</div>
+			}
+		}
+	</div>
+}
+
+// appMetricsLoader is where the charts arrive: a placeholder the size of a
+// block, replaced as soon as the tab is open.
+templ appMetricsLoader(name string) {
+	<div
+		id="app-metric-charts"
+		class="mt-5"
+		hx-get={ "/apps/" + name + "/metrics/charts" }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+		aria-busy="true"
+	>
+		<div class="panel">
+			<div class="obs-empty">Reading metrics…</div>
+		</div>
+	</div>
+}
+
+// projectUsageSection is what the project has cost this month and will.
+templ projectUsageSection(u *ProjectUsage) {
+	<section id="usage" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">
+				@icon("gauge")
+			</span>
+			<h2 class="settings-section-title">Usage</h2>
+		</div>
+		<div class="metrics mb-4">
+			@metric("Current usage", u.Current, u.Period)
+			@metric("Estimated usage", u.Estimated, "this month, at the current rate")
+		</div>
+		if len(u.Resources) > 0 {
+			@usageTable("Resource", u.Resources)
+		}
+		if len(u.Services) > 0 {
+			<div class="mt-4">
+				@usageTable("Service", u.Services)
+			</div>
+		}
+		if u.Note != "" {
+			<p class="field-note mt-3">{ u.Note }</p>
+		}
+	</section>
+}
+
+templ usageTable(first string, lines []UsageLine) {
+	<div class="panel overflow-hidden">
+		<table class="dtable">
+			<thead>
+				<tr>
+					<th scope="col">{ first }</th>
+					<th scope="col">Used</th>
+					<th scope="col" class="text-right">Current</th>
+					<th scope="col" class="text-right">Estimated</th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, l := range lines {
+					<tr>
+						<td class="font-medium">{ l.Name }</td>
+						<td class="text-muted-foreground tabular-nums">{ l.Detail }</td>
+						<td class="text-right tabular-nums">{ l.Current }</td>
+						<td class="text-right tabular-nums">{ l.Estimated }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+func countErrors(entries []observe.Entry) int {
+	n := 0
+	for _, e := range entries {
+		if e.Error {
+			n++
+		}
+	}
+	return n
+}

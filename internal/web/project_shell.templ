@@ -48,6 +48,8 @@ templ projectShell(s Slots, page templ.Component) {
 		<div class="project-body">
 			<nav class="project-rail" aria-label="Project">
 				@projectRailLink(bar, SectionArchitecture, "Architecture", "network")
+				@projectRailLink(bar, SectionObservability, "Observability", "activity")
+				@projectRailLink(bar, SectionLogs, "Logs", "logs")
 				@projectRailLink(bar, SectionSettings, "Settings", "settings")
 				<div class="flex-1"></div>
 				<a class="project-rail-link" href="/account" aria-label="Your account">

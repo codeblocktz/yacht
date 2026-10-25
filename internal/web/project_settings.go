@@ -59,6 +59,7 @@ func (s *Server) renderProjectSettingsWith(
 	roleAdmin := ok && role.AtLeast(account.RoleAdmin)
 	_, admin := s.apps.(projectAdmin)
 	d := ProjectSettingsData{Project: p, Apps: len(apps), Error: fail, CanAdmin: admin && roleAdmin, RoleAdmin: roleAdmin}
+	d.Usage = s.projectUsage(ctx, owner.ID, p, apps)
 	s.attachSharedVariables(r, owner.ID, &d)
 	_, d.PROn = s.apps.(prEnvironments)
 	if es, ok := s.environments(); ok {
