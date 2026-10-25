@@ -28,6 +28,8 @@ type ProjectSettingsData struct {
 	EnvironmentsOn bool
 	Copied         []app.EnvironmentCopy
 	CopiedEnv      string
+	// PROn says the service makes environments for pull requests.
+	PROn bool
 }
 
 // ProjectSettings is the project's own settings, reached from the rail, as
@@ -179,6 +181,32 @@ templ projectEnvironments(d ProjectSettingsData) {
 				}
 			</div>
 		</div>
+		if d.PROn {
+			<div class="panel mt-4">
+				<div class="panel-body flex flex-wrap items-center justify-between gap-3">
+					<div class="min-w-0">
+						<div class="font-medium">PR Environments</div>
+						<p class="hint mt-0.5">
+							An environment for each pull request opened against a repository this project builds — production
+							copied, building the pull request's branch — taken down when it closes. A fork's pull request is
+							never built: its code would run with this project's variables.
+						</p>
+					</div>
+					if d.RoleAdmin {
+						<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/pr-environments") }>
+							if d.Project.PREnvironments {
+								<button class="btn btn-sm" type="submit">Disable</button>
+							} else {
+								<input type="hidden" name="enabled" value="1"/>
+								<button class="btn btn-sm btn-primary" type="submit">Enable PR Environments</button>
+							}
+						</form>
+					} else if d.Project.PREnvironments {
+						<span class="tag">on</span>
+					}
+				</div>
+			</div>
+		}
 		if d.RoleAdmin {
 			<form method="post" action={ templ.URL("/projects/" + d.Project.Slug + "/environments") } class="mt-4 flex flex-wrap items-end gap-3">
 				<div class="field">

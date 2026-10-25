@@ -878,6 +878,7 @@ func (s *Server) Handler() http.Handler {
 			// the admins' to do, like deleting an app.
 			r.Post("/projects/{slug}/environments", s.environmentCreate)
 			r.Post("/projects/{slug}/environments/{env}/delete", s.environmentDelete)
+			r.Post("/projects/{slug}/pr-environments", s.projectPREnvironments)
 			r.Post("/projects/{slug}/delete", s.projectDelete)
 
 			// Storage sits with the admin actions rather than the member ones:

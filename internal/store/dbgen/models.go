@@ -275,6 +275,7 @@ type Environment struct {
 	Name       string
 	CopiedFrom string
 	CreatedAt  time.Time
+	PrNumber   *int32
 }
 
 type GithubDelivery struct {
@@ -349,12 +350,13 @@ type PlatformRegistry struct {
 }
 
 type Project struct {
-	ID        uuid.UUID
-	OwnerID   string
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             uuid.UUID
+	OwnerID        string
+	Slug           string
+	Name           string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	PrEnvironments bool
 }
 
 type ProjectVariable struct {

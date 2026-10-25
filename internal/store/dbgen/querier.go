@@ -594,6 +594,9 @@ type Querier interface {
 	// A team letting go of an installation stops its apps building from it.
 	// Whatever paused them already stays the reason.
 	PauseTeamGitHubApps(ctx context.Context, arg PauseTeamGitHubAppsParams) (int64, error)
+	// Every project that builds a repository in production and makes an
+	// environment for its pull requests: one row a project, whichever team.
+	ProjectsForPullRequest(ctx context.Context, arg ProjectsForPullRequestParams) ([]ProjectsForPullRequestRow, error)
 	PruneGitHubDeliveries(ctx context.Context) (int64, error)
 	ReclaimExpiredDeploymentOperations(ctx context.Context) ([]DeploymentOperation, error)
 	// Records the region an app already lives in, once. Not versioned: recording
@@ -693,9 +696,11 @@ type Querier interface {
 	// The release's image becomes the deployment's: for a deploy that built,
 	// the first moment there is one to name.
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
+	SetEnvironmentPR(ctx context.Context, arg SetEnvironmentPRParams) error
 	SetGitHubInstallationSuspended(ctx context.Context, arg SetGitHubInstallationSuspendedParams) (int64, error)
 	SetPlatformDNS(ctx context.Context, arg SetPlatformDNSParams) (PlatformDn, error)
 	SetPlatformRegistry(ctx context.Context, arg SetPlatformRegistryParams) (PlatformRegistry, error)
+	SetProjectPREnvironments(ctx context.Context, arg SetProjectPREnvironmentsParams) (int64, error)
 	SetReleaseBackfillState(ctx context.Context, arg SetReleaseBackfillStateParams) (int64, error)
 	// Switching team ends any impersonation, in the same statement. Somebody who
 	// picks one of their own teams has said which team they mean to be in; leaving

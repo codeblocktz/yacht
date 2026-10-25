@@ -38,7 +38,7 @@ const createProject = `-- name: CreateProject :one
 
 INSERT INTO projects (owner_id, slug, name)
 VALUES ($1, $2, $3)
-RETURNING id, owner_id, slug, name, created_at, updated_at
+RETURNING id, owner_id, slug, name, created_at, updated_at, pr_environments
 `
 
 type CreateProjectParams struct {
@@ -59,6 +59,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrEnvironments,
 	)
 	return i, err
 }
@@ -81,7 +82,7 @@ func (q *Queries) DeleteProject(ctx context.Context, arg DeleteProjectParams) (i
 }
 
 const getProjectByID = `-- name: GetProjectByID :one
-SELECT id, owner_id, slug, name, created_at, updated_at FROM projects
+SELECT id, owner_id, slug, name, created_at, updated_at, pr_environments FROM projects
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -100,12 +101,13 @@ func (q *Queries) GetProjectByID(ctx context.Context, arg GetProjectByIDParams) 
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrEnvironments,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, owner_id, slug, name, created_at, updated_at FROM projects
+SELECT id, owner_id, slug, name, created_at, updated_at, pr_environments FROM projects
 WHERE owner_id = $1 AND slug = $2
 `
 
@@ -124,6 +126,7 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, arg GetProjectBySlugPara
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrEnvironments,
 	)
 	return i, err
 }
@@ -299,7 +302,7 @@ func (q *Queries) ListAppsWithoutProject(ctx context.Context, ownerID string) ([
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT p.id, p.owner_id, p.slug, p.name, p.created_at, p.updated_at, count(a.id) AS app_count
+SELECT p.id, p.owner_id, p.slug, p.name, p.created_at, p.updated_at, p.pr_environments, count(a.id) AS app_count
 FROM projects p
 LEFT JOIN apps a ON a.project_id = p.id
 WHERE p.owner_id = $1
@@ -308,13 +311,14 @@ ORDER BY p.name
 `
 
 type ListProjectsRow struct {
-	ID        uuid.UUID
-	OwnerID   string
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	AppCount  int64
+	ID             uuid.UUID
+	OwnerID        string
+	Slug           string
+	Name           string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	PrEnvironments bool
+	AppCount       int64
 }
 
 func (q *Queries) ListProjects(ctx context.Context, ownerID string) ([]ListProjectsRow, error) {
@@ -333,6 +337,7 @@ func (q *Queries) ListProjects(ctx context.Context, ownerID string) ([]ListProje
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PrEnvironments,
 			&i.AppCount,
 		); err != nil {
 			return nil, err
@@ -368,7 +373,7 @@ const renameProject = `-- name: RenameProject :one
 UPDATE projects
 SET name = $3, updated_at = now()
 WHERE owner_id = $1 AND id = $2
-RETURNING id, owner_id, slug, name, created_at, updated_at
+RETURNING id, owner_id, slug, name, created_at, updated_at, pr_environments
 `
 
 type RenameProjectParams struct {
@@ -387,6 +392,7 @@ func (q *Queries) RenameProject(ctx context.Context, arg RenameProjectParams) (P
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PrEnvironments,
 	)
 	return i, err
 }

@@ -60,6 +60,7 @@ func (s *Server) renderProjectSettingsWith(
 	_, admin := s.apps.(projectAdmin)
 	d := ProjectSettingsData{Project: p, Apps: len(apps), Error: fail, CanAdmin: admin && roleAdmin, RoleAdmin: roleAdmin}
 	s.attachSharedVariables(r, owner.ID, &d)
+	_, d.PROn = s.apps.(prEnvironments)
 	if es, ok := s.environments(); ok {
 		d.EnvironmentsOn = true
 		if envs, err := es.Environments(ctx, owner.ID, p.Slug); err == nil {
@@ -176,4 +177,31 @@ func (s *Server) projectDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.flashOK(w, r, p.Name+" deleted.")
 	http.Redirect(w, r, "/projects", http.StatusSeeOther)
+}
+
+// prEnvironments is the PR Environments toggle, asserted like the rest.
+type prEnvironments interface {
+	SetPREnvironments(ctx context.Context, ownerID, projectSlug string, enabled bool) error
+}
+
+// projectPREnvironments turns a project's pull-request environments on or off.
+func (s *Server) projectPREnvironments(w http.ResponseWriter, r *http.Request) {
+	pe, ok := s.apps.(prEnvironments)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	owner := identity.MustFromContext(r.Context())
+	slug := chi.URLParam(r, "slug")
+	enabled := formChecked(r, "enabled")
+	if err := pe.SetPREnvironments(r.Context(), owner.ID, slug, enabled); err != nil {
+		s.renderProjectSettingsWith(w, r, http.StatusUnprocessableEntity, err.Error(), nil)
+		return
+	}
+	if enabled {
+		s.flashOK(w, r, "PR Environments on. The GitHub App has to send pull request events for them to start.")
+	} else {
+		s.flashOK(w, r, "PR Environments off.")
+	}
+	http.Redirect(w, r, "/projects/"+slug+"/settings#environments", http.StatusSeeOther)
 }

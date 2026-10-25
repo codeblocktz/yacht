@@ -132,6 +132,19 @@ type EnvironmentCopy struct {
 func (s *Service) CreateEnvironment(
 	ctx context.Context, ownerID, projectSlug, name, from string,
 ) (Environment, []EnvironmentCopy, error) {
+	return s.createEnvironment(ctx, ownerID, projectSlug, name, from, envOptions{})
+}
+
+// envOptions is how an environment made for a pull request differs from one
+// made by hand: its number, and the branch the repository's services build.
+type envOptions struct {
+	pr     int
+	branch func(App) string
+}
+
+func (s *Service) createEnvironment(
+	ctx context.Context, ownerID, projectSlug, name, from string, opts envOptions,
+) (Environment, []EnvironmentCopy, error) {
 	p, err := s.Project(ctx, ownerID, projectSlug)
 	if err != nil {
 		return Environment{}, nil, err
@@ -165,10 +178,18 @@ func (s *Service) CreateEnvironment(
 		return Environment{}, nil, fmt.Errorf("app: create environment: %w", err)
 	}
 	env := Environment{Slug: row.Slug, Name: row.Name, CopiedFrom: row.CopiedFrom, CreatedAt: row.CreatedAt}
+	if opts.pr > 0 {
+		n := int32(opts.pr)
+		if err := s.q.SetEnvironmentPR(ctx, dbgen.SetEnvironmentPRParams{
+			OwnerID: ownerID, ProjectID: p.ID, Slug: slug, PrNumber: &n,
+		}); err != nil {
+			return env, nil, fmt.Errorf("app: record the pull request: %w", err)
+		}
+	}
 	if from == "" {
 		return env, nil, nil
 	}
-	copies, err := s.copyEnvironment(ctx, ownerID, p, from, slug)
+	copies, err := s.copyEnvironment(ctx, ownerID, p, from, slug, opts)
 	env.Apps = 0
 	for _, c := range copies {
 		if c.Err == nil {
@@ -180,7 +201,7 @@ func (s *Service) CreateEnvironment(
 
 // copyEnvironment copies every service of one environment into another.
 func (s *Service) copyEnvironment(
-	ctx context.Context, ownerID string, p Project, from, to string,
+	ctx context.Context, ownerID string, p Project, from, to string, opts envOptions,
 ) ([]EnvironmentCopy, error) {
 	sources, err := s.ListInEnvironment(ctx, ownerID, p, from)
 	if err != nil {
@@ -226,7 +247,7 @@ func (s *Service) copyEnvironment(
 	var out []EnvironmentCopy
 	for _, src := range sources {
 		c := EnvironmentCopy{Service: src.ServiceName(), App: names[src.Name]}
-		c.Note, c.Err = s.copyService(ctx, ownerID, p, src, names[src.Name], to, hosts, conns)
+		c.Note, c.Err = s.copyService(ctx, ownerID, p, src, names[src.Name], to, hosts, conns, opts)
 		out = append(out, c)
 	}
 	return out, nil
@@ -251,7 +272,7 @@ func copyName(service, env string, taken map[string]bool) string {
 // copyService makes one service's copy in the new environment.
 func (s *Service) copyService(
 	ctx context.Context, ownerID string, p Project, src App, name, env string,
-	hosts map[string]string, conns map[string]Reference,
+	hosts map[string]string, conns map[string]Reference, opts envOptions,
 ) (string, error) {
 	var notes []string
 	in := CreateInput{
@@ -266,6 +287,12 @@ func (s *Service) copyService(
 		notes = append(notes, "starts empty, with its own credentials")
 	} else {
 		in.Image, in.Repo, in.Settings = src.Image, src.Repo, &src
+		if opts.branch != nil {
+			if branch := opts.branch(src); branch != "" && branch != in.Repo.Branch {
+				in.Repo.Branch = branch
+				notes = append(notes, "builds "+branch)
+			}
+		}
 		vars, rewritten, err := s.copyVariables(ctx, ownerID, src, hosts, conns)
 		if err != nil {
 			return "", err
@@ -467,3 +494,22 @@ func (s *Service) placeInEnvironment(ctx context.Context, ownerID string, in *Cr
 	}
 	return nil
 }
+
+// SetPREnvironments turns a project's pull-request environments on or off.
+// Turning them off leaves any already made; closing their pull requests
+// still takes them down.
+func (s *Service) SetPREnvironments(ctx context.Context, ownerID, projectSlug string, enabled bool) error {
+	p, err := s.Project(ctx, ownerID, projectSlug)
+	if err != nil {
+		return err
+	}
+	if _, err := s.q.SetProjectPREnvironments(ctx, dbgen.SetProjectPREnvironmentsParams{
+		OwnerID: ownerID, ID: p.ID, Enabled: enabled,
+	}); err != nil {
+		return fmt.Errorf("app: set PR environments: %w", err)
+	}
+	return nil
+}
+
+// prEnvironmentSlug is the environment a pull request gets: pr-<number>.
+func prEnvironmentSlug(number int) string { return fmt.Sprintf("pr-%d", number) }

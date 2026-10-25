@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -135,5 +136,55 @@ func TestAnEnvironmentNeedsAName(t *testing.T) {
 	}
 	if _, _, err := s.CreateEnvironment(ctx, id, p.Slug, "qa", "nowhere"); err == nil {
 		t.Error("copied from an environment that does not exist")
+	}
+}
+
+// A pull request against a repository a project builds gets an environment:
+// production copied, the repository's services building the pull request's
+// branch. Closing it takes the environment down; a fork's is never built.
+func TestAPullRequestGetsAnEnvironment(t *testing.T) {
+	ctx := context.Background()
+	s, _ := githubFixture(t, nil)
+	team := owner(t, s, s.pool, "pr-environments")
+	connect(t, s, team, 7)
+	p, err := s.CreateProject(ctx, team, "Shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeployFromGitHub(ctx, team, GitHubRef{InstallationID: 7, RepoID: webRepo.ID}, p.ID); err != nil {
+		t.Fatalf("DeployFromGitHub: %v", err)
+	}
+	event := func(action string, headRepo int64) []byte {
+		return []byte(fmt.Sprintf(`{"action":%q,"number":7,
+			"pull_request":{"head":{"ref":"feature/cart","repo":{"id":%d}},"base":{"ref":"main","repo":{"id":%d}}},
+			"repository":{"id":%d,"full_name":"acme/web"},"installation":{"id":7}}`,
+			action, headRepo, webRepo.ID, webRepo.ID))
+	}
+
+	// Off until the project turns it on.
+	if got, _ := s.gitHubPullRequest(ctx, event("opened", webRepo.ID)); !strings.Contains(got, "No project") {
+		t.Errorf("with PR environments off: %q", got)
+	}
+	if err := s.SetPREnvironments(ctx, team, p.Slug, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.gitHubPullRequest(ctx, event("opened", 999)); !strings.Contains(got, "fork") {
+		t.Errorf("a fork's pull request: %q", got)
+	}
+	if got, err := s.gitHubPullRequest(ctx, event("opened", webRepo.ID)); err != nil || !strings.Contains(got, "pr-7 made") {
+		t.Fatalf("opened: %q, %v", got, err)
+	}
+	copy, err := s.Get(ctx, team, "web-pr-7")
+	if err != nil {
+		t.Fatalf("the pull request's copy: %v", err)
+	}
+	if copy.Environment() != "pr-7" || copy.Repo.Branch != "feature/cart" {
+		t.Errorf("the copy is in %s building %q", copy.Environment(), copy.Repo.Branch)
+	}
+	if got, _ := s.gitHubPullRequest(ctx, event("closed", webRepo.ID)); !strings.Contains(got, "taken down") {
+		t.Errorf("closed: %q", got)
+	}
+	if _, err := s.Get(ctx, team, "web-pr-7"); err == nil {
+		t.Error("the pull request's copy survived it closing")
 	}
 }

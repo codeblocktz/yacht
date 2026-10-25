@@ -82,6 +82,8 @@ func (s *Service) actOnGitHub(ctx context.Context, d GitHubDelivery) (string, er
 		return "Webhook connected.", nil
 	case "push":
 		return s.gitHubPush(ctx, d.Body)
+	case "pull_request":
+		return s.gitHubPullRequest(ctx, d.Body)
 	case "installation":
 		return s.gitHubInstallation(ctx, d.Body)
 	case "installation_repositories":
@@ -215,4 +217,83 @@ func (s *Service) gitHubInstallationRepos(ctx context.Context, body []byte) (str
 	}
 	return fmt.Sprintf("%d added, %d removed; %d apps paused, %d resumed.",
 		len(ev.Added), len(ev.Removed), paused, resumed), nil
+}
+
+// gitHubPullRequest makes a project's environment for a pull request when it
+// opens and takes it down when it closes, as Railway's PR Environments do.
+// The environment is production copied, with every service built from the
+// pull request's repository building its branch instead; pushes to that
+// branch then deploy it the way any push deploys an app on its branch.
+func (s *Service) gitHubPullRequest(ctx context.Context, body []byte) (string, error) {
+	var ev github.PullRequestEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		return "", fmt.Errorf("app: read pull request payload: %w", err)
+	}
+	inst, repo, number := ev.Installation.ID, ev.Repository.ID, ev.Number
+	if inst == 0 || repo == 0 || number == 0 {
+		return "Ignored a pull request that names no installation, repository or number.", nil
+	}
+	// A pull request from a fork is not built. Anybody can open one, and
+	// its code would run with the project's variables — its secrets among
+	// them — in an environment that looks like the project's own.
+	if ev.PullRequest.Head.Repo.ID != repo {
+		return fmt.Sprintf("Ignored pull request #%d: it comes from a fork, and a fork's code is not run with this project's variables.", number), nil
+	}
+	projects, err := s.q.ProjectsForPullRequest(ctx, dbgen.ProjectsForPullRequestParams{
+		InstallationID: &inst, RepoID: &repo,
+	})
+	if err != nil {
+		return "", fmt.Errorf("app: find projects for a pull request: %w", err)
+	}
+	if len(projects) == 0 {
+		return "No project makes environments for " + orUnknown(ev.Repository.FullName) + "'s pull requests.", nil
+	}
+	slug := prEnvironmentSlug(number)
+	branch := ev.PullRequest.Head.Ref
+	builds := func(a App) string {
+		if a.Source == SourceGit && a.Repo.GitHub.InstallationID == inst && a.Repo.GitHub.RepoID == repo {
+			return branch
+		}
+		return ""
+	}
+
+	var lines []string
+	for _, row := range projects {
+		p := Project{ID: row.ID, OwnerID: row.OwnerID, Slug: row.Slug, Name: row.Name}
+		has, err := s.HasEnvironment(ctx, p.OwnerID, p, slug)
+		if err != nil {
+			lines = append(lines, p.OwnerID+"/"+p.Slug+": "+err.Error())
+			continue
+		}
+		switch ev.Action {
+		case "opened", "reopened", "ready_for_review":
+			if has {
+				lines = append(lines, p.OwnerID+"/"+p.Slug+": "+slug+" already exists")
+				continue
+			}
+			env, copies, err := s.createEnvironment(ctx, p.OwnerID, p.Slug, slug, DefaultEnvironment,
+				envOptions{pr: number, branch: builds})
+			if err != nil {
+				s.log.Error("PR environment", slog.String("project", p.Slug), slog.String("error", err.Error()))
+				lines = append(lines, p.OwnerID+"/"+p.Slug+": could not make "+slug+": "+err.Error())
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("%s/%s: %s made from production, %d services, building %s",
+				p.OwnerID, p.Slug, env.Slug, len(copies), branch))
+		case "closed":
+			if !has {
+				continue
+			}
+			if err := s.DeleteEnvironment(ctx, p.OwnerID, p.Slug, slug); err != nil {
+				s.log.Error("PR environment", slog.String("project", p.Slug), slog.String("error", err.Error()))
+				lines = append(lines, p.OwnerID+"/"+p.Slug+": could not take down "+slug+": "+err.Error())
+				continue
+			}
+			lines = append(lines, p.OwnerID+"/"+p.Slug+": "+slug+" taken down")
+		}
+	}
+	if len(lines) == 0 {
+		return fmt.Sprintf("Nothing to do for pull request #%d %s.", number, ev.Action), nil
+	}
+	return strings.Join(lines, "\n"), nil
 }
