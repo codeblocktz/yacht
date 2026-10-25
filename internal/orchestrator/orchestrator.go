@@ -219,6 +219,11 @@ type AppSpec struct {
 	// those is what lets the read-only default stay the default.
 	ScratchPaths []string
 
+	// Args replace the image's command arguments. Empty runs the image's own.
+	// $(NAME) is expanded from the workload's environment, secrets included,
+	// which is how a password reaches a program that only takes it as a flag.
+	Args []string
+
 	// HealthPath is an HTTP path on the workload's own port that reports
 	// whether it is ready to serve. Empty means no probe.
 	//

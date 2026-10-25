@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -249,6 +250,15 @@ func (a App) UntrustedCert() bool {
 
 // Options are the settings the service needs beyond its dependencies.
 type Options struct {
+	// BackupS3 is where database backups are written; nil keeps them on a
+	// volume beside each database. BackupToolImage uploads and downloads
+	// them, DefaultBackupToolImage when empty, and BackupCheckInterval is how
+	// often finished backup jobs are settled and due ones started. See
+	// backup.go.
+	BackupS3            *backup.S3
+	BackupToolImage     string
+	BackupCheckInterval time.Duration
+
 	// Keeper seals secret variables. Left nil, secrets are refused rather than
 	// stored readable — a protection somebody asked for and did not get is
 	// worse than one they were told they could not have.
@@ -966,11 +976,34 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 			return App{}, fmt.Errorf("app: create secret %s: %w", key, err)
 		}
 	}
+	// The same password under each further name the engine's clients read,
+	// sealed like the original: it is the same secret, and a copy stored
+	// readable would be the original stored readable.
+	for _, key := range blueprint.PasswordKeys {
+		sealed, err := s.keeper.Seal(generated[blueprint.GeneratedSecrets[0]])
+		if err != nil {
+			return App{}, err
+		}
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Sealed: sealed, Secret: true,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create secret %s: %w", key, err)
+		}
+	}
+	// Where other apps reach it. Not secret, and plain so the variables tab
+	// shows it: an address is what somebody copies into a client.
+	for _, key := range blueprint.HostKeys {
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Value: created.PrivateHost(),
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create variable %s: %w", key, err)
+		}
+	}
 	// The address other apps use, sealed because it carries the password.
 	if blueprint.ConnectionKey != "" {
 		conn := fmt.Sprintf(blueprint.ConnectionTemplate,
 			generated[blueprint.GeneratedSecrets[0]],
-			created.Name+"."+created.Namespace+".svc.cluster.local")
+			created.PrivateHost())
 		sealed, err := s.keeper.Seal(conn)
 		if err != nil {
 			return App{}, err

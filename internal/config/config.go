@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -282,6 +283,28 @@ type Config struct {
 	GitHubAppClientID       string
 	GitHubAppClientSecret   string
 
+	// BackupS3* are where database backups are written: an S3-compatible
+	// bucket — R2, MinIO, AWS — under BackupS3Prefix. Endpoint, bucket,
+	// access key and secret key together, or none of them; with none, each
+	// database's backups are kept on a volume beside it, which survives a bad
+	// migration and not the loss of the cluster.
+	//
+	// The keys stay in the engine. What a backup job in a customer's
+	// namespace is given is a URL signed for its one object, so the bucket
+	// may be shared with other things the install keeps, under another
+	// prefix, without a customer's job being able to reach them.
+	BackupS3Endpoint  string
+	BackupS3Region    string
+	BackupS3Bucket    string
+	BackupS3Prefix    string
+	BackupS3AccessKey string
+	BackupS3SecretKey string
+
+	// BackupToolImage uploads and downloads dumps in a backup job; curl, run
+	// as the database's own non-root user. Empty is the engine's pinned
+	// default. An install that pulls from a mirror names its copy here.
+	BackupToolImage string
+
 	// Debug enables verbose logging.
 	Debug bool
 }
@@ -338,6 +361,13 @@ func Load() (Config, error) {
 		GitHubAppClientID:        strings.TrimSpace(env("YACHT_GITHUB_APP_CLIENT_ID", "")),
 		GitHubAppClientSecret:    env("YACHT_GITHUB_APP_CLIENT_SECRET", ""),
 		Debug:                    envBool("YACHT_DEBUG", false),
+		BackupS3Endpoint:         strings.TrimSpace(env("YACHT_BACKUP_S3_ENDPOINT", "")),
+		BackupS3Region:           strings.TrimSpace(env("YACHT_BACKUP_S3_REGION", "")),
+		BackupS3Bucket:           strings.TrimSpace(env("YACHT_BACKUP_S3_BUCKET", "")),
+		BackupS3Prefix:           strings.TrimSpace(env("YACHT_BACKUP_S3_PREFIX", "databases")),
+		BackupS3AccessKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_ACCESS_KEY", "")),
+		BackupS3SecretKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_SECRET_KEY", "")),
+		BackupToolImage:          strings.TrimSpace(env("YACHT_BACKUP_TOOL_IMAGE", "")),
 	}
 
 	if err := c.validate(); err != nil {
@@ -425,6 +455,9 @@ func (c Config) validate() error {
 	}
 	errs = append(errs, c.accountFaults()...)
 	errs = append(errs, c.gitHubFaults()...)
+	if _, err := c.BackupStore(); err != nil {
+		errs = append(errs, err)
+	}
 
 	return errors.Join(errs...)
 }
@@ -812,6 +845,43 @@ func (c Config) String() string {
 		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation,
 		orOff(c.GitHubAppSlug), c.Debug,
 	)
+}
+
+// BackupStore is the bucket database backups go to, or nil when none is
+// configured.
+//
+// Half a bucket is refused at startup: an endpoint without keys would leave
+// every backup on a volume while the operator believed they were off-site,
+// which is the failure nobody discovers until they need one.
+func (c Config) BackupStore() (*backup.S3, error) {
+	set := map[string]string{
+		"YACHT_BACKUP_S3_ENDPOINT":   c.BackupS3Endpoint,
+		"YACHT_BACKUP_S3_BUCKET":     c.BackupS3Bucket,
+		"YACHT_BACKUP_S3_ACCESS_KEY": c.BackupS3AccessKey,
+		"YACHT_BACKUP_S3_SECRET_KEY": c.BackupS3SecretKey,
+	}
+	var missing []string
+	given := 0
+	for _, k := range []string{"YACHT_BACKUP_S3_ENDPOINT", "YACHT_BACKUP_S3_BUCKET",
+		"YACHT_BACKUP_S3_ACCESS_KEY", "YACHT_BACKUP_S3_SECRET_KEY"} {
+		if set[k] == "" {
+			missing = append(missing, k)
+		} else {
+			given++
+		}
+	}
+	if given == 0 {
+		return nil, nil
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("database backups to S3 need %s as well", strings.Join(missing, ", "))
+	}
+	s3, err := backup.NewS3(c.BackupS3Endpoint, c.BackupS3Region, c.BackupS3Bucket,
+		c.BackupS3Prefix, c.BackupS3AccessKey, c.BackupS3SecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("YACHT_BACKUP_S3_*: %w", err)
+	}
+	return s3, nil
 }
 
 // MailTransport names the transport sign-in links will be delivered through.

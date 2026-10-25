@@ -460,3 +460,46 @@ func TestTCPProxyLoads(t *testing.T) {
 		}
 	}
 }
+
+// Half a bucket is refused at startup, because it would leave every backup on
+// a volume while the operator believed they were off-site.
+func TestBackupBucketIsAllOrNothing(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_BACKUP_S3_ENDPOINT": "https://acct.r2.cloudflarestorage.com",
+		"YACHT_BACKUP_S3_BUCKET":   "datahuru-backups",
+	})
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "YACHT_BACKUP_S3_ACCESS_KEY") {
+		t.Fatalf("Load = %v, want the missing keys named", err)
+	}
+
+	t.Setenv("YACHT_BACKUP_S3_ACCESS_KEY", "AKID")
+	t.Setenv("YACHT_BACKUP_S3_SECRET_KEY", "secret")
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3, err := c.BackupStore()
+	if err != nil || s3 == nil || s3.Prefix != "databases" || s3.Region != "us-east-1" {
+		t.Fatalf("store = %+v, %v", s3, err)
+	}
+	if strings.Contains(c.String(), "secret") {
+		t.Error("the secret key is in what startup logs")
+	}
+
+	t.Setenv("YACHT_BACKUP_S3_ENDPOINT", "r2.example")
+	if _, err := Load(); err == nil {
+		t.Error("an endpoint that is not a URL was accepted")
+	}
+}
+
+func TestNoBucketKeepsBackupsOnAVolume(t *testing.T) {
+	setEnv(t, nil)
+	c, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s3, err := c.BackupStore(); s3 != nil || err != nil {
+		t.Errorf("store = %+v, %v; want none", s3, err)
+	}
+}

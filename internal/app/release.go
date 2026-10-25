@@ -50,6 +50,9 @@ type Release struct {
 	ScratchPaths           []string
 	WritableRootFilesystem bool
 
+	// Args replace the image's command arguments; empty runs its own.
+	Args []string
+
 	HealthPath string
 	Liveness   bool
 
@@ -148,6 +151,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		RunAsUser:              r.RunAsUser,
 		FSGroup:                r.FSGroup,
 		ScratchPaths:           append([]string(nil), r.ScratchPaths...),
+		Args:                   append([]string(nil), r.Args...),
 		HealthPath:             r.HealthPath,
 		Liveness:               r.Liveness,
 		Secrets:                cloneStrings(overlays.Secrets),
@@ -259,6 +263,7 @@ func (s *Service) recordRelease(
 		Internal:  a.Internal,
 		RunAsUser: runtime.RunAsUser, FsGroup: runtime.FSGroup,
 		ScratchPaths:           append([]string{}, runtime.ScratchPaths...),
+		Args:                   append([]string{}, runtime.Args...),
 		WritableRootFilesystem: false,
 		HealthPath:             a.HealthPath, HealthLiveness: a.Liveness,
 		StartCommand: a.StartCommand, PreDeployCommand: a.PreDeployCommand,
@@ -346,6 +351,7 @@ func toRelease(row dbgen.AppRelease) Release {
 		Internal:  row.Internal,
 		RunAsUser: row.RunAsUser, FSGroup: row.FsGroup,
 		ScratchPaths:           append([]string(nil), row.ScratchPaths...),
+		Args:                   append([]string(nil), row.Args...),
 		WritableRootFilesystem: row.WritableRootFilesystem,
 		HealthPath:             row.HealthPath, Liveness: row.HealthLiveness,
 		StartCommand: row.StartCommand, PreDeployCommand: row.PreDeployCommand,

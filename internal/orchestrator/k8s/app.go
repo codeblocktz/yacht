@@ -428,6 +428,9 @@ func (o *Orchestrator) container(
 	if cmd := startCommand(spec); cmd != nil {
 		c = c.WithCommand(cmd...)
 	}
+	if len(spec.Args) > 0 {
+		c = c.WithArgs(spec.Args...)
+	}
 
 	// Readiness first: it is what keeps traffic away from a container that is
 	// not serving yet, which is the whole of what most workloads need.
@@ -763,6 +766,11 @@ func specHash(spec orchestrator.AppSpec) string {
 	}
 	// Not the restart policy or the healthcheck timeout: neither is in the pod
 	// template, and changing them is no reason to restart anything.
+	// Only when set, like the pool: every workload started with its image's
+	// own command keeps the fingerprint it had before arguments existed.
+	if len(spec.Args) > 0 {
+		fmt.Fprintf(h, "args=%q\n", spec.Args)
+	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}

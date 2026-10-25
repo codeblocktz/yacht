@@ -10,7 +10,7 @@ INSERT INTO app_releases (
     writable_root_filesystem, health_path, health_liveness,
     start_command, pre_deploy_command,
     cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds,
-    env, secret_keys, config_version, origin
+    env, secret_keys, config_version, origin, args
 )
 VALUES (
     @owner_id, @app_id, @image_ref, @image_digest, @source, @source_revision,
@@ -19,7 +19,7 @@ VALUES (
     @writable_root_filesystem, @health_path, @health_liveness,
     @start_command, @pre_deploy_command,
     @cron_schedule, @restart_policy, @restart_max_retries, @health_timeout_seconds,
-    @env, @secret_keys, @config_version, @origin
+    @env, @secret_keys, @config_version, @origin, @args
 )
 RETURNING *;
 

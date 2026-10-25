@@ -571,8 +571,22 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if err != nil {
 		return err
 	}
+	// Validated with the rest of the configuration, so this cannot fail on a
+	// Config that Load returned; a wrapper's hand-built one gets the reason.
+	backups, err := cfg.BackupStore()
+	if err != nil {
+		return err
+	}
+	if backups != nil {
+		log.Info("database backups go to a bucket", slog.String("bucket", backups.Where()))
+	} else {
+		log.Info("database backups are kept on a volume beside each database — " +
+			"set YACHT_BACKUP_S3_* to keep them off the cluster")
+	}
 
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
+		BackupS3:            backups,
+		BackupToolImage:     cfg.BackupToolImage,
 		Builder:             builder,
 		Images:              images,
 		Manifests:           manifests,
@@ -768,6 +782,11 @@ func (e *Engine) Start(ctx context.Context) {
 	// Counts each app's requests and puts the idle ones to sleep, where the
 	// install has a waker to wake them again.
 	go apps.RunSleeper(ctx)
+
+	// Records finished database backups and starts the daily ones that are
+	// due. Every replica may run it: the database admits one running job per
+	// app, so two replicas starting the same night's backup start one.
+	go apps.RunBackupScheduler(ctx)
 
 	// Records the region of every app made before regions existed, where it
 	// can be told, and does nothing on an install with none. Recording only:

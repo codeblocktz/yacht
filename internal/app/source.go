@@ -32,7 +32,29 @@ const (
 	// it can mount the data directory, run as the right user, and generate the
 	// credentials — none of which a person should have to look up.
 	SourcePostgres Source = "postgres"
+
+	// SourceMySQL, SourceRedis and SourceMongo are the other databases
+	// Railway's Add › Database offers, configured the same way and for the
+	// same reason.
+	SourceMySQL Source = "mysql"
+	SourceRedis Source = "redis"
+	SourceMongo Source = "mongo"
 )
+
+// Database reports whether a source is one of the database engines.
+//
+// A database gets the Database and Backups tabs, a logo on its card, and a
+// place in Add › Database rather than among the other sources. Asked of the
+// source rather than inferred from the image, for the reason Source is stored
+// at all: an image somebody chose that happens to be postgres is theirs to
+// run, and Yacht knows nothing about its credentials.
+func (s Source) Database() bool {
+	switch s {
+	case SourcePostgres, SourceMySQL, SourceRedis, SourceMongo:
+		return true
+	}
+	return false
+}
 
 // Blueprint is everything a source decides on the app's behalf.
 //
@@ -80,9 +102,24 @@ type Blueprint struct {
 	GeneratedSecrets []string
 
 	// ConnectionTemplate builds the in-cluster address other apps use, with
-	// %s for the generated password.
+	// %s for the generated password and then the host.
 	ConnectionTemplate string
 	ConnectionKey      string
+
+	// PasswordKeys are further variables holding the generated password, and
+	// HostKeys variables holding the address other apps reach this one at.
+	// Each engine's own clients look for their own spelling — psql reads
+	// PGPASSWORD and PGHOST — and Railway sets every one of them, so an app
+	// moved from there finds the names it already uses.
+	PasswordKeys []string
+	HostKeys     []string
+
+	// Args replace the image's command arguments. Only for an engine that
+	// takes its configuration nowhere else: Redis has no variable for a
+	// password, only a flag. $(NAME) is the app's variable NAME, expanded by
+	// the kubelet, which is how a generated secret reaches a flag without
+	// being written into the pod template.
+	Args []string
 }
 
 // Capabilities is what this install can actually do.
@@ -121,7 +158,7 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 		},
 		{
 			Source:      SourcePostgres,
-			Label:       "Postgres",
+			Label:       "PostgreSQL",
 			Description: "A Postgres 16 database, with its storage and credentials set up.",
 			Available:   true,
 			Image:       "postgres:16-alpine",
@@ -149,10 +186,126 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 				// point is not empty on every storage class, and initdb
 				// refuses a directory that is not.
 				"PGDATA": "/var/lib/postgresql/data/pgdata",
+				// What psql and libpq read. PGHOST in the database's own
+				// container is harmless: the entrypoint clears it for the
+				// scripts it runs against the server it is setting up.
+				"PGUSER":     "yacht",
+				"PGDATABASE": "yacht",
+				"PGPORT":     "5432",
 			},
 			GeneratedSecrets:   []string{"POSTGRES_PASSWORD"},
+			PasswordKeys:       []string{"PGPASSWORD"},
+			HostKeys:           []string{"PGHOST"},
 			ConnectionKey:      "DATABASE_URL",
 			ConnectionTemplate: "postgres://yacht:%s@%s:5432/yacht?sslmode=disable",
+		},
+		{
+			Source:      SourceMySQL,
+			Label:       "MySQL",
+			Description: "A MySQL 8 database, with its storage and credentials set up.",
+			Available:   true,
+			Image:       "mysql:8",
+			Port:        3306,
+			Internal:    true,
+
+			// The mysql user in the image. Checked by running the image as it,
+			// read-only, with a fresh root-owned volume: as anyone else the
+			// entrypoint cannot write the data directory it initialises.
+			RunAsUser: 999,
+			FSGroup:   999,
+
+			// mysqld's socket, lock and pid files go here, and it refuses to
+			// start without them.
+			ScratchPaths: []string{"/var/run/mysqld"},
+
+			// The mount point itself, unlike Postgres: MySQL 8 initialises a
+			// directory holding lost+found without complaint, which is what an
+			// ext4 claim arrives with.
+			Volume: &VolumeInput{
+				Name: "data", MountPath: "/var/lib/mysql",
+				SizeBytes: 1 << 30,
+			},
+			Env: map[string]string{
+				"MYSQL_DATABASE": "yacht",
+				"MYSQLDATABASE":  "yacht",
+				"MYSQLUSER":      "root",
+				"MYSQLPORT":      "3306",
+			},
+			GeneratedSecrets:   []string{"MYSQL_ROOT_PASSWORD"},
+			PasswordKeys:       []string{"MYSQLPASSWORD"},
+			HostKeys:           []string{"MYSQLHOST"},
+			ConnectionKey:      "MYSQL_URL",
+			ConnectionTemplate: "mysql://root:%s@%s:3306/yacht",
+		},
+		{
+			Source:      SourceRedis,
+			Label:       "Redis",
+			Description: "A Redis 7 server with a password, saving to its own storage.",
+			Available:   true,
+			Image:       "redis:7-alpine",
+			Port:        6379,
+			Internal:    true,
+
+			// The redis user in the alpine image. Its group is 1000, but the
+			// group a process runs as only has to own what it writes, and the
+			// volume belongs to fsGroup.
+			RunAsUser: 999,
+			FSGroup:   999,
+
+			Volume: &VolumeInput{
+				Name: "data", MountPath: "/data",
+				SizeBytes: 1 << 30,
+			},
+			Env: map[string]string{
+				"REDISUSER": "default",
+				"REDISPORT": "6379",
+			},
+			GeneratedSecrets:   []string{"REDIS_PASSWORD"},
+			PasswordKeys:       []string{"REDISPASSWORD"},
+			HostKeys:           []string{"REDISHOST"},
+			ConnectionKey:      "REDIS_URL",
+			ConnectionTemplate: "redis://default:%s@%s:6379",
+
+			// Without an append-only file a restart keeps only the last
+			// snapshot, which is minutes of writes lost to every redeploy. The
+			// password is on the command line because Redis reads it nowhere
+			// else; anybody who can list the container's processes already has
+			// its environment.
+			Args: []string{
+				"redis-server",
+				"--requirepass", "$(REDIS_PASSWORD)",
+				"--appendonly", "yes",
+			},
+		},
+		{
+			Source:      SourceMongo,
+			Label:       "MongoDB",
+			Description: "A MongoDB 7 database, with its storage and credentials set up.",
+			Available:   true,
+			Image:       "mongo:7",
+			Port:        27017,
+			Internal:    true,
+
+			// The mongodb user in the image. The entrypoint's first start, the
+			// one that creates the root user, keeps its socket and temporary
+			// config in /tmp, which is always writable.
+			RunAsUser: 999,
+			FSGroup:   999,
+
+			Volume: &VolumeInput{
+				Name: "data", MountPath: "/data/db",
+				SizeBytes: 1 << 30,
+			},
+			Env: map[string]string{
+				"MONGO_INITDB_ROOT_USERNAME": "mongo",
+				"MONGOUSER":                  "mongo",
+				"MONGOPORT":                  "27017",
+			},
+			GeneratedSecrets:   []string{"MONGO_INITDB_ROOT_PASSWORD"},
+			PasswordKeys:       []string{"MONGOPASSWORD"},
+			HostKeys:           []string{"MONGOHOST"},
+			ConnectionKey:      "MONGO_URL",
+			ConnectionTemplate: "mongodb://mongo:%s@%s:27017",
 		},
 		{
 			Source:      SourceGit,
