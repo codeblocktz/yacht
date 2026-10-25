@@ -68,6 +68,9 @@ func podPhaseClass(p orchestrator.PodInfo) string {
 		if p.Healthy() {
 			return "status-ok"
 		}
+		if containerFailing(p.Reason) {
+			return "status-err"
+		}
 		return "status-warn"
 	case "Pending", "ContainerCreating":
 		return "status-info"
@@ -654,4 +657,66 @@ func canRollBackTo(a app.App, dep app.Deployment) bool {
 		return false
 	}
 	return true
+}
+
+// sourceDisconnectForm is the id of the form the source card's Disconnect
+// button submits: see appRuntimeForm.
+const sourceDisconnectForm = "source-disconnect"
+
+// podStatusLabel is a pod's state as somebody reading the table means it. A
+// pod is Running as soon as it is scheduled, and stays Running while its
+// container fails to start, which is the moment the word misleads most: the
+// container's own reason is the state then.
+func podStatusLabel(p orchestrator.PodInfo) string {
+	if p.Phase == "Running" && !p.Healthy() && p.Reason != "" {
+		return p.Reason
+	}
+	return p.Phase
+}
+
+// containerFailing reports whether a container's waiting reason means it
+// cannot run as it is, rather than that it is on its way.
+func containerFailing(reason string) bool {
+	switch reason {
+	case "CrashLoopBackOff", "RunContainerError", "CreateContainerError", "CreateContainerConfigError",
+		"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "OOMKilled", "Error":
+		return true
+	}
+	return false
+}
+
+// deploymentImageLabel is what a deployment row shows where its image goes.
+// A deploy records its image only when it finishes, so one without is
+// building, or — once the app has an image from this build — rolling it out;
+// and one that failed without ever having one failed to build.
+func deploymentImageLabel(a app.App, dep app.Deployment) string {
+	if !imageIsPending(dep.Image) {
+		return dep.Image
+	}
+	switch {
+	case dep.Status == app.DeployFailed:
+		return "build failed"
+	case dep.Status == app.DeployRunning && !imageIsPending(a.Image):
+		return "deploying " + a.Image
+	}
+	return imageLabel(dep.Image)
+}
+
+// deploymentSource is where a deployment came from, as a person would say
+// it. An app's first deploy is recorded as "initial", which reads as an
+// image even for one built from GitHub.
+func deploymentSource(a app.App, dep app.Deployment) string {
+	src := dep.Source()
+	if src == "image" && a.Source == app.SourceGit {
+		if a.Repo.GitHub.Set() || strings.Contains(a.Repo.URL, "github.com") {
+			return "GitHub"
+		}
+		return "Git"
+	}
+	return src
+}
+
+// lastDeployFailed reports whether the most recent deployment failed.
+func lastDeployFailed(deps []app.Deployment) bool {
+	return len(deps) > 0 && deps[0].Status == app.DeployFailed
 }

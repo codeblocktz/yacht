@@ -92,3 +92,34 @@ func TestDeployFromGitHub(t *testing.T) {
 		t.Error("no repository was deployed")
 	}
 }
+
+// Moving an app changes its canvas, and nothing it runs on.
+func TestMoveToProject(t *testing.T) {
+	ctx := context.Background()
+	s, _ := githubFixture(t, nil)
+	team := owner(t, s, s.pool, "move-project")
+	a, err := s.Create(ctx, team, CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.CreateProject(ctx, team, "Shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MoveToProject(ctx, team, "web", p.Slug); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := s.Get(ctx, team, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.ProjectID != p.ID || moved.Namespace != a.Namespace {
+		t.Errorf("after the move: project %s namespace %s", moved.ProjectID, moved.Namespace)
+	}
+	if _, err := s.MoveToProject(ctx, team, "web", "nowhere"); err == nil {
+		t.Error("moved into a project that does not exist")
+	}
+	if _, err := s.MoveToProject(ctx, team, "gone", p.Slug); err == nil {
+		t.Error("moved an app that does not exist")
+	}
+}

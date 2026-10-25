@@ -92,6 +92,8 @@ type Apps interface {
 	ProjectByID(ctx context.Context, ownerID string, id uuid.UUID) (app.Project, error)
 	CreateProject(ctx context.Context, ownerID, name string) (app.Project, error)
 	ListInProject(ctx context.Context, ownerID string, projectID uuid.UUID) ([]app.App, error)
+	// MoveToProject draws an app on another of the team's projects.
+	MoveToProject(ctx context.Context, ownerID, name, projectSlug string) (app.Project, error)
 
 	// SetPosition and ClearPositions are the canvas arrangement, which belongs
 	// to the team rather than to whoever last dragged something.
@@ -740,6 +742,8 @@ func (s *Server) Handler() http.Handler {
 			// the arrangement can be thrown away and recomputed at any time.
 			r.Post("/projects/{slug}/arrange", s.canvasArrange)
 			r.Post("/apps/{name}/position", s.canvasPosition)
+			// Moving an app between canvases is arranging, like the above.
+			r.Post("/apps/{name}/project", s.appMoveProject)
 			r.Get("/apps", s.appList)
 			r.Post("/apps", s.appCreate)
 			r.Get("/apps/new", s.appNew)

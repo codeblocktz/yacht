@@ -45,7 +45,7 @@ func TestDeploymentsExplainBaselineStatesWithoutInventingAnActiveAttempt(t *test
 	missing := renderToString(t, AppDeploymentsBody(AppDetailData{
 		App: app.App{Name: "missing", BaselineError: "manifest no longer exists"},
 	}))
-	for _, want := range []string{"No baseline release yet", "manifest no longer exists"} {
+	for _, want := range []string{"Not running yet", "manifest no longer exists"} {
 		if !strings.Contains(missing, want) {
 			t.Errorf("missing-baseline body missing %q", want)
 		}

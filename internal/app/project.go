@@ -256,3 +256,24 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 func toProject(row dbgen.Project) Project {
 	return Project{ID: row.ID, OwnerID: row.OwnerID, Slug: row.Slug, Name: row.Name}
 }
+
+// MoveToProject draws an app on another of the team's projects. Only the
+// canvas changes: the app keeps its name, namespace, address and history.
+func (s *Service) MoveToProject(ctx context.Context, ownerID, name, projectSlug string) (Project, error) {
+	a, err := s.Get(ctx, ownerID, name)
+	if err != nil {
+		return Project{}, err
+	}
+	p, err := s.Project(ctx, ownerID, projectSlug)
+	if err != nil {
+		return Project{}, err
+	}
+	n, err := s.q.SetAppProject(ctx, dbgen.SetAppProjectParams{OwnerID: ownerID, ID: a.ID, ProjectID: pgUUID(p.ID)})
+	if err != nil {
+		return Project{}, fmt.Errorf("app: move to project: %w", err)
+	}
+	if n == 0 {
+		return Project{}, ErrNotFound
+	}
+	return p, nil
+}
