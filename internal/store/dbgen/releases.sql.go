@@ -32,7 +32,7 @@ INSERT INTO app_releases (
     writable_root_filesystem, health_path, health_liveness,
     start_command, pre_deploy_command,
     cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds,
-    env, secret_keys, config_version, origin
+    env, secret_keys, config_version, origin, args
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
@@ -41,9 +41,9 @@ VALUES (
     $17, $18, $19,
     $20, $21,
     $22, $23, $24, $25,
-    $26, $27, $28, $29
+    $26, $27, $28, $29, $30
 )
-RETURNING id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds
+RETURNING id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, args
 `
 
 type CreateAppReleaseParams struct {
@@ -76,6 +76,7 @@ type CreateAppReleaseParams struct {
 	SecretKeys             []string
 	ConfigVersion          int64
 	Origin                 string
+	Args                   []string
 }
 
 // Release snapshots are owner-scoped at every read and write, like every
@@ -112,6 +113,7 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 		arg.SecretKeys,
 		arg.ConfigVersion,
 		arg.Origin,
+		arg.Args,
 	)
 	var i AppRelease
 	err := row.Scan(
@@ -146,6 +148,7 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 		&i.RestartPolicy,
 		&i.RestartMaxRetries,
 		&i.HealthTimeoutSeconds,
+		&i.Args,
 	)
 	return i, err
 }
@@ -221,7 +224,7 @@ func (q *Queries) GetAppForReleaseBackfill(ctx context.Context, arg GetAppForRel
 }
 
 const getAppRelease = `-- name: GetAppRelease :one
-SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds FROM app_releases
+SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, args FROM app_releases
 WHERE owner_id = $1 AND app_id = $2 AND id = $3
 `
 
@@ -266,6 +269,7 @@ func (q *Queries) GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (A
 		&i.RestartPolicy,
 		&i.RestartMaxRetries,
 		&i.HealthTimeoutSeconds,
+		&i.Args,
 	)
 	return i, err
 }
@@ -315,7 +319,7 @@ func (q *Queries) IncrementAppConfigVersion(ctx context.Context, arg IncrementAp
 }
 
 const listAppReleases = `-- name: ListAppReleases :many
-SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds FROM app_releases
+SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, args FROM app_releases
 WHERE owner_id = $1 AND app_id = $2
 ORDER BY created_at DESC, id DESC
 LIMIT $3
@@ -368,6 +372,7 @@ func (q *Queries) ListAppReleases(ctx context.Context, arg ListAppReleasesParams
 			&i.RestartPolicy,
 			&i.RestartMaxRetries,
 			&i.HealthTimeoutSeconds,
+			&i.Args,
 		); err != nil {
 			return nil, err
 		}

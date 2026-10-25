@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -33,6 +35,18 @@ type Nets interface {
 	// TargetStatus reports whether the configured CNAME target resolves,
 	// as a sentence. Empty when there was nothing to check.
 	TargetStatus(ctx context.Context, target string) string
+
+	// GenerateDomain, SetPublicDomain and RemovePublicDomain are the
+	// app's platform hostname: Railway's Generate Domain, its edit form with
+	// a target port, and taking it away. A port of zero leaves the app's as
+	// it is.
+	GenerateDomain(ctx context.Context, ownerID, name string, port int32) (string, error)
+	SetPublicDomain(ctx context.Context, ownerID, name, label string, port int32) error
+	RemovePublicDomain(ctx context.Context, ownerID, name string) error
+
+	// EnableTCPProxy and DisableTCPProxy are the app's public TCP port.
+	EnableTCPProxy(ctx context.Context, ownerID, name string) (app.TCPProxy, error)
+	DisableTCPProxy(ctx context.Context, ownerID, name string) error
 }
 
 // domainsFragment is the polled half of the custom domain list.
@@ -225,17 +239,162 @@ func (s *Server) dnsSet(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/cluster/dns", http.StatusSeeOther)
 }
 
+// ---- public networking: generated domain and TCP proxy
+
+// networkingTab is the tab a networking form goes back to: where it was
+// posted from. The section is one component placed on whichever tab holds
+// it, so it says which in each form rather than every handler assuming one.
+// Only tabs that render it are accepted, so the value cannot send the
+// redirect anywhere else.
+func networkingTab(r *http.Request) string {
+	if r.FormValue("tab") == "settings" {
+		return "settings"
+	}
+	return "domains"
+}
+
+// formPort reads a port field: zero when it is empty, and an error when it
+// is not a number at all.
+func formPort(r *http.Request) (int32, error) {
+	raw := strings.TrimSpace(r.FormValue("port"))
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, errors.New("the port must be a number, such as 8080")
+	}
+	return int32(n), nil
+}
+
+// publicDomainGenerate is Generate Domain.
+func (s *Server) publicDomainGenerate(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name, tab := chi.URLParam(r, "name"), networkingTab(r)
+
+	port, err := formPort(r)
+	if err == nil {
+		var host string
+		if host, err = s.nets.GenerateDomain(ctx, owner.ID, name, port); err == nil {
+			s.flashOK(w, r, host+" is on its way. It answers once the route is written, in a few seconds.")
+		}
+	}
+	if err != nil {
+		s.appActionFailed(w, r, name, tab, err)
+		return
+	}
+	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+}
+
+// publicDomainSet is "Update your domain or target port".
+func (s *Server) publicDomainSet(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name, tab := chi.URLParam(r, "name"), networkingTab(r)
+
+	port, err := formPort(r)
+	if err == nil {
+		err = s.nets.SetPublicDomain(ctx, owner.ID, name, r.FormValue("label"), port)
+	}
+	if err != nil {
+		s.appActionFailed(w, r, name, tab, err)
+		return
+	}
+	s.flashOK(w, r, "Saved. A new name answers once the route is rewritten; a new port once the app has rolled out.")
+	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+}
+
+// publicDomainRemove takes the platform hostname away.
+func (s *Server) publicDomainRemove(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name, tab := chi.URLParam(r, "name"), networkingTab(r)
+
+	if err := s.nets.RemovePublicDomain(ctx, owner.ID, name); err != nil {
+		s.appActionFailed(w, r, name, tab, err)
+		return
+	}
+	s.flashOK(w, r, "Domain removed. The app is no longer on the internet at it.")
+	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+}
+
+// tcpProxyEnable gives the app a public TCP port.
+func (s *Server) tcpProxyEnable(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name, tab := chi.URLParam(r, "name"), networkingTab(r)
+
+	proxy, err := s.nets.EnableTCPProxy(ctx, owner.ID, name)
+	if err != nil {
+		s.appActionFailed(w, r, name, tab, err)
+		return
+	}
+	s.flashOK(w, r, "TCP proxy on: "+proxy.Address()+" reaches port "+strconv.Itoa(int(proxy.Target))+
+		". Anyone can connect to it, so the app's own password is what keeps them out.")
+	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+}
+
+// tcpProxyDisable takes it away.
+func (s *Server) tcpProxyDisable(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	name, tab := chi.URLParam(r, "name"), networkingTab(r)
+
+	if err := s.nets.DisableTCPProxy(ctx, owner.ID, name); err != nil {
+		s.appActionFailed(w, r, name, tab, err)
+		return
+	}
+	s.flashOK(w, r, "TCP proxy removed. Connections from outside the cluster stop reaching the app.")
+	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+}
+
 // netOf adapts the app detail into what the networking sections take.
 //
 // The sections were written for a page of their own and are now the Domains
 // tab; keeping them on their own small type means they still say what they need
 // rather than reaching into everything the tab happens to hold.
 func netOf(d AppDetailData) NetworkingData {
+	tab := "domains"
+	if d.Tab == "settings" {
+		tab = "settings"
+	}
 	return NetworkingData{
 		App:           d.App.Name,
+		Tab:           tab,
 		Net:           d.Net,
 		UntrustedCert: d.App.UntrustedCert(),
 		ResolverName:  d.ResolverName,
 		Settled:       domainsSettled(d.Net),
 	}
+}
+
+// returnTab is the tab the section's forms come back to.
+func (d NetworkingData) returnTab() string {
+	if d.Tab == "settings" {
+		return "settings"
+	}
+	return "domains"
+}
+
+// publicHost is the app's platform hostname. Managed is read as well as
+// Public.Host because it is the field that predates the section, and a caller
+// filling in only that still has its hostname shown.
+func (d NetworkingData) publicHost() string {
+	if d.Net.Public.Host != "" {
+		return d.Net.Public.Host
+	}
+	return d.Net.Managed
+}
+
+// portValue is what the port field starts at: the app's port, or the first it
+// is known to listen on when it has none.
+func portValue(pub app.PublicDomain) string {
+	switch {
+	case pub.Port > 0:
+		return strconv.Itoa(int(pub.Port))
+	case len(pub.Suggestions) > 0:
+		return strconv.Itoa(int(pub.Suggestions[0]))
+	}
+	return ""
 }

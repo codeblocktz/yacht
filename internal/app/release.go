@@ -50,6 +50,9 @@ type Release struct {
 	ScratchPaths           []string
 	WritableRootFilesystem bool
 
+	// Args replace the image's command arguments; empty runs its own.
+	Args []string
+
 	HealthPath string
 	Liveness   bool
 
@@ -92,6 +95,11 @@ type ReleaseOverlays struct {
 	CertIssuer    string
 	HTTPSOnly     bool
 	CNAMETarget   string
+
+	// TCPProxyPort is the app's public TCP port, zero for none. Routing, like
+	// Hosts: a rollback must not take away a proxy somebody's database
+	// connection string depends on, or bring back one they turned off.
+	TCPProxyPort int32
 
 	// Asleep runs none of the release's replicas, and Waker routes its hosts
 	// to the waker; see sleep.go. The one overlay that reaches into a field
@@ -143,6 +151,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		RunAsUser:              r.RunAsUser,
 		FSGroup:                r.FSGroup,
 		ScratchPaths:           append([]string(nil), r.ScratchPaths...),
+		Args:                   append([]string(nil), r.Args...),
 		HealthPath:             r.HealthPath,
 		Liveness:               r.Liveness,
 		Secrets:                cloneStrings(overlays.Secrets),
@@ -152,6 +161,7 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		CertIssuer:             overlays.CertIssuer,
 		CNAMETarget:            overlays.CNAMETarget,
 		HTTPSOnly:              overlays.HTTPSOnly,
+		TCPProxyPort:           overlays.TCPProxyPort,
 		RegistryAuth:           append([]byte(nil), overlays.RegistryAuth...),
 		Waker:                  waker,
 		Pool:                   overlays.Pool,
@@ -253,6 +263,7 @@ func (s *Service) recordRelease(
 		Internal:  a.Internal,
 		RunAsUser: runtime.RunAsUser, FsGroup: runtime.FSGroup,
 		ScratchPaths:           append([]string{}, runtime.ScratchPaths...),
+		Args:                   append([]string{}, runtime.Args...),
 		WritableRootFilesystem: false,
 		HealthPath:             a.HealthPath, HealthLiveness: a.Liveness,
 		StartCommand: a.StartCommand, PreDeployCommand: a.PreDeployCommand,
@@ -340,6 +351,7 @@ func toRelease(row dbgen.AppRelease) Release {
 		Internal:  row.Internal,
 		RunAsUser: row.RunAsUser, FSGroup: row.FsGroup,
 		ScratchPaths:           append([]string(nil), row.ScratchPaths...),
+		Args:                   append([]string(nil), row.Args...),
 		WritableRootFilesystem: row.WritableRootFilesystem,
 		HealthPath:             row.HealthPath, Liveness: row.HealthLiveness,
 		StartCommand: row.StartCommand, PreDeployCommand: row.PreDeployCommand,

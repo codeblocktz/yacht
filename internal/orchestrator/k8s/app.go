@@ -94,6 +94,12 @@ func (o *Orchestrator) ApplyApp(ctx context.Context, spec orchestrator.AppSpec) 
 		return err
 	}
 
+	// Applied or pruned on every apply, like the Service: turning a proxy off
+	// has to take the port off every machine, not merely stop renewing it.
+	if err := o.applyTCPProxy(ctx, spec); err != nil {
+		return err
+	}
+
 	switch {
 	case spec.Waker != nil:
 		// Already pointed at the waker, above.
@@ -422,6 +428,9 @@ func (o *Orchestrator) container(
 	if cmd := startCommand(spec); cmd != nil {
 		c = c.WithCommand(cmd...)
 	}
+	if len(spec.Args) > 0 {
+		c = c.WithArgs(spec.Args...)
+	}
 
 	// Readiness first: it is what keeps traffic away from a container that is
 	// not serving yet, which is the whole of what most workloads need.
@@ -544,6 +553,10 @@ func (o *Orchestrator) DeleteApp(ctx context.Context, ref orchestrator.Ref) erro
 	}
 
 	if err := o.deleteCronJob(ctx, ref); err != nil {
+		return err
+	}
+
+	if err := o.deleteTCPProxy(ctx, ref); err != nil {
 		return err
 	}
 
@@ -753,6 +766,11 @@ func specHash(spec orchestrator.AppSpec) string {
 	}
 	// Not the restart policy or the healthcheck timeout: neither is in the pod
 	// template, and changing them is no reason to restart anything.
+	// Only when set, like the pool: every workload started with its image's
+	// own command keeps the fingerprint it had before arguments existed.
+	if len(spec.Args) > 0 {
+		fmt.Fprintf(h, "args=%q\n", spec.Args)
+	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
 	}

@@ -249,3 +249,66 @@ func TestReservingNothingIssuesNormally(t *testing.T) {
 		t.Fatalf("host = %q, want web.apps.domain.test", host)
 	}
 }
+
+// The reconcile issues nothing to an app that holds nothing, which is the
+// whole of Generate Domain: being applied is no longer a reason to be public.
+func TestReconcileManagedIssuesNothingUnasked(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-reconcile-none", "web", "ns-test-reconcile-none")
+	q := dbgen.New(pool)
+
+	host, err := ReconcileManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name, AppDomain: "apps.domain-none.test",
+	})
+	if err != nil || host != "" {
+		t.Fatalf("ReconcileManaged = %q, %v; want nothing issued", host, err)
+	}
+	if _, ok, err := GetManaged(ctx, q, a.ID); ok || err != nil {
+		t.Fatalf("GetManaged = %t, %v; want no row", ok, err)
+	}
+}
+
+// A generated name is one label under up, replaces the app's hostname rather
+// than adding a second, and moves with the app domain keeping its kind.
+func TestIssueGeneratedReplacesAndMoves(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-generated", "web", "ns-test-generated")
+	q := dbgen.New(pool)
+	in := GenerateInput{OwnerID: a.OwnerID, AppID: a.ID, AppDomain: "apps.domain-gen.test"}
+
+	if _, err := EnsureManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name, AppDomain: in.AppDomain,
+	}); err != nil {
+		t.Fatalf("EnsureManaged: %v", err)
+	}
+	in.Label = "web-production"
+	host, err := IssueGenerated(ctx, q, in)
+	if err != nil || host != "web-production.up.apps.domain-gen.test" {
+		t.Fatalf("IssueGenerated = %q, %v", host, err)
+	}
+	if hosts, _ := HostsForApp(ctx, q, a.ID); len(hosts) != 1 || hosts[0] != host {
+		t.Fatalf("hosts = %v, want only %s", hosts, host)
+	}
+
+	in.Label = "Bad_Label"
+	if _, err := IssueGenerated(ctx, q, in); err == nil {
+		t.Fatal("IssueGenerated accepted a label that is not one")
+	}
+	in.Label = "admin"
+	in.Reserved = []string{"admin.up.apps.domain-gen.test"}
+	if _, err := IssueGenerated(ctx, q, in); !errors.Is(err, ErrHostReserved) {
+		t.Fatalf("a reserved name = %v, want ErrHostReserved", err)
+	}
+
+	moved, err := ReconcileManaged(ctx, q, ManagedInput{
+		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name, AppDomain: "apps.domain-gen2.test",
+	})
+	if err != nil || moved != "web-production.up.apps.domain-gen2.test" {
+		t.Fatalf("ReconcileManaged after the domain changed = %q, %v", moved, err)
+	}
+	if held, _, _ := GetManaged(ctx, q, a.ID); !held.Generated || held.Label != "web-production" {
+		t.Fatalf("held = %+v, want the generated kind and label kept", held)
+	}
+}

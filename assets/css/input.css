@@ -2085,3 +2085,35 @@
     @apply h-auto flex-1;
   }
 }
+
+/* ---- databases: the engine's logo, Add › Database, the Database tab. */
+@layer components {
+  /* Full strength wherever it is drawn: the logo's colour is how the engine
+     is recognised, and an icon's usual dimming would grey it out. On a light
+     tile, because two of the four brands are a dark blue that vanishes on the
+     dark theme's cards. */
+  .engine-logo { @apply size-4 shrink-0 rounded-[3px] bg-white p-px; }
+
+  /* Add › Database opens in place inside the Add menu. */
+  .canvas-add-db > summary { @apply cursor-pointer list-none; }
+  .canvas-add-db > summary::-webkit-details-marker { display: none; }
+  .canvas-add-db-chevron { @apply text-muted-foreground transition-transform; }
+  .canvas-add-db-chevron svg { @apply size-3.5; }
+  .canvas-add-db[open] .canvas-add-db-chevron { @apply rotate-90; }
+
+  /* The tables, as a short list to pick from rather than a page of its own:
+     scrolls past a dozen, because the rows below are what is being read. */
+  .db-tables { @apply flex max-h-64 flex-col overflow-y-auto py-1; }
+  .db-table-link {
+    @apply flex items-center gap-3 px-5 py-1.5 font-mono text-[12px] text-foreground
+           transition-colors hover:bg-accent;
+  }
+  .db-table-link-active { @apply bg-accent; }
+
+  /* Values as the server printed them: monospaced, one line each, cut at a
+     readable width with the whole value on hover. */
+  .db-grid td { @apply max-w-[260px] truncate whitespace-nowrap font-mono text-[12px]; }
+  .db-grid th { @apply whitespace-nowrap font-mono; }
+  .db-null { @apply italic text-muted-foreground; }
+  .db-record-k { @apply w-[96px]; }
+}

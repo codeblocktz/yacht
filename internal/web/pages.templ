@@ -414,6 +414,9 @@ type AppDetailData struct {
 	// Projects are the team's, for the settings' move; empty leaves the
 	// section out.
 	Projects    []app.Project
+	// Stages says saving waits for Deploy, so the settings say "Save"
+	// rather than promise a rollout that does not happen until then.
+	Stages bool
 	// RefTargets are the other apps a variable can refer to, for the
 	// variables tab's picker; empty leaves the picker out.
 	RefTargets []app.ReferenceTarget
@@ -478,6 +481,12 @@ type AppDetailData struct {
 	// Region is where the app lives, on an install with regions; nil on one
 	// without, which draws nothing about regions at all.
 	Region *AppRegionData
+
+	// Database and Backups are a database's two extra tabs, loaded only when
+	// one of them is open: each dials the database or reads its jobs. See
+	// database.go.
+	Database *DatabaseData
+	Backups  *BackupsData
 }
 
 // AppDetail is the Railway-shaped view: a rail of every app on the left so you
@@ -619,6 +628,8 @@ templ appTabs(name, active string) {
 		@appTab(name, active, "metrics", "Metrics")
 		@appTab(name, active, "console", "Console")
 		@appTab(name, settingsTab(active), "settings", "Settings")
+		// The tabs only some apps have — a database's — passed in by the caller.
+		{ children... }
 	</nav>
 }
 
@@ -1024,10 +1035,17 @@ templ appRuntimeForm(d AppDetailData) {
 			</div>
 		</section>
 		<div class="sticky bottom-0 -mx-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-			<button class="btn btn-primary" type="submit">Save and roll out</button>
-			<span class="ml-3 text-[12px] text-muted-foreground">
-				Saving applies these to the cluster and records a deployment.
-			</span>
+			if d.Stages {
+				<button class="btn btn-primary" type="submit">Save</button>
+				<span class="ml-3 text-[12px] text-muted-foreground">
+					Changes wait for Deploy, with the rest of what is staged.
+				</span>
+			} else {
+				<button class="btn btn-primary" type="submit">Save and roll out</button>
+				<span class="ml-3 text-[12px] text-muted-foreground">
+					Saving applies these to the cluster and records a deployment.
+				</span>
+			}
 		</div>
 	</form>
 }
@@ -1164,8 +1182,7 @@ templ appDomains(d AppDetailData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
-	@publicNetworking(netOf(d))
-	@customDomains(netOf(d))
+	@NetworkingSection(netOf(d))
 	@routingOptions(netOf(d))
 }
 
@@ -1599,7 +1616,10 @@ templ sourcePicker(d NewAppData) {
 					<span class="text-muted-foreground">&rsaquo;</span>
 				</a>
 			}
-			for _, b := range d.Sources {
+			// The databases are one choice, as Railway's Add › Database is, and
+			// each engine a click on the page it opens.
+			@databaseSourceRow(d.Project)
+			for _, b := range nonDatabaseSources(d.Sources) {
 				if b.Available {
 					<a href={ templ.SafeURL(sourceHref(b.Source, d.Project)) } class="row-link">
 						<span class="text-muted-foreground">

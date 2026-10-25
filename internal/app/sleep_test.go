@@ -149,6 +149,7 @@ func sleepyApp(t *testing.T, s *Service, ownerID, name string) App {
 	if err != nil {
 		t.Fatalf("create %s: %v", name, err)
 	}
+	a = publicApp(t, s, ownerID, name)
 	if a.Host == "" {
 		t.Fatalf("%s has no hostname; sleeping needs one", name)
 	}
@@ -608,6 +609,7 @@ func TestCapacityCountsASleeperAtTheWakeReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	a = publicApp(t, s, id, a.Name)
 	before, err := s.Capacity(ctx)
 	if err != nil {
 		t.Fatalf("Capacity: %v", err)

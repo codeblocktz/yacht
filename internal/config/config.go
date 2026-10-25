@@ -2,6 +2,7 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -118,8 +120,10 @@ type Config struct {
 	// YACHT_SECRET_KEY and this stays empty.
 	SecretKeyPrevious []string
 
-	// AppDomain is the platform domain every app gets a hostname under, such
-	// as apps.example.com. Empty switches per-app hostnames off entirely.
+	// AppDomain is the platform domain apps get hostnames under, such as
+	// apps.example.com: <app>-<environment>.up.<this> once somebody presses
+	// Generate Domain, and <name>.<this> for apps given one before that
+	// existed. Empty switches per-app hostnames off entirely.
 	AppDomain string
 
 	// WildcardTLS serves platform hostnames over TLS using the ingress
@@ -158,6 +162,26 @@ type Config struct {
 	// is the one a particular resolver gives rather than the one the public
 	// internet would.
 	DNSResolver string
+
+	// TCPProxyHost is the name an app's TCP proxy is reached at, the
+	// <host> in <host>:<port>. Empty switches TCP proxies off.
+	//
+	// Any name that resolves to the machines does: every machine answers on
+	// every proxy's port. Yacht does not publish it; it is what the dashboard
+	// tells somebody to connect to.
+	TCPProxyHost string
+
+	// TCPProxyPorts are the ports proxies are given, as YACHT_TCP_PROXY_PORTS
+	// says them: a range, "30000-30085", both ends included. Read through
+	// TCPProxyRange.
+	//
+	// They have to be NodePorts the cluster accepts — 30000-32767 unless its
+	// API server was told otherwise — and ports the machines' firewalls let in
+	// from the internet. The default is the low band of the NodePort range,
+	// which Kubernetes keeps for ports chosen by hand and allocates to nobody
+	// else unless the rest is full, so a port picked here is not one some other
+	// Service already took.
+	TCPProxyPorts string
 
 	// NetworkIsolation is how far teams are kept apart on the cluster's
 	// network: "team" (the default) refuses every connection into a team's
@@ -259,6 +283,28 @@ type Config struct {
 	GitHubAppClientID       string
 	GitHubAppClientSecret   string
 
+	// BackupS3* are where database backups are written: an S3-compatible
+	// bucket — R2, MinIO, AWS — under BackupS3Prefix. Endpoint, bucket,
+	// access key and secret key together, or none of them; with none, each
+	// database's backups are kept on a volume beside it, which survives a bad
+	// migration and not the loss of the cluster.
+	//
+	// The keys stay in the engine. What a backup job in a customer's
+	// namespace is given is a URL signed for its one object, so the bucket
+	// may be shared with other things the install keeps, under another
+	// prefix, without a customer's job being able to reach them.
+	BackupS3Endpoint  string
+	BackupS3Region    string
+	BackupS3Bucket    string
+	BackupS3Prefix    string
+	BackupS3AccessKey string
+	BackupS3SecretKey string
+
+	// BackupToolImage uploads and downloads dumps in a backup job; curl, run
+	// as the database's own non-root user. Empty is the engine's pinned
+	// default. An install that pulls from a mirror names its copy here.
+	BackupToolImage string
+
 	// Debug enables verbose logging.
 	Debug bool
 }
@@ -281,6 +327,8 @@ func Load() (Config, error) {
 		WildcardTLS:              envBool("YACHT_WILDCARD_TLS", false),
 		CertIssuer:               strings.TrimSpace(env("YACHT_CERT_ISSUER", "")),
 		DNSResolver:              env("YACHT_DNS_RESOLVER", ""),
+		TCPProxyHost:             strings.ToLower(strings.TrimSuffix(strings.TrimSpace(env("YACHT_TCP_PROXY_HOST", "")), ".")),
+		TCPProxyPorts:            strings.TrimSpace(env("YACHT_TCP_PROXY_PORTS", defaultTCPProxyPorts)),
 		NetworkIsolation:         env("YACHT_NETWORK_ISOLATION", ""),
 		EgressAllow:              env("YACHT_EGRESS_ALLOW", ""),
 		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
@@ -313,6 +361,13 @@ func Load() (Config, error) {
 		GitHubAppClientID:        strings.TrimSpace(env("YACHT_GITHUB_APP_CLIENT_ID", "")),
 		GitHubAppClientSecret:    env("YACHT_GITHUB_APP_CLIENT_SECRET", ""),
 		Debug:                    envBool("YACHT_DEBUG", false),
+		BackupS3Endpoint:         strings.TrimSpace(env("YACHT_BACKUP_S3_ENDPOINT", "")),
+		BackupS3Region:           strings.TrimSpace(env("YACHT_BACKUP_S3_REGION", "")),
+		BackupS3Bucket:           strings.TrimSpace(env("YACHT_BACKUP_S3_BUCKET", "")),
+		BackupS3Prefix:           strings.TrimSpace(env("YACHT_BACKUP_S3_PREFIX", "databases")),
+		BackupS3AccessKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_ACCESS_KEY", "")),
+		BackupS3SecretKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_SECRET_KEY", "")),
+		BackupToolImage:          strings.TrimSpace(env("YACHT_BACKUP_TOOL_IMAGE", "")),
 	}
 
 	if err := c.validate(); err != nil {
@@ -344,6 +399,7 @@ func (c Config) validate() error {
 		errs = append(errs, errors.New(
 			"YACHT_MAX_CONCURRENT_BUILDS must be between 1 and 16"))
 	}
+	errs = append(errs, c.tcpProxyFaults()...)
 	// A short shared secret is worse than none, because it invites exposing
 	// the dashboard while providing no real protection.
 	if c.AuthToken != "" && len(c.AuthToken) < 16 {
@@ -399,8 +455,55 @@ func (c Config) validate() error {
 	}
 	errs = append(errs, c.accountFaults()...)
 	errs = append(errs, c.gitHubFaults()...)
+	if _, err := c.BackupStore(); err != nil {
+		errs = append(errs, err)
+	}
 
 	return errors.Join(errs...)
+}
+
+// defaultTCPProxyPorts is the low band of Kubernetes' default NodePort range,
+// 30000-32767: the 86 ports it sets aside for Services that name their own,
+// and hands out itself only once every other port is taken.
+const defaultTCPProxyPorts = "30000-30085"
+
+// TCPProxyRange is the first and last port a TCP proxy may be given.
+//
+// Empty is the default range, so a Config built by hand rather than loaded —
+// an embedder's, or a test's — gets what an unset variable gets.
+func (c Config) TCPProxyRange() (first, last int32, err error) {
+	raw := cmp.Or(strings.TrimSpace(c.TCPProxyPorts), defaultTCPProxyPorts)
+	lo, hi, ok := strings.Cut(raw, "-")
+	if !ok {
+		hi = lo
+	}
+	f, err1 := strconv.ParseInt(strings.TrimSpace(lo), 10, 32)
+	l, err2 := strconv.ParseInt(strings.TrimSpace(hi), 10, 32)
+	switch {
+	case err1 != nil || err2 != nil:
+		return 0, 0, fmt.Errorf("YACHT_TCP_PROXY_PORTS %q must be a port or a range such as %s", raw, defaultTCPProxyPorts)
+	case f < 1 || l > 65535 || f > l:
+		return 0, 0, fmt.Errorf("YACHT_TCP_PROXY_PORTS %q must be ports between 1 and 65535, lowest first", raw)
+	}
+	return int32(f), int32(l), nil
+}
+
+// tcpProxyFaults validates the TCP proxy's settings.
+//
+// Checked at startup, because a range the cluster refuses would otherwise be
+// met one proxy at a time, as an apply that fails for an app somebody has just
+// tried to reach their database through.
+func (c Config) tcpProxyFaults() []error {
+	var errs []error
+	if _, _, err := c.TCPProxyRange(); err != nil {
+		errs = append(errs, err)
+	}
+	if c.TCPProxyHost != "" {
+		if fault := domainFault(c.TCPProxyHost); fault != "" {
+			errs = append(errs, fmt.Errorf("YACHT_TCP_PROXY_HOST %s", fault))
+		}
+	}
+	return errs
 }
 
 // wakerFaults validates the waker's settings. Each of these would otherwise be
@@ -742,6 +845,43 @@ func (c Config) String() string {
 		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation,
 		orOff(c.GitHubAppSlug), c.Debug,
 	)
+}
+
+// BackupStore is the bucket database backups go to, or nil when none is
+// configured.
+//
+// Half a bucket is refused at startup: an endpoint without keys would leave
+// every backup on a volume while the operator believed they were off-site,
+// which is the failure nobody discovers until they need one.
+func (c Config) BackupStore() (*backup.S3, error) {
+	set := map[string]string{
+		"YACHT_BACKUP_S3_ENDPOINT":   c.BackupS3Endpoint,
+		"YACHT_BACKUP_S3_BUCKET":     c.BackupS3Bucket,
+		"YACHT_BACKUP_S3_ACCESS_KEY": c.BackupS3AccessKey,
+		"YACHT_BACKUP_S3_SECRET_KEY": c.BackupS3SecretKey,
+	}
+	var missing []string
+	given := 0
+	for _, k := range []string{"YACHT_BACKUP_S3_ENDPOINT", "YACHT_BACKUP_S3_BUCKET",
+		"YACHT_BACKUP_S3_ACCESS_KEY", "YACHT_BACKUP_S3_SECRET_KEY"} {
+		if set[k] == "" {
+			missing = append(missing, k)
+		} else {
+			given++
+		}
+	}
+	if given == 0 {
+		return nil, nil
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("database backups to S3 need %s as well", strings.Join(missing, ", "))
+	}
+	s3, err := backup.NewS3(c.BackupS3Endpoint, c.BackupS3Region, c.BackupS3Bucket,
+		c.BackupS3Prefix, c.BackupS3AccessKey, c.BackupS3SecretKey)
+	if err != nil {
+		return nil, fmt.Errorf("YACHT_BACKUP_S3_*: %w", err)
+	}
+	return s3, nil
 }
 
 // MailTransport names the transport sign-in links will be delivered through.

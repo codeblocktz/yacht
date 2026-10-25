@@ -116,6 +116,7 @@ type AppRelease struct {
 	RestartPolicy          string
 	RestartMaxRetries      int32
 	HealthTimeoutSeconds   int32
+	Args                   []string
 }
 
 type AppReleaseBackfill struct {
@@ -183,6 +184,32 @@ type ClusterJoin struct {
 	UpdatedBy   pgtype.UUID
 }
 
+type DatabaseBackup struct {
+	ID         uuid.UUID
+	OwnerID    string
+	AppID      uuid.UUID
+	Kind       string
+	Trigger    string
+	Status     string
+	Location   string
+	ObjectKey  string
+	BackupID   pgtype.UUID
+	JobName    string
+	SizeBytes  int64
+	Error      string
+	CreatedBy  string
+	StartedAt  time.Time
+	FinishedAt pgtype.Timestamptz
+}
+
+type DatabaseBackupSchedule struct {
+	AppID     uuid.UUID
+	OwnerID   string
+	Daily     bool
+	Keep      int32
+	UpdatedAt time.Time
+}
+
 type Deployment struct {
 	ID         uuid.UUID
 	OwnerID    string
@@ -235,6 +262,7 @@ type Domain struct {
 	NextCheckAt   time.Time
 	CheckAttempts int32
 	Verified      bool
+	Generated     bool
 }
 
 type GithubDelivery struct {
@@ -372,6 +400,13 @@ type StagedVariable struct {
 	Sealed    []byte
 	Secret    bool
 	UpdatedAt time.Time
+}
+
+type TcpProxy struct {
+	AppID     uuid.UUID
+	OwnerID   string
+	Port      int32
+	CreatedAt time.Time
 }
 
 type Team struct {

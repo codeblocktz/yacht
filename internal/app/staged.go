@@ -556,7 +556,23 @@ func settingChanges(a App, r Release) []StagedChange {
 	if a.HealthPath != "" || r.HealthPath != "" {
 		add("Restart on failed check", onOff(r.Liveness), onOff(a.Liveness))
 	}
+	// The Deploy section: each is how the release runs, so each is a change
+	// that waits for Deploy like the rest. Found missing on the live install,
+	// where a pre-deploy command was saved and the bar did not count it.
+	add("Pre-deploy command", orNone(r.PreDeployCommand), orNone(a.PreDeployCommand))
+	add("Start command", orNone(r.StartCommand), orNone(a.StartCommand))
+	add("Cron schedule", orNone(r.CronSchedule), orNone(a.CronSchedule))
+	add("Restart policy", orDefault(string(r.RestartPolicy)), orDefault(string(a.RestartPolicy)))
+	add("Max restart retries", strconv.Itoa(int(r.RestartMaxRetries)), strconv.Itoa(int(a.RestartMaxRetries)))
+	add("Healthcheck timeout", secondsWord(r.HealthTimeoutSeconds), secondsWord(a.HealthTimeoutSeconds))
 	return out
+}
+
+func secondsWord(n int32) string {
+	if n == 0 {
+		return "default"
+	}
+	return strconv.Itoa(int(n)) + "s"
 }
 
 func portWord(p int32) string {

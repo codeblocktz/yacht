@@ -106,6 +106,7 @@ func TestChangingThePortReachesTheCluster(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	publicApp(t, s, id, "web")
 
 	if _, err := s.Update(ctx, id, "web", UpdateInput{
 		Image: "nginx:alpine", Port: 3000,
@@ -218,8 +219,8 @@ func TestARepositoryChangeAloneIsNotARollout(t *testing.T) {
 	}
 }
 
-// Turning an app internal withdraws its hostname rather than hiding it, and
-// turning it back issues one again.
+// Turning an app internal stops routing its hostname, and turning it back
+// routes the same one again: the name stays the app's in between.
 func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	ctx := context.Background()
 	s, orch, pool := testService(t, Options{AppDomain: "apps.update-internal.test"})
@@ -230,6 +231,7 @@ func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	host := publicApp(t, s, id, "web").Host
 	if len(orch.lastAppSpec().Hosts) == 0 {
 		t.Fatal("the app never had a hostname to withdraw")
 	}
@@ -254,8 +256,8 @@ func TestInternalWithdrawsAndRestoresTheHostname(t *testing.T) {
 	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
 		t.Fatalf("worker public update: %v", err)
 	}
-	if len(orch.lastAppSpec().Hosts) == 0 {
-		t.Error("the hostname was not issued again")
+	if hosts := orch.lastAppSpec().Hosts; len(hosts) != 1 || hosts[0] != host {
+		t.Errorf("hosts = %v, want %s routed again", hosts, host)
 	}
 }
 

@@ -94,6 +94,13 @@ type Querier interface {
 	// next pass rather than waiting for somebody to press a button. That is the
 	// whole difference between this and what it replaced.
 	CreateCustomDomain(ctx context.Context, arg CreateCustomDomainParams) (Domain, error)
+	// Backups of a database, and restores into it. Scoped by owner_id wherever a
+	// person asks, like every other resource query; the settler and the schedule
+	// read across owners, because they act for every team.
+	// Refused by database_backups_one_running when anything is already running
+	// against this database, which is the point: the caller reports the unique
+	// violation as "one at a time" rather than racing a second dump.
+	CreateDatabaseBackup(ctx context.Context, arg CreateDatabaseBackupParams) (DatabaseBackup, error)
 	CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error)
 	CreateDeploymentOperation(ctx context.Context, arg CreateDeploymentOperationParams) (DeploymentOperation, error)
 	CreateMagicLink(ctx context.Context, arg CreateMagicLinkParams) (MagicLink, error)
@@ -105,6 +112,15 @@ type Querier interface {
 	// A push that changed no watched file: recorded, already finished, and never
 	// queued, because there is nothing for a worker to do.
 	CreateSkippedDeployment(ctx context.Context, arg CreateSkippedDeploymentParams) (Deployment, error)
+	// TCP proxies: a public port on every machine for one app's own port.
+	// Claims a port for an app.
+	//
+	// Not an upsert on port: the unique index is what makes two apps reaching for
+	// the same port an error the caller retries with another, rather than one app
+	// quietly taking the other's. An app that already has a proxy keeps it — the
+	// port is what somebody's connection string says, and turning the proxy on
+	// twice must not change it.
+	CreateTCPProxy(ctx context.Context, arg CreateTCPProxyParams) (TcpProxy, error)
 	CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error)
 	// Every query filters by owner_id.
 	//
@@ -121,6 +137,9 @@ type Querier interface {
 	DeleteApp(ctx context.Context, arg DeleteAppParams) error
 	DeleteAppHook(ctx context.Context, arg DeleteAppHookParams) (int64, error)
 	DeleteCustomDomain(ctx context.Context, arg DeleteCustomDomainParams) (int64, error)
+	// Never a running one: its Job is still writing, and the row is how the
+	// settler finds it.
+	DeleteDatabaseBackup(ctx context.Context, arg DeleteDatabaseBackupParams) (int64, error)
 	DeleteExpiredInvitations(ctx context.Context) error
 	DeleteExpiredMagicLinks(ctx context.Context) error
 	DeleteExpiredSessions(ctx context.Context) error
@@ -164,6 +183,7 @@ type Querier interface {
 	// Records the stop for the same reason DeleteSessionByHash does.
 	DeleteSessionsForUser(ctx context.Context, userID uuid.UUID) error
 	DeleteStagedVariable(ctx context.Context, arg DeleteStagedVariableParams) (int64, error)
+	DeleteTCPProxy(ctx context.Context, arg DeleteTCPProxyParams) (int64, error)
 	DeleteVariable(ctx context.Context, arg DeleteVariableParams) (int64, error)
 	DeleteVariableAndBump(ctx context.Context, arg DeleteVariableAndBumpParams) (DeleteVariableAndBumpRow, error)
 	DeleteVolume(ctx context.Context, arg DeleteVolumeParams) (int64, error)
@@ -193,6 +213,9 @@ type Querier interface {
 	EnsureRegion(ctx context.Context, name string) error
 	FailQueuedBuildOperation(ctx context.Context, arg FailQueuedBuildOperationParams) (int64, error)
 	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
+	// Only from running, so two engine processes settling the same Job agree on
+	// one outcome and the second changes nothing.
+	FinishDatabaseBackup(ctx context.Context, arg FinishDatabaseBackupParams) (int64, error)
 	FinishDeployment(ctx context.Context, arg FinishDeploymentParams) (Deployment, error)
 	FinishDeploymentOperation(ctx context.Context, arg FinishDeploymentOperationParams) (int64, error)
 	// A delivery that failed half way is forgotten, so GitHub's redelivery of it
@@ -220,6 +243,8 @@ type Querier interface {
 	// take no owner_id. See the 00012 migration for why.
 	GetClusterJoin(ctx context.Context) (ClusterJoin, error)
 	GetCustomDomain(ctx context.Context, arg GetCustomDomainParams) (Domain, error)
+	GetDatabaseBackup(ctx context.Context, arg GetDatabaseBackupParams) (DatabaseBackup, error)
+	GetDatabaseBackupSchedule(ctx context.Context, arg GetDatabaseBackupScheduleParams) (DatabaseBackupSchedule, error)
 	GetDeployment(ctx context.Context, arg GetDeploymentParams) (Deployment, error)
 	GetDeploymentOperation(ctx context.Context, arg GetDeploymentOperationParams) (DeploymentOperation, error)
 	GetDeploymentOperationByDeployment(ctx context.Context, arg GetDeploymentOperationByDeploymentParams) (DeploymentOperation, error)
@@ -323,6 +348,10 @@ type Querier interface {
 	GetSessionByHash(ctx context.Context, tokenHash []byte) (GetSessionByHashRow, error)
 	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
+	GetTCPProxy(ctx context.Context, arg GetTCPProxyParams) (TcpProxy, error)
+	// Read by the apply, which has the app and not always its owner's scope in
+	// hand separately; the app id is unique on its own.
+	GetTCPProxyByApp(ctx context.Context, appID uuid.UUID) (TcpProxy, error)
 	GetTeam(ctx context.Context, id string) (Team, error)
 	// The check every use of an installation goes through: a team reads the
 	// repositories of an installation only if it is connected to it.
@@ -415,9 +444,18 @@ type Querier interface {
 	// Nothing answered "which domains are stuck" before this. A domain that is not
 	// routed is the only kind anybody needs to find, so it sorts to the top.
 	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
+	ListDatabaseBackups(ctx context.Context, arg ListDatabaseBackupsParams) ([]DatabaseBackup, error)
 	ListDeploymentOperations(ctx context.Context, arg ListDeploymentOperationsParams) ([]DeploymentOperation, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
+	// Every database whose daily backup is on and has not been taken, or tried,
+	// in the last day — less a few minutes, so a schedule that ran at 03:00:05
+	// yesterday still runs at about 03:00 today rather than drifting later.
+	ListDueDatabaseBackups(ctx context.Context) ([]ListDueDatabaseBackupsRow, error)
+	// The scheduled backups past the number kept, oldest last. Only succeeded
+	// ones count toward the number: a failed night should not push a good backup
+	// out.
+	ListExpiredScheduledBackups(ctx context.Context, arg ListExpiredScheduledBackupsParams) ([]DatabaseBackup, error)
 	// Newest first, for the team page. Scoped by the team acted as, which is
 	// whose record it is.
 	ListImpersonationEvents(ctx context.Context, arg ListImpersonationEventsParams) ([]ImpersonationEvent, error)
@@ -450,6 +488,7 @@ type Querier interface {
 	// feeds the reconciler, which is the platform settling its own records rather
 	// than a team reading theirs.
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	ListRunningDatabaseBackups(ctx context.Context) ([]ListRunningDatabaseBackupsRow, error)
 	// Awake apps that sleep, by their own setting or their team's. Every team's:
 	// the sleeper runs for the whole install, like the reconciler.
 	ListSleepCandidates(ctx context.Context) ([]ListSleepCandidatesRow, error)
@@ -460,6 +499,8 @@ type Querier interface {
 	ListStagedVariablesForApp(ctx context.Context, arg ListStagedVariablesForAppParams) ([]StagedVariable, error)
 	// Wakes whose process went away: a restart, or a replica that stopped.
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
+	// Every port in use, so a new one is picked from those that are not.
+	ListTCPProxyPorts(ctx context.Context) ([]int32, error)
 	ListTeamGitHubInstallations(ctx context.Context, ownerID string) ([]ListTeamGitHubInstallationsRow, error)
 	// Every team with its quota, its pool, its storage and how many people are in
 	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.
@@ -635,6 +676,10 @@ type Querier interface {
 	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)
 	SetClusterJoin(ctx context.Context, arg SetClusterJoinParams) (ClusterJoin, error)
+	// The object and the Job are named after the row, so they are set once it
+	// exists: the name is what lets a settler in any engine process find both.
+	SetDatabaseBackupJob(ctx context.Context, arg SetDatabaseBackupJobParams) error
+	SetDatabaseBackupSchedule(ctx context.Context, arg SetDatabaseBackupScheduleParams) error
 	// The release's image becomes the deployment's: for a deploy that built,
 	// the first moment there is one to name.
 	SetDeploymentRelease(ctx context.Context, arg SetDeploymentReleaseParams) (int64, error)
@@ -722,6 +767,10 @@ type Querier interface {
 	// name we already control. verified follows from it and is not written here —
 	// it is generated from state, so that the routing gate and the state on screen
 	// cannot disagree.
+	//
+	// generated says which kind of platform hostname this is — one under
+	// up.<app domain>, or the <name>.<app domain> every app used to be given — and
+	// is written on every call, because changing a name moves it under up.
 	UpsertManagedDomain(ctx context.Context, arg UpsertManagedDomainParams) (Domain, error)
 	UpsertMembership(ctx context.Context, arg UpsertMembershipParams) (Membership, error)
 	// Returns an id and not the row. RETURNING * here would put the hash into a Go

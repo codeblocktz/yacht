@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -72,11 +74,19 @@ func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (stri
 		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 
+	return upsertManaged(ctx, q, in.OwnerID, in.AppID, host, in.TLS, false)
+}
+
+func upsertManaged(
+	ctx context.Context, q *dbgen.Queries, ownerID string, appID uuid.UUID,
+	host string, tls, generated bool,
+) (string, error) {
 	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
-		OwnerID: in.OwnerID,
-		AppID:   in.AppID,
-		Host:    host,
-		Tls:     in.TLS,
+		OwnerID:   ownerID,
+		AppID:     appID,
+		Host:      host,
+		Tls:       tls,
+		Generated: generated,
 	}); err != nil {
 		if isUniqueViolation(err) {
 			return "", fmt.Errorf("%w: %s", ErrHostTaken, host)
@@ -84,6 +94,108 @@ func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (stri
 		return "", fmt.Errorf("domain: issue %s: %w", host, err)
 	}
 	return host, nil
+}
+
+// Managed is an app's platform hostname as stored.
+type Managed struct {
+	Host string
+
+	// Generated is a hostname under up.<app domain>, made by Generate Domain
+	// or chosen since. False is the <name>.<app domain> every app was given
+	// when it was created, before an app had to ask for one.
+	Generated bool
+
+	// Label is the part before the domain: the app's name for one issued at
+	// create, and whatever was generated or chosen otherwise.
+	Label string
+}
+
+// GetManaged returns an app's platform hostname, and false when it has none.
+func GetManaged(ctx context.Context, q *dbgen.Queries, appID uuid.UUID) (Managed, bool, error) {
+	row, err := q.GetManagedDomain(ctx, appID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Managed{}, false, nil
+	}
+	if err != nil {
+		return Managed{}, false, fmt.Errorf("domain: read hostname: %w", err)
+	}
+	label, _, _ := strings.Cut(row.Host, ".")
+	return Managed{Host: row.Host, Generated: row.Generated, Label: label}, true, nil
+}
+
+// ReconcileManaged keeps the platform hostname an app already holds in line
+// with the app domain, and issues none to an app that holds none.
+//
+// The difference from EnsureManaged is the whole of Generate Domain. An app is
+// no longer given a hostname for existing; it has one because somebody asked,
+// and an apply that issued one regardless would undo every app that never did.
+// What an app does hold moves with the app domain, under the same label and of
+// the same kind — <label>.<domain> stays one, <label>.up.<domain> the other —
+// so changing the domain still moves every URL on its next apply.
+//
+// With no app domain configured the hostname is retired, as EnsureManaged
+// retires it: the feature is off, and a row left behind would keep the app
+// routed at a name the operator has given up.
+func ReconcileManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (string, error) {
+	if normalize(in.AppDomain) == "" {
+		return "", RetireManaged(ctx, q, in.AppID)
+	}
+	held, ok, err := GetManaged(ctx, q, in.AppID)
+	if err != nil || !ok {
+		return "", err
+	}
+	base := normalize(in.AppDomain)
+	if held.Generated {
+		base = GeneratedDomain(base)
+	}
+	host := held.Label + "." + base
+	if host == held.Host {
+		return host, nil
+	}
+	if len(host) > maxHostname {
+		return "", fmt.Errorf("domain: hostname %q exceeds %d characters", host, maxHostname)
+	}
+	if Reserved(host, "", in.Reserved) {
+		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
+	}
+	return upsertManaged(ctx, q, in.OwnerID, in.AppID, host, in.TLS, held.Generated)
+}
+
+// GenerateInput describes a generated hostname: <label>.up.<app domain>.
+type GenerateInput struct {
+	OwnerID   string
+	AppID     uuid.UUID
+	Label     string
+	AppDomain string
+	TLS       bool
+	Reserved  []string
+}
+
+// IssueGenerated gives an app the generated hostname named by in.Label,
+// replacing whatever platform hostname it held, or moving it if it held one.
+//
+// One platform hostname per app, as before — the partial unique index is still
+// what holds that — so choosing a new name releases the old one in the same
+// statement, and nothing is left holding a name the app no longer answers on.
+//
+// ErrHostTaken when another app holds the name; ErrNoAppDomain when there is no
+// domain to put it under.
+func IssueGenerated(ctx context.Context, q *dbgen.Queries, in GenerateInput) (string, error) {
+	base := GeneratedDomain(in.AppDomain)
+	if base == "" {
+		return "", ErrNoAppDomain
+	}
+	if err := ValidateLabel(in.Label); err != nil {
+		return "", err
+	}
+	host := normalize(in.Label) + "." + base
+	if len(host) > maxHostname {
+		return "", fmt.Errorf("domain: hostname %q exceeds %d characters", host, maxHostname)
+	}
+	if Reserved(host, "", in.Reserved) {
+		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
+	}
+	return upsertManaged(ctx, q, in.OwnerID, in.AppID, host, in.TLS, true)
 }
 
 // RetireManaged removes an app's platform-issued hostname, releasing the name

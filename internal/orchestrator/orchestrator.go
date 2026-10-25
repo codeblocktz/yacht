@@ -219,6 +219,11 @@ type AppSpec struct {
 	// those is what lets the read-only default stay the default.
 	ScratchPaths []string
 
+	// Args replace the image's command arguments. Empty runs the image's own.
+	// $(NAME) is expanded from the workload's environment, secrets included,
+	// which is how a password reaches a program that only takes it as a flag.
+	Args []string
+
 	// HealthPath is an HTTP path on the workload's own port that reports
 	// whether it is ready to serve. Empty means no probe.
 	//
@@ -290,6 +295,16 @@ type AppSpec struct {
 
 	// HTTPSOnly routes through the ingress controller's secure entrypoint only.
 	HTTPSOnly bool
+
+	// TCPProxyPort, when set, is a port every machine in the cluster answers
+	// on and hands to the workload's own Port: a TCP proxy, for what does not
+	// speak HTTP and so cannot go through the ingress controller. Zero is none,
+	// and removes one that was there.
+	//
+	// Chosen above this seam and handed down rather than left to the cluster
+	// to allocate, because it is what somebody's connection string says: it
+	// has to survive the Service behind it being deleted and made again.
+	TCPProxyPort int32
 
 	// RegistryAuth is a Docker config.json for pulling this app's image, when
 	// it comes from a private registry. Empty leaves the namespace without a
@@ -460,6 +475,12 @@ func (s AppSpec) Validate() error {
 	}
 	if len(s.Hosts) > 0 && s.Port == 0 {
 		return errors.New("app spec: hosts require a port to route to")
+	}
+	if s.TCPProxyPort < 0 || s.TCPProxyPort > 65535 {
+		return fmt.Errorf("app spec: tcp proxy port must be within 0-65535, got %d", s.TCPProxyPort)
+	}
+	if s.TCPProxyPort > 0 && s.Port == 0 {
+		return errors.New("app spec: a tcp proxy requires a port to send connections to")
 	}
 	for _, h := range s.Hosts {
 		if !hostRE.MatchString(h) {

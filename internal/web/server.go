@@ -802,6 +802,9 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/apps/{name}/logs/stream", s.appLogsStream)
 				r.Get("/apps/{name}/deployments/{id}/logs", s.deployLogs)
 			}
+			// A database's Database and Backups tabs, and Add › Database.
+			s.mountDatabases(r)
+
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)
 			// Deploying what is staged is a deploy like any other: a member's,
@@ -865,6 +868,9 @@ func (s *Server) Handler() http.Handler {
 			r.Use(s.requireRole(account.RoleAdmin))
 
 			r.Post("/apps/{name}/delete", s.appDelete)
+			// A database's connection string, a restore over its data, and
+			// deleting a backup: a credential, and two that cannot be undone.
+			s.mountDatabaseAdmin(r)
 			// A project's name and its deletion are the team's admins', like
 			// deleting an app — which deleting a project does, to every one.
 			r.Post("/projects/{slug}/rename", s.projectRename)
@@ -907,6 +913,14 @@ func (s *Server) Handler() http.Handler {
 				r.Post("/apps/{name}/domains", s.domainAdd)
 				r.Post("/apps/{name}/domains/{id}/verify", s.domainVerify)
 				r.Post("/apps/{name}/domains/{id}/delete", s.domainRemove)
+				// Generate Domain and the TCP proxy sit with the custom
+				// domains: each puts the app somewhere on the internet it was
+				// not, which a redeploy does not undo.
+				r.Post("/apps/{name}/networking/domain/generate", s.publicDomainGenerate)
+				r.Post("/apps/{name}/networking/domain", s.publicDomainSet)
+				r.Post("/apps/{name}/networking/domain/delete", s.publicDomainRemove)
+				r.Post("/apps/{name}/networking/tcp-proxy", s.tcpProxyEnable)
+				r.Post("/apps/{name}/networking/tcp-proxy/delete", s.tcpProxyDisable)
 			}
 
 			r.Post("/apps/{name}/storage", s.storageAttach)

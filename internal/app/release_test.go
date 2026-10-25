@@ -27,7 +27,7 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"CPURequest": true, "CPULimit": true,
 		"MemoryRequest": true, "MemoryLimit": true,
 		"WritableRootFilesystem": true, "Internal": true,
-		"RunAsUser": true, "FSGroup": true, "ScratchPaths": true,
+		"RunAsUser": true, "FSGroup": true, "ScratchPaths": true, "Args": true,
 		"HealthPath": true, "Liveness": true, "StartCommand": true,
 		"Schedule": true, "RestartPolicy": true, "MaxRestarts": true, "HealthTimeoutSeconds": true,
 	}
@@ -36,7 +36,7 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"Hosts": true, "Secrets": true, "Volumes": true,
 		"TLSHosts": true, "CNAMETarget": true, "HTTPSOnly": true,
 		"RegistryAuth": true, "IssuedHosts": true, "CertIssuer": true,
-		"Waker": true, "Pool": true, "Region": true,
+		"Waker": true, "Pool": true, "Region": true, "TCPProxyPort": true,
 	}
 
 	typ := reflect.TypeOf(orchestrator.AppSpec{})
@@ -69,6 +69,7 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		MemoryRequest: "128Mi", MemoryLimit: "512Mi",
 		WritableRootFilesystem: true, Internal: true,
 		RunAsUser: 1001, FSGroup: 1002, ScratchPaths: []string{"/tmp/run"},
+		Args:       []string{"server", "--password", "$(PASSWORD)"},
 		HealthPath: "/ready", Liveness: true,
 		StartCommand: "bin/web start", PreDeployCommand: "bin/migrate",
 		CronSchedule: "0 3 * * *", RestartPolicy: orchestrator.RestartNever,
@@ -91,6 +92,7 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		MemoryRequest: "128Mi", MemoryLimit: "512Mi",
 		WritableRootFilesystem: true, Internal: true,
 		RunAsUser: 1001, FSGroup: 1002, ScratchPaths: []string{"/tmp/run"},
+		Args:       []string{"server", "--password", "$(PASSWORD)"},
 		HealthPath: "/ready", Liveness: true, StartCommand: "bin/web start",
 		Schedule: "0 3 * * *", RestartPolicy: orchestrator.RestartNever,
 		MaxRestarts: 5, HealthTimeoutSeconds: 120,

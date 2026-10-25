@@ -45,6 +45,13 @@ type Networking struct {
 	// Namespace is where the app's objects live, so a command the page offers
 	// for looking into one can be pasted and run as it is.
 	Namespace string
+
+	// Public is the app's platform hostname and what Generate Domain needs;
+	// Private, where other apps reach it; TCPProxy, its public TCP port. See
+	// public_networking.go.
+	Public   PublicDomain
+	Private  PrivateEndpoint
+	TCPProxy TCPProxy
 }
 
 // Networking returns an app's routing.
@@ -66,6 +73,9 @@ func (s *Service) Networking(ctx context.Context, ownerID, name string) (Network
 	}
 	out.Issuing = s.opts.CertIssuer != ""
 	out.Certs = s.certificates(ctx, a, out.Custom)
+	if err := s.attachPublicNetworking(ctx, a, &out); err != nil {
+		return Networking{}, err
+	}
 	return out, nil
 }
 

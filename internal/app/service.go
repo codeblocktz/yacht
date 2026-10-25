@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -249,6 +250,15 @@ func (a App) UntrustedCert() bool {
 
 // Options are the settings the service needs beyond its dependencies.
 type Options struct {
+	// BackupS3 is where database backups are written; nil keeps them on a
+	// volume beside each database. BackupToolImage uploads and downloads
+	// them, DefaultBackupToolImage when empty, and BackupCheckInterval is how
+	// often finished backup jobs are settled and due ones started. See
+	// backup.go.
+	BackupS3            *backup.S3
+	BackupToolImage     string
+	BackupCheckInterval time.Duration
+
 	// Keeper seals secret variables. Left nil, secrets are refused rather than
 	// stored readable — a protection somebody asked for and did not get is
 	// worse than one they were told they could not have.
@@ -259,8 +269,18 @@ type Options struct {
 	AppDomain string
 
 	// WildcardTLS serves those hostnames over TLS from the ingress
-	// controller's default certificate.
+	// controller's default certificate, which is taken to carry both
+	// *.<AppDomain> and *.up.<AppDomain>.
 	WildcardTLS bool
+
+	// TCPProxyHost is the name TCP proxies are reached at. Empty switches
+	// them off: there would be nothing to tell somebody to connect to.
+	TCPProxyHost string
+
+	// TCPProxyPortFirst and TCPProxyPortLast bound the ports a TCP proxy is
+	// given, both included.
+	TCPProxyPortFirst int32
+	TCPProxyPortLast  int32
 
 	// CertIssuer is the cluster-wide certificate issuer custom domains are
 	// given certificates from. Empty means the install has none, and a custom
@@ -488,7 +508,8 @@ type UpdateInput struct {
 	MemoryRequest string
 	MemoryLimit   string
 
-	// Internal withdraws the platform hostname rather than merely hiding it.
+	// Internal stops routing the app's hostnames, which it keeps for when it
+	// is made public again.
 	Internal bool
 
 	// Repo is where a Git app builds from. Changing it does not rebuild —
@@ -674,8 +695,8 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	// them off the App it is handed.
 	updated.Volumes, updated.Variables = a.Volumes, a.Variables
 
-	// A port cleared or an app made internal withdraws its address; the
-	// reverse issues one.
+	// A port cleared or an app made internal stops routing its addresses; the
+	// reverse routes them again.
 	if updated.Internal != a.Internal || (updated.Port == 0) != (a.Port == 0) {
 		s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	}
@@ -955,11 +976,34 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 			return App{}, fmt.Errorf("app: create secret %s: %w", key, err)
 		}
 	}
+	// The same password under each further name the engine's clients read,
+	// sealed like the original: it is the same secret, and a copy stored
+	// readable would be the original stored readable.
+	for _, key := range blueprint.PasswordKeys {
+		sealed, err := s.keeper.Seal(generated[blueprint.GeneratedSecrets[0]])
+		if err != nil {
+			return App{}, err
+		}
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Sealed: sealed, Secret: true,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create secret %s: %w", key, err)
+		}
+	}
+	// Where other apps reach it. Not secret, and plain so the variables tab
+	// shows it: an address is what somebody copies into a client.
+	for _, key := range blueprint.HostKeys {
+		if _, err := q.UpsertVariable(ctx, dbgen.UpsertVariableParams{
+			OwnerID: ownerID, AppID: created.ID, Key: key, Value: created.PrivateHost(),
+		}); err != nil {
+			return App{}, fmt.Errorf("app: create variable %s: %w", key, err)
+		}
+	}
 	// The address other apps use, sealed because it carries the password.
 	if blueprint.ConnectionKey != "" {
 		conn := fmt.Sprintf(blueprint.ConnectionTemplate,
 			generated[blueprint.GeneratedSecrets[0]],
-			created.Name+"."+created.Namespace+".svc.cluster.local")
+			created.PrivateHost())
 		sealed, err := s.keeper.Seal(conn)
 		if err != nil {
 			return App{}, err
@@ -1006,17 +1050,12 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		}
 	}
 
-	// Issued inside the same transaction as the app row, so an app cannot
-	// exist without its URL and no later step can forget to add one.
-	host, err := domain.EnsureManaged(ctx, q, s.managedInput(created))
-	if err != nil {
-		if errors.Is(err, domain.ErrHostTaken) {
-			return App{}, err
-		}
-		return App{}, fmt.Errorf("app: issue hostname: %w", err)
-	}
-	created.Host = host
-	created.TLS = s.opts.WildcardTLS && host != ""
+	// No hostname. An app is public because somebody pressed Generate Domain,
+	// not because it exists: that is Railway's rule, and the right one — a
+	// worker, an API meant for other apps, a repository deployed to see
+	// whether it builds, none of them should be on the internet merely for
+	// having a port. A template that knows its app is a website asks for one
+	// after the app exists; see DeployTemplateIn.
 
 	var release Release
 	if created.Source != SourceGit {
@@ -1114,6 +1153,10 @@ func (s *Service) applyRelease(
 	if err != nil {
 		return err
 	}
+	proxyPort, err := s.tcpProxyPortFor(ctx, q, effective)
+	if err != nil {
+		return err
+	}
 
 	// An app whose image has not been built yet gets its namespace and its
 	// hostname and nothing else. Applying the placeholder would create a
@@ -1155,8 +1198,9 @@ func (s *Service) applyRelease(
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
 		Volumes: volumeSpecs(vols), Hosts: hosts, TLSHosts: s.tlsHosts(hosts),
 		IssuedHosts: s.issuedHosts(hosts), CertIssuer: s.opts.CertIssuer,
-		HTTPSOnly:   a.HTTPSOnly && len(hosts) > 0,
-		CNAMETarget: cnameTargetFor(a, target),
+		HTTPSOnly:    a.HTTPSOnly && len(hosts) > 0,
+		CNAMETarget:  cnameTargetFor(a, target),
+		TCPProxyPort: proxyPort,
 		Asleep:      a.Sleep.State == SleepAsleep,
 		Waker:       s.wakerFor(a, hosts),
 		Pool:        pool,
@@ -1209,24 +1253,13 @@ func (s *Service) issuedHosts(hosts []string) []string {
 	}
 	var out []string
 	for _, h := range hosts {
-		if !domain.CoveredByWildcard(h, s.opts.AppDomain) {
+		if !domain.CoveredByPlatformWildcard(h, s.opts.AppDomain) {
 			out = append(out, h)
 		}
 	}
 	return out
 }
 
-// reconcileHosts brings the managed hostname in line with current config and
-// returns every hostname routed to the app.
-// managedInput describes the hostname an app should hold, which is none at all
-// when it has no port.
-//
-// A workload with no port takes no traffic, so a hostname could never reach it
-// — and issuing one anyway would both fail validation downstream and hold a
-// globally unique name against every other app. Expressing it as an empty app
-// domain reuses the existing "feature is off" path, which already retires a
-// hostname rather than merely skipping it. That matters: an app is created
-// with a port and later has it cleared, and the name has to be released.
 // cnameTarget reads the install's ExternalDNS target.
 //
 // Read on each apply rather than captured at startup, so changing it in
@@ -1256,25 +1289,39 @@ func cnameTargetFor(a App, target string) string {
 	return target
 }
 
+// managedInput describes where the app's platform hostname, if it holds one,
+// belongs under the current app domain.
 func (s *Service) managedInput(a App) domain.ManagedInput {
-	appDomain := s.opts.AppDomain
-	// A workload with no port cannot be reached, and an internal one speaks a
-	// protocol an HTTP hostname cannot carry. Neither gets a name.
-	if a.Port == 0 || a.Internal {
-		appDomain = ""
-	}
 	return domain.ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: appDomain, TLS: s.opts.WildcardTLS,
+		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
 		Reserved: s.opts.ReservedDomains,
 	}
 }
 
+// servesHTTP reports whether an app can take traffic through a hostname: it
+// has a port, and it is not internal. A workload with no port takes no
+// traffic, and an internal one speaks a protocol an HTTP hostname cannot
+// carry — a database, behind a Service on its own port rather than the one
+// the ingress controller sends to.
+func servesHTTP(a App) bool { return a.Port > 0 && !a.Internal }
+
+// reconcileHosts brings the app's platform hostname in line with the app
+// domain and returns every hostname that should be routed to it.
+//
+// None at all for an app that cannot serve HTTP, its platform hostname and
+// custom domains alike, but nothing is released: the names stay the app's, and
+// giving it a port again, or making it public again, routes them as they were.
+// Releasing them instead would hand an app's address to whoever asked next
+// while its owner was changing a setting.
 func (s *Service) reconcileHosts(
 	ctx context.Context, q *dbgen.Queries, a App,
 ) ([]string, error) {
-	if _, err := domain.EnsureManaged(ctx, q, s.managedInput(a)); err != nil {
+	if _, err := domain.ReconcileManaged(ctx, q, s.managedInput(a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
+	}
+	if !servesHTTP(a) {
+		return nil, nil
 	}
 	// Routable rather than every row: a custom domain that has not been proven
 	// is a claim, and routing one would let somebody take traffic for a name
@@ -1359,18 +1406,17 @@ func (s *Service) attachBaseline(ctx context.Context, a *App) {
 
 // attachHost reads the app's hostname, tolerating a store that will not answer.
 //
-// ListDomainsByApp orders managed first, so index 0 is the platform hostname
-// whenever one has been issued.
+// The platform hostname only, and only while it is routed. Taking the first of
+// every domain the app holds, as this used to, was right while every app had a
+// platform hostname to come first; an app that has none would now be shown at
+// a custom domain that may not even be proven yet.
 func (s *Service) attachHost(ctx context.Context, a *App) {
-	hosts, err := domain.HostsForApp(ctx, s.q, a.ID)
-	if err != nil {
+	if held, ok, err := domain.GetManaged(ctx, s.q, a.ID); err != nil {
 		s.log.Debug("hostname unavailable",
 			slog.String("app", a.Name), slog.String("error", err.Error()))
-		return
-	}
-	if len(hosts) > 0 {
-		a.Host = hosts[0]
-		a.TLS = s.opts.WildcardTLS
+	} else if ok && servesHTTP(*a) && s.opts.AppDomain != "" {
+		a.Host = held.Host
+		a.TLS = s.opts.WildcardTLS && domain.CoveredByPlatformWildcard(held.Host, s.opts.AppDomain)
 	}
 
 	// Read on the same pass. Storage changes what the app page can offer —

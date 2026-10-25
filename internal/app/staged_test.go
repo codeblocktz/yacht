@@ -437,6 +437,18 @@ func TestThePlatformVariablesReachEveryApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A public address only once asked for, as on Railway; generating one
+	// re-applies the app, with the variable that names it.
+	if _, err := s.GenerateDomain(ctx, id, "web", 0); err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
+	// The route reaches the workload on the reconciler's next pass.
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
+	}
+	if a, err = s.Get(ctx, id, "web"); err != nil {
+		t.Fatal(err)
+	}
 	env := orch.lastAppSpec().Env
 	want := map[string]string{
 		"DATAHURU_PRIVATE_DOMAIN": "web." + a.Namespace + ".svc.cluster.local",
@@ -548,5 +560,34 @@ func TestARollbackKeepsTheReferencesItsReleaseUsed(t *testing.T) {
 	}
 	if v, err := s.RevealVariable(ctx, id, "web", "DB"); err != nil || v != "${{db.PRIVATE_HOST}}" {
 		t.Errorf("DB after the rollback = %q, %v", v, err)
+	}
+}
+
+// A pre-deploy command saved and not yet deployed is a staged change, like
+// a port or a limit. On the live install the bar did not count one.
+func TestADeploySettingIsAStagedChange(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := stagingService(t, "svc-staged-commands", Options{})
+	a, err := createAndDeploy(t, s, ctx, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(ctx, id, "web", UpdateInput{
+		Image: a.Image, Port: a.Port, PreDeployCommand: "bin/migrate",
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	changes, err := s.StagedChanges(ctx, id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range changes {
+		found = found || (c.Key == "Pre-deploy command" && c.To == "bin/migrate")
+	}
+	if !found {
+		t.Errorf("staged = %+v, want the pre-deploy command", changes)
 	}
 }

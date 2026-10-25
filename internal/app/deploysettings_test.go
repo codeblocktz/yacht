@@ -27,6 +27,14 @@ func TestDeploySettingsReachTheReleaseAndTheWorkload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	// A public address only once asked for, as on Railway.
+	if _, err := s.GenerateDomain(ctx, id, "report", 0); err != nil {
+		t.Fatalf("GenerateDomain: %v", err)
+	}
+	// The route reaches the workload on the reconciler's next pass.
+	if err := s.ReconcileApps(ctx); err != nil {
+		t.Fatalf("ReconcileApps: %v", err)
+	}
 	if hosts := orch.lastAppSpec().Hosts; len(hosts) == 0 {
 		t.Fatalf("an app that always runs has hosts %v, want its platform hostname", hosts)
 	}
