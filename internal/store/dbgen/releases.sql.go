@@ -30,6 +30,8 @@ INSERT INTO app_releases (
     replicas, port, cpu_request, cpu_limit, memory_request, memory_limit,
     internal, run_as_user, fs_group, scratch_paths,
     writable_root_filesystem, health_path, health_liveness,
+    start_command, pre_deploy_command,
+    cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds,
     env, secret_keys, config_version, origin
 )
 VALUES (
@@ -37,9 +39,11 @@ VALUES (
     $7, $8, $9, $10, $11, $12,
     $13, $14, $15, $16,
     $17, $18, $19,
-    $20, $21, $22, $23
+    $20, $21,
+    $22, $23, $24, $25,
+    $26, $27, $28, $29
 )
-RETURNING id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin
+RETURNING id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds
 `
 
 type CreateAppReleaseParams struct {
@@ -62,6 +66,12 @@ type CreateAppReleaseParams struct {
 	WritableRootFilesystem bool
 	HealthPath             string
 	HealthLiveness         bool
+	StartCommand           string
+	PreDeployCommand       string
+	CronSchedule           string
+	RestartPolicy          string
+	RestartMaxRetries      int32
+	HealthTimeoutSeconds   int32
 	Env                    []byte
 	SecretKeys             []string
 	ConfigVersion          int64
@@ -92,6 +102,12 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 		arg.WritableRootFilesystem,
 		arg.HealthPath,
 		arg.HealthLiveness,
+		arg.StartCommand,
+		arg.PreDeployCommand,
+		arg.CronSchedule,
+		arg.RestartPolicy,
+		arg.RestartMaxRetries,
+		arg.HealthTimeoutSeconds,
 		arg.Env,
 		arg.SecretKeys,
 		arg.ConfigVersion,
@@ -124,12 +140,18 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 		&i.ConfigVersion,
 		&i.CreatedAt,
 		&i.Origin,
+		&i.StartCommand,
+		&i.PreDeployCommand,
+		&i.CronSchedule,
+		&i.RestartPolicy,
+		&i.RestartMaxRetries,
+		&i.HealthTimeoutSeconds,
 	)
 	return i, err
 }
 
 const getAppForReleaseBackfill = `-- name: GetAppForReleaseBackfill :one
-SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused FROM apps
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths FROM apps
 WHERE owner_id = $1 AND id = $2
 FOR UPDATE
 `
@@ -186,12 +208,20 @@ func (q *Queries) GetAppForReleaseBackfill(ctx context.Context, arg GetAppForRel
 		&i.GithubInstallationID,
 		&i.GithubRepoID,
 		&i.GithubPaused,
+		&i.StartCommand,
+		&i.PreDeployCommand,
+		&i.CronSchedule,
+		&i.RestartPolicy,
+		&i.RestartMaxRetries,
+		&i.HealthTimeoutSeconds,
+		&i.DockerfilePath,
+		&i.WatchPaths,
 	)
 	return i, err
 }
 
 const getAppRelease = `-- name: GetAppRelease :one
-SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin FROM app_releases
+SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds FROM app_releases
 WHERE owner_id = $1 AND app_id = $2 AND id = $3
 `
 
@@ -230,6 +260,12 @@ func (q *Queries) GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (A
 		&i.ConfigVersion,
 		&i.CreatedAt,
 		&i.Origin,
+		&i.StartCommand,
+		&i.PreDeployCommand,
+		&i.CronSchedule,
+		&i.RestartPolicy,
+		&i.RestartMaxRetries,
+		&i.HealthTimeoutSeconds,
 	)
 	return i, err
 }
@@ -279,7 +315,7 @@ func (q *Queries) IncrementAppConfigVersion(ctx context.Context, arg IncrementAp
 }
 
 const listAppReleases = `-- name: ListAppReleases :many
-SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin FROM app_releases
+SELECT id, owner_id, app_id, image_ref, image_digest, source, source_revision, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, internal, run_as_user, fs_group, scratch_paths, writable_root_filesystem, health_path, health_liveness, env, secret_keys, config_version, created_at, origin, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds FROM app_releases
 WHERE owner_id = $1 AND app_id = $2
 ORDER BY created_at DESC, id DESC
 LIMIT $3
@@ -326,6 +362,12 @@ func (q *Queries) ListAppReleases(ctx context.Context, arg ListAppReleasesParams
 			&i.ConfigVersion,
 			&i.CreatedAt,
 			&i.Origin,
+			&i.StartCommand,
+			&i.PreDeployCommand,
+			&i.CronSchedule,
+			&i.RestartPolicy,
+			&i.RestartMaxRetries,
+			&i.HealthTimeoutSeconds,
 		); err != nil {
 			return nil, err
 		}
@@ -338,7 +380,7 @@ func (q *Queries) ListAppReleases(ctx context.Context, arg ListAppReleasesParams
 }
 
 const listPendingReleaseBackfills = `-- name: ListPendingReleaseBackfills :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, b.state, b.last_error, b.attempts
+SELECT a.id, a.owner_id, a.name, a.namespace, a.image, a.replicas, a.port, a.cpu_request, a.cpu_limit, a.memory_request, a.memory_limit, a.created_at, a.updated_at, a.health_path, a.health_liveness, a.source, a.internal, a.project_id, a.canvas_x, a.canvas_y, a.https_only, a.cname_only, a.repo_url, a.repo_branch, a.repo_subdir, a.run_as_user, a.config_version, a.active_release_id, a.sleep_mode, a.sleep_after_minutes, a.sleep_state, a.sleeping_since, a.waking_since, a.awake_since, a.last_request_at, a.request_count, a.requests_seen_since, a.wake_failed_at, a.wake_failure, a.region, a.github_installation_id, a.github_repo_id, a.github_paused, a.start_command, a.pre_deploy_command, a.cron_schedule, a.restart_policy, a.restart_max_retries, a.health_timeout_seconds, a.dockerfile_path, a.watch_paths, b.state, b.last_error, b.attempts
 FROM app_release_backfills b
 JOIN apps a ON a.id = b.app_id AND a.owner_id = b.owner_id
 WHERE b.state IN ('pending', 'image_unavailable', 'blocked')
@@ -408,6 +450,14 @@ func (q *Queries) ListPendingReleaseBackfills(ctx context.Context, resultLimit i
 			&i.App.GithubInstallationID,
 			&i.App.GithubRepoID,
 			&i.App.GithubPaused,
+			&i.App.StartCommand,
+			&i.App.PreDeployCommand,
+			&i.App.CronSchedule,
+			&i.App.RestartPolicy,
+			&i.App.RestartMaxRetries,
+			&i.App.HealthTimeoutSeconds,
+			&i.App.DockerfilePath,
+			&i.App.WatchPaths,
 			&i.State,
 			&i.LastError,
 			&i.Attempts,
@@ -448,13 +498,19 @@ SET image           = r.image_ref,
     internal        = r.internal,
     health_path     = r.health_path,
     health_liveness = r.health_liveness,
+    start_command      = r.start_command,
+    pre_deploy_command = r.pre_deploy_command,
+    cron_schedule          = r.cron_schedule,
+    restart_policy         = r.restart_policy,
+    restart_max_retries    = r.restart_max_retries,
+    health_timeout_seconds = r.health_timeout_seconds,
     run_as_user     = CASE WHEN apps.source = 'git' THEN r.run_as_user ELSE apps.run_as_user END,
     config_version  = apps.config_version + 1,
     updated_at      = now()
 FROM app_releases r
 WHERE apps.owner_id = $1 AND apps.id = $2
   AND r.id = $3 AND r.owner_id = $1 AND r.app_id = apps.id
-RETURNING apps.id, apps.owner_id, apps.name, apps.namespace, apps.image, apps.replicas, apps.port, apps.cpu_request, apps.cpu_limit, apps.memory_request, apps.memory_limit, apps.created_at, apps.updated_at, apps.health_path, apps.health_liveness, apps.source, apps.internal, apps.project_id, apps.canvas_x, apps.canvas_y, apps.https_only, apps.cname_only, apps.repo_url, apps.repo_branch, apps.repo_subdir, apps.run_as_user, apps.config_version, apps.active_release_id, apps.sleep_mode, apps.sleep_after_minutes, apps.sleep_state, apps.sleeping_since, apps.waking_since, apps.awake_since, apps.last_request_at, apps.request_count, apps.requests_seen_since, apps.wake_failed_at, apps.wake_failure, apps.region, apps.github_installation_id, apps.github_repo_id, apps.github_paused
+RETURNING apps.id, apps.owner_id, apps.name, apps.namespace, apps.image, apps.replicas, apps.port, apps.cpu_request, apps.cpu_limit, apps.memory_request, apps.memory_limit, apps.created_at, apps.updated_at, apps.health_path, apps.health_liveness, apps.source, apps.internal, apps.project_id, apps.canvas_x, apps.canvas_y, apps.https_only, apps.cname_only, apps.repo_url, apps.repo_branch, apps.repo_subdir, apps.run_as_user, apps.config_version, apps.active_release_id, apps.sleep_mode, apps.sleep_after_minutes, apps.sleep_state, apps.sleeping_since, apps.waking_since, apps.awake_since, apps.last_request_at, apps.request_count, apps.requests_seen_since, apps.wake_failed_at, apps.wake_failure, apps.region, apps.github_installation_id, apps.github_repo_id, apps.github_paused, apps.start_command, apps.pre_deploy_command, apps.cron_schedule, apps.restart_policy, apps.restart_max_retries, apps.health_timeout_seconds, apps.dockerfile_path, apps.watch_paths
 `
 
 type RestoreAppFromReleaseParams struct {
@@ -515,6 +571,14 @@ func (q *Queries) RestoreAppFromRelease(ctx context.Context, arg RestoreAppFromR
 		&i.GithubInstallationID,
 		&i.GithubRepoID,
 		&i.GithubPaused,
+		&i.StartCommand,
+		&i.PreDeployCommand,
+		&i.CronSchedule,
+		&i.RestartPolicy,
+		&i.RestartMaxRetries,
+		&i.HealthTimeoutSeconds,
+		&i.DockerfilePath,
+		&i.WatchPaths,
 	)
 	return i, err
 }

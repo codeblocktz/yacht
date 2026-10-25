@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,22 @@ type Release struct {
 
 	HealthPath string
 	Liveness   bool
+
+	// StartCommand is what the release's container runs, and
+	// PreDeployCommand what runs once before it starts. Release history
+	// rather than current state, so a rollback runs the commands written for
+	// the code it returns to.
+	StartCommand     string
+	PreDeployCommand string
+
+	// CronSchedule, RestartPolicy, RestartMaxRetries and
+	// HealthTimeoutSeconds are how the release runs, and so are history too:
+	// a rollback runs on the schedule it had, with its restarts and its
+	// patience.
+	CronSchedule         string
+	RestartPolicy        orchestrator.RestartPolicy
+	RestartMaxRetries    int32
+	HealthTimeoutSeconds int32
 
 	Env        map[string]string
 	SecretKeys []string
@@ -139,6 +156,11 @@ func (r Release) AppSpec(overlays ReleaseOverlays) orchestrator.AppSpec {
 		Waker:                  waker,
 		Pool:                   overlays.Pool,
 		Region:                 overlays.Region,
+		StartCommand:           r.StartCommand,
+		Schedule:               r.CronSchedule,
+		RestartPolicy:          r.RestartPolicy,
+		MaxRestarts:            r.RestartMaxRetries,
+		HealthTimeoutSeconds:   r.HealthTimeoutSeconds,
 	}
 }
 
@@ -228,6 +250,11 @@ func (s *Service) recordRelease(
 		ScratchPaths:           append([]string{}, runtime.ScratchPaths...),
 		WritableRootFilesystem: false,
 		HealthPath:             a.HealthPath, HealthLiveness: a.Liveness,
+		StartCommand: a.StartCommand, PreDeployCommand: a.PreDeployCommand,
+		CronSchedule:         a.CronSchedule,
+		RestartPolicy:        string(cmp.Or(a.RestartPolicy, orchestrator.RestartOnFailure)),
+		RestartMaxRetries:    a.RestartMaxRetries,
+		HealthTimeoutSeconds: a.HealthTimeoutSeconds,
 		Env: env, SecretKeys: append([]string{}, secretKeys...),
 		ConfigVersion: a.ConfigVersion, Origin: origin,
 	})
@@ -310,6 +337,11 @@ func toRelease(row dbgen.AppRelease) Release {
 		ScratchPaths:           append([]string(nil), row.ScratchPaths...),
 		WritableRootFilesystem: row.WritableRootFilesystem,
 		HealthPath:             row.HealthPath, Liveness: row.HealthLiveness,
+		StartCommand: row.StartCommand, PreDeployCommand: row.PreDeployCommand,
+		CronSchedule:         row.CronSchedule,
+		RestartPolicy:        orchestrator.RestartPolicy(row.RestartPolicy),
+		RestartMaxRetries:    row.RestartMaxRetries,
+		HealthTimeoutSeconds: row.HealthTimeoutSeconds,
 		Env: env, SecretKeys: append([]string(nil), row.SecretKeys...),
 		ConfigVersion: row.ConfigVersion, CreatedAt: row.CreatedAt,
 		Origin: row.Origin,

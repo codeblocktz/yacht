@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"net/url"
@@ -58,8 +59,86 @@ func phaseClass(phase string) string {
 		return "status-info"
 	case string(orchestrator.PhaseFailing):
 		return "status-err"
+	case string(orchestrator.PhaseScheduled):
+		return "status-info"
 	}
 	return "status-neutral"
+}
+
+// cronStatus is a scheduled app's status in a few words: that it runs on a
+// schedule, and when it next will — the question somebody looking at a card
+// that is never "running" has.
+func cronStatus(st orchestrator.AppStatus) string { return cronStatusAt(st, time.Now()) }
+
+func cronStatusAt(st orchestrator.AppStatus, now time.Time) string {
+	next, ok := orchestrator.NextRun(st.Schedule, now)
+	if !ok {
+		return "Cron"
+	}
+	return "Cron · next run " + untilLabel(next.Sub(now)) + afterFailure(st)
+}
+
+// afterFailure adds that the last run failed, when it did.
+func afterFailure(st orchestrator.AppStatus) string {
+	if st.Message != "" {
+		return " · " + st.Message
+	}
+	return ""
+}
+
+// untilLabel is a wait in words, rounded the way a person says it.
+func untilLabel(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "in under a minute"
+	case d < time.Hour:
+		return "in " + plural(int(d.Round(time.Minute).Minutes()), "minute")
+	case d < 48*time.Hour:
+		return "in " + plural(int(d.Round(time.Hour).Hours()), "hour")
+	}
+	return "in " + plural(int(d.Round(24*time.Hour).Hours()/24), "day")
+}
+
+// restartPolicies are the restart policy's choices, in Railway's order and
+// words.
+var restartPolicies = []struct {
+	Value orchestrator.RestartPolicy
+	Label string
+}{
+	{orchestrator.RestartOnFailure, "On failure"},
+	{orchestrator.RestartAlways, "Always"},
+	{orchestrator.RestartNever, "Never"},
+}
+
+// restartPolicyLabel is a policy in words.
+func restartPolicyLabel(p orchestrator.RestartPolicy) string {
+	for _, c := range restartPolicies {
+		if c.Value == p {
+			return c.Label
+		}
+	}
+	return string(p)
+}
+
+// restartPolicyOf is an app's policy, the default when it has none recorded.
+func restartPolicyOf(a app.App) orchestrator.RestartPolicy {
+	return cmp.Or(a.RestartPolicy, orchestrator.RestartOnFailure)
+}
+
+// watchPathsPlaceholder shows both halves of the grammar: what to watch, and
+// a ! line taking some of it back.
+const watchPathsPlaceholder = "/backend/**\n!/backend/**/*.md"
+
+// watchPathsText is watch paths as the field edits them, one per line.
+func watchPathsText(patterns []string) string { return strings.Join(patterns, "\n") }
+
+// optionalNumber shows zero — "the default" — as an empty field, so the
+// placeholder says what the default is.
+func optionalNumber(n int32) string {
+	if n == 0 {
+		return ""
+	}
+	return strconv.Itoa(int(n))
 }
 
 // podPhaseClass maps a pod to a status style, treating a Running pod whose
@@ -733,6 +812,13 @@ func failureReason(message string) string {
 		message = strings.TrimPrefix(message, prefix)
 	}
 	return message
+}
+
+// failureLines is failureReason a line at a time. Most reasons are one line;
+// a pre-deploy command's carries the end of what it printed, and a stack
+// trace run together into one paragraph is a stack trace nobody can read.
+func failureLines(message string) []string {
+	return strings.Split(failureReason(message), "\n")
 }
 
 // lastDeployFailed reports whether the most recent deployment failed.

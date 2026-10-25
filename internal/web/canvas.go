@@ -313,6 +313,8 @@ func cardStatus(a app.App) (label, class string) {
 		return "Stopped", "card-status-idle"
 	case orchestrator.PhasePending:
 		return "Deploying", "card-status-busy"
+	case orchestrator.PhaseScheduled:
+		return cronStatus(a.Status), "card-status-idle"
 	}
 	return string(a.Status.Phase), "card-status-idle"
 }

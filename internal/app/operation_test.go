@@ -1020,7 +1020,7 @@ func TestExpiredRecoveredVerificationObservesOnceWithoutRestartingTheRolloutBudg
 	s.orch = script
 	err := s.verifyRecoveredRollout(ctx, App{
 		Name: "web", Namespace: "expired-recovery",
-	}, releaseID, 1, time.Now().Add(-time.Hour))
+	}, releaseID, 1, time.Now().Add(-time.Hour), s.opts.RolloutTimeout)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expired recovery = %v, want original-budget timeout", err)
 	}

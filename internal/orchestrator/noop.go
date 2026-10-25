@@ -79,6 +79,14 @@ func (n *Noop) AppStatus(_ context.Context, ref Ref) (AppStatus, error) {
 	if !ok {
 		return AppStatus{}, ErrNotFound
 	}
+	if spec.Schedule != "" && spec.Replicas > 0 {
+		// Between runs, which is all an in-memory orchestrator ever is.
+		return AppStatus{
+			Phase: PhaseScheduled, ReleaseID: spec.ReleaseID,
+			ConfigVersion: spec.ConfigVersion, AvailableCondition: true,
+			Schedule: spec.Schedule,
+		}, nil
+	}
 	if spec.Replicas == 0 {
 		return AppStatus{
 			Phase: PhaseStopped, ReleaseID: spec.ReleaseID,
@@ -98,6 +106,20 @@ func (n *Noop) AppStatus(_ context.Context, ref Ref) (AppStatus, error) {
 }
 
 func (n *Noop) Ping(context.Context) error { return nil }
+
+// Compile-time check that Noop can run a pre-deploy command, so an app that
+// has one deploys on an install with no cluster rather than being refused.
+var _ PreDeployer = (*Noop)(nil)
+
+// PreDeploy reports success without running anything. There is no image to
+// run the command in, and an engine booted without a cluster is one somebody
+// is clicking through rather than migrating a database with.
+func (n *Noop) PreDeploy(_ context.Context, req PreDeployRequest) (PreDeployResult, error) {
+	if err := req.App.Validate(); err != nil {
+		return PreDeployResult{}, err
+	}
+	return PreDeployResult{Succeeded: true}, nil
+}
 
 // ClusterSummary reports what was applied, not a simulated cluster.
 //

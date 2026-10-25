@@ -55,6 +55,14 @@ type App struct {
 	GithubInstallationID *int64
 	GithubRepoID         *int64
 	GithubPaused         string
+	StartCommand         string
+	PreDeployCommand     string
+	CronSchedule         string
+	RestartPolicy        string
+	RestartMaxRetries    int32
+	HealthTimeoutSeconds int32
+	DockerfilePath       string
+	WatchPaths           []string
 }
 
 type AppHook struct {
@@ -102,6 +110,12 @@ type AppRelease struct {
 	ConfigVersion          int64
 	CreatedAt              time.Time
 	Origin                 string
+	StartCommand           string
+	PreDeployCommand       string
+	CronSchedule           string
+	RestartPolicy          string
+	RestartMaxRetries      int32
+	HealthTimeoutSeconds   int32
 }
 
 type AppReleaseBackfill struct {

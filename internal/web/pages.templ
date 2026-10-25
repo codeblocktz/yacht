@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 	"strconv"
 
@@ -400,6 +401,8 @@ templ appStatus(a app.App) {
 		@sleepingStatus(a)
 	} else if !a.StatusKnown {
 		@statusDot("unknown", "status-neutral")
+	} else if a.Status.Phase == orchestrator.PhaseScheduled {
+		@statusDot(cronStatus(a.Status), phaseClass(string(a.Status.Phase)))
 	} else {
 		@statusDot(string(a.Status.Phase), phaseClass(string(a.Status.Phase)))
 	}
@@ -670,7 +673,11 @@ templ AppDeploymentsBody(d AppDetailData) {
 				} else if lastDeployFailed(d.Deployments) {
 					<p>The last deploy failed. Fix this and redeploy:</p>
 					if reason := failureReason(d.Deployments[0].Message); reason != "" {
-						<p class="mono mt-2 break-words text-[12px] text-destructive">{ reason }</p>
+						<p class="mono mt-2 break-words text-[12px] text-destructive">
+							for _, line := range failureLines(reason) {
+								<span class="block">{ line }</span>
+							}
+						</p>
 					}
 				} else {
 					<p>It runs once its first deploy succeeds.</p>
@@ -1063,6 +1070,10 @@ templ appRuntimeForm(d AppDetailData) {
 				tab.
 			</p>
 		</section>
+		if a.Source == app.SourceGit {
+			@appBuildSection(a)
+		}
+		@appDeploySection(a)
 		<section id="scale" class="settings-section">
 			<div class="settings-section-head">
 				<span class="settings-section-mark">@icon("cpu")</span>
@@ -1094,6 +1105,126 @@ templ appRuntimeForm(d AppDetailData) {
 			</span>
 		</div>
 	</form>
+}
+
+// appDeploySection is how a new version starts: what runs before it takes
+// traffic, and what it runs.
+//
+// Part of the runtime form rather than a form of its own, because both are
+// part of the release and saving either rolls the app out like an image
+// change does. The pre-deploy command comes first because that is the order
+// they run in.
+templ appDeploySection(a app.App) {
+	<section id="deploy" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("rocket")</span>
+			<h2 class="settings-section-title">Deploy</h2>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="pre_deploy_command">Pre-deploy command</label>
+			<p class="field-note">
+				Runs once before each new version takes traffic, in the new image with
+				this app's variables. Database migrations go here. If it fails, the
+				deploy fails and the running version keeps running.
+			</p>
+			<input class="control mono mt-1.5" id="pre_deploy_command" name="pre_deploy_command" value={ a.PreDeployCommand } placeholder="bin/migrate" autocomplete="off" spellcheck="false"/>
+			<p class="field-note mt-1.5">
+				It runs again when a deploy is retried, so it should be safe to run twice.
+				Volumes are not attached while it runs.
+			</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="start_command">Start command</label>
+			<p class="field-note">
+				Runs instead of the image's own command. Empty starts the image the way
+				it was built.
+			</p>
+			<input class="control mono mt-1.5" id="start_command" name="start_command" value={ a.StartCommand } placeholder="bin/server start" autocomplete="off" spellcheck="false"/>
+			<p class="field-note mt-1.5">Both commands run through <code class="mono">/bin/sh -c</code>, so the image needs a shell.</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="cron_schedule">Cron schedule</label>
+			<p class="field-note">
+				Run the app on this schedule instead of keeping it running, in UTC. Each
+				run starts the app and ends when it exits, and a run still going when the
+				next is due skips that one. Nothing routes to it, so it has no hostname.
+				Empty keeps it running.
+			</p>
+			<input class="control mono mt-1.5 w-56" id="cron_schedule" name="cron_schedule" value={ a.CronSchedule } placeholder="0 3 * * *" autocomplete="off" spellcheck="false"/>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="restart_policy">Restart policy</label>
+			<p class="field-note">
+				What a crash costs. Kubernetes restarts a running app's container whatever
+				this says; what it decides is how many crashes a new version may have
+				before its deploy fails and the version before it keeps running, and when
+				a running app shows as failing.
+			</p>
+			<div class="mt-1.5 flex flex-wrap items-end gap-3">
+				@selectbox.SelectBox(selectbox.Props{Class: "w-56 shrink-0"}) {
+					@selectbox.Trigger(selectbox.TriggerProps{ID: "restart_policy", Name: "restart_policy", Class: "w-full"}) {
+						@selectbox.Value(selectbox.ValueProps{Placeholder: restartPolicyLabel(restartPolicyOf(a))})
+					}
+					@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+						for _, p := range restartPolicies {
+							@selectbox.Item(selectbox.ItemProps{Value: string(p.Value), Selected: restartPolicyOf(a) == p.Value}) {
+								{ p.Label }
+							}
+						}
+					}
+				}
+				<div>
+					<label class="field-label" for="restart_max_retries">Max restart retries</label>
+					<input class="control mt-1.5 w-32" id="restart_max_retries" type="number" name="restart_max_retries" min="0" max="100" value={ optionalNumber(a.RestartMaxRetries) } placeholder={ strconv.Itoa(orchestrator.DefaultMaxRestarts) }/>
+				</div>
+			</div>
+			<p class="field-note mt-1.5">
+				On failure gives up after the retries, three when empty. Always never
+				gives up on a crash. Never fails a deploy on its first crash. A run on a
+				schedule is retried as many times, or not at all with Never.
+			</p>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="health_timeout">Healthcheck timeout</label>
+			<p class="field-note">
+				Seconds a new version has to become ready before its deploy fails and the
+				running version stays. With a health path, ready is answering on it.
+				Empty is ten minutes.
+			</p>
+			<input class="control mt-1.5 w-32" id="health_timeout" type="number" name="health_timeout" min="0" max={ strconv.Itoa(orchestrator.MaxHealthTimeoutSeconds) } value={ optionalNumber(a.HealthTimeoutSeconds) } placeholder="600"/>
+		</div>
+	</section>
+}
+
+// appBuildSection is how a Git app's next build reads its repository: which
+// Dockerfile, and which pushes are worth building at all.
+//
+// Neither rolls anything out. Like the repository above them, they decide
+// what the next build does, and the save says so.
+templ appBuildSection(a app.App) {
+	<section id="build" class="settings-section">
+		<div class="settings-section-head">
+			<span class="settings-section-mark">@icon("layers")</span>
+			<h2 class="settings-section-title">Build</h2>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="dockerfile_path">Dockerfile path</label>
+			<p class="field-note">
+				Relative to the repository's directory above. Empty builds the Dockerfile
+				there, or works out how to build the code when there is none.
+			</p>
+			<input class="control mono mt-1.5" id="dockerfile_path" name="dockerfile_path" value={ a.DockerfilePath } placeholder="Dockerfile" autocomplete="off" spellcheck="false"/>
+		</div>
+		<div class="field-group">
+			<label class="field-label" for="watch_paths">Watch paths</label>
+			<p class="field-note">
+				Gitignore-style patterns, one per line, from the repository's root. A push
+				that changes no file they match is skipped instead of deployed. Empty
+				deploys every push.
+			</p>
+			<textarea class="control mono mt-1.5" id="watch_paths" name="watch_paths" rows="3" placeholder={ watchPathsPlaceholder } spellcheck="false">{ watchPathsText(a.WatchPaths) }</textarea>
+		</div>
+	</section>
 }
 
 // ---- domains tab
@@ -1138,6 +1269,10 @@ templ appSettings(d AppDetailData) {
 			<a href="#networking">Networking</a>
 			<a href="#domains">Domains</a>
 			<a href="#volumes">Volumes</a>
+			if d.App.Source == app.SourceGit {
+				<a href="#build">Build</a>
+			}
+			<a href="#deploy">Deploy</a>
 			<a href="#scale">Scale</a>
 			<a href="#health">Health</a>
 			<a href="#replicas">Replicas</a>

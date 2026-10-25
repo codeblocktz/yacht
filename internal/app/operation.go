@@ -634,6 +634,7 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 	req := orchestrator.BuildRequest{
 		Owner: orchestrator.OwnerID(op.OwnerID), App: a.Name, Image: image,
 		RepoURL: a.Repo.URL, Ref: a.Repo.Ref(), Subdir: a.Repo.Subdir,
+		Dockerfile: a.DockerfilePath,
 		Insecure: s.images.Insecure(ctx), RegistryAuth: auth,
 		RepoToken: repoToken,
 		Log:       s.buildLogger(ctx, row.ID),
@@ -714,10 +715,33 @@ func rolloutReason(status orchestrator.AppStatus) string {
 		status.Updated, status.Desired, status.Ready, status.Available)
 }
 
+// rolloutBudget is how long a release's rollout is waited for: its
+// healthcheck timeout when it has one, and the engine's otherwise. The
+// release's rather than the app's, so a rollback is given the patience the
+// release it restores was deployed with.
+func (s *Service) rolloutBudget(release Release) time.Duration {
+	if release.HealthTimeoutSeconds > 0 {
+		return time.Duration(release.HealthTimeoutSeconds) * time.Second
+	}
+	return s.opts.RolloutTimeout
+}
+
+// rolloutTimedOut is a rollout that ran out of budget, saying which budget
+// when it was the app's own: "not ready within 30s" points at the setting
+// somebody chose, where "timed out" leaves them to remember it.
+func (s *Service) rolloutTimedOut(budget time.Duration, reason string) error {
+	if budget != s.opts.RolloutTimeout {
+		return fmt.Errorf("app: rollout verification timed out: not ready within the healthcheck timeout of %s: %s",
+			budget, reason)
+	}
+	return fmt.Errorf("app: rollout verification timed out: %s", reason)
+}
+
 func (s *Service) verifyRollout(
 	ctx context.Context, a App, releaseID uuid.UUID, configVersion int64, started time.Time,
+	budget time.Duration,
 ) error {
-	remaining := time.Until(started.Add(s.opts.RolloutTimeout))
+	remaining := time.Until(started.Add(budget))
 	if remaining <= 0 {
 		remaining = time.Nanosecond
 	}
@@ -745,7 +769,7 @@ func (s *Service) verifyRollout(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("app: rollout verification timed out: %s", rolloutReason(last))
+			return s.rolloutTimedOut(budget, rolloutReason(last))
 		case <-ticker.C:
 		}
 	}
@@ -753,9 +777,10 @@ func (s *Service) verifyRollout(
 
 func (s *Service) verifyRecoveredRollout(
 	ctx context.Context, a App, releaseID uuid.UUID, configVersion int64, started time.Time,
+	budget time.Duration,
 ) error {
-	if time.Now().Before(started.Add(s.opts.RolloutTimeout)) {
-		return s.verifyRollout(ctx, a, releaseID, configVersion, started)
+	if time.Now().Before(started.Add(budget)) {
+		return s.verifyRollout(ctx, a, releaseID, configVersion, started, budget)
 	}
 
 	observe, cancel := context.WithTimeout(ctx, recoveredRolloutObservationTimeout)
@@ -776,7 +801,7 @@ func (s *Service) verifyRecoveredRollout(
 	if status.Terminal {
 		return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
 	}
-	return fmt.Errorf("app: rollout verification timed out: %s", rolloutReason(status))
+	return s.rolloutTimedOut(budget, rolloutReason(status))
 }
 
 func (s *Service) executeOperation(ctx context.Context, op Operation) error {
@@ -804,18 +829,23 @@ func (s *Service) applyAndVerifyOperation(
 	ctx context.Context, op Operation, a App, stageErr error,
 ) error {
 	err := stageErr
+	// Every operation that reaches here is about to change the release the
+	// app runs — a build, a redeploy, a rollback, a settings rollout — and so
+	// every one runs the release's pre-deploy command first. A failure ends
+	// the operation here, before anything is applied. Every error fails the
+	// deploy, as an apply error does in this path; it is recovery, which
+	// observes the cluster rather than acting on it, that tells a command's
+	// failure from a cluster that could not be asked.
+	if err == nil {
+		err = s.preDeployOperation(ctx, op)
+	}
 	var release Release
 	if err == nil {
 		err = s.withAppConvergenceLock(ctx, op.AppID, func() error {
-			current, readErr := s.q.GetDeploymentOperation(ctx,
-				dbgen.GetDeploymentOperationParams{OwnerID: op.OwnerID, ID: op.ID})
-			if readErr != nil {
-				return readErr
+			if claimErr := s.checkOperationClaim(ctx, op); claimErr != nil {
+				return claimErr
 			}
-			if op.ClaimToken == nil || !current.ClaimToken.Valid ||
-				uuid.UUID(current.ClaimToken.Bytes) != *op.ClaimToken || current.Status != op.Status {
-				return ErrOperationClaimLost
-			}
+			var readErr error
 			a, readErr = s.operationApp(ctx, op)
 			if readErr != nil {
 				return readErr
@@ -831,7 +861,7 @@ func (s *Service) applyAndVerifyOperation(
 		err = s.transitionOperation(ctx, &op, OperationVerifying)
 	}
 	if err == nil {
-		err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt)
+		err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt, s.rolloutBudget(release))
 	}
 	if errors.Is(err, ErrClusterObservation) {
 		// An API outage says nothing about the rollout. Preserve the verifying
@@ -893,18 +923,34 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 		return ErrOperationRecoveryPending
 	}
 
+	// An applying stage may have stopped before its pre-deploy command
+	// finished, or before it started; see recoverPreDeploy. A verifying one
+	// applied, so its command had already succeeded.
+	if op.Status == OperationApplying {
+		if err := s.recoverPreDeploy(ctx, op); err != nil {
+			// Only the command's own answer ends the deploy. Anything else
+			// is left as the stage's other failures are: given back, or left
+			// for the lease to expire, and looked at again.
+			var failed *PreDeployFailure
+			switch {
+			case errors.As(err, &failed), errors.Is(err, ErrNoPreDeployer):
+				return s.completeOperation(ctx, op, err)
+			case errors.Is(err, ErrClusterObservation):
+				if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
+					return releaseErr
+				}
+			}
+			return err
+		}
+	}
+
 	var a App
 	var release Release
 	err := s.withAppConvergenceLock(ctx, op.AppID, func() error {
-		current, readErr := s.q.GetDeploymentOperation(ctx,
-			dbgen.GetDeploymentOperationParams{OwnerID: op.OwnerID, ID: op.ID})
-		if readErr != nil {
-			return readErr
+		if claimErr := s.checkOperationClaim(ctx, op); claimErr != nil {
+			return claimErr
 		}
-		if !current.ClaimToken.Valid || uuid.UUID(current.ClaimToken.Bytes) != *op.ClaimToken ||
-			current.Status != op.Status {
-			return ErrOperationClaimLost
-		}
+		var readErr error
 		a, readErr = s.operationApp(ctx, op)
 		if readErr != nil {
 			return readErr
@@ -936,7 +982,8 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 		}
 		return err
 	}
-	err = s.verifyRecoveredRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt)
+	err = s.verifyRecoveredRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt,
+		s.rolloutBudget(release))
 	if errors.Is(err, ErrClusterObservation) {
 		if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
 			return releaseErr

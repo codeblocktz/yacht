@@ -149,6 +149,51 @@ type pushPayload struct {
 	Ref     string `json:"ref"`
 	After   string `json:"after"`
 	Deleted bool   `json:"deleted"`
+
+	// What the push changed, for an app with watch paths. Every host sends
+	// commits with the files each added, removed and modified; GitLab and
+	// Gitea also say how many commits there were in all, since they send at
+	// most twenty.
+	Commits []struct {
+		Added    []string `json:"added"`
+		Removed  []string `json:"removed"`
+		Modified []string `json:"modified"`
+	} `json:"commits"`
+	TotalCommitsCount *int `json:"total_commits_count"`
+	TotalCommits      *int `json:"total_commits"`
+	Forced            bool `json:"forced"`
+	Created           bool `json:"created"`
+}
+
+// githubCommitCap is the most commits GitHub lists in one push event.
+const githubCommitCap = 2048
+
+// changedFiles is every file the push touched, and whether that is all of
+// them.
+//
+// Not all of them is reported rather than guessed past: a host that listed
+// twenty commits of forty, a push that created the branch or rewrote it —
+// where the commits listed are not what changed since the last deploy — or
+// one that lists none at all. Those deploy whatever the watch paths say,
+// because a deploy nobody needed costs a build, and one skipped that was
+// needed costs a version nobody shipped.
+func (p pushPayload) changedFiles() ([]string, bool) {
+	n := len(p.Commits)
+	switch {
+	case n == 0, n >= githubCommitCap, p.Forced, p.Created:
+		return nil, false
+	case p.TotalCommitsCount != nil && *p.TotalCommitsCount != n:
+		return nil, false
+	case p.TotalCommits != nil && *p.TotalCommits != n:
+		return nil, false
+	}
+	var files []string
+	for _, c := range p.Commits {
+		files = append(files, c.Added...)
+		files = append(files, c.Removed...)
+		files = append(files, c.Modified...)
+	}
+	return files, true
 }
 
 // DeliverPush acts on one delivery and returns what it did, in a sentence the
@@ -231,6 +276,13 @@ func (s *Service) actOnPush(ctx context.Context, a App, p Push) (string, error) 
 	}
 
 	revision := shortRevision(payload.After)
+	// Before admission, and before a push is held behind a deploy in
+	// flight: a push that changed nothing watched is not one to wait for.
+	if len(a.WatchPaths) > 0 {
+		if files, complete := payload.changedFiles(); complete && !watchedChange(a.WatchPaths, files) {
+			return s.skipPush(ctx, a, revision)
+		}
+	}
 	err := s.admitPush(ctx, a, revision)
 	if errors.Is(err, ErrOperationInFlight) {
 		// Built when the deploy in flight ends, rather than dropped: that build
@@ -247,6 +299,23 @@ func (s *Service) actOnPush(ctx context.Context, a App, p Push) (string, error) 
 	}
 	s.log.Info("push admitted", slog.String("app", a.Name), slog.String("revision", revision))
 	return fmt.Sprintf("Deploying %s.", revision), nil
+}
+
+// skippedPushMessage is what a skipped push's deployment says.
+const skippedPushMessage = "No changed file matches the watch paths."
+
+// skipPush records a push that changed none of the app's watch paths: a
+// deployment that is skipped from the start, in the history where the deploy
+// would have been, as Railway shows one.
+func (s *Service) skipPush(ctx context.Context, a App, revision string) (string, error) {
+	if _, err := s.q.CreateSkippedDeployment(ctx, dbgen.CreateSkippedDeploymentParams{
+		OwnerID: a.OwnerID, AppID: a.ID, Image: a.Image,
+		Revision: PushTriggerPrefix + revision, Message: skippedPushMessage,
+	}); err != nil {
+		return "", fmt.Errorf("app: record a skipped push: %w", err)
+	}
+	s.log.Info("push skipped", slog.String("app", a.Name), slog.String("revision", revision))
+	return fmt.Sprintf("Skipped %s — no changed file matches the watch paths.", revision), nil
 }
 
 // admitPush admits a build of the app's branch, as a person's redeploy would.

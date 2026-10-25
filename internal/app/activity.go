@@ -116,6 +116,8 @@ func (s *Service) DeployActivity(ctx context.Context, ownerID string, days int) 
 		case "cancelled":
 			day.Cancelled += n
 			out.Cancelled += n
+		case DeploySkipped:
+			// Not a deploy at all, and charting one as anything would be.
 		default:
 			// running and pending both mean "not finished yet".
 			day.Running += n

@@ -28,7 +28,8 @@ func TestEveryAppSpecFieldHasOneReleaseOwner(t *testing.T) {
 		"MemoryRequest": true, "MemoryLimit": true,
 		"WritableRootFilesystem": true, "Internal": true,
 		"RunAsUser": true, "FSGroup": true, "ScratchPaths": true,
-		"HealthPath": true, "Liveness": true,
+		"HealthPath": true, "Liveness": true, "StartCommand": true,
+		"Schedule": true, "RestartPolicy": true, "MaxRestarts": true, "HealthTimeoutSeconds": true,
 	}
 	overlayOwned := map[string]bool{
 		"Ref": true, "ReleaseID": true, "ConfigVersion": true,
@@ -69,6 +70,9 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		WritableRootFilesystem: true, Internal: true,
 		RunAsUser: 1001, FSGroup: 1002, ScratchPaths: []string{"/tmp/run"},
 		HealthPath: "/ready", Liveness: true,
+		StartCommand: "bin/web start", PreDeployCommand: "bin/migrate",
+		CronSchedule: "0 3 * * *", RestartPolicy: orchestrator.RestartNever,
+		RestartMaxRetries: 5, HealthTimeoutSeconds: 120,
 	}
 	overlays := ReleaseOverlays{
 		Ref: ref, ConfigVersion: 7, RegistryAuth: []byte("auth"),
@@ -87,7 +91,9 @@ func TestAReleaseReconstructsTheWholeAppSpec(t *testing.T) {
 		MemoryRequest: "128Mi", MemoryLimit: "512Mi",
 		WritableRootFilesystem: true, Internal: true,
 		RunAsUser: 1001, FSGroup: 1002, ScratchPaths: []string{"/tmp/run"},
-		HealthPath: "/ready", Liveness: true,
+		HealthPath: "/ready", Liveness: true, StartCommand: "bin/web start",
+		Schedule: "0 3 * * *", RestartPolicy: orchestrator.RestartNever,
+		MaxRestarts: 5, HealthTimeoutSeconds: 120,
 		RegistryAuth: []byte("auth"), Secrets: map[string]string{"SECRET": "current"},
 		Volumes:     []orchestrator.VolumeSpec{{Name: "data", MountPath: "/data", SizeBytes: 42}},
 		Hosts:       []string{"web.example.test", "shop.customer.test"},
