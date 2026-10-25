@@ -305,6 +305,22 @@ type Config struct {
 	// default. An install that pulls from a mirror names its copy here.
 	BackupToolImage string
 
+	// LogsURL is a VictoriaLogs the cluster's container output is collected
+	// into, and MetricsURL a VictoriaMetrics scraping the kubelets and the
+	// ingress controller. Each is optional: without the first, a project's
+	// Logs page reads the live pods, as an app's always has, and history ends
+	// with the pod; without the second, Observability shows what
+	// metrics-server says now, and no requests, latency or history. Neither
+	// is ever exposed: the engine reads them and scopes every query to the
+	// signed-in team's own apps (package observe).
+	LogsURL    string
+	MetricsURL string
+
+	// LogsRetention is how long the log store keeps lines, as it was told
+	// to: the engine cannot ask it. Only offered as the longest range the Logs
+	// page lets somebody pick, and said beside it.
+	LogsRetention time.Duration
+
 	// Debug enables verbose logging.
 	Debug bool
 }
@@ -368,6 +384,9 @@ func Load() (Config, error) {
 		BackupS3AccessKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_ACCESS_KEY", "")),
 		BackupS3SecretKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_SECRET_KEY", "")),
 		BackupToolImage:          strings.TrimSpace(env("YACHT_BACKUP_TOOL_IMAGE", "")),
+		LogsURL:                  strings.TrimSpace(env("YACHT_LOGS_URL", "")),
+		MetricsURL:               strings.TrimSpace(env("YACHT_METRICS_URL", "")),
+		LogsRetention:            envDuration("YACHT_LOGS_RETENTION", 7*24*time.Hour),
 	}
 
 	if err := c.validate(); err != nil {
@@ -458,6 +477,7 @@ func (c Config) validate() error {
 	if _, err := c.BackupStore(); err != nil {
 		errs = append(errs, err)
 	}
+	errs = append(errs, c.observeFaults()...)
 
 	return errors.Join(errs...)
 }
@@ -839,11 +859,11 @@ func (c Config) String() string {
 	}
 	return fmt.Sprintf(
 		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
-			"accounts=%t mail=%s waker=%s isolation=%s github_app=%s debug=%t",
+			"accounts=%t mail=%s waker=%s isolation=%s github_app=%s logs=%s metrics=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
 		c.KubeInCluster, token, c.OwnerID,
 		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation,
-		orOff(c.GitHubAppSlug), c.Debug,
+		orOff(c.GitHubAppSlug), orOff(c.LogsURL), orOff(c.MetricsURL), c.Debug,
 	)
 }
 

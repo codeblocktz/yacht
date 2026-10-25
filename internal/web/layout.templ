@@ -61,6 +61,7 @@ templ Layout(s Slots, page templ.Component) {
 				<script src={ asset("/assets/js/joint.min.js") } defer></script>
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>
+				<script src={ asset("/assets/js/observe.js") } defer></script>
 			}
 			// Loaded everywhere rather than behind a flag: it does nothing on a
 			// page with no [data-log-stream], and gating it would mean every
@@ -1189,6 +1190,20 @@ templ icon(name string) {
 			case "arrow-right":
 				<path d="M5 12h14"></path>
 				<path d="m12 5 7 7-7 7"></path>
+			case "logs":
+				<path d="M13 12h8"></path>
+				<path d="M13 18h8"></path>
+				<path d="M13 6h8"></path>
+				<path d="M3 12h1"></path>
+				<path d="M3 18h1"></path>
+				<path d="M3 6h1"></path>
+				<path d="M8 12h1"></path>
+				<path d="M8 18h1"></path>
+				<path d="M8 6h1"></path>
+			case "download":
+				<path d="M12 15V3"></path>
+				<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+				<path d="m7 10 5 5 5-5"></path>
 			case "network":
 				<rect x="16" y="16" width="6" height="6" rx="1"></rect>
 				<rect x="2" y="16" width="6" height="6" rx="1"></rect>

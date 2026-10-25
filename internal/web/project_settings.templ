@@ -30,6 +30,9 @@ type ProjectSettingsData struct {
 	CopiedEnv      string
 	// PROn says the service makes environments for pull requests.
 	PROn bool
+	// Usage is what the project costs, where a wrapping application prices
+	// it; nil leaves the section out.
+	Usage *ProjectUsage
 }
 
 // ProjectSettings is the project's own settings, reached from the rail, as
@@ -51,6 +54,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 					}
 					if d.SharedOn {
 						<a href="#shared-variables">Shared Variables</a>
+					}
+					if d.Usage != nil {
+						<a href="#usage">Usage</a>
 					}
 					<a href="#danger">Danger</a>
 				</nav>
@@ -80,6 +86,9 @@ templ ProjectSettings(d ProjectSettingsData) {
 					}
 					if d.EnvironmentsOn {
 						@projectEnvironments(d)
+					}
+					if d.Usage != nil {
+						@projectUsageSection(d.Usage)
 					}
 					<section id="danger" class="settings-section">
 						<div class="settings-section-head">

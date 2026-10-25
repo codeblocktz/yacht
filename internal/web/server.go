@@ -310,6 +310,18 @@ type Options struct {
 	// Logs, when set, puts the log surface on the router.
 	Logs Logger
 
+	// LogHistory and MetricHistory are the install's log and metrics stores,
+	// and LogRetention how long the first keeps lines. Each optional: a
+	// project's Logs and Observability pages are there without them, reading
+	// the live pods and metrics-server instead. See observe.go.
+	LogHistory    LogHistory
+	LogRetention  time.Duration
+	MetricHistory MetricHistory
+
+	// Usage, when set, puts what a project costs on its settings: a wrapping
+	// application's meter, priced in its own money. See usage.go.
+	Usage UsageMeter
+
 	// Registries, when set, puts the image registry surface on the router.
 	// Nil leaves it off: an install with nowhere to push cannot build, and a
 	// form for a setting nothing reads is a worse answer than no form.
@@ -473,6 +485,12 @@ type Server struct {
 	// right for an install whose orchestrator has no containers to read.
 	logs Logger
 
+	// logStore, metricStore and usage are optional; see Options.
+	logStore     LogHistory
+	logRetention time.Duration
+	metricStore  MetricHistory
+	usage        UsageMeter
+
 	accounts       Accounts
 	mailer         notify.Mailer
 	baseURL        string
@@ -577,6 +595,10 @@ func New(opts Options) (*Server, error) {
 		sleep:          opts.Sleep,
 		wakerBrand:     cmp.Or(opts.WakerBrand, DefaultBrandName),
 		logs:           opts.Logs,
+		logStore:       opts.LogHistory,
+		logRetention:   opts.LogRetention,
+		metricStore:    opts.MetricHistory,
+		usage:          opts.Usage,
 		accounts:       opts.Accounts,
 		mailer:         opts.Mailer,
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
@@ -767,6 +789,9 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/apps/{name}/settings", s.appDetail)
 			// The Console tab and its socket; console.go says why a member's.
 			s.mountConsole(r)
+			// A project's Logs and Observability, and an app's Metrics charts:
+			// reading, like every other page here. observe.go.
+			s.mountObserve(r)
 			// Polled while a deploy or a build is in flight, and not otherwise.
 			r.Get("/apps/{name}/deployments/fragment", s.deploymentsFragment)
 			// Reads the remote with ls-remote while somebody types a branch.

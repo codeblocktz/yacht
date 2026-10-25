@@ -1618,6 +1618,94 @@
 }
 
 @layer components {
+  /* Series colours for the Observability blocks and an app's Metrics charts.
+
+     The categorical slots are the house data-viz palette in its validated
+     order, a step per theme: a service takes the slot of its place in the
+     project, so it is one colour on every block. Run through the palette
+     validator for both surfaces; the three light slots under 3:1 are why every
+     multi-series block carries a legend and a headline value. Percentiles are
+     one blue from light to dark, p50 to p99, because they are ordered. */
+  :root {
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
+    --series-5: #e87ba4; --series-6: #008300; --series-7: #6250d6; --series-8: #e34948;
+    --chart-seq-1: #86b6ef; --chart-seq-2: #3987e5; --chart-seq-3: #1c5cab; --chart-seq-4: #0d366b;
+    --chart-info: color-mix(in oklab, var(--info) 70%, transparent);
+    --chart-lines: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  }
+  .dark {
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #008300; --series-7: #9085e9; --series-8: #e66767;
+    --chart-seq-1: #184f95; --chart-seq-2: #2a78d6; --chart-seq-3: #5598e7; --chart-seq-4: #9ec5f4;
+  }
+
+  /* A page of blocks: two to a row where there is room, one on a phone. */
+  .obs-grid {
+    @apply grid gap-4;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  }
+  .obs-chart {
+    @apply h-[150px] w-full px-3 pb-2 pt-3;
+  }
+  .obs-chart text {
+    @apply fill-muted-foreground text-[10.5px];
+  }
+  .obs-headline {
+    @apply text-[13px] font-medium tabular-nums text-foreground;
+  }
+  .obs-empty {
+    @apply flex h-[150px] items-center justify-center px-6 text-center text-[12.5px] text-muted-foreground;
+  }
+  /* The range picker: a row of choices, the chosen one a lighter surface
+     rather than a fill — selected is neutral. */
+  .obs-ranges {
+    @apply inline-flex items-center gap-px rounded-lg border border-border bg-muted/50 p-0.5;
+  }
+  .obs-range {
+    @apply rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground transition-colors
+           hover:text-foreground;
+  }
+  .obs-range-active {
+    @apply bg-background text-foreground shadow-sm;
+  }
+
+  /* The log explorer's table: time, service, data. Dense like a log, and a
+     table so the three columns line up however long a service's name is. */
+  .logx {
+    @apply max-h-[calc(100vh-330px)] min-h-[240px] overflow-auto font-mono text-[11.5px] leading-[1.5];
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
+  }
+  .logx table { @apply w-full border-collapse; }
+  .logx thead th {
+    @apply sticky top-0 z-[1] border-b border-border bg-card px-3 py-2 text-left font-sans text-xs
+           font-medium text-muted-foreground;
+  }
+  .logx td { @apply px-3 py-[3px] align-top; }
+  .logx tbody tr:hover { @apply bg-foreground/[0.035]; }
+  .logx .logx-time { @apply w-[1%] whitespace-nowrap tabular-nums text-muted-foreground/80; }
+  .logx .logx-svc { @apply w-[1%] whitespace-nowrap; }
+  .logx .logx-msg { @apply whitespace-pre-wrap break-all; }
+  /* An error is a tint on the row and its text in the error colour: at this
+     density a coloured word alone does not carry across a wide table. */
+  .logx tr.logx-err { @apply bg-destructive/[0.06]; }
+  .logx tr.logx-err .logx-msg { @apply text-destructive; }
+  .logx-dot {
+    @apply mr-1.5 inline-block size-2 rounded-full align-middle;
+  }
+  .logx-filter {
+    @apply relative min-w-[260px] flex-1;
+  }
+  .logx-filter .control { @apply pl-8 pr-9; }
+  .logx-filter > svg { @apply pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2; }
+  .logx-filter .kbd { @apply absolute right-2 top-1/2 -translate-y-1/2; }
+  .live-dot {
+    @apply inline-block size-2 rounded-full bg-muted-foreground/50;
+  }
+  .live-on .live-dot { @apply bg-success animate-pulse; }
+}
+
+@layer components {
   /* The events table.
      
      Tighter than .dtable's default, because this list is read the way a log is

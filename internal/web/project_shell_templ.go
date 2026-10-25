@@ -151,6 +151,14 @@ func projectShell(s Slots, page templ.Component) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
+		templ_7745c5c3_Err = projectRailLink(bar, SectionObservability, "Observability", "activity").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = projectRailLink(bar, SectionLogs, "Logs", "logs").Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
 		templ_7745c5c3_Err = projectRailLink(bar, SectionSettings, "Settings", "settings").Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -237,7 +245,7 @@ func projectRailLink(bar ProjectBar, section, label, iconName string) templ.Comp
 		var templ_7745c5c3_Var7 templ.SafeURL
 		templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(projectHref(bar, section)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 71, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 73, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 		if templ_7745c5c3_Err != nil {
@@ -250,7 +258,7 @@ func projectRailLink(bar ProjectBar, section, label, iconName string) templ.Comp
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 72, Col: 20}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 74, Col: 20}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -281,7 +289,7 @@ func projectRailLink(bar ProjectBar, section, label, iconName string) templ.Comp
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 78, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 80, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
@@ -348,7 +356,7 @@ func projectSwitcher(bar ProjectBar) templ.Component {
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.ResolveAttributeValue("Project: " + bar.Name + ". Switch project")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 86, Col: 108}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 88, Col: 108}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var13)
 				if templ_7745c5c3_Err != nil {
@@ -361,7 +369,7 @@ func projectSwitcher(bar ProjectBar) templ.Component {
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(bar.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 87, Col: 49}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 89, Col: 49}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -431,7 +439,7 @@ func projectSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var18 templ.SafeURL
 					templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(p.Href))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 95, Col: 102}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 97, Col: 102}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 					if templ_7745c5c3_Err != nil {
@@ -452,7 +460,7 @@ func projectSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var19 string
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(p.Name)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 97, Col: 52}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 99, Col: 52}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
@@ -465,7 +473,7 @@ func projectSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var20 string
 					templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(p.Apps))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 98, Col: 89}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 100, Col: 89}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 					if templ_7745c5c3_Err != nil {
@@ -543,7 +551,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(bar.Environment)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 121, Col: 20}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 123, Col: 20}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 			if templ_7745c5c3_Err != nil {
@@ -585,7 +593,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var25 string
 					templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue("Environment: " + bar.Environment + ". Switch environment")
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 126, Col: 124}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 128, Col: 124}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 					if templ_7745c5c3_Err != nil {
@@ -620,7 +628,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var28 string
 					templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(bar.Environment)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 128, Col: 45}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 130, Col: 45}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 					if templ_7745c5c3_Err != nil {
@@ -690,7 +698,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 						var templ_7745c5c3_Var32 templ.SafeURL
 						templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(e.Href))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 136, Col: 103}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 138, Col: 103}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 						if templ_7745c5c3_Err != nil {
@@ -725,7 +733,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 						var templ_7745c5c3_Var35 string
 						templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(e.Name)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 138, Col: 53}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 140, Col: 53}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 						if templ_7745c5c3_Err != nil {
@@ -738,7 +746,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 						var templ_7745c5c3_Var36 string
 						templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(e.Apps))
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 139, Col: 90}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 141, Col: 90}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 						if templ_7745c5c3_Err != nil {
@@ -756,7 +764,7 @@ func envSwitcher(bar ProjectBar) templ.Component {
 					var templ_7745c5c3_Var37 templ.SafeURL
 					templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/projects/" + bar.Slug + "/settings#environments"))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 143, Col: 98}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/project_shell.templ`, Line: 145, Col: 98}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 					if templ_7745c5c3_Err != nil {

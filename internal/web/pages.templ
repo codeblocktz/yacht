@@ -894,7 +894,9 @@ templ appMetrics(d AppDetailData) {
 				runs unbounded.
 			</p>
 		</div>
-	</div>
+	</div>	// Requests, errors, latency, CPU and memory over time, from the metrics
+	// store where there is one; observe.templ.
+	@appMetricsLoader(d.App.Name)
 }
 
 // appRuntimeForm is everything about an app that had no way to be changed.
