@@ -1,8 +1,7 @@
 -- Variables that wait for a deploy, and variables a whole project shares.
 --
--- Numbered 39 rather than 38 so it does not collide with the deploy commands
--- migration being written alongside it; goose orders by number, and the two
--- touch nothing in common.
+-- Numbered 40 because 38 and 39 belong to work merged before this; goose
+-- refuses a lower number arriving after a higher one has run.
 
 -- +goose Up
 -- +goose StatementBegin
