@@ -1100,6 +1100,47 @@
   }
 }
 
+  /* ------------------------------------------------------- project chrome
+     A project is drawn the way Railway draws one: a bar naming the project
+     and its environment, a rail of its sections, and the page filling the
+     rest. The dashboard's sidebar is not part of it. */
+  .project-shell { @apply flex h-full flex-col bg-canvas; }
+  .project-bar {
+    @apply flex h-12 shrink-0 items-center gap-2.5 border-b border-border bg-sidebar px-3 text-[13px];
+  }
+  .project-bar-brand {
+    @apply grid size-8 place-items-center rounded-md text-foreground transition-colors hover:bg-accent;
+  }
+  .project-bar-rule { @apply h-5 w-px bg-border; }
+  .project-bar-switch {
+    @apply inline-flex max-w-[260px] items-center gap-1.5 rounded-md px-2 py-1 text-foreground
+           transition-colors hover:bg-accent;
+  }
+  .project-bar-switch svg { @apply size-3.5; }
+  .project-bar-env {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-muted-foreground;
+  }
+  .project-body { @apply flex min-h-0 flex-1; }
+  .project-rail {
+    @apply flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-2;
+  }
+  .project-rail-link {
+    @apply relative grid size-9 place-items-center rounded-md text-muted-foreground transition-colors
+           hover:bg-accent hover:text-foreground;
+  }
+  .project-rail-link-active { @apply bg-accent text-foreground; }
+  /* The rail's names, shown beside it on hover, the way the collapsed
+     sidebar shows them. */
+  .project-rail-link .nav-tip {
+    @apply pointer-events-none absolute left-full top-1/2 z-50 ml-2 hidden -translate-y-1/2
+           whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[12px]
+           text-popover-foreground shadow-sm;
+  }
+  .project-rail-link:hover .nav-tip,
+  .project-rail-link:focus-visible .nav-tip { @apply block; }
+  .project-main { @apply flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden; }
+  .switcher-item-active { @apply bg-accent text-foreground; }
+
   /* ---------------------------------------------------------------- canvas */
 
   /* The graph is laid out on the server, so the cards are absolutely
@@ -1204,12 +1245,26 @@
 
   /* Attached beneath the card, sharing its edge, so the volume reads as part
      of the service rather than as a second thing that happens to be nearby. */
+  /* With a volume under it, the card and the volume are one object: the
+     card gives up its bottom corners and its bottom edge becomes the line
+     between them, the way Railway draws a database with its volume. */
+  .canvas-node[data-has-volume="true"] .canvas-card { @apply rounded-b-none; }
+  /* Hovered as one object too: a border that lit up on the card and not on
+     its volume drew the seam back in. */
+  .canvas-node:hover .canvas-card,
+  .canvas-node:hover .canvas-volume { @apply border-foreground/25; }
   .canvas-volume {
     @apply flex items-center gap-2.5 rounded-b-md border border-t-0 border-border
            bg-muted/40 px-3.5 text-[12px] text-muted-foreground
            transition-colors hover:text-foreground;
     height: var(--canvas-volume-h);
   }
+
+  /* Railway's Add, floating top-right on the surface: the canvas is the
+     page, and a bar across it to hold one button pushed it down for nothing. */
+  .canvas-add { @apply absolute right-4 top-4 z-30; }
+  .canvas-add-btn { @apply gap-1.5 bg-card shadow-sm; }
+  .canvas-add-btn svg { @apply size-3.5; }
 
   /* ---- drawn by JointJS (canvas.js). The server's cards are moved into the
      drawing, each in a foreignObject, so they keep every style above. */

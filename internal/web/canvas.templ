@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/web/ui/popover"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 )
 
@@ -14,19 +15,6 @@ import (
 // all. canvas.js then hands the same cards to JointJS (vendored, no build
 // step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
-	// A bar rather than a page heading: the graph is the page, and a heading
-	// with a paragraph under it would push the thing somebody came to look at
-	// below the fold.
-	<div class="canvas-bar">
-		<a class="canvas-bar-back" href="/projects" aria-label="All projects">
-			@icon("layers")
-		</a>
-		<span class="min-w-0 truncate font-medium">{ d.Project.Name }</span>
-		<span class="min-w-0 flex-1 truncate text-muted-foreground">
-			How these apps relate to each other.
-		</span>
-		@deployButton(d.Project.Slug)
-	</div>
 	if d.Empty {
 		<div class="canvas-empty">
 			@emptyApps(d.Project.Slug)
@@ -120,6 +108,7 @@ templ Canvas(d CanvasData) {
 					</div>
 				}
 			</div>
+			@canvasAdd(d.Project.Slug)
 			// Floating on the surface rather than in the bar, because they act on
 			// the view rather than on the project — and because an infinite canvas
 			// has no edge to hang them off. Hidden until the script runs: buttons
@@ -297,4 +286,45 @@ templ projectRow(p app.Project) {
 		</span>
 		<span class="tabular-nums text-muted-foreground">{ plural(int(p.Apps), "app") }</span>
 	</a>
+}
+
+// canvasAdd is Railway's Add: one button on the canvas, and everything a
+// project can be given behind it. Each entry is the flow that already
+// exists for it, into this project.
+templ canvasAdd(project string) {
+	<div class="canvas-add">
+		@popover.Root() {
+			@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+				<button type="button" class="btn btn-sm canvas-add-btn">
+					@icon("plus")
+					Add
+				</button>
+			}
+			@popover.Content(popover.ContentProps{Placement: popover.PlacementBottomEnd, Exclusive: true}) {
+				<div class="flex min-w-[230px] flex-col gap-px p-1">
+					<div class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Create</div>
+					<a class="switcher-item" href={ templ.URL(githubDeployHref(project)) }>
+						@icon("github")
+						<span class="flex-1">GitHub Repository</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourcePostgres, project)) }>
+						@icon("storage")
+						<span class="flex-1">Database</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL("/templates" + projectQuery("?", project)) }>
+						@icon("layers")
+						<span class="flex-1">Template</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourceImage, project)) }>
+						@icon("package")
+						<span class="flex-1">Docker Image</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourceGit, project)) }>
+						@icon("box")
+						<span class="flex-1">Git Repository</span>
+					</a>
+				</div>
+			}
+		}
+	</div>
 }

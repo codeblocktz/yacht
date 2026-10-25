@@ -1,0 +1,116 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/web/ui/popover"
+)
+
+// projectShell is a project's chrome, drawn the way Railway draws one: a bar
+// across the top naming the project and its environment, a rail of the
+// project's own sections down the left, and the page — a canvas, or the
+// project's settings — filling the rest.
+//
+// The dashboard's sidebar is not drawn here. Inside a project, its links
+// are a way out of the project rather than a way around it; the brand mark
+// is that way out, as it is on Railway.
+templ projectShell(s Slots, page templ.Component) {
+	{{ bar := *s.Project }}
+	<a class="skip-link" href="#main-content">Skip to content</a>
+	<div class="project-shell" data-app-shell>
+		<header class="project-bar">
+			<a href={ templ.URL(s.BrandHref) } class="project-bar-brand" aria-label={ s.BrandName + " — all projects" }>
+				if s.BrandMark != nil {
+					@s.BrandMark
+				} else {
+					@brandMark("h-[19px] w-auto shrink-0")
+				}
+			</a>
+			<span class="project-bar-rule" aria-hidden="true"></span>
+			@projectSwitcher(bar)
+			<span class="crumb-sep" aria-hidden="true">/</span>
+			<span class="project-bar-env" title="Environments are coming: each a separate copy of every service">
+				<span class="tree-dot status-ok" aria-hidden="true"></span>
+				{ bar.Environment }
+			</span>
+			<div class="flex-1"></div>
+			if s.HeaderTools != nil {
+				<div class="flex items-center gap-2">
+					@slot(s.HeaderTools)
+				</div>
+			}
+		</header>
+		{{ banner := withActingBanner(ctx, s.Banner) }}
+		if isActingBanner(banner) {
+			@banner
+		} else if banner != nil {
+			<div class="border-b border-border px-4 py-3">
+				@slot(banner)
+			</div>
+		}
+		<div class="project-body">
+			<nav class="project-rail" aria-label="Project">
+				@projectRailLink(bar, SectionArchitecture, "Architecture", "network")
+				@projectRailLink(bar, SectionSettings, "Settings", "settings")
+				<div class="flex-1"></div>
+				<a class="project-rail-link" href="/account" aria-label="Your account">
+					@icon("user")
+					<span class="nav-tip" aria-hidden="true">Your account</span>
+				</a>
+			</nav>
+			<main id="main-content" tabindex="-1" class="project-main">
+				@page
+			</main>
+		</div>
+	</div>
+	@palette(s.SearchIndex)
+	@confirmationDialog()
+	@toastHost(s.Flash)
+}
+
+templ projectRailLink(bar ProjectBar, section, label, iconName string) {
+	<a
+		class={ "project-rail-link", templ.KV("project-rail-link-active", bar.Section == section) }
+		href={ templ.URL(projectHref(bar, section)) }
+		aria-label={ label }
+		if bar.Section == section {
+			aria-current="page"
+		}
+	>
+		@icon(iconName)
+		<span class="nav-tip" aria-hidden="true">{ label }</span>
+	</a>
+}
+
+// projectSwitcher is the project's name, and a way to every other one.
+templ projectSwitcher(bar ProjectBar) {
+	@popover.Root() {
+		@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+			<button type="button" class="project-bar-switch" aria-label={ "Project: " + bar.Name + ". Switch project" }>
+				<span class="truncate font-medium">{ bar.Name }</span>
+				@icon("chevrons-up-down")
+			</button>
+		}
+		@popover.Content(popover.ContentProps{Placement: popover.PlacementBottomStart, Exclusive: true}) {
+			<div class="flex min-w-[240px] flex-col gap-px p-1">
+				<div class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Projects</div>
+				for _, p := range bar.Projects {
+					<a class={ "switcher-item", templ.KV("switcher-item-active", p.Active) } href={ templ.URL(p.Href) }>
+						@icon("boxes")
+						<span class="min-w-0 flex-1 truncate">{ p.Name }</span>
+						<span class="text-[11px] tabular-nums text-muted-foreground">{ strconv.Itoa(p.Apps) }</span>
+					</a>
+				}
+				<div class="my-1 h-px bg-border"></div>
+				<a class="switcher-item" href="/projects?new=1">
+					@icon("plus")
+					<span class="flex-1">New project</span>
+				</a>
+				<a class="switcher-item" href="/projects">
+					@icon("layers")
+					<span class="flex-1">All projects</span>
+				</a>
+			</div>
+		}
+	}
+}

@@ -102,6 +102,8 @@ templ Layout(s Slots, page templ.Component) {
 				</main>
 				@confirmationDialog()
 				@toastHost(s.Flash)
+			} else if s.FullBleed && s.Project != nil {
+				@projectShell(s, page)
 			} else {
 				@appShell(s, page)
 			}
@@ -1186,6 +1188,12 @@ templ icon(name string) {
 			case "arrow-right":
 				<path d="M5 12h14"></path>
 				<path d="m12 5 7 7-7 7"></path>
+			case "network":
+				<rect x="16" y="16" width="6" height="6" rx="1"></rect>
+				<rect x="2" y="16" width="6" height="6" rx="1"></rect>
+				<rect x="9" y="2" width="6" height="6" rx="1"></rect>
+				<path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"></path>
+				<path d="M12 12V8"></path>
 			case "link":
 				<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
 				<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
