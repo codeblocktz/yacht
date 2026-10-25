@@ -229,7 +229,7 @@ func (s *Service) checkReleaseSecrets(ctx context.Context, a App, release Releas
 	}
 	have := map[string]bool{}
 	for _, v := range vars {
-		if v.Secret {
+		if v.Secret || v.Reference {
 			have[v.Key] = true
 		}
 	}

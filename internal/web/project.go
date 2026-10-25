@@ -213,6 +213,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachSleep(ctx, d)
 	s.attachRegion(ctx, d)
 	s.attachProjects(ctx, d)
+	s.attachReferenceTargets(ctx, d)
 	return d
 }
 

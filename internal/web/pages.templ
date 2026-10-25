@@ -411,6 +411,9 @@ type AppDetailData struct {
 	// Projects are the team's, for the settings' move; empty leaves the
 	// section out.
 	Projects    []app.Project
+	// RefTargets are the other apps a variable can refer to, for the
+	// variables tab's picker; empty leaves the picker out.
+	RefTargets  []app.ReferenceTarget
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -860,6 +863,8 @@ templ appVariables(d AppDetailData) {
 									<span class="ml-2">
 										@statusDot("secret", "status-info")
 									</span>
+								} else if v.Reference {
+									@variableReference(v)
 								} else {
 									{ v.Value }
 								}
@@ -876,6 +881,9 @@ templ appVariables(d AppDetailData) {
 			</div>
 		}
 	</div>
+	if len(d.RefTargets) > 0 {
+		@addReference(d)
+	}
 	<div class="panel">
 		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
 		<div class="panel-body">

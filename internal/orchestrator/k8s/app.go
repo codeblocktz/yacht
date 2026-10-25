@@ -28,7 +28,7 @@ import (
 // servicePort is the stable port the in-cluster Service listens on, regardless
 // of what port the container uses. Keeping it fixed means ingress and
 // service-discovery config does not change when an app changes its port.
-const servicePort int32 = 80
+const servicePort = orchestrator.PublicServicePort
 
 // deploymentProgressDeadline is also the upper bound used by the application
 // worker. Setting it on the object lets the Deployment controller supply the
@@ -705,10 +705,7 @@ func maps[K comparable, V any](m map[K]V) func(func(K) bool) {
 // ingress, and giving it the same fixed port would mean a connection string
 // naming its real port reaches a Service that is not listening there.
 func exposedPort(spec orchestrator.AppSpec) int32 {
-	if spec.Internal {
-		return spec.Port
-	}
-	return servicePort
+	return orchestrator.ServicePort(spec.Internal, spec.Port)
 }
 
 // servicePortName labels the port. "http" would be a lie on a database.

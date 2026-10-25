@@ -835,3 +835,17 @@ type HTTPLogger interface {
 	// HTTPLogsEnabled reports whether the running controller is writing one.
 	HTTPLogsEnabled(ctx context.Context) bool
 }
+
+// PublicServicePort is where a public app's Service listens, whatever port
+// the app itself does.
+const PublicServicePort int32 = 80
+
+// ServicePort is the port an app's Service listens on inside the cluster:
+// its own for an internal app, and a fixed one for a public app, so the
+// ingress in front of it does not change when the app's port does.
+func ServicePort(internal bool, port int32) int32 {
+	if internal {
+		return port
+	}
+	return PublicServicePort
+}

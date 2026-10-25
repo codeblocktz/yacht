@@ -1,46 +1,207 @@
-// An infinite canvas: panning, zooming, and dragging cards.
+// The project canvas, drawn with JointJS: cards you can move, and arrows that
+// route around them from each app to what it depends on.
 //
-// There is no scroll container. The graph is moved with a transform and the
-// canvas clips it, so panning is unbounded in every direction and there are no
-// scrollbars saying otherwise. A scroll container can only reach the edges of
-// what is already there, which makes an empty area you cannot move into look
-// like a wall.
+// The page renders and navigates without this file. The server lays the
+// cards out and draws straight edges between them, every card is a link, and
+// with the script blocked that picture is what you get. This file hands those
+// same cards to JointJS — moved into the drawing rather than drawn again, so
+// a card's status and links have one source, the template — and replaces the
+// server's edges with routed, labelled ones.
 //
-// The page renders and navigates without this file. Every card is a link and
-// every position comes from the server, so with the script blocked you get a
-// static picture you can still click through — which is the reason the layout
-// is computed in Go rather than here.
-//
-// The geometry is read off the canvas element rather than repeated. The server
-// laid the cards out with those numbers and drew the initial edges from them;
-// a second copy in this file would be correct until somebody changed one of
-// them, and then it would be wrong in a way nothing tests.
+// The view (where you have panned to, and how far you are zoomed) is this
+// person's and stays in the browser. Where a card sits is the team's, and is
+// sent to the server when it is dropped.
 (function () {
   "use strict";
 
   var canvas = document.querySelector("[data-canvas]");
-  if (!canvas) return;
+  if (!canvas || !window.joint) return;
 
   var inner = canvas.querySelector(".canvas-inner");
-  if (!inner) return;
+  var data = document.getElementById("canvas-graph");
+  if (!inner || !data) return;
+
+  var graphData;
+  try {
+    graphData = JSON.parse(data.textContent);
+  } catch (e) {
+    return; // The server's picture stays.
+  }
 
   var CARD_W = parseInt(canvas.dataset.cardW, 10);
-  var CARD_H = parseInt(canvas.dataset.cardH, 10);
-  var VOLUME_H = parseInt(canvas.dataset.volumeH, 10);
-  if (!CARD_W || !CARD_H) return;
+  if (!CARD_W) return;
 
   var MIN_ZOOM = 0.25;
   var MAX_ZOOM = 2;
   var GRID_SIZE = 22; // matches the dot grid in the stylesheet
   var FIT_MARGIN = 48;
+  var HTML_NS = "http://www.w3.org/1999/xhtml";
 
-  var GRAPH_W = inner.offsetWidth;
-  var GRAPH_H = inner.offsetHeight;
+  var joint = window.joint;
 
-  // The view: where the graph's origin sits on screen, and how big it is drawn.
-  // This is this person's view of the canvas rather than the team's
-  // arrangement of it, so it stays in the browser — the same reasoning that
-  // sends a dragged card to the server and keeps the zoom here.
+  // ---- shapes
+
+  // A card is a foreignObject holding the server's own card markup. The rect
+  // under it is what JointJS measures and routes around; it is drawn
+  // invisible, because the card draws itself.
+  var Card = joint.dia.Element.define(
+    "yacht.Card",
+    {
+      size: { width: CARD_W, height: 96 },
+      attrs: {
+        body: { width: "calc(w)", height: "calc(h)", fill: "transparent", stroke: "none" },
+        fo: { width: "calc(w)", height: "calc(h)" },
+      },
+    },
+    {
+      markup: [
+        { tagName: "rect", selector: "body" },
+        {
+          tagName: "foreignObject",
+          selector: "fo",
+          children: [
+            {
+              tagName: "div",
+              namespaceURI: HTML_NS,
+              selector: "html",
+              className: "canvas-card-host",
+            },
+          ],
+        },
+      ],
+    }
+  );
+
+  // A dependency: from the app that needs something to the app that has it,
+  // so the arrowhead points at what is depended on — the way it reads aloud.
+  // The wide transparent path under the line is what the pointer finds; a
+  // 1.5px line is too thin to hover.
+  var Dependency = joint.dia.Link.define(
+    "yacht.Dependency",
+    {
+      attrs: {
+        hit: { connection: true, fill: "none", stroke: "transparent", strokeWidth: 14 },
+        line: {
+          connection: true,
+          fill: "none",
+          targetMarker: { type: "path", d: "M 8 -4 0 0 8 4 z", class: "canvas-link-arrow" },
+        },
+      },
+    },
+    {
+      markup: [
+        { tagName: "path", selector: "hit", className: "canvas-link-hit" },
+        { tagName: "path", selector: "line", className: "canvas-link" },
+      ],
+      defaultLabel: {
+        markup: [
+          { tagName: "rect", selector: "labelBody", className: "canvas-link-label-bg" },
+          { tagName: "text", selector: "labelText", className: "canvas-link-label" },
+        ],
+        attrs: {
+          labelText: { textAnchor: "middle", textVerticalAnchor: "middle", fontSize: 11 },
+          labelBody: {
+            ref: "labelText",
+            x: "calc(x - 6)",
+            y: "calc(y - 3)",
+            width: "calc(w + 12)",
+            height: "calc(h + 6)",
+            rx: 4,
+          },
+        },
+        position: { distance: 0.5 },
+      },
+    }
+  );
+
+  var namespace = { yacht: { Card: Card, Dependency: Dependency }, standard: joint.shapes.standard };
+  var graph = new joint.dia.Graph({}, { cellNamespace: namespace });
+
+  var host = document.createElement("div");
+  host.className = "canvas-paper";
+  canvas.insertBefore(host, inner);
+
+  var paper = new joint.dia.Paper({
+    el: host,
+    model: graph,
+    cellViewNamespace: namespace,
+    width: "100%",
+    height: "100%",
+    gridSize: GRID_SIZE / 2,
+    async: false,
+    frozen: true,
+    background: { color: "transparent" },
+    interactive: { linkMove: false, labelMove: false, addLinkFromMagnet: false, vertexAdd: false },
+    defaultRouter: { name: "manhattan", args: { padding: 18, step: GRID_SIZE / 2, maximumLoops: 2000 } },
+    defaultConnector: { name: "rounded", args: { radius: 10 } },
+    defaultAnchor: { name: "center" },
+    defaultConnectionPoint: { name: "boundary", args: { offset: 2 } },
+    // A card can be dropped anywhere; the origin is the one limit, for the
+    // reason the server clamps it — a card dragged past the corner is an
+    // overshoot, not a place.
+    restrictTranslate: function () {
+      return { x: 0, y: 0, width: Infinity, height: Infinity };
+    },
+  });
+
+  // ---- cells
+
+  var byName = {};
+  graphData.nodes.forEach(function (n) {
+    var card = new Card({ id: "app:" + n.name, position: { x: n.x, y: n.y }, size: { width: CARD_W, height: n.h } });
+    card.set("app", n.name);
+    byName[n.name] = card;
+  });
+  graph.resetCells(
+    Object.keys(byName)
+      .map(function (k) {
+        return byName[k];
+      })
+      .concat(
+        graphData.edges
+          .filter(function (e) {
+            return byName[e.from] && byName[e.to];
+          })
+          .map(function (e) {
+            var link = new Dependency({ source: { id: byName[e.from].id }, target: { id: byName[e.to].id } });
+            var via = e.via || [];
+            if (via.length) {
+              link.labels([
+                { attrs: { labelText: { text: via.length > 2 ? via[0] + " +" + (via.length - 1) : via.join(", ") } } },
+              ]);
+              link.attr("root/title", e.from + " uses " + via.join(", ") + " from " + e.to);
+            }
+            return link;
+          })
+      )
+  );
+
+  // Rendered first — a frozen paper has no views to put the cards in — and
+  // then the server's cards go into the drawing. Every card has to make it
+  // across before the server's picture is hidden; otherwise the drawing is
+  // taken down again and the picture stays.
+  paper.unfreeze();
+  var moves = graph.getElements().map(function (card) {
+    var view = card.findView(paper);
+    return {
+      node: inner.querySelector('[data-node="' + CSS.escape(card.get("app")) + '"]'),
+      slot: view && view.findNode("html"),
+    };
+  });
+  if (!moves.every(function (m) { return m.node && m.slot; })) {
+    host.remove();
+    return;
+  }
+  moves.forEach(function (m) {
+    m.node.style.left = "";
+    m.node.style.top = "";
+    m.slot.appendChild(m.node);
+  });
+  inner.hidden = true;
+  canvas.classList.add("canvas-drawn");
+
+  // ---- the view
+
   var view = { x: 0, y: 0, zoom: 1 };
   var viewKey = "yacht.view." + (canvas.dataset.project || "");
 
@@ -49,12 +210,10 @@
   }
 
   function apply() {
-    inner.style.transformOrigin = "0 0";
-    inner.style.transform =
-      "translate(" + view.x + "px, " + view.y + "px) scale(" + view.zoom + ")";
+    paper.matrix({ a: view.zoom, b: 0, c: 0, d: view.zoom, e: view.x, f: view.y });
 
-    // The grid moves and scales with the graph. A grid that stayed put would
-    // be the one thing on screen insisting the canvas had not moved.
+    // The grid moves and scales with the drawing. A grid that stayed put
+    // would be the one thing on screen insisting the canvas had not moved.
     var step = GRID_SIZE * view.zoom;
     canvas.style.backgroundSize = step + "px " + step + "px";
     canvas.style.backgroundPosition = view.x + "px " + view.y + "px";
@@ -69,23 +228,16 @@
     }
   }
 
-  // zoomTo keeps the point under the cursor where it is.
-  //
-  // Without the anchor, zooming always pulls toward the origin, so getting
-  // closer to something on the right means zooming in and then hunting for it
-  // again.
+  // zoomTo keeps the point under the cursor where it is, so getting closer
+  // to something does not mean hunting for it again afterwards.
   function zoomTo(next, clientX, clientY) {
     next = clamp(next, MIN_ZOOM, MAX_ZOOM);
     if (next === view.zoom) return;
-
     var rect = canvas.getBoundingClientRect();
     var ax = clientX === undefined ? rect.width / 2 : clientX - rect.left;
     var ay = clientY === undefined ? rect.height / 2 : clientY - rect.top;
-
-    // The graph point currently under the anchor, which must not move.
     var gx = (ax - view.x) / view.zoom;
     var gy = (ay - view.y) / view.zoom;
-
     view.zoom = next;
     view.x = ax - gx * view.zoom;
     view.y = ay - gy * view.zoom;
@@ -94,28 +246,30 @@
 
   function fit() {
     var rect = canvas.getBoundingClientRect();
+    var box = graph.getBBox();
+    if (!box) return;
     view.zoom = clamp(
-      Math.min(
-        (rect.width - FIT_MARGIN * 2) / GRAPH_W,
-        (rect.height - FIT_MARGIN * 2) / GRAPH_H
-      ),
+      Math.min((rect.width - FIT_MARGIN * 2) / box.width, (rect.height - FIT_MARGIN * 2) / box.height, 1),
       MIN_ZOOM,
       MAX_ZOOM
     );
-    view.x = (rect.width - GRAPH_W * view.zoom) / 2;
-    view.y = (rect.height - GRAPH_H * view.zoom) / 2;
+    view.x = (rect.width - box.width * view.zoom) / 2 - box.x * view.zoom;
+    view.y = (rect.height - box.height * view.zoom) / 2 - box.y * view.zoom;
     apply();
   }
 
+  var saved = null;
   try {
-    var saved = JSON.parse(localStorage.getItem(viewKey));
-    if (saved && isFinite(saved.x) && isFinite(saved.y) && saved.zoom) {
-      view = { x: saved.x, y: saved.y, zoom: clamp(saved.zoom, MIN_ZOOM, MAX_ZOOM) };
-    }
+    saved = JSON.parse(localStorage.getItem(viewKey));
   } catch (e) {
     // Nothing stored, or it was written by an older version.
   }
-  apply();
+  if (saved && isFinite(saved.x) && isFinite(saved.y) && saved.zoom) {
+    view = { x: saved.x, y: saved.y, zoom: clamp(saved.zoom, MIN_ZOOM, MAX_ZOOM) };
+    apply();
+  } else {
+    fit();
+  }
 
   var controls = document.querySelector("[data-canvas-controls]");
   if (controls) {
@@ -140,12 +294,12 @@
     });
   }
 
-  // Ctrl or Command with the wheel zooms; the wheel alone moves the view,
-  // because there is no scrollbar left to do it. Browsers report a trackpad
-  // pinch as a ctrl-wheel, so pinching works without a second code path.
+  // Ctrl or Command with the wheel zooms; the wheel alone moves the view.
+  // Browsers report a trackpad pinch as a ctrl-wheel, so pinching works too.
   canvas.addEventListener(
     "wheel",
     function (event) {
+      if (event.target.closest("[data-canvas-controls]")) return;
       event.preventDefault();
       if (event.ctrlKey || event.metaKey) {
         zoomTo(view.zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12), event.clientX, event.clientY);
@@ -158,55 +312,31 @@
     { passive: false }
   );
 
-  // ---- geometry
-
-  function nodeAt(name) {
-    return inner.querySelector('[data-node="' + CSS.escape(name) + '"]');
-  }
-
-  function box(node) {
-    var height = node.dataset.hasVolume === "true" ? CARD_H + VOLUME_H : CARD_H;
-    return {
-      x: parseInt(node.style.left, 10) || 0,
-      y: parseInt(node.style.top, 10) || 0,
-      h: height,
-    };
-  }
-
-  // The same route the server draws: out of the top of the card that needs
-  // something, into the bottom of the card that provides it. Kept identical on
-  // purpose — an edge that changed shape the moment you touched a card would
-  // read as the connection itself having changed.
-  function route(from, to) {
-    var x1 = from.x + CARD_W / 2;
-    var y1 = from.y;
-    var x2 = to.x + CARD_W / 2;
-    var y2 = to.y + to.h;
-    var mid = Math.round((y1 + y2) / 2);
-    return "M" + x1 + " " + y1 + " V" + mid + " H" + x2 + " V" + y2;
-  }
-
-  function redrawEdges(name) {
-    var paths = inner.querySelectorAll(
-      '[data-from="' + CSS.escape(name) + '"], [data-to="' + CSS.escape(name) + '"]'
-    );
-    paths.forEach(function (path) {
-      var from = nodeAt(path.dataset.from);
-      var to = nodeAt(path.dataset.to);
-      if (!from || !to) return;
-      path.setAttribute("d", route(box(from), box(to)));
-    });
-  }
-
-  // ---- dragging a card, and panning the view
-
-  var drag = null;
+  // Dragging the background moves the view. Unbounded in every direction:
+  // that is what makes the canvas infinite rather than a window onto a sheet.
   var pan = null;
+  paper.on("blank:pointerdown", function (evt) {
+    pan = { clientX: evt.clientX, clientY: evt.clientY, x: view.x, y: view.y };
+    canvas.classList.add("canvas-panning");
+  });
+  window.addEventListener("pointermove", function (event) {
+    if (!pan) return;
+    view.x = pan.x + (event.clientX - pan.clientX);
+    view.y = pan.y + (event.clientY - pan.clientY);
+    apply();
+  });
+  window.addEventListener("pointerup", function () {
+    if (!pan) return;
+    pan = null;
+    canvas.classList.remove("canvas-panning");
+  });
 
-  // A drag that ends on a link still fires a click, and the link is the card,
-  // so every drag used to finish by opening the panel. preventDefault on
-  // pointerdown does not stop it: the click is a separate event that arrives
-  // after pointerup regardless. It has to be swallowed on the way past.
+  // ---- moving a card
+
+  // A drag that ends on a card still fires a click, and the card is a link,
+  // so every drag would finish by opening the panel. It is swallowed on the
+  // way past instead.
+  var moved = null;
   var swallowClick = false;
   canvas.addEventListener(
     "click",
@@ -219,108 +349,32 @@
     true
   );
 
-  canvas.addEventListener("pointerdown", function (event) {
-    if (event.button !== 0) return;
-    if (event.target.closest("[data-canvas-controls]")) return;
-
-    var handle = event.target.closest("[data-drag-handle]");
-    if (handle) {
-      var node = handle.closest("[data-node]");
-      if (!node) return;
-      event.preventDefault();
-      canvas.setPointerCapture(event.pointerId);
-      var start = box(node);
-      drag = {
-        node: node,
-        pointerId: event.pointerId,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        startX: start.x,
-        startY: start.y,
-        moved: false,
-      };
-      node.classList.add("canvas-node-dragging");
-      return;
-    }
-
-    // Anywhere that is not a card moves the view. Dragging the background is
-    // how every canvas works, and it costs nothing here: the background has
-    // nothing else to click.
-    if (event.target.closest("[data-node]")) return;
-    event.preventDefault();
-    canvas.setPointerCapture(event.pointerId);
-    pan = {
-      pointerId: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      x: view.x,
-      y: view.y,
-    };
-    canvas.classList.add("canvas-panning");
+  paper.on("element:pointerdown", function (view) {
+    moved = { card: view.model, from: view.model.position() };
+    view.el.classList.add("canvas-card-dragging");
   });
-
-  canvas.addEventListener("pointermove", function (event) {
-    if (pan && event.pointerId === pan.pointerId) {
-      // Not clamped, in either direction. That is what makes the canvas
-      // infinite rather than a window onto a fixed sheet.
-      view.x = pan.x + (event.clientX - pan.clientX);
-      view.y = pan.y + (event.clientY - pan.clientY);
-      apply();
-      return;
-    }
-    if (!drag || event.pointerId !== drag.pointerId) return;
-
-    // Divided by the zoom: at 50% the pointer covers twice the canvas for the
-    // same distance on screen, and a card that ignored that would slide out
-    // from under the cursor.
-    var x = Math.round(drag.startX + (event.clientX - drag.clientX) / view.zoom);
-    var y = Math.round(drag.startY + (event.clientY - drag.clientY) / view.zoom);
-
-    // Clamped at the origin for the reason the server clamps it: a card
-    // dragged past the top-left corner is an overshoot, not a request to be
-    // put somewhere the canvas does not extend to.
-    x = Math.max(0, x);
-    y = Math.max(0, y);
-
-    drag.node.style.left = x + "px";
-    drag.node.style.top = y + "px";
-    drag.moved = true;
-    redrawEdges(drag.node.dataset.node);
+  graph.on("change:position", function (card) {
+    if (moved && moved.card === card) moved.dirty = true;
   });
-
-  function release(event) {
-    if (canvas.hasPointerCapture(event.pointerId)) {
-      canvas.releasePointerCapture(event.pointerId);
-    }
-  }
-
-  function endDrag(event) {
-    if (pan && event.pointerId === pan.pointerId) {
-      pan = null;
-      canvas.classList.remove("canvas-panning");
-      release(event);
-      return;
-    }
-    if (!drag || event.pointerId !== drag.pointerId) return;
-
-    var node = drag.node;
-    var moved = drag.moved;
-    node.classList.remove("canvas-node-dragging");
-    release(event);
-    drag = null;
-    if (!moved) return;
-
+  paper.on("element:pointerup", function (cardView) {
+    cardView.el.classList.remove("canvas-card-dragging");
+    var drag = moved;
+    moved = null;
+    if (!drag || !drag.dirty) return;
     swallowClick = true;
+    save(cardView);
+  });
 
-    var position = box(node);
+  // Failure is shown rather than swallowed. The card is already where it was
+  // dropped, so a silent failure looks exactly like a save — until the next
+  // reload puts it back with nothing to explain why.
+  function save(cardView) {
+    var card = cardView.model;
+    var p = card.position();
     var body = new URLSearchParams();
-    body.set("x", String(position.x));
-    body.set("y", String(position.y));
-
-    // Failure is reported rather than swallowed. The card is already where the
-    // person dropped it, so a silent failure looks exactly like a save — until
-    // the next reload puts it back and there is nothing to explain why.
-    fetch("/apps/" + encodeURIComponent(node.dataset.node) + "/position", {
+    body.set("x", String(Math.max(0, Math.round(p.x))));
+    body.set("y", String(Math.max(0, Math.round(p.y))));
+    fetch("/apps/" + encodeURIComponent(card.get("app")) + "/position", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
@@ -328,13 +382,36 @@
     })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
-        node.classList.remove("canvas-node-unsaved");
+        cardView.el.classList.remove("canvas-card-unsaved");
       })
       .catch(function () {
-        node.classList.add("canvas-node-unsaved");
+        cardView.el.classList.add("canvas-card-unsaved");
       });
   }
 
-  canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", endDrag);
+  // ---- what a card is connected to
+
+  // Hovering a card lights its arrows and dims the rest, which is the
+  // question a canvas of more than three apps is opened to answer.
+  function focus(card, on) {
+    var related = {};
+    graph.getConnectedLinks(card).forEach(function (link) {
+      related[link.id] = true;
+      var other = link.source().id === card.id ? link.target().id : link.source().id;
+      related[other] = true;
+    });
+    related[card.id] = true;
+    canvas.classList.toggle("canvas-focusing", on);
+    graph.getCells().forEach(function (cell) {
+      var v = cell.findView(paper);
+      if (!v) return;
+      v.el.classList.toggle("canvas-related", on && !!related[cell.id]);
+    });
+  }
+  paper.on("element:mouseenter", function (v) {
+    if (!pan && !moved) focus(v.model, true);
+  });
+  paper.on("element:mouseleave", function (v) {
+    focus(v.model, false);
+  });
 })();

@@ -219,7 +219,7 @@ func (s *Service) copyConnection(ctx context.Context, ownerID string, from, to A
 		return fmt.Errorf("app: %s offers no connection string to give %s", from.Name, to.Name)
 	}
 
-	_, secrets, err := s.envFor(ctx, s.q, from.ID)
+	_, secrets, err := s.envFor(ctx, s.q, from.OwnerID, from.ID)
 	if err != nil {
 		return fmt.Errorf("app: read %s connection: %w", from.Name, err)
 	}

@@ -21,6 +21,13 @@ import (
 var ErrNoSecretKey = errors.New(
 	"app: no YACHT_SECRET_KEY is configured, so a secret cannot be stored safely")
 
+// ErrSavedWhileDeploying means a variable was saved, and its rollout was not
+// started because another deploy of the app is running. The save is not
+// undone: refusing it would lose what was typed, and saying "failed" about a
+// value that is stored is how somebody ends up typing it in three times.
+var ErrSavedWhileDeploying = errors.New(
+	"app: saved; a deploy is already running, so this applies with the next one")
+
 // ErrVariableNotFound means the app has no variable with that key.
 var ErrVariableNotFound = errors.New("app: no such variable")
 
@@ -37,6 +44,18 @@ type Variable struct {
 	Key    string
 	Value  string
 	Secret bool
+
+	// Reference means the value is ${{app.KEY}} references, which Value
+	// carries as typed: the names, never what they resolve to.
+	Reference bool
+}
+
+// Refs lists what a reference variable points at.
+func (v Variable) Refs() []Reference {
+	if !v.Reference {
+		return nil
+	}
+	return References(v.Value)
 }
 
 // VariableInput sets or replaces a variable.
@@ -72,6 +91,9 @@ func (s *Service) SetVariable(
 
 	a, err := s.Get(ctx, ownerID, appName)
 	if err != nil {
+		return err
+	}
+	if err := s.checkReferences(ctx, ownerID, a, in.Value); err != nil {
 		return err
 	}
 
@@ -133,7 +155,9 @@ func (s *Service) SetVariable(
 		}
 		if err := s.deployReleaseOperation(
 			ctx, ownerID, a, release, "variable:"+in.Key,
-		); err != nil {
+		); errors.Is(err, ErrOperationInFlight) {
+			return ErrSavedWhileDeploying
+		} else if err != nil {
 			return err
 		}
 	}
@@ -176,7 +200,9 @@ func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key stri
 		}
 		if err := s.deployReleaseOperation(
 			ctx, ownerID, a, release, "variable-delete:"+key,
-		); err != nil {
+		); errors.Is(err, ErrOperationInFlight) {
+			return ErrSavedWhileDeploying
+		} else if err != nil {
 			return err
 		}
 	}
@@ -203,6 +229,7 @@ func (s *Service) variablesFor(
 		v := Variable{Key: row.Key, Secret: row.Secret}
 		if !row.Secret {
 			v.Value = row.Value
+			v.Reference = HasReference(row.Value)
 		}
 		out = append(out, v)
 	}
@@ -215,8 +242,12 @@ func (s *Service) variablesFor(
 // puts them in a Kubernetes Secret rather than in the pod template — so they
 // are absent from `kubectl get deploy -o yaml`, which is the copy people
 // actually read and paste into issues.
+//
+// A reference is resolved here too, and lands with the secrets whatever it
+// points at: what it resolves to can be another app's password, and the
+// release this deploy records keeps plain values for good.
 func (s *Service) envFor(
-	ctx context.Context, q *dbgen.Queries, appID uuid.UUID,
+	ctx context.Context, q *dbgen.Queries, ownerID string, appID uuid.UUID,
 ) (plain, secrets map[string]string, err error) {
 	rows, err := q.ListVariablesForApp(ctx, appID)
 	if err != nil {
@@ -227,6 +258,12 @@ func (s *Service) envFor(
 	secrets = make(map[string]string)
 	for _, row := range rows {
 		if !row.Secret {
+			if HasReference(row.Value) {
+				if secrets[row.Key], err = s.resolveReferences(ctx, q, ownerID, row.Key, row.Value, 0); err != nil {
+					return nil, nil, err
+				}
+				continue
+			}
 			plain[row.Key] = row.Value
 			continue
 		}
@@ -273,16 +310,20 @@ func (s *Service) recordLinks(
 	if err != nil {
 		return fmt.Errorf("app: list apps for links: %w", err)
 	}
+	// A reference names its app outright, so it is an edge without guessing.
+	referenced := map[string]bool{}
+	for _, r := range References(value) {
+		referenced[r.App] = true
+	}
 	for _, peer := range peers {
 		if peer.ID == from.ID {
 			continue
 		}
-		// The name a workload is reachable by inside the cluster. Matching on
-		// the qualified host rather than the bare name, so a variable whose
-		// value merely contains the word "api" is not a dependency on the app
-		// called api.
-		host := peer.Name + "." + peer.Namespace
-		if !strings.Contains(value, host) {
+		// Otherwise, the name a workload is reachable by inside the cluster.
+		// Matching on the qualified host rather than the bare name, so a
+		// variable whose value merely contains the word "api" is not a
+		// dependency on the app called api.
+		if !referenced[peer.Name] && !strings.Contains(value, peer.Name+"."+peer.Namespace) {
 			continue
 		}
 		if err := q.CreateAppLink(ctx, dbgen.CreateAppLinkParams{

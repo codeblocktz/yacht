@@ -1211,6 +1211,60 @@
     height: var(--canvas-volume-h);
   }
 
+  /* ---- drawn by JointJS (canvas.js). The server's cards are moved into the
+     drawing, each in a foreignObject, so they keep every style above. */
+  .canvas-paper { @apply absolute inset-0; }
+  .canvas-paper svg { @apply overflow-visible; }
+  .canvas-card-host { @apply h-full w-full; }
+  /* WebKit draws positioned or composited HTML inside a foreignObject at the
+     page's origin instead of where the drawing puts it, so every card stacked
+     in the corner in Safari. Inside a drawn card nothing is positioned (the
+     one thing that was, the grip, is hidden) and an icon is dimmed by its
+     colour rather than by opacity. Important, because the cards' own classes
+     are utilities and would otherwise win. */
+  .canvas-card-host,
+  .canvas-card-host * { position: static !important; }
+  .canvas-card-host svg {
+    opacity: 1 !important;
+    color: color-mix(in oklab, currentColor 70%, transparent);
+  }
+  /* Any part of a drawn card starts a drag; a click without moving still
+     follows its link. The grip was there for the hand-rolled drag. */
+  .canvas-drawn .canvas-grip { @apply hidden; }
+
+  /* Dashed and moving toward what is depended on, the way Railway draws a
+     connection: still lines on a canvas read as decoration. */
+  .canvas-link {
+    @apply fill-none stroke-muted-foreground/45;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 5;
+    animation: canvas-link-flow 1.1s linear infinite;
+  }
+  .canvas-link-hit { cursor: default; }
+  .canvas-link-arrow { @apply fill-muted-foreground/60 stroke-none; }
+  .canvas-link-label { @apply fill-muted-foreground font-mono; }
+  .canvas-link-label-bg { @apply fill-card stroke-border; stroke-width: 1; }
+  @keyframes canvas-link-flow { to { stroke-dashoffset: -11; } }
+  @media (prefers-reduced-motion: reduce) {
+    .canvas-link { animation: none; }
+  }
+
+  /* Hovering a card: its arrows and what they reach stay, the rest steps back. */
+  .canvas-focusing .joint-cell { @apply transition-opacity; }
+  .canvas-focusing .joint-cell:not(.canvas-related) { @apply opacity-30; }
+  .canvas-related .canvas-link { @apply stroke-foreground/80; }
+  .canvas-related .canvas-link-arrow { @apply fill-foreground/80; }
+
+  .canvas-card-dragging .canvas-card { @apply border-foreground/40 shadow-lg transition-none; }
+  .canvas-card-unsaved .canvas-card { @apply border-destructive; }
+
+  /* A variable that is another app's: the app it comes from, as a link. */
+  .ref-chip {
+    @apply inline-flex items-center gap-1.5 rounded border border-border bg-muted/40
+           px-1.5 py-0.5 text-[12px] text-foreground transition-colors hover:bg-accent;
+  }
+  .ref-chip svg { @apply size-3.5; }
+
   /* The panel over the canvas. Wider than a default sheet because it holds the
      app's whole detail — a variables table at 24rem wraps every row. */
   .canvas-sheet {

@@ -58,6 +58,7 @@ templ Layout(s Slots, page templ.Component) {
 			@popover.Script()
 			@checkbox.Script()
 			if s.FullBleed {
+				<script src={ asset("/assets/js/joint.min.js") } defer></script>
 				<script src={ asset("/assets/js/canvas.js") } defer></script>
 				<script src={ asset("/assets/js/charts.js") } defer></script>
 			}
@@ -1185,6 +1186,9 @@ templ icon(name string) {
 			case "arrow-right":
 				<path d="M5 12h14"></path>
 				<path d="m12 5 7 7-7 7"></path>
+			case "link":
+				<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+				<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
 			case "corner-down-left":
 				<polyline points="9 10 4 15 9 20"></polyline>
 				<path d="M20 4v7a4 4 0 0 1-4 4H4"></path>

@@ -140,10 +140,19 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(ctx)
 	name := chi.URLParam(r, "name")
 
-	err := s.apps.SetVariable(ctx, owner.ID, name, app.VariableInput{
+	in := app.VariableInput{
 		Key: r.FormValue("key"), Value: r.FormValue("value"),
 		Secret: formChecked(r, "secret"),
-	})
+	}
+	if ref, ok := referenceInput(r); ok {
+		in = ref
+	}
+	err := s.apps.SetVariable(ctx, owner.ID, name, in)
+	if errors.Is(err, app.ErrSavedWhileDeploying) {
+		s.flashOK(w, r, "Saved "+strings.TrimSpace(in.Key)+". A deploy is already running — redeploy once it finishes to apply it.")
+		http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		s.variableFailed(w, r, name, err)
 		return
@@ -157,7 +166,13 @@ func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(ctx)
 	name := chi.URLParam(r, "name")
 
-	if err := s.apps.DeleteVariable(ctx, owner.ID, name, chi.URLParam(r, "key")); err != nil {
+	err := s.apps.DeleteVariable(ctx, owner.ID, name, chi.URLParam(r, "key"))
+	if errors.Is(err, app.ErrSavedWhileDeploying) {
+		s.flashOK(w, r, "Removed. A deploy is already running — redeploy once it finishes to apply it.")
+		http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+		return
+	}
+	if err != nil {
 		s.variableFailed(w, r, name, err)
 		return
 	}
@@ -487,5 +502,6 @@ func (s *Server) detailWith(
 	s.attachSleep(r.Context(), &d)
 	s.attachRegion(r.Context(), &d)
 	s.attachProjects(r.Context(), &d)
+	s.attachReferenceTargets(r.Context(), &d)
 	return d
 }

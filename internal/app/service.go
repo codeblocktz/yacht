@@ -992,7 +992,7 @@ func (s *Service) applyRelease(
 	if release == nil {
 		return fmt.Errorf("%w for %s", ErrNoBaselineRelease, a.Name)
 	}
-	_, secrets, err := s.envFor(ctx, q, a.ID)
+	_, secrets, err := s.envFor(ctx, q, a.OwnerID, a.ID)
 	if err != nil {
 		return err
 	}

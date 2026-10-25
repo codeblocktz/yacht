@@ -247,7 +247,9 @@ func releaseVariables(
 	plain := make(map[string]string)
 	var secretKeys []string
 	for _, row := range rows {
-		if row.Secret {
+		// A reference is delivered with the secrets, resolved at each
+		// deploy, so a release keeps neither the reference nor its value.
+		if row.Secret || HasReference(row.Value) {
 			secretKeys = append(secretKeys, row.Key)
 			continue
 		}

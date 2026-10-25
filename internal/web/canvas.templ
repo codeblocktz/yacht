@@ -9,11 +9,10 @@ import (
 
 // Canvas draws a project's apps and what connects them.
 //
-// Server-rendered: the layout is computed in Go and the edges are an SVG path
-// list. There is no client-side graph library because there is no Node in this
-// project, and a canvas that needs a build step to render is one a self-hoster
-// cannot patch. Dragging is progressive — every card is a link first, and the
-// script only adds the ability to move it.
+// Server-rendered first: the layout is computed in Go, every card is a link,
+// and the edges are an SVG path list, so the page works with no script at
+// all. canvas.js then hands the same cards to JointJS (vendored, no build
+// step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
 	// A bar rather than a page heading: the graph is the page, and a heading
 	// with a paragraph under it would push the thing somebody came to look at
@@ -38,12 +37,16 @@ templ Canvas(d CanvasData) {
 		// rather than a second copy that can drift from them.
 		<div
 			class="canvas"
+			style={ canvasVars() }
 			data-canvas
 			data-card-w={ strconv.Itoa(cardW) }
 			data-card-h={ strconv.Itoa(cardH) }
 			data-volume-h={ strconv.Itoa(volumeH) }
 			data-project={ d.Project.Slug }
 		>
+			// What the drawing joins, for the script. The cards below are still
+			// the server's, and are what a browser without the script shows.
+			@templ.JSONScript("canvas-graph", d.Graph())
 			<div class="canvas-inner" style={ canvasSize(d) }>
 				<svg class="canvas-edges" width={ strconv.Itoa(d.Width) } height={ strconv.Itoa(d.Height) }>
 					<defs>

@@ -28,6 +28,8 @@ type fakeApps struct {
 	projects    []app.Project
 	byOwner     map[string][]app.App
 	deploys     []app.Deployment // when set, every app's history
+	setVars     []app.VariableInput
+	setVarErr   error
 	created     []app.CreateInput
 	deleted     []string
 	scaled      map[string]int32
@@ -766,8 +768,12 @@ func varsFrom(env map[string]string) []app.Variable {
 	return out
 }
 
-func (f *fakeApps) SetVariable(context.Context, string, string, app.VariableInput) error {
-	return errors.New("fakeApps has no variables")
+func (f *fakeApps) SetVariable(_ context.Context, _, _ string, in app.VariableInput) error {
+	f.setVars = append(f.setVars, in)
+	if f.setVarErr != nil {
+		return f.setVarErr
+	}
+	return nil
 }
 
 func (f *fakeApps) DeleteVariable(context.Context, string, string, string) error {

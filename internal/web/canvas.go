@@ -239,3 +239,53 @@ func itoa(n int) string {
 	}
 	return string(b[i:])
 }
+
+// canvasGraph is the graph as the canvas script draws it. The cards are the
+// server's — the script moves them into the drawing rather than rendering
+// its own — so this carries only what the drawing needs to place them and
+// join them: where each card is, and which depends on which.
+type canvasGraph struct {
+	Nodes []canvasGraphNode `json:"nodes"`
+	Edges []canvasGraphEdge `json:"edges"`
+}
+
+type canvasGraphNode struct {
+	Name string `json:"name"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	H    int    `json:"h"`
+}
+
+// canvasGraphEdge is every variable one app reaches another through, drawn
+// as one arrow: two arrows between the same cards would sit on top of each
+// other and read as one anyway.
+type canvasGraphEdge struct {
+	From string   `json:"from"`
+	To   string   `json:"to"`
+	Via  []string `json:"via"`
+}
+
+// Graph is the canvas for the script.
+func (d CanvasData) Graph() canvasGraph {
+	g := canvasGraph{Nodes: make([]canvasGraphNode, 0, len(d.Nodes)), Edges: []canvasGraphEdge{}}
+	for _, n := range d.Nodes {
+		g.Nodes = append(g.Nodes, canvasGraphNode{Name: n.App.Name, X: n.X, Y: n.Y, H: n.Height})
+	}
+	at := map[[2]string]int{}
+	for _, e := range d.Edges {
+		pair := [2]string{e.From, e.To}
+		i, ok := at[pair]
+		if !ok {
+			i = len(g.Edges)
+			at[pair] = i
+			g.Edges = append(g.Edges, canvasGraphEdge{From: e.From, To: e.To})
+		}
+		if e.Via != "" {
+			g.Edges[i].Via = append(g.Edges[i].Via, e.Via)
+		}
+	}
+	for i := range g.Edges {
+		sort.Strings(g.Edges[i].Via)
+	}
+	return g
+}

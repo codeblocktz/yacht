@@ -493,8 +493,15 @@ func roleTone(r account.Role) string {
 // time.
 func canvasSize(d CanvasData) string {
 	return "width:" + strconv.Itoa(d.Width) + "px" +
-		";height:" + strconv.Itoa(d.Height) + "px" +
-		";--canvas-card-h:" + strconv.Itoa(cardH) + "px" +
+		";height:" + strconv.Itoa(d.Height) + "px"
+}
+
+// canvasVars are the card geometry, on the canvas itself rather than the
+// server's layer: the script moves the cards out of that layer into the
+// drawing, and they keep their size only if what sizes them is still above
+// them.
+func canvasVars() string {
+	return "--canvas-card-h:" + strconv.Itoa(cardH) + "px" +
 		";--canvas-volume-h:" + strconv.Itoa(volumeH) + "px"
 }
 
