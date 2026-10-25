@@ -1281,6 +1281,10 @@
   .canvas-add { @apply absolute right-4 top-4 z-30; }
   .canvas-add-btn { @apply gap-1.5 bg-card shadow-sm; }
   .canvas-add-btn svg { @apply size-3.5; }
+  .canvas-add-github { @apply w-[380px]; }
+  .canvas-add-github [data-add-back] svg { @apply rotate-180; }
+  .canvas-add-rows { @apply max-h-[360px] overflow-y-auto; }
+  .canvas-add-rows .panel { @apply rounded-none border-0 bg-transparent shadow-none; }
 
   /* ---- a service's deployments, as Railway lists them */
   .deploy-card { @apply rounded-lg border border-border bg-card px-4 py-3; }

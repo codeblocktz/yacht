@@ -299,9 +299,32 @@ templ canvasAdd(project string) {
 				</button>
 			}
 			@popover.Content(popover.ContentProps{Placement: popover.PlacementBottomEnd, Exclusive: true}) {
-				<div class="flex min-w-[230px] flex-col gap-px p-1">
+				// The GitHub step: a search over the team's repositories, in the
+				// menu, as Railway's is. Shown by canvas.js; without it the
+				// GitHub entry is a link to the same list on a page.
+				<div class="canvas-add-github" data-add-step="github" hidden>
+					<div class="flex items-center gap-2 border-b border-border p-2">
+						<button type="button" class="btn btn-ghost btn-sm btn-icon" data-add-back aria-label="Back">
+							@icon("chevron-right")
+						</button>
+						<input type="hidden" name="project" value={ project }/>
+						<input
+							class="control h-8 flex-1"
+							type="search"
+							name="q"
+							placeholder="Search repositories"
+							autocomplete="off"
+							hx-get="/apps/new/github/repositories"
+							hx-trigger="input changed delay:200ms, search"
+							hx-target="next [data-add-rows]"
+							hx-include="previous [name='project']"
+						/>
+					</div>
+					<div class="canvas-add-rows" data-add-rows></div>
+				</div>
+				<div class="flex min-w-[230px] flex-col gap-px p-1" data-add-step="root">
 					<div class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Create</div>
-					<a class="switcher-item" href={ templ.URL(githubDeployHref(project)) }>
+					<a class="switcher-item" href={ templ.URL(githubDeployHref(project)) } data-add-open="github">
 						@icon("github")
 						<span class="flex-1">GitHub Repository</span>
 					</a>

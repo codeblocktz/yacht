@@ -209,7 +209,9 @@
     return Math.min(hi, Math.max(lo, n));
   }
 
-  function apply() {
+  // persist is false for a move the person did not make — sliding an open
+  // card into view — so it is not what the canvas opens at next time.
+  function apply(persist) {
     paper.matrix({ a: view.zoom, b: 0, c: 0, d: view.zoom, e: view.x, f: view.y });
 
     // The grid moves and scales with the drawing. A grid that stayed put
@@ -221,6 +223,7 @@
     var label = document.querySelector("[data-zoom-level]");
     if (label) label.textContent = Math.round(view.zoom * 100) + "%";
 
+    if (persist === false) return;
     try {
       localStorage.setItem(viewKey, JSON.stringify(view));
     } catch (e) {
@@ -289,7 +292,7 @@
     if (cardBox.left >= visibleLeft && cardBox.right <= visibleRight) return;
     // Centred in what is left, keeping the zoom somebody chose.
     view.x += (visibleLeft + visibleRight) / 2 - (cardBox.left + cardBox.right) / 2;
-    apply();
+    apply(false);
   }
 
   var controls = document.querySelector("[data-canvas-controls]");
@@ -408,6 +411,49 @@
       .catch(function () {
         cardView.el.classList.add("canvas-card-unsaved");
       });
+  }
+
+  // ---- the Add menu's GitHub step
+
+  // GitHub Repository turns the menu into a search over the team's
+  // repositories, as Railway's does, instead of leaving the canvas for a
+  // page. Back returns to the list of things to add.
+  var addMenu = document.querySelector(".canvas-add");
+  if (addMenu) {
+    addMenu.addEventListener("click", function (event) {
+      var open = event.target.closest("[data-add-open]");
+      var back = event.target.closest("[data-add-back]");
+      if (!open && !back) return;
+      event.preventDefault();
+      var root = addMenu.querySelector('[data-add-step="root"]');
+      var step = addMenu.querySelector('[data-add-step="github"]');
+      if (!root || !step) return;
+      root.hidden = !!open;
+      step.hidden = !open;
+      if (open) {
+        var search = step.querySelector('input[type="search"]');
+        search.focus();
+        if (window.htmx) window.htmx.trigger(search, "search");
+      }
+    });
+    // An install without a GitHub App has no list to search. Said in the
+    // menu, with the way to the page that explains it, rather than an empty
+    // box that looks like a team with no repositories.
+    addMenu.addEventListener("htmx:responseError", function (event) {
+      var rows = addMenu.querySelector("[data-add-rows]");
+      var link = addMenu.querySelector("[data-add-open]");
+      if (!rows || !link) return;
+      rows.innerHTML = "";
+      var note = document.createElement("div");
+      note.className = "px-3 py-4 text-[12.5px] text-muted-foreground";
+      note.textContent = "Repositories could not be listed. ";
+      var a = document.createElement("a");
+      a.href = link.getAttribute("href");
+      a.className = "underline";
+      a.textContent = "Open GitHub deploy";
+      note.appendChild(a);
+      rows.appendChild(note);
+    });
   }
 
   // ---- what a card is connected to
