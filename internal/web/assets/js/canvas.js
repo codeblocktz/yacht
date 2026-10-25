@@ -456,6 +456,57 @@
     });
   }
 
+  // ---- keeping the cards current
+
+  // Each card's state, asked for every few seconds while the page is in
+  // view: a push deploys an app without anybody pressing anything here, and
+  // Railway's cards go from Building to Online while you watch. A service
+  // added or removed elsewhere changes the picture, which is the server's to
+  // lay out — so the page is drawn again, unless a panel is open, where a
+  // reload would throw away whatever was being typed into it.
+  var statusURL = "/projects/" + encodeURIComponent(canvas.dataset.project || "") +
+    "/status?environment=" + encodeURIComponent(canvas.dataset.environment || "");
+  function refreshCards() {
+    if (document.visibilityState !== "visible") return;
+    fetch(statusURL, { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (!data || !data.apps) return;
+        var drawn = graph.getElements().map(function (card) {
+          return card.get("app");
+        });
+        var names = Object.keys(data.apps);
+        var changed =
+          names.length !== drawn.length ||
+          names.some(function (name) {
+            return drawn.indexOf(name) < 0;
+          });
+        if (changed) {
+          if (!document.querySelector(".canvas-card-open")) location.reload();
+          return;
+        }
+        names.forEach(function (name) {
+          var node = canvas.querySelector('[data-node="' + CSS.escape(name) + '"] .canvas-card-status');
+          if (!node) return;
+          var state = data.apps[name];
+          node.className = "canvas-card-status " + state.class;
+          var label = node.lastChild;
+          if (label && label.nodeType === 3) {
+            label.textContent = state.label;
+          } else {
+            node.appendChild(document.createTextNode(state.label));
+          }
+        });
+      })
+      .catch(function () {
+        // A missed poll is the next one's to make up.
+      });
+  }
+  setInterval(refreshCards, 5000);
+  document.addEventListener("visibilitychange", refreshCards);
+
   // ---- what a card is connected to
 
   // Hovering a card lights its arrows and dims the rest, which is the

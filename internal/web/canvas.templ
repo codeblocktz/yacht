@@ -43,6 +43,7 @@ templ Canvas(d CanvasData) {
 			data-card-h={ strconv.Itoa(cardH) }
 			data-volume-h={ strconv.Itoa(volumeH) }
 			data-project={ d.Project.Slug }
+			data-environment={ d.Env }
 		>
 			// What the drawing joins, for the script. The cards below are still
 			// the server's, and are what a browser without the script shows.

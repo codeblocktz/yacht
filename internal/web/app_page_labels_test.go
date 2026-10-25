@@ -97,6 +97,7 @@ func TestDeploymentTitlesAndBadges(t *testing.T) {
 		"initial": "Initial deploy", "redeploy": "Redeploy", app.RollbackTrigger: "Rollback",
 		app.PushTriggerPrefix + "2fdc9db0123": "Push 2fdc9db", "variable:DATABASE_URL": "Set DATABASE_URL",
 		"variable-delete:OLD": "Removed OLD", "port:8080 internal:false": "Changed port → 8080",
+		"changes:DATABASE_URL": "Deployed DATABASE_URL", "changes:A,B,C": "Deployed 3 changes",
 	} {
 		if got := deploymentTitle(app.Deployment{Revision: rev}); got != want {
 			t.Errorf("deploymentTitle(%q) = %q, want %q", rev, got, want)

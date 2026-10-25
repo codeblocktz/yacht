@@ -736,6 +736,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/projects", s.projectList)
 			r.Post("/projects", s.projectCreate)
 			r.Get("/projects/{slug}", s.projectCanvas)
+			r.Get("/projects/{slug}/status", s.projectStatus)
 			r.Get("/projects/{slug}/settings", s.projectSettings)
 
 			// Arranging the canvas sits with the member actions, alongside

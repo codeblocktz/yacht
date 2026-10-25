@@ -2,10 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -288,7 +290,14 @@ func (s *Server) deploymentsFragment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := appDeployments(*s.appPanel(ctx, a, "")).Render(ctx, w); err != nil {
+	d := s.appPanel(ctx, a, "")
+	// Nothing changed since the tab last drew: no body, and htmx leaves the
+	// tab as it is.
+	if r.URL.Query().Get("token") == deploymentsToken(*d) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := appDeployments(*d).Render(ctx, w); err != nil {
 		s.log.Error("render deployments fragment", slog.String("error", err.Error()))
 	}
 }
@@ -347,4 +356,49 @@ func (s *Server) canvasArrange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/projects/"+project.Slug, http.StatusSeeOther)
+}
+
+// projectStatus is each card's state, for the canvas to keep itself current
+// without a reload: Railway's cards go from Building to Online while you
+// watch, and a card that said "Deploying" until somebody refreshed looked
+// like a deploy that had hung.
+func (s *Server) projectStatus(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	owner := identity.MustFromContext(ctx)
+	if s.apps == nil {
+		http.NotFound(w, r)
+		return
+	}
+	project, err := s.apps.Project(ctx, owner.ID, chi.URLParam(r, "slug"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	env := strings.TrimSpace(r.URL.Query().Get("environment"))
+	var apps []app.App
+	if es, ok := s.environments(); ok {
+		if env == "" {
+			env = app.DefaultEnvironment
+		}
+		apps, err = es.ListInEnvironment(ctx, owner.ID, project, env)
+	} else {
+		apps, err = s.apps.ListInProject(ctx, owner.ID, project.ID)
+	}
+	if err != nil {
+		http.Error(w, "could not read the apps", http.StatusInternalServerError)
+		return
+	}
+	type card struct {
+		Label string `json:"label"`
+		Class string `json:"class"`
+		Host  string `json:"host"`
+	}
+	out := map[string]card{}
+	for _, a := range apps {
+		label, class := cardStatus(a)
+		out[a.Name] = card{Label: label, Class: class, Host: a.Host}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"apps": out})
 }
