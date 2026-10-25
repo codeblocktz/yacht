@@ -185,6 +185,11 @@ func (s *Service) createRelease(
 	if err != nil {
 		return Release{}, fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
 	}
+	// Whatever deploys next carries every edit saved for it: a redeploy or a
+	// push as much as the staged-changes bar. See staged.go.
+	if err := s.commitStaged(ctx, q, &a); err != nil {
+		return Release{}, err
+	}
 	return s.recordRelease(ctx, q, a, sourceRevision, digest, "deployment")
 }
 

@@ -303,6 +303,18 @@ type Project struct {
 	UpdatedAt time.Time
 }
 
+type ProjectVariable struct {
+	ID        uuid.UUID
+	OwnerID   string
+	ProjectID uuid.UUID
+	Key       string
+	Value     string
+	Sealed    []byte
+	Secret    bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type Region struct {
 	Name          string
 	DisplayName   string
@@ -335,6 +347,17 @@ type SignupLink struct {
 	ExpiresAt  time.Time
 	ConsumedAt pgtype.Timestamptz
 	CreatedAt  time.Time
+}
+
+type StagedVariable struct {
+	OwnerID   string
+	AppID     uuid.UUID
+	Key       string
+	Removed   bool
+	Value     string
+	Sealed    []byte
+	Secret    bool
+	UpdatedAt time.Time
 }
 
 type Team struct {

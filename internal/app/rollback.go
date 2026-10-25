@@ -130,7 +130,7 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 		return fmt.Errorf("app: restore settings from release: %w", err)
 	}
 	restored := toApp(row)
-	if err := s.restoreVariables(ctx, q, ownerID, restored, release.Env); err != nil {
+	if err := s.restoreVariables(ctx, q, ownerID, restored, release.Env, release.SecretKeys); err != nil {
 		return err
 	}
 	// A live operation refuses admission here, which abandons the whole
@@ -173,9 +173,19 @@ func (s *Service) checkReleaseImage(ctx context.Context, release Release) error 
 // value even where the release had it in the clear: the secret is the more
 // recent decision about that value, and writing it back out as plain text
 // would undo it.
+//
+// A reference the release ran with stays too. It is delivered with the
+// secrets, so its key is among secretKeys rather than in env, and the text
+// that names what it points at was never kept — removing it for being absent
+// from env would leave the release without a variable it was made with.
 func (s *Service) restoreVariables(
 	ctx context.Context, q *dbgen.Queries, ownerID string, a App, env map[string]string,
+	secretKeys []string,
 ) error {
+	withSecrets := make(map[string]bool, len(secretKeys))
+	for _, k := range secretKeys {
+		withSecrets[k] = true
+	}
 	rows, err := q.ListVariablesForApp(ctx, a.ID)
 	if err != nil {
 		return fmt.Errorf("app: list variables for rollback: %w", err)
@@ -183,7 +193,7 @@ func (s *Service) restoreVariables(
 	current := make(map[string]dbgen.Variable, len(rows))
 	for _, row := range rows {
 		current[row.Key] = row
-		if row.Secret {
+		if row.Secret || (withSecrets[row.Key] && HasReference(row.Value)) {
 			continue
 		}
 		if _, keep := env[row.Key]; keep {
