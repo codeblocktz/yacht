@@ -199,3 +199,15 @@ func TestACardSaysWhetherTheAppIsUp(t *testing.T) {
 		}
 	}
 }
+
+// An empty project is a canvas with Add on it, as Railway's is, rather than
+// a page with no way to add from where you are.
+func TestAnEmptyProjectHasAdd(t *testing.T) {
+	h := testServer(t, Options{Apps: newFakeApps()})
+	body := get(t, h, "/projects/default").Body.String()
+	for _, want := range []string{"canvas-is-empty", "canvas-add", "Nothing here yet"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("an empty project is missing %q", want)
+		}
+	}
+}

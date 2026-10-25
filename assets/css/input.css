@@ -1162,6 +1162,9 @@
            text-muted-foreground transition-colors hover:bg-accent hover:text-foreground;
   }
   .canvas-empty { @apply flex flex-1 items-center justify-center p-6; }
+  /* The empty canvas has nothing to pan, so the grab cursor would promise a
+     drag that does nothing. */
+  .canvas-is-empty { @apply flex cursor-default; }
 
   /* Floating on the surface, bottom-left, because an infinite canvas has no
      edge to hang a toolbar off and the controls act on the view rather than on

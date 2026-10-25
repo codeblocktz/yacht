@@ -16,8 +16,20 @@ import (
 // step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
 	if d.Empty {
-		<div class="canvas-empty">
-			@emptyApps(d.Project.Slug)
+		// An empty project is still a canvas, as Railway's is: the grid, Add
+		// in its corner, and a word in the middle about what to put on it.
+		<div class="canvas canvas-is-empty">
+			<div class="canvas-empty">
+				<div class="empty">
+					<span class="empty-mark" aria-hidden="true">
+						@icon("boxes")
+					</span>
+					<p class="font-medium text-foreground">Nothing here yet</p>
+					<p>Add a GitHub repository, a database or an image — Add is at the top right.</p>
+					<a class="btn btn-primary mt-3" href={ templ.SafeURL(newAppHref(d.Project.Slug)) }>Add a service</a>
+				</div>
+			</div>
+			@canvasAdd(d.Project.Slug)
 		</div>
 	} else {
 		// The geometry lives here, in one place, so the script that re-routes
