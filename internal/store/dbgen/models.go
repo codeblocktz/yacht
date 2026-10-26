@@ -347,6 +347,7 @@ type ImpersonationEvent struct {
 	OperatorEmail string
 	Action        string
 	At            time.Time
+	Reason        string
 }
 
 type Invitation struct {

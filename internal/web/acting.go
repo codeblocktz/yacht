@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,13 @@ import (
 // It is always visible. Every page shows who is being acted as, with the way
 // out beside it, and the start and the stop are written down where the team's
 // page shows them.
+
+// The reason an impersonation is started is a sentence, not a word: "help"
+// tells a customer reading their log nothing.
+const (
+	minImpersonationReason = 10
+	maxImpersonationReason = 500
+)
 
 // OperatorCheck is the ActingCheck for an install whose operators are named:
 // the person's address must be on the list. With no names it approves nobody,
@@ -123,7 +131,16 @@ func (s *Server) adminTeamAct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	team, err := s.accounts.StartActing(ctx, sess.ID, chi.URLParam(r, "id"))
+	// Why, before anything changes: the reason is what the record is for.
+	reason := strings.TrimSpace(r.FormValue("reason"))
+	if n := len([]rune(reason)); n < minImpersonationReason || n > maxImpersonationReason {
+		s.flashErr(w, r, fmt.Sprintf("Say why, in %d to %d characters: the reason is kept with the start, where the team can read it.",
+			minImpersonationReason, maxImpersonationReason))
+		http.Redirect(w, r, backTo(r, adminTeamHref(chi.URLParam(r, "id"))), http.StatusSeeOther)
+		return
+	}
+
+	team, err := s.accounts.StartActingWithReason(ctx, sess.ID, chi.URLParam(r, "id"), reason)
 	switch {
 	case errors.Is(err, account.ErrNoSuchTeam):
 		http.NotFound(w, r)
@@ -141,7 +158,8 @@ func (s *Server) adminTeamAct(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("impersonation started",
 		slog.String("operator", user.Email),
 		slog.String("user", user.ID.String()),
-		slog.String("team", team.ID))
+		slog.String("team", team.ID),
+		slog.String("reason", reason))
 	s.flashWarn(w, r, "You are acting as "+cmp.Or(team.DisplayName, team.ID)+
 		". Everything you do is done as this team, and the start and stop are recorded on its page.")
 	// To the overview, which is now the team's: what the operator came to see.

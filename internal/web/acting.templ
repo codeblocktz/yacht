@@ -1,5 +1,7 @@
 package web
 
+import "strconv"
+
 // actingBannerView is the strip across the top of every page while an
 // operator is acting as a team, with whatever banner the page would otherwise
 // have had underneath it.
@@ -43,14 +45,42 @@ templ actingBannerView(team string, below templ.Component) {
 // customer's, with the customer's apps, and anything done there is done to
 // them.
 templ actAsTeamButton(d AdminTeamData) {
-	<form method="post" action={ templ.SafeURL(adminTeamHref(d.Team.TeamID) + "/act") }>
-		<button
-			class="btn"
-			type="submit"
-			data-confirm={ "Every page will show " + d.Team.TeamName + "'s apps, and you will be its owner: deploys, settings and deletions you make are made to this team. Your own team is left as it is. The start and the stop are recorded on this page, and a banner stays at the top of every page until you stop." }
-			data-confirm-title={ "Act as " + d.Team.TeamName + "?" }
-			data-confirm-label="Act as this team"
-		>Act as this team</button>
+	@ImpersonateForm(d.Team.TeamID, d.Team.TeamName, adminTeamHref(d.Team.TeamID))
+}
+
+// ImpersonateForm starts acting as a team, with the reason it is being done:
+// a ticket, a failing deploy, a customer's request. The reason is required,
+// and kept with the start in the team's own audit log and in the operators'
+// list of impersonations — "why was somebody in our account" is the first
+// question a customer asks about it.
+//
+// Exported for a wrapping application's own customer pages, which are where
+// its operators look a customer up. next is the page to come back to when
+// the reason is refused.
+templ ImpersonateForm(teamID, teamName, next string) {
+	<form method="post" action={ templ.SafeURL(adminTeamHref(teamID) + "/act") } class="flex flex-col gap-2">
+		<input type="hidden" name="next" value={ next }/>
+		<label class="label" for={ "impersonate-reason-" + teamID }>Reason</label>
+		<textarea
+			class="control"
+			id={ "impersonate-reason-" + teamID }
+			name="reason"
+			rows="2"
+			minlength={ strconv.Itoa(minImpersonationReason) }
+			maxlength={ strconv.Itoa(maxImpersonationReason) }
+			placeholder="Ticket #123: their deploy fails at the build"
+			required
+		></textarea>
+		<span class="hint">Recorded with the start, in { teamName }'s audit log and in Impersonations.</span>
+		<div>
+			<button
+				class="btn"
+				type="submit"
+				data-confirm={ "Every page will show " + teamName + "'s workspace, and you will act as its owner: deploys, settings and deletions you make are made to this team, recorded as yours. Your own team is left as it is. A banner stays at the top of every page until you stop." }
+				data-confirm-title={ "Impersonate " + teamName + "?" }
+				data-confirm-label="Impersonate"
+			>Impersonate…</button>
+		</div>
 	</form>
 }
 
@@ -98,6 +128,7 @@ templ actingSection(d AdminTeamData) {
 							<th>When</th>
 							<th>Operator</th>
 							<th>What</th>
+							<th>Reason</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -106,6 +137,7 @@ templ actingSection(d AdminTeamData) {
 								<td class="whitespace-nowrap text-muted-foreground" title={ ev.At.UTC().Format("2006-01-02 15:04:05 UTC") }>{ relativeTime(ev.At) }</td>
 								<td class="max-w-[260px] truncate">{ ev.OperatorEmail }</td>
 								<td>{ impersonationAction(ev.Action) }</td>
+								<td class="max-w-[320px] text-muted-foreground">{ ev.Reason }</td>
 							</tr>
 						}
 					</tbody>

@@ -275,10 +275,11 @@ func TestACapacityPolicyFormRoundTrips(t *testing.T) {
 	}
 }
 
-// The operator's overview carries how much of the install is sold.
+// The operator's overview, in the Admin console, carries how much of the
+// install is sold.
 func TestTheOperatorsOverviewShowsWhatIsSold(t *testing.T) {
 	h := capacityServer(t, &fakeCapacity{snap: snapshotAt(30, 62, true)}).Handler()
-	body := get(t, h, "/").Body.String()
+	body := get(t, h, "/admin").Body.String()
 	if !strings.Contains(body, "data-capacity-metric") || !strings.Contains(body, "of sellable memory") {
 		t.Error("the operator's overview does not say how much is sold")
 	}

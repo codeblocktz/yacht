@@ -78,9 +78,9 @@ func TestAWrappersChromeRendersInTheEngineSidebar(t *testing.T) {
 		t.Error("the wrapper's active page is not marked active")
 	}
 
-	// Its groups in the order it put them — the engine's primary links, then
-	// Account, then System — and Admin last, apart.
-	order := []string{`data-nav-label="Overview"`, `>Account</div>`, `>System</div>`, `class="nav-admin"`, `data-nav-label="Plans"`}
+	// Its groups in the order it put them — the workspace's links, then
+	// Account — and Admin last, apart.
+	order := []string{`data-nav-label="Projects"`, `>Account</div>`, `class="nav-admin"`, `data-nav-label="Plans"`}
 	last := -1
 	for _, marker := range order {
 		i := strings.Index(aside, marker)

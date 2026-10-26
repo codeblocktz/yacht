@@ -405,14 +405,23 @@ FOR UPDATE OF s;
 UPDATE sessions SET acting_team_id = NULL, acting_since = NULL WHERE id = @id;
 
 -- name: InsertImpersonationEvent :exec
-INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
-VALUES (@owner_id, @user_id::uuid, @operator_email, @action);
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action, reason)
+VALUES (@owner_id, @user_id::uuid, @operator_email, @action, @reason);
 
 -- Newest first, for the team page. Scoped by the team acted as, which is
 -- whose record it is.
 -- name: ListImpersonationEvents :many
-SELECT id, owner_id, user_id, operator_email, action, at
+SELECT id, owner_id, user_id, operator_email, action, at, reason
 FROM impersonation_events
 WHERE owner_id = @owner_id
 ORDER BY at DESC, id
+LIMIT @max_rows;
+
+-- Every team's, newest first, with the team's name: Admin › Impersonations,
+-- the operators' own record of where they went.
+-- name: ListAllImpersonationEvents :many
+SELECT e.id, e.owner_id, e.user_id, e.operator_email, e.action, e.at, e.reason, t.display_name
+FROM impersonation_events e
+JOIN teams t ON t.id = e.owner_id
+ORDER BY e.at DESC, e.id
 LIMIT @max_rows;

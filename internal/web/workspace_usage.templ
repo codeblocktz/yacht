@@ -1,0 +1,42 @@
+package web
+
+// WorkspaceUsage is what each of the workspace's projects costs this month.
+templ WorkspaceUsage(d WorkspaceUsageData) {
+	@pageHead("Usage", "What each project has used this month, and what the month comes to at the rate it runs now.", nil)
+	<div class="panel">
+		if len(d.Projects) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing to show yet</p>
+				<p>Usage appears once a project runs something.</p>
+			</div>
+		} else {
+			<div class="overflow-x-auto">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>Project</th>
+							<th>Period</th>
+							<th class="text-right">So far</th>
+							<th class="text-right">Estimated</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, p := range d.Projects {
+							<tr>
+								<td>
+									<a class="font-medium hover:underline" href={ templ.SafeURL("/projects/" + p.Project.Slug + "/settings#usage") }>{ p.Project.Name }</a>
+								</td>
+								<td class="text-muted-foreground">{ p.Usage.Period }</td>
+								<td class="text-right tabular-nums">{ p.Usage.Current }</td>
+								<td class="text-right tabular-nums">{ p.Usage.Estimated }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+	if d.Note != "" {
+		<p class="mt-3 text-[12px] text-muted-foreground">{ d.Note }</p>
+	}
+}

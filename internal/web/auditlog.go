@@ -124,7 +124,7 @@ var auditRoutes = map[string]auditSpec{
 	"POST /team/sleep":                     {action: "team.sleep", targetKind: "team"},
 	"POST /team/github/choose":             {action: "github.connect", targetKind: "team"},
 	"POST /team/github/{id}/disconnect":    {action: "github.disconnect", targetKind: "github", target: ":id"},
-	"POST /admin/teams/{id}/act":           {action: "acting.start", targetKind: "team", target: ":id", ownerParam: "id"},
+	"POST /admin/teams/{id}/act":           {action: "acting.start", targetKind: "team", target: ":id", ownerParam: "id", detail: map[string]string{"reason": "reason"}},
 	"POST /acting/stop":                    {action: "acting.stop", targetKind: "team"},
 
 	// Tokens and webhooks.

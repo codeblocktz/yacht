@@ -25,6 +25,14 @@ type Surfaces struct {
 	// Regions is the Admin area's regions page.
 	Regions bool
 
+	// Usage, Tokens and Audit are the workspace's Usage page, its API tokens
+	// and its audit log; Impersonation is the Admin console's list of
+	// operators acting as teams.
+	Usage, Tokens, Audit, Impersonation bool
+
+	// Templates is the workspace's templates page.
+	Templates bool
+
 	// Operator is whether this request's person runs the install, and so
 	// whether the cluster-wide pages are theirs to be offered.
 	Operator bool
@@ -61,6 +69,12 @@ func (s *Server) withSurfaces(next http.Handler) http.Handler {
 		Registry: s.registries != nil,
 		Quotas:   s.quotas != nil,
 		Regions:  s.regions != nil,
+
+		Usage:         s.usage != nil,
+		Tokens:        s.tokens != nil,
+		Audit:         s.audit != nil && s.accounts != nil,
+		Impersonation: s.impersonation(),
+		Templates:     s.stacks != nil,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Per request, unlike the rest: it depends on who is asking.

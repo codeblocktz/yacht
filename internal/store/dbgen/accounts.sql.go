@@ -716,8 +716,8 @@ func (q *Queries) HasPassword(ctx context.Context, userID uuid.UUID) (bool, erro
 }
 
 const insertImpersonationEvent = `-- name: InsertImpersonationEvent :exec
-INSERT INTO impersonation_events (owner_id, user_id, operator_email, action)
-VALUES ($1, $2::uuid, $3, $4)
+INSERT INTO impersonation_events (owner_id, user_id, operator_email, action, reason)
+VALUES ($1, $2::uuid, $3, $4, $5)
 `
 
 type InsertImpersonationEventParams struct {
@@ -725,6 +725,7 @@ type InsertImpersonationEventParams struct {
 	UserID        uuid.UUID
 	OperatorEmail string
 	Action        string
+	Reason        string
 }
 
 func (q *Queries) InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error {
@@ -733,12 +734,63 @@ func (q *Queries) InsertImpersonationEvent(ctx context.Context, arg InsertImpers
 		arg.UserID,
 		arg.OperatorEmail,
 		arg.Action,
+		arg.Reason,
 	)
 	return err
 }
 
+const listAllImpersonationEvents = `-- name: ListAllImpersonationEvents :many
+SELECT e.id, e.owner_id, e.user_id, e.operator_email, e.action, e.at, e.reason, t.display_name
+FROM impersonation_events e
+JOIN teams t ON t.id = e.owner_id
+ORDER BY e.at DESC, e.id
+LIMIT $1
+`
+
+type ListAllImpersonationEventsRow struct {
+	ID            uuid.UUID
+	OwnerID       string
+	UserID        pgtype.UUID
+	OperatorEmail string
+	Action        string
+	At            time.Time
+	Reason        string
+	DisplayName   string
+}
+
+// Every team's, newest first, with the team's name: Admin › Impersonations,
+// the operators' own record of where they went.
+func (q *Queries) ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error) {
+	rows, err := q.db.Query(ctx, listAllImpersonationEvents, maxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllImpersonationEventsRow{}
+	for rows.Next() {
+		var i ListAllImpersonationEventsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.UserID,
+			&i.OperatorEmail,
+			&i.Action,
+			&i.At,
+			&i.Reason,
+			&i.DisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listImpersonationEvents = `-- name: ListImpersonationEvents :many
-SELECT id, owner_id, user_id, operator_email, action, at
+SELECT id, owner_id, user_id, operator_email, action, at, reason
 FROM impersonation_events
 WHERE owner_id = $1
 ORDER BY at DESC, id
@@ -768,6 +820,7 @@ func (q *Queries) ListImpersonationEvents(ctx context.Context, arg ListImpersona
 			&i.OperatorEmail,
 			&i.Action,
 			&i.At,
+			&i.Reason,
 		); err != nil {
 			return nil, err
 		}

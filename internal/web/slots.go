@@ -104,6 +104,12 @@ type NavGroup struct {
 // meaning of one is a breaking change for anything wrapping the engine, so
 // treat this struct as public API.
 type Slots struct {
+	// Admin says this is the Admin console's chrome rather than a workspace's:
+	// the install's pages, for its operators. A wrapping application adds its
+	// operator pages to the sidebar when it is set, and its workspace pages —
+	// billing, say — when it is not.
+	Admin bool
+
 	// Title is the document title.
 	Title string
 
@@ -231,6 +237,11 @@ type DefaultSlots struct {
 	// own README; a wrapping application points it at its product's docs,
 	// since its customers have no use for the engine's.
 	DocsHref string
+
+	// Plan names the team's plan under its name in the workspace switcher,
+	// as Railway's HOBBY does. Nil, or an empty answer, shows the person's
+	// role there instead. Asked only for a team that is the person's own.
+	Plan func(ctx context.Context, teamID string) string
 }
 
 // DefaultDocsHref is the engine's own documentation.
@@ -263,7 +274,13 @@ func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		// session in two places at once. The banner is where acting stops.
 		switcher = TeamIdentity(surfaces.ActingAs, "Support access", true)
 	case len(teams) > 0:
-		switcher = TeamSwitcher(teams)
+		var plan string
+		if d.Plan != nil {
+			if t, ok := activeTeam(teams); ok {
+				plan = d.Plan(ctx, t.ID)
+			}
+		}
+		switcher = TeamSwitcher(teams, plan)
 	case signedIn:
 		switcher = TeamIdentity(ownerLabel(owner), "Owner", false)
 	}
@@ -292,21 +309,7 @@ func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		banner = ActingBanner(acting)
 	}
 
-	// The team's projects and the deploys in flight, where there is a team
-	// to read them for.
 	ws, haveWorkspace := workspaceFromContext(ctx)
-	deployments := NavItem{Label: "Deployments", Href: "/deployments", Icon: "rocket",
-		Active: hasPrefix(path, "/deployments")}
-	if haveWorkspace && ws.LiveDeploys > 0 {
-		// Counted, not merely flagged: "3" says whether the deploy you
-		// started is the only one, which a dot cannot.
-		deployments.Badge = strconv.Itoa(ws.LiveDeploys)
-		deployments.Live = true
-	}
-	var projects *SidebarProjects
-	if haveWorkspace {
-		projects = sidebarProjects(ws, path)
-	}
 	var searchIndex string
 	if signedIn {
 		searchIndex = searchIndexPath
@@ -325,54 +328,145 @@ func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		BrandHref:     "/",
 		SidebarTop:    switcher,
 		SidebarFooter: footer,
-		Projects:      projects,
 		SearchIndex:   searchIndex,
-		Nav: []NavGroup{
-			{Items: []NavItem{
-				{Label: "Overview", Href: "/", Icon: "grid", Active: path == "/"},
-				// No Apps entry. An app is drawn on a project's canvas and
-				// reached from it, so a second door into a flat list of every
-				// app in the team would show the same things with the one fact
-				// that matters — what they are connected to — taken out.
-				{Label: "Projects", Href: "/projects", Icon: "boxes",
-					Active: hasPrefix(path, "/projects") || hasPrefix(path, "/apps") ||
-						hasPrefix(path, "/canvas")},
-				deployments,
-			}},
-			// Everything about running the install, in one group: the teams
-			// on it, whether the cluster has room for them, and the machines
-			// and settings underneath. One group rather than tenants here and
-			// machines there, because the line that matters is between the
-			// people who run the install and the people using it, and one
-			// heading is what makes that line visible — and one place is where
-			// a wrapping application's install-wide pages go too.
-			{Heading: AdminNavHeading, Items: adminNav(ctx, path)},
-			{Heading: "System", Items: append(teamNav(ctx, path), NavItem{
-				Label: "Settings", Href: "/settings", Icon: "settings",
-				Active: hasPrefix(path, "/settings"),
-			})},
-		},
 	}
-	// The Admin area is the operator's. Offered to anyone else its entries
-	// would be links to a 403, which reads as a broken page rather than one
-	// that belongs to somebody else — and on an install hosting customers, the
-	// cluster underneath is not theirs to be shown at all.
-	if !surfaces.Operator {
-		kept := slots.Nav[:0]
-		for _, g := range slots.Nav {
-			if g.Heading != AdminNavHeading {
-				kept = append(kept, g)
-			}
-		}
-		slots.Nav = kept
+
+	// Two chromes, as Railway has: the workspace, which is everybody's home
+	// — the team's projects and what belongs to the team — and the Admin
+	// console, which is the install's and only its operators'. One sidebar
+	// holding both read as one product with the operator's tools bolted on,
+	// and showed an operator two lists of the same teams.
+	if surfaces.Operator && IsAdminPath(path) {
+		slots.Admin = true
+		slots.BrandHref = "/admin"
+		slots.Project = nil
+		slots.SidebarTop = AdminConsoleTop(signedIn)
+		slots.Nav = adminConsoleNav(ctx, path)
+		return slots
+	}
+	slots.Nav = workspaceNav(ctx, path, surfaces, len(teams) > 0)
+	if haveWorkspace && ws.LiveDeploys > 0 {
+		// Deploys in flight are counted on Projects, where they are: "3"
+		// says whether the deploy you started is the only one, which a dot
+		// cannot.
+		slots.Nav[0].Items[0].Badge = strconv.Itoa(ws.LiveDeploys)
+		slots.Nav[0].Items[0].Live = true
 	}
 	return slots
 }
 
+// The Admin console's groups. A wrapping application adds its own pages to
+// these by heading — its customers to AdminCustomersHeading, say.
+const (
+	AdminCustomersHeading = "Customers"
+	AdminClusterHeading   = "Cluster"
+	AdminInstallHeading   = "Install"
+)
+
+// IsAdminPath reports whether a path is one of the Admin console's: the
+// install's pages rather than a team's.
+func IsAdminPath(path string) bool {
+	return path == "/admin" || hasPrefix(path, "/admin/") ||
+		path == "/cluster" || hasPrefix(path, "/cluster/") ||
+		path == "/settings"
+}
+
+// workspaceNav is the workspace's sidebar, Railway's: the team's projects
+// and templates, what it costs and who is in it, and its settings. An
+// operator also has the way into the Admin console, apart at the bottom.
+func workspaceNav(ctx context.Context, path string, s Surfaces, accounts bool) []NavGroup {
+	main := []NavItem{
+		// No Apps entry. An app is drawn on a project's canvas and reached
+		// from it, so a second door into a flat list of every app in the team
+		// would show the same things with the one fact that matters — what
+		// they are connected to — taken out.
+		{Label: "Projects", Href: "/", Icon: "boxes",
+			Active: path == "/" || hasPrefix(path, "/projects") || hasPrefix(path, "/apps") ||
+				hasPrefix(path, "/canvas")},
+	}
+	if s.Templates {
+		main = append(main, NavItem{Label: "Templates", Href: "/templates", Icon: "layers", Active: hasPrefix(path, "/templates")})
+	}
+	if s.Usage {
+		main = append(main, NavItem{Label: "Usage", Href: "/usage", Icon: "gauge", Active: hasPrefix(path, "/usage")})
+	}
+	if accounts {
+		main = append(main, NavItem{Label: "People", Href: "/team", Icon: "users", Active: path == "/team"})
+	}
+	nav := []NavGroup{{Items: main}}
+
+	var settings []NavItem
+	if accounts && s.Tokens {
+		settings = append(settings, NavItem{Label: "API tokens", Href: "/team/tokens", Icon: "key",
+			Active: hasPrefix(path, "/team/tokens")})
+	}
+	if s.Audit {
+		settings = append(settings, NavItem{Label: "Audit log", Href: "/team/audit", Icon: "activity",
+			Active: hasPrefix(path, "/team/audit")})
+	}
+	if accounts {
+		settings = append(settings, NavItem{Label: "Account", Href: "/account", Icon: "user",
+			Active: hasPrefix(path, "/account")})
+	}
+	if len(settings) > 0 {
+		nav = append(nav, NavGroup{Heading: WorkspaceSettingsHeading, Items: settings})
+	}
+	if s.Operator {
+		nav = append(nav, NavGroup{Heading: AdminNavHeading, Items: []NavItem{
+			{Label: "Admin console", Href: "/admin", Icon: "server"},
+		}})
+	}
+	return nav
+}
+
+// WorkspaceSettingsHeading is the workspace's settings group, where a
+// wrapping application puts its own — billing, say.
+const WorkspaceSettingsHeading = "Settings"
+
+// adminConsoleNav is the Admin console's sidebar: its overview, the teams on
+// the install, the machines they run on, and the install's own settings.
+func adminConsoleNav(ctx context.Context, path string) []NavGroup {
+	s := SurfacesFromContext(ctx)
+	customers := []NavItem{}
+	if s.Quotas {
+		customers = append(customers,
+			NavItem{Label: "Teams", Href: "/admin/teams", Icon: "building",
+				Active: hasPrefix(path, "/admin/teams")},
+			NavItem{Label: "Capacity", Href: "/admin/capacity", Icon: "gauge",
+				Active: hasPrefix(path, "/admin/capacity")},
+		)
+	}
+	if s.Impersonation {
+		customers = append(customers, NavItem{Label: "Impersonations", Href: "/admin/impersonations", Icon: "eye",
+			Active: hasPrefix(path, "/admin/impersonations")})
+	}
+	if s.Regions {
+		customers = append(customers, NavItem{Label: "Regions", Href: "/admin/regions", Icon: "map-pin",
+			Active: hasPrefix(path, "/admin/regions")})
+	}
+	nav := []NavGroup{{Items: []NavItem{{Label: "Overview", Href: "/admin", Icon: "grid", Active: path == "/admin"}}}}
+	if len(customers) > 0 {
+		nav = append(nav, NavGroup{Heading: AdminCustomersHeading, Items: customers})
+	}
+	nav = append(nav,
+		NavGroup{Heading: AdminClusterHeading, Items: adminNav(ctx, path)},
+		NavGroup{Heading: AdminInstallHeading, Items: []NavItem{
+			{Label: "Settings", Href: "/settings", Icon: "settings", Active: path == "/settings"},
+		}},
+	)
+	return nav
+}
+
 func breadcrumbFor(path string) []Crumb {
 	switch {
-	case path == "/":
-		return []Crumb{{Label: "Overview"}}
+	case path == "/" || path == "/projects":
+		return []Crumb{{Label: "Projects"}}
+	case path == "/usage":
+		return []Crumb{{Label: "Usage"}}
+	case path == "/admin":
+		return []Crumb{{Label: AdminNavHeading}, {Label: "Overview"}}
+	case hasPrefix(path, "/admin/impersonations"):
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Impersonations"}}
 	case hasPrefix(path, "/apps/new"):
 		return []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "New"}}
 	case hasPrefix(path, "/apps/"):
@@ -461,45 +555,16 @@ func slot(c templ.Component) templ.Component {
 	return c
 }
 
-// teamNav offers team management only where there is a team to manage.
+// adminNav is the Admin console's Cluster group: the machines, and the
+// registry and DNS where this install has them.
 //
-// An install resolved by a shared token has one owner and no memberships, so
-// the page would show a list of one person nobody can change. The switcher
-// already answers "is this install multi-team?", and this asks it the same way.
-func teamNav(ctx context.Context, path string) []NavItem {
-	if len(TeamsFromContext(ctx)) == 0 {
-		return nil
-	}
-	return []NavItem{{
-		Label: "Team", Href: "/team", Icon: "users",
-		Active: hasPrefix(path, "/team"),
-	}}
-}
-
-// adminNav lists the Admin pages this install actually has: the teams and
-// whether the cluster has room for them first, because those are what an
-// operator of a shared install checks most; then the machines; then the
-// install-wide settings.
-//
-// Conditional for the reason the Team entry is: an entry whose route was never
-// mounted is a link to a 404, which reads as a broken feature rather than an
-// absent one. DNS had exactly that problem from the day it was written — a
-// page with no way in, and a custom-domain panel telling people to go to it.
+// Conditional: an entry whose route was never mounted is a link to a 404,
+// which reads as a broken feature rather than an absent one. DNS had exactly
+// that problem from the day it was written — a page with no way in, and a
+// custom-domain panel telling people to go to it.
 func adminNav(ctx context.Context, path string) []NavItem {
 	var items []NavItem
 	s := SurfacesFromContext(ctx)
-	if s.Quotas {
-		items = append(items,
-			NavItem{Label: "Teams", Href: "/admin/teams", Icon: "building",
-				Active: hasPrefix(path, "/admin/teams")},
-			NavItem{Label: "Capacity", Href: "/admin/capacity", Icon: "gauge",
-				Active: hasPrefix(path, "/admin/capacity")},
-		)
-	}
-	if s.Regions {
-		items = append(items, NavItem{Label: "Regions", Href: "/admin/regions", Icon: "map-pin",
-			Active: hasPrefix(path, "/admin/regions")})
-	}
 	items = append(items,
 		NavItem{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
 			Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")},

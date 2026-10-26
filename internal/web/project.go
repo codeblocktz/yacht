@@ -28,29 +28,6 @@ type ProjectListData struct {
 	Focus bool
 }
 
-// projectList shows the projects a team has.
-func (s *Server) projectList(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	owner := identity.MustFromContext(ctx)
-
-	// An install with no app service has no projects. The sidebar links here
-	// regardless, so the answer is the empty list rather than a nil
-	// dereference or a 404 for a link the page itself offered.
-	if s.apps == nil {
-		s.render(w, r, ProjectList(ProjectListData{}))
-		return
-	}
-	projects, err := s.apps.Projects(ctx, owner.ID)
-	if err != nil {
-		s.log.Error("list projects", slog.String("error", err.Error()))
-		http.Error(w, "could not load projects", http.StatusInternalServerError)
-		return
-	}
-	s.render(w, r, ProjectList(ProjectListData{
-		Projects: projects, Focus: r.URL.Query().Get("new") != "",
-	}))
-}
-
 // projectCreate makes a project and opens its canvas.
 func (s *Server) projectCreate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -58,13 +35,9 @@ func (s *Server) projectCreate(w http.ResponseWriter, r *http.Request) {
 
 	p, err := s.apps.CreateProject(ctx, owner.ID, r.FormValue("name"))
 	if err != nil {
-		projects, listErr := s.apps.Projects(ctx, owner.ID)
-		if listErr != nil {
-			s.log.Error("list projects", slog.String("error", listErr.Error()))
-		}
 		// Re-rendered rather than redirected, so the message arrives with the
 		// form that caused it instead of as a detail on another page.
-		s.renderStatus(w, r, http.StatusUnprocessableEntity, ProjectList(ProjectListData{Projects: projects, Error: err.Error()}))
+		s.renderWorkspaceHome(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	http.Redirect(w, r, "/projects/"+p.Slug, http.StatusSeeOther)

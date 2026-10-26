@@ -60,9 +60,9 @@ var hrefRE = regexp.MustCompile(`href="([^"]+)"`)
 // the same defect wearing the opposite sign — a link to a 404 reads as a
 // broken feature rather than an absent one.
 func TestTheSidebarOnlyOffersPagesThatExist(t *testing.T) {
-	// Without a registry.
+	// Without a registry. The registry is the Admin console's.
 	h := testServer(t, Options{})
-	body := get(t, h, "/").Body.String()
+	body := get(t, h, "/admin").Body.String()
 	for _, link := range hrefRE.FindAllStringSubmatch(body, -1) {
 		if link[1] == "/cluster/registry" {
 			t.Error("the sidebar links to the registry on an install that has none")
@@ -71,7 +71,7 @@ func TestTheSidebarOnlyOffersPagesThatExist(t *testing.T) {
 
 	// With one.
 	h = testServer(t, Options{Registries: &fakeRegistries{canStore: true}})
-	body = get(t, h, "/").Body.String()
+	body = get(t, h, "/admin").Body.String()
 	if !strings.Contains(body, `href="/cluster/registry"`) {
 		t.Error("an install with a registry does not link to it")
 	}
@@ -84,7 +84,8 @@ func TestTheSidebarOnlyOffersPagesThatExist(t *testing.T) {
 // route somebody remembered.
 func TestEverySidebarLinkResolves(t *testing.T) {
 	h := testServer(t, Options{Registries: &fakeRegistries{canStore: true}})
-	body := get(t, h, "/").Body.String()
+	// Both chromes: the workspace's, and the Admin console's.
+	body := get(t, h, "/").Body.String() + get(t, h, "/admin").Body.String()
 
 	seen := map[string]bool{}
 	for _, m := range hrefRE.FindAllStringSubmatch(body, -1) {
