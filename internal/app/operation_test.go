@@ -718,7 +718,8 @@ func TestCancellingABuildRemovesItsRecordedJob(t *testing.T) {
 		t.Fatalf("seed Git app: %v", err)
 	}
 	a := App{ID: appID, OwnerID: ownerID, Name: "web", Namespace: "operation-cancel-build-web",
-		Image: "registry.test/old:web", Source: SourceGit}
+		Image: "registry.test/old:web", Source: SourceGit,
+		Repo: Repo{URL: "https://example.test/repo.git", Branch: "main"}}
 	op, err := s.admitDeployment(ctx, ownerID, a, "redeploy", uuid.Nil, true)
 	if err != nil {
 		t.Fatalf("admit build: %v", err)
