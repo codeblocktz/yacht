@@ -234,18 +234,19 @@ func TestEveryNavTargetResolves(t *testing.T) {
 
 	// The operator's menu, which is the full one. The server here has no
 	// accounts, so its one principal is the operator and reaches every page.
+	// Both chromes: the workspace's and the Admin console's.
 	opCtx := context.WithValue(context.Background(), surfacesKey{}, Surfaces{Operator: true})
-	slots := DefaultSlots{}.Slots(opCtx,
-		httptest.NewRequest(http.MethodGet, "/", nil))
-
 	var checked int
-	for _, group := range slots.Nav {
-		for _, item := range group.Items {
-			if code := get(t, h, item.Href).Code; code != http.StatusOK {
-				t.Errorf("nav item %q -> GET %s = %d, want 200",
-					item.Label, item.Href, code)
+	for _, path := range []string{"/", "/admin"} {
+		slots := DefaultSlots{}.Slots(opCtx, httptest.NewRequest(http.MethodGet, path, nil))
+		for _, group := range slots.Nav {
+			for _, item := range group.Items {
+				if code := get(t, h, item.Href).Code; code != http.StatusOK {
+					t.Errorf("nav item %q -> GET %s = %d, want 200",
+						item.Label, item.Href, code)
+				}
+				checked++
 			}
-			checked++
 		}
 	}
 	if checked < 7 {

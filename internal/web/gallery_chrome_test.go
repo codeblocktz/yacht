@@ -117,10 +117,12 @@ func chromeGalleryPages() []galleryPage {
 	}
 	apps[1].Host, apps[1].TLS = "shop.acme.dev", true
 
-	overview := func(c *Checklist) OverviewData {
-		return OverviewData{
-			OwnerName: galleryOwner.DisplayName, ClusterOK: true, AppCount: int64(len(apps)),
-			Apps: apps, Activity: activityBusy(), Checklist: c,
+	// The workspace's home, with the gallery's apps as one project.
+	home := func(c *Checklist) WorkspaceHomeData {
+		p := app.Project{Name: "Storefront", Slug: "storefront"}
+		return WorkspaceHomeData{
+			Total: 1, Sort: sortRecent, View: viewGrid, Checklist: c,
+			Cards: projectCards([]app.Project{p}, apps, "", sortRecent),
 		}
 	}
 	partly := gettingStarted(checklistFacts{
@@ -155,47 +157,52 @@ func chromeGalleryPages() []galleryPage {
 		},
 		{
 			// Collapsed to icons, with a tooltip showing for the focused link.
-			file: "chrome-rail.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-rail.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: `document.documentElement.setAttribute("data-sidebar", "collapsed");` +
-				` document.querySelector('.nav-item[href="/deployments"]').focus();`,
+				` document.querySelector('.nav-item[href="/"]').focus();`,
 		},
 		{
-			file: "chrome-rail-menu.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-rail-menu.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: `document.documentElement.setAttribute("data-sidebar", "collapsed"); ` + openMenu(0),
 		},
 		{
-			file: "chrome-palette.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-palette.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: `window.yachtPalette.open();`,
 		},
 		{
-			file: "chrome-palette-search.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-palette-search.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: `window.yachtPalette.open(); setTimeout(function () {` +
 				` var i = document.querySelector("[data-palette-input]"); i.value = "st";` +
 				` i.dispatchEvent(new Event("input")); }, 200);`,
 		},
 		{
-			file: "chrome-switcher.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-switcher.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: openMenu(0),
 		},
 		{
-			file: "chrome-user-menu.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)),
+			file: "chrome-user-menu.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)),
 			boot: openMenu(1),
 		},
 		{
 			// An install with no accounts: the owner, named, and nothing to
 			// switch to.
-			file: "chrome-solo.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(nil)), solo: true,
+			file: "chrome-solo.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(nil)), solo: true,
 		},
 		{
-			file: "chrome-getting-started.html", path: "/", crumbs: []Crumb{{Label: "Overview"}},
-			page: Overview(overview(partly)),
+			// The Admin console: its own sidebar, and the way back.
+			file: "chrome-admin.html", path: "/admin", crumbs: []Crumb{{Label: AdminNavHeading}, {Label: "Overview"}},
+			page: Overview(OverviewData{Operator: true, ClusterOK: true}),
+		},
+		{
+			file: "chrome-getting-started.html", path: "/", crumbs: []Crumb{{Label: "Projects"}},
+			page: WorkspaceHome(home(partly)),
 		},
 		{
 			// Shot at phone width: the same sidebar, as a drawer over the page.
@@ -208,14 +215,16 @@ func chromeGalleryPages() []galleryPage {
 
 // The gallery's chrome has to be a real one: signed in, in a team, with
 // projects. A gallery drawn against an empty context reviews a sidebar with
-// no switcher, no tree and no person in it — which no install ships.
+// no switcher and no person in it — which no install ships.
 func TestTheGalleryDrawsAFullChrome(t *testing.T) {
 	g := galleryPage{path: "/apps/api"}
 	ctx := galleryChromeContext(context.Background(), g)
 	s := DefaultSlots{}.Slots(ctx, httptest.NewRequest("GET", "/apps/api", nil))
-	if s.SidebarTop == nil || s.SidebarFooter == nil || s.Projects == nil {
-		t.Fatalf("gallery chrome is missing parts: top %v, footer %v, projects %v",
-			s.SidebarTop != nil, s.SidebarFooter != nil, s.Projects != nil)
+	// No project tree: the workspace's projects are its home page, as
+	// Railway's are, and a project is opened from there.
+	if s.SidebarTop == nil || s.SidebarFooter == nil || len(s.Nav) < 2 {
+		t.Fatalf("gallery chrome is missing parts: top %v, footer %v, nav groups %d",
+			s.SidebarTop != nil, s.SidebarFooter != nil, len(s.Nav))
 	}
 	if len(chromeGalleryPages()) < 8 {
 		t.Error("the chrome's gallery states are missing")

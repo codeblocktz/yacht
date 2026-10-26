@@ -328,7 +328,7 @@ func (f *fakeAccounts) SetRole(
 	return errNoFakeAccountsBackend
 }
 
-func (f *fakeAccounts) StartActing(context.Context, uuid.UUID, string) (account.Team, error) {
+func (f *fakeAccounts) StartActingWithReason(context.Context, uuid.UUID, string, string) (account.Team, error) {
 	return account.Team{}, errors.New("not implemented in this fake")
 }
 

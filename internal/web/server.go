@@ -239,7 +239,7 @@ type Accounts interface {
 	// again — an operator acting as a team, for support. The account service
 	// records both; who may start is decided here, and whether they may go on
 	// is decided on every request by the identity provider and roleOf.
-	StartActing(ctx context.Context, sessionID uuid.UUID, teamID string) (account.Team, error)
+	StartActingWithReason(ctx context.Context, sessionID uuid.UUID, teamID, reason string) (account.Team, error)
 	StopActing(ctx context.Context, sessionID uuid.UUID) (string, error)
 
 	// ImpersonationEvents is the durable record for one team, newest first.
@@ -790,7 +790,10 @@ func (s *Server) Handler() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireRole(account.RoleMember))
 
-			r.Get("/", s.overview)
+			// The workspace's home is its projects, as Railway's is. The
+			// install's overview — the cluster, what is sold of it — is the
+			// Admin console's.
+			r.Get("/", s.workspaceHome)
 
 			// What the command palette searches: the team's projects and apps.
 			// Member, like every other read, and scoped by the resolved owner.
@@ -800,7 +803,10 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/onboarding/dismiss", s.onboardingDismiss)
 
 			r.Get("/canvas", s.canvasRedirect)
-			r.Get("/projects", s.projectList)
+			r.Get("/projects", s.workspaceHome)
+			if s.usage != nil && s.apps != nil {
+				r.Get("/usage", s.workspaceUsage)
+			}
 			r.Post("/projects", s.projectCreate)
 			r.Get("/projects/{slug}", s.projectCanvas)
 			r.Get("/projects/{slug}/status", s.projectStatus)
@@ -1065,6 +1071,10 @@ func (s *Server) Handler() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireOperator)
 
+			r.Get("/admin", s.overview)
+			if s.impersonation() {
+				r.Get("/admin/impersonations", s.adminImpersonations)
+			}
 			r.Get("/cluster", s.clusterNodes)
 			r.Get("/cluster/nodes", s.clusterNodes)
 			r.Get("/cluster/pods", s.clusterPods)
@@ -1301,25 +1311,6 @@ func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
 			s.log.Error("read capacity for the overview", slog.String("error", err.Error()))
 		}
 	}
-	if s.apps != nil {
-		if apps, err := s.apps.List(ctx, owner.ID); err == nil {
-			data.Apps = apps
-			data.AppCount = int64(len(apps))
-		} else {
-			s.log.Error("list apps", slog.String("error", err.Error()))
-		}
-
-		// A chart that cannot be drawn is left out rather than shown empty.
-		// An empty chart says "you have deployed nothing", and saying that
-		// because a query failed is worse than saying nothing at all.
-		if activity, err := s.apps.DeployActivity(ctx, owner.ID, deployWindowDays); err == nil {
-			data.Activity = activity
-		} else {
-			s.log.Error("deploy activity", slog.String("error", err.Error()))
-		}
-	}
-	data.Checklist = s.checklistFor(r)
-
 	s.render(w, r, Overview(data))
 }
 

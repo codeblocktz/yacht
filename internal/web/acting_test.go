@@ -66,9 +66,12 @@ func newActingSetup(t *testing.T, prefix string, operators []string) *actingSetu
 	return a
 }
 
+// actingReason is what the tests give as why they act.
+const actingReason = "Ticket #42: the deploy fails at the build"
+
 func (a *actingSetup) act(t *testing.T) {
 	t.Helper()
-	rec := a.postAs(t, "/admin/teams/"+a.custTeam+"/act", a.operator)
+	rec := a.postFormAs(t, "/admin/teams/"+a.custTeam+"/act", a.operator, url.Values{"reason": {actingReason}})
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
 		t.Fatalf("POST act as the named operator = %d → %q, want 303 → /\n%s",
 			rec.Code, rec.Header().Get("Location"), rec.Body.String())
@@ -143,8 +146,9 @@ func TestANamedOperatorActsAsAnotherTeam(t *testing.T) {
 	if strings.Contains(home, a.appName) {
 		t.Error("acting as the customer, the overview still shows the operator's own team's app")
 	}
-	// The Admin area stays: it is the person who is the operator, not the team.
-	if !strings.Contains(home, `href="/admin/teams"`) {
+	// The way into the Admin console stays: it is the person who is the
+	// operator, not the team.
+	if !strings.Contains(home, `href="/admin"`) {
 		t.Error("acting as a team took the Admin area away from the operator")
 	}
 
@@ -300,7 +304,7 @@ func TestStopActingPutsTheOperatorBack(t *testing.T) {
 
 	// The team page shows the record.
 	page := a.getAs(t, "/admin/teams/"+a.custTeam, a.operator).Body.String()
-	for _, want := range []string{"Support access", "Started acting", "Stopped acting", operatorEmail, "Act as this team"} {
+	for _, want := range []string{"Support access", "Started acting", "Stopped acting", operatorEmail, "Impersonate…"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the team page does not show %q", want)
 		}
@@ -425,3 +429,35 @@ func TestPersonEmailIsThePersonWhileActing(t *testing.T) {
 		t.Errorf("PersonEmail with sign-in off = %q, want none", got)
 	}
 }
+
+// Acting needs a reason: without one nothing starts, and with one it is
+// kept with the start — on the team's page, and in Admin › Impersonations,
+// paired with the stop that ended it.
+func TestImpersonatingNeedsAReasonAndKeepsIt(t *testing.T) {
+	a := newActingSetup(t, "web-act-reason", []string{operatorEmail})
+
+	for _, reason := range []string{"", "help"} {
+		rec := a.postFormAs(t, "/admin/teams/"+a.custTeam+"/act", a.operator, url.Values{"reason": {reason}})
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") == "/" {
+			t.Errorf("reason %q: %d → %q, want refused back to the team", reason, rec.Code, rec.Header().Get("Location"))
+		}
+		if got := a.actingTeam(t, a.operator); got != "" {
+			t.Fatalf("reason %q started acting as %q", reason, got)
+		}
+	}
+
+	a.act(t)
+	if code := a.postAs(t, "/acting/stop", a.operator).Code; code != http.StatusSeeOther {
+		t.Fatalf("stop = %d", code)
+	}
+	if body := a.getAs(t, "/admin/teams/"+a.custTeam, a.operator).Body.String(); !strings.Contains(body, actingReason) {
+		t.Error("the team's support access does not show the reason")
+	}
+	body := a.getAs(t, "/admin/impersonations", a.operator).Body.String()
+	for _, want := range []string{actingReason, operatorEmail, "under a minute"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Admin › Impersonations is missing %q", want)
+		}
+	}
+}
+

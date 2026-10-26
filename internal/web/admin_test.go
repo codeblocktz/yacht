@@ -151,48 +151,54 @@ func TestTheOperatorSeesATeamsPool(t *testing.T) {
 	}
 }
 
-// Nothing in the Admin group is offered to somebody who does not run the
-// install. On an install hosting customers, the cluster under them is not
-// theirs to be shown at all.
-func TestTheAdminGroupIsOnlyTheOperators(t *testing.T) {
+// The workspace and the Admin console are two chromes. A workspace offers
+// an operator one way into the console and nothing of it besides; it offers
+// anybody else nothing of it at all. The console is the install's pages, and
+// only an operator is ever given it.
+func TestTheAdminConsoleIsOnlyTheOperators(t *testing.T) {
+	hrefs := func(nav []NavGroup) []string {
+		var out []string
+		for _, g := range nav {
+			for _, item := range g.Items {
+				out = append(out, item.Href)
+			}
+		}
+		return out
+	}
 	for _, operator := range []bool{true, false} {
 		ctx := context.WithValue(context.Background(), surfacesKey{},
 			Surfaces{Operator: operator, Quotas: true, DNS: true, Registry: true})
-		slots := DefaultSlots{}.Slots(ctx, httptest.NewRequest(http.MethodGet, "/", nil))
 
-		var admin *NavGroup
-		for i, g := range slots.Nav {
-			if g.Heading == "Infrastructure" {
-				t.Errorf("an Infrastructure group is still drawn (operator=%v)", operator)
-			}
-			if g.Heading == AdminNavHeading {
-				admin = &slots.Nav[i]
-			}
-			for _, item := range g.Items {
-				if !operator && (strings.HasPrefix(item.Href, "/cluster") || strings.HasPrefix(item.Href, "/admin")) {
-					t.Errorf("a non-operator is offered %s", item.Href)
-				}
+		home := DefaultSlots{}.Slots(ctx, httptest.NewRequest(http.MethodGet, "/", nil))
+		if home.Admin {
+			t.Errorf("the workspace is drawn as the Admin console (operator=%v)", operator)
+		}
+		for _, href := range hrefs(home.Nav) {
+			isAdmin := strings.HasPrefix(href, "/cluster") || strings.HasPrefix(href, "/admin")
+			if isAdmin && (!operator || href != "/admin") {
+				t.Errorf("the workspace offers %s (operator=%v)", href, operator)
 			}
 		}
+		if got := strings.Join(hrefs(home.Nav), " "); operator != strings.Contains(got, "/admin") {
+			t.Errorf("the workspace's way into the console: %q (operator=%v)", got, operator)
+		}
+
+		console := DefaultSlots{}.Slots(ctx, httptest.NewRequest(http.MethodGet, "/admin/teams", nil))
 		if !operator {
-			if admin != nil {
-				t.Error("a non-operator is offered the Admin group")
+			if console.Admin {
+				t.Error("a non-operator is given the Admin console")
 			}
 			continue
 		}
-		if admin == nil {
-			t.Fatal("the operator is not offered the Admin group")
-		}
-		var got []string
-		for _, item := range admin.Items {
-			got = append(got, item.Href)
+		if !console.Admin || console.Projects != nil || console.BrandHref != "/admin" {
+			t.Fatalf("the operator's console: admin %v, projects %v, brand %q", console.Admin, console.Projects, console.BrandHref)
 		}
 		want := []string{
-			"/admin/teams", "/admin/capacity", "/cluster/nodes", "/cluster/pods",
-			"/cluster/volumes", "/cluster/events", "/cluster/registry", "/cluster/dns",
+			"/admin", "/admin/teams", "/admin/capacity", "/cluster/nodes", "/cluster/pods",
+			"/cluster/volumes", "/cluster/events", "/cluster/registry", "/cluster/dns", "/settings",
 		}
-		if strings.Join(got, " ") != strings.Join(want, " ") {
-			t.Errorf("Admin group = %v, want %v", got, want)
+		if got := hrefs(console.Nav); strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Errorf("the console's sidebar = %v, want %v", got, want)
 		}
 	}
 }
@@ -264,8 +270,12 @@ func TestTheAdminPagesAreTheOperators(t *testing.T) {
 	if strings.Contains(home, `href="/admin/teams"`) || strings.Contains(home, ">Admin<") {
 		t.Error("a member is offered the Admin area")
 	}
+	// The operator's way in is the workspace's Admin console link; the
+	// console has the pages.
 	home = rt.getAs(t, "/", rt.owner).Body.String()
-	if !strings.Contains(home, `href="/admin/teams"`) || !strings.Contains(home, `href="/admin/capacity"`) {
+	console := rt.getAs(t, "/admin", rt.owner).Body.String()
+	if !strings.Contains(home, `href="/admin"`) ||
+		!strings.Contains(console, `href="/admin/teams"`) || !strings.Contains(console, `href="/admin/capacity"`) {
 		t.Error("the operator is not offered the Admin area")
 	}
 }

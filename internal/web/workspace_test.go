@@ -127,19 +127,19 @@ func TestTheSearchIndexIsBehindTheMemberGate(t *testing.T) {
 
 // ------------------------------------------------------- deployments badge
 
-// Deploys in flight are counted on the Deployments link, and nothing is drawn
+// Deploys in flight are counted on the Projects link, and nothing is drawn
 // when there are none — a "0" badge is a badge that is always there.
 func TestTheDeploymentsLinkCountsDeploysInFlight(t *testing.T) {
 	deployments := func(ws app.Workspace) NavItem {
 		s := DefaultSlots{}.Slots(workspaceCtx(ws), httptest.NewRequest("GET", "/", nil))
 		for _, g := range s.Nav {
 			for _, item := range g.Items {
-				if item.Href == "/deployments" {
+				if item.Label == "Projects" {
 					return item
 				}
 			}
 		}
-		t.Fatal("no Deployments link")
+		t.Fatal("no Projects link")
 		return NavItem{}
 	}
 
@@ -155,7 +155,7 @@ func TestTheDeploymentsLinkCountsDeploysInFlight(t *testing.T) {
 	apps := newFakeApps()
 	apps.workspace = map[string]app.Workspace{"owner-1": {LiveDeploys: 2}}
 	body := get(t, testServer(t, Options{Apps: apps}), "/").Body.String()
-	for _, want := range []string{`nav-badge rail-hide nav-badge-live`, `aria-label="Deployments, 2 in progress"`, `nav-dot nav-dot-live`} {
+	for _, want := range []string{`nav-badge rail-hide nav-badge-live`, `aria-label="Projects, 2 in progress"`, `nav-dot nav-dot-live`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page is missing %q", want)
 		}
@@ -234,7 +234,7 @@ func TestGettingStartedIsComputedFromWhatTheTeamHas(t *testing.T) {
 	}
 }
 
-// A new team sees the checklist on the overview; dismissing it is a POST that
+// A new team sees the checklist on its home; dismissing it is a POST that
 // puts it away for the team.
 func TestTheChecklistShowsAndCanBePutAway(t *testing.T) {
 	apps := newFakeApps()
@@ -308,6 +308,9 @@ func TestTheSidebarMarkup(t *testing.T) {
 	// app's page is otherwise drawn in its project's chrome (see
 	// TestAProjectIsDrawnInItsOwnChrome).
 	s.Project = nil
+	// The tree, as a wrapper that offers one draws it: the engine's own
+	// workspace has its projects on its home page instead.
+	s.Projects = sidebarProjects(ws, "/apps/web")
 	// Admin first, as a wrapper might leave it.
 	s.Nav = append([]NavGroup{{Heading: AdminNavHeading, Items: []NavItem{{Label: "Nodes", Href: "/cluster/nodes", Icon: "server"}}}}, s.Nav...)
 	page := renderWith(t, ctx, Layout(s, templ.NopComponent))
@@ -344,9 +347,9 @@ func TestTheSidebarMarkup(t *testing.T) {
 
 	// Admin drawn after everything else in the navigation.
 	admin := strings.Index(page, `class="nav-admin"`)
-	settings := strings.Index(page, `href="/settings"`)
-	if admin < 0 || settings < 0 || admin < settings {
-		t.Errorf("the Admin section is not last (admin at %d, settings at %d)", admin, settings)
+	tree := strings.Index(page, `role="tree"`)
+	if admin < 0 || tree < 0 || admin < tree {
+		t.Errorf("the Admin section is not last (admin at %d, tree at %d)", admin, tree)
 	}
 
 	// The palette is outside the shell, which the phone drawer makes inert.

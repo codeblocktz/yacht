@@ -109,44 +109,41 @@ type OverviewData struct {
 	Capacity *app.CapacitySnapshot
 }
 
+// Overview is the Admin console's home: the install — its machines, how
+// busy they are, and how much of them is sold. A team's apps, deploys and
+// getting started are its workspace's, and are not repeated here.
 templ Overview(d OverviewData) {
-	@pageHead("Overview", "Signed in as "+d.OwnerName, deployButton(""))
+	@pageHead("Overview", "The install: its machines, how busy they are, and how much of them is sold.", nil)
 	if !d.ClusterOK {
 		@clusterCallout(d.ClusterError)
 	}
-	if d.Checklist != nil {
-		@checklist(*d.Checklist)
-	}
 	<div class="metrics mb-6">
-		@metric("Apps", strconv.FormatInt(d.AppCount, 10), "")
-		if d.Operator {
-			@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
-				fmt.Sprintf("%d ready", d.Summary.NodesReady))
-			@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
-			@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
-				clusterCPUDetail(d.Summary))
-			@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
-				clusterMemDetail(d.Summary))
-			if d.Capacity != nil {
-				@capacityMetric(*d.Capacity)
-			}
+		@metric("Nodes", strconv.Itoa(d.Summary.Nodes),
+			fmt.Sprintf("%d ready", d.Summary.NodesReady))
+		@metric("Pods", strconv.Itoa(d.Summary.Pods), podCapacityLabel(d.Summary))
+		@metricUsage("CPU", d.Summary.CPUPercent(), d.Summary.UsageKnown,
+			clusterCPUDetail(d.Summary))
+		@metricUsage("Memory", d.Summary.MemoryPercent(), d.Summary.UsageKnown,
+			clusterMemDetail(d.Summary))
+		if d.Capacity != nil {
+			@capacityMetric(*d.Capacity)
 		}
 	</div>
-	if len(d.Activity.Days) > 0 {
-		@deployActivity(d.Activity)
-	}
-	<div class="panel">
-		<div class="panel-header">
-			<span class="panel-title">Apps</span>
-			<a href="/apps" class="text-[12px] text-muted-foreground hover:text-foreground">
-				View all
-			</a>
-		</div>
-		if len(d.Apps) == 0 {
-			@emptyApps("")
-		} else {
-			@appRows(d.Apps)
-		}
+	<div class="grid gap-4 sm:grid-cols-2">
+		<a class="panel row-link p-4" href="/cluster/nodes">
+			@icon("server")
+			<span class="min-w-0 flex-1">
+				<span class="block font-medium">Machines</span>
+				<span class="block text-muted-foreground">The nodes, what runs on them, their volumes and events.</span>
+			</span>
+		</a>
+		<a class="panel row-link p-4" href="/settings">
+			@icon("settings")
+			<span class="min-w-0 flex-1">
+				<span class="block font-medium">Install settings</span>
+				<span class="block text-muted-foreground">How this install is configured, and its version.</span>
+			</span>
+		</a>
 	</div>
 }
 

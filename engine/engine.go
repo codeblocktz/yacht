@@ -244,6 +244,14 @@ const (
 	// their entries to this group.
 	AdminNavHeading = web.AdminNavHeading
 
+	// The Admin console's groups, where a wrapper adds its operator pages
+	// when Slots.Admin is set — its customers to AdminCustomersHeading, say —
+	// and the workspace's settings group, where it adds its own when not.
+	AdminCustomersHeading    = web.AdminCustomersHeading
+	AdminClusterHeading      = web.AdminClusterHeading
+	AdminInstallHeading      = web.AdminInstallHeading
+	WorkspaceSettingsHeading = web.WorkspaceSettingsHeading
+
 	// The levels a CapacitySnapshot can be at.
 	CapacityOK      = app.CapacityOK
 	CapacityWarn    = app.CapacityWarn
@@ -281,6 +289,13 @@ const (
 )
 
 var (
+	// ImpersonateForm starts acting as a team, with the reason it is done —
+	// for a wrapper's own customer pages. See web.ImpersonateForm.
+	ImpersonateForm = web.ImpersonateForm
+
+	// IsAdminPath reports whether a path is the Admin console's.
+	IsAdminPath = web.IsAdminPath
+
 	// ErrQuotaExceeded is what Apps refuses a change with when it would take
 	// a team past its quota, for a wrapper that answers it with something of
 	// its own rather than the engine's sentence.
@@ -353,6 +368,11 @@ var (
 	// SurfacesFromContext reads them, in a SlotProvider or a handler behind
 	// the engine's identity middleware.
 	SurfacesFromContext = web.SurfacesFromContext
+	// WithSurfaces sets them, for a wrapper's tests of its own chrome.
+	WithSurfaces = web.WithSurfaces
+	// WithOwner puts the resolved owner on a context, as the identity
+	// provider does for each request: for a wrapper's tests.
+	WithOwner = identity.NewContext
 	// OwnerFromContext reads the Owner identity middleware resolved.
 	OwnerFromContext = identity.FromContext
 	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly

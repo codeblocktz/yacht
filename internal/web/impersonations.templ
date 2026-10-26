@@ -1,0 +1,60 @@
+package web
+
+// AdminImpersonations is every operator's acting as a team, across the
+// install: who went in, to which team, why, and for how long. Each team has
+// its own visits in its own audit log; this is the operators' side of it.
+templ AdminImpersonations(d ImpersonationsData) {
+	@pageHead("Impersonations", "Every time an operator acted as a customer's team, with the reason they gave. Each team sees its own in its audit log.", nil)
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div class="min-w-0">
+				<div class="font-medium">{ d.Error }</div>
+			</div>
+		</div>
+	}
+	<div class="panel">
+		if len(d.Items) == 0 {
+			<div class="empty">
+				<p class="font-medium text-foreground">No impersonations</p>
+				<p>Started from a team's page in Admin, with a reason. Each one is listed here.</p>
+			</div>
+		} else {
+			<div class="overflow-x-auto">
+				<table class="dtable">
+					<thead>
+						<tr>
+							<th>Started</th>
+							<th>Operator</th>
+							<th>Team</th>
+							<th>Reason</th>
+							<th class="text-right">Lasted</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, i := range d.Items {
+							<tr>
+								<td class="whitespace-nowrap tabular-nums" title={ i.Started.UTC().Format("2006-01-02 15:04:05 MST") }>{ relativeTime(i.Started) }</td>
+								<td>{ i.Operator }</td>
+								<td><a class="hover:underline" href={ templ.SafeURL(adminTeamHref(i.TeamID)) }>{ i.TeamName }</a></td>
+								<td class="max-w-[360px]">
+									if i.Reason != "" {
+										{ i.Reason }
+									} else {
+										<span class="text-muted-foreground">none given</span>
+									}
+								</td>
+								<td class="whitespace-nowrap text-right tabular-nums">
+									if i.Ended.IsZero() {
+										<span class="status status-warn">{ impersonationLength(i) }</span>
+									} else {
+										{ impersonationLength(i) }
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	</div>
+}

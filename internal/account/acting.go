@@ -47,6 +47,11 @@ type ImpersonationEvent struct {
 	OperatorEmail string
 	Action        string
 	At            time.Time
+	// Reason is why, as the operator gave it when they started; empty on a
+	// stop.
+	Reason string
+	// TeamName is the team's name, where the read crosses teams.
+	TeamName string
 }
 
 // ActingCheck reports whether a person may act as a team other than their own.
@@ -69,6 +74,11 @@ type ActingCheck func(ctx context.Context, user User) bool
 // The state and the record are one transaction. A durable record that can be
 // missing an impersonation that happened is not one anybody can rely on.
 func (s *Service) StartActing(ctx context.Context, sessionID uuid.UUID, teamID string) (Team, error) {
+	return s.StartActingWithReason(ctx, sessionID, teamID, "")
+}
+
+// StartActingWithReason is StartActing with why, kept with the start.
+func (s *Service) StartActingWithReason(ctx context.Context, sessionID uuid.UUID, teamID, reason string) (Team, error) {
 	var team Team
 	err := s.inTx(ctx, func(q *dbgen.Queries) error {
 		row, err := q.GetTeam(ctx, teamID)
@@ -103,7 +113,7 @@ func (s *Service) StartActing(ctx context.Context, sessionID uuid.UUID, teamID s
 			// nothing is recorded.
 			return ErrSessionInvalid
 		}
-		return record(ctx, q, teamID, cur.UserID, cur.Email, ImpersonationStart)
+		return record(ctx, q, teamID, cur.UserID, cur.Email, ImpersonationStart, reason)
 	})
 	return team, err
 }
@@ -142,7 +152,32 @@ func (s *Service) ImpersonationEvents(ctx context.Context, teamID string, limit 
 	for _, r := range rows {
 		ev := ImpersonationEvent{
 			ID: r.ID, TeamID: r.OwnerID, OperatorEmail: r.OperatorEmail,
-			Action: r.Action, At: r.At,
+			Action: r.Action, At: r.At, Reason: r.Reason,
+		}
+		if r.UserID.Valid {
+			ev.UserID = r.UserID.Bytes
+		}
+		out = append(out, ev)
+	}
+	return out, nil
+}
+
+// AllImpersonationEvents is every team's record, newest first: the
+// operators' own list of where they went. Only the install's operators may
+// be shown it — the caller's gate, as for starting.
+func (s *Service) AllImpersonationEvents(ctx context.Context, limit int32) ([]ImpersonationEvent, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.q.ListAllImpersonationEvents(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("account: list every impersonation: %w", err)
+	}
+	out := make([]ImpersonationEvent, 0, len(rows))
+	for _, r := range rows {
+		ev := ImpersonationEvent{
+			ID: r.ID, TeamID: r.OwnerID, OperatorEmail: r.OperatorEmail,
+			Action: r.Action, At: r.At, Reason: r.Reason, TeamName: r.DisplayName,
 		}
 		if r.UserID.Valid {
 			ev.UserID = r.UserID.Bytes
@@ -164,15 +199,15 @@ func endActing(ctx context.Context, q *dbgen.Queries, cur dbgen.LockSessionActin
 	if err := q.ClearSessionActing(ctx, cur.ID); err != nil {
 		return "", fmt.Errorf("account: stop acting: %w", err)
 	}
-	if err := record(ctx, q, team, cur.UserID, cur.Email, ImpersonationStop); err != nil {
+	if err := record(ctx, q, team, cur.UserID, cur.Email, ImpersonationStop, ""); err != nil {
 		return "", err
 	}
 	return team, nil
 }
 
-func record(ctx context.Context, q *dbgen.Queries, teamID string, userID uuid.UUID, email, action string) error {
+func record(ctx context.Context, q *dbgen.Queries, teamID string, userID uuid.UUID, email, action, reason string) error {
 	if err := q.InsertImpersonationEvent(ctx, dbgen.InsertImpersonationEventParams{
-		OwnerID: teamID, UserID: userID, OperatorEmail: email, Action: action,
+		OwnerID: teamID, UserID: userID, OperatorEmail: email, Action: action, Reason: reason,
 	}); err != nil {
 		return fmt.Errorf("account: record impersonation %s: %w", action, err)
 	}

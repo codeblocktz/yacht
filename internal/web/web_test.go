@@ -64,14 +64,14 @@ func TestNewRequiresDependencies(t *testing.T) {
 
 func TestOverviewRendersWithDefaultChrome(t *testing.T) {
 	h := testServer(t, Options{})
-	rec := get(t, h, "/")
+	rec := get(t, h, "/admin")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
 
-	for _, want := range []string{"Overview", "Yacht", "Apps", "Settings", "Eric"} {
+	for _, want := range []string{"Overview", "Yacht", "Admin console", "Go to workspace", "Settings", "Eric"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q", want)
 		}
@@ -121,7 +121,7 @@ func TestSlotProviderReplacesChrome(t *testing.T) {
 	}
 
 	// The page itself still renders — chrome and content are independent.
-	if !strings.Contains(body, "Signed in as") {
+	if !strings.Contains(body, "No projects yet") {
 		t.Error("page content should be unaffected by the chrome")
 	}
 }
@@ -260,7 +260,7 @@ func TestHealthReportsClusterFailure(t *testing.T) {
 func TestOverviewShowsClusterError(t *testing.T) {
 	h := testServer(t, Options{Orchestrator: newFailingOrchestrator()})
 
-	rec := get(t, h, "/")
+	rec := get(t, h, "/admin")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -289,7 +289,7 @@ func TestSettingsShowsOwner(t *testing.T) {
 // An app is reached through its project, so Projects is what lights up on an
 // app's URL — there is no Apps entry to light up instead.
 func TestDefaultSlotsMarkActiveNav(t *testing.T) {
-	for _, path := range []string{"/projects", "/projects/default", "/apps/web", "/canvas"} {
+	for _, path := range []string{"/", "/projects", "/projects/default", "/apps/web", "/canvas"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		s := DefaultSlots{}.Slots(context.Background(), req)
 
@@ -299,19 +299,17 @@ func TestDefaultSlotsMarkActiveNav(t *testing.T) {
 				if item.Href == "/apps" {
 					t.Error("the sidebar still offers a flat list of apps")
 				}
-				if item.Href == "/projects" {
+				// Projects is the workspace's home, so it is "/".
+				if item.Label == "Projects" {
 					checked = true
-					if !item.Active {
-						t.Errorf("projects nav item is not active on %s", path)
+					if item.Href != "/" || !item.Active {
+						t.Errorf("Projects (%s) is not the active home on %s", item.Href, path)
 					}
-				}
-				if item.Href == "/" && item.Active {
-					t.Errorf("overview is active on %s", path)
 				}
 			}
 		}
 		if !checked {
-			t.Fatalf("no /projects nav item found for %s", path)
+			t.Fatalf("no Projects nav item found for %s", path)
 		}
 	}
 }

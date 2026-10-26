@@ -191,12 +191,16 @@ func TestEveryPageIsReachableByClicking(t *testing.T) {
 	h.user(t, "nav@web.test")
 	c := sessionCookie(h.signIn(t, "nav@web.test"))
 
-	body := h.getAs(t, "/", c).Body.String()
+	// The workspace's pages from its home, and the install's from the Admin
+	// console's — which the workspace links to.
+	body := h.getAs(t, "/", c).Body.String() + h.getAs(t, "/admin", c).Body.String()
 
 	// Every top-level page a person is meant to use. Sub-pages of an app are
-	// reached from the app, so they are not listed here.
+	// reached from the app, so they are not listed here; nor are a flat list
+	// of apps and the team's deploys, which are each project's canvas and
+	// deployments now, as Railway's are.
 	for _, href := range []string{
-		"/", "/apps", "/deployments",
+		"/", "/admin",
 		"/cluster/nodes", "/cluster/pods", "/cluster/volumes", "/cluster/events",
 		"/team", "/settings", "/account",
 	} {

@@ -125,6 +125,16 @@ func (s *Server) teamsFor(r *http.Request) []TeamChoice {
 // The first team is the fallback for a session whose active team is somehow not
 // in the list: a switcher whose label is blank looks like a broken control, and
 // the list underneath is still correct.
+// activeTeam is the team the session is in.
+func activeTeam(teams []TeamChoice) (TeamChoice, bool) {
+	for _, t := range teams {
+		if t.Active {
+			return t, true
+		}
+	}
+	return TeamChoice{}, false
+}
+
 func activeTeamName(teams []TeamChoice) string {
 	for _, t := range teams {
 		if t.Active {

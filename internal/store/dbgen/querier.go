@@ -448,6 +448,9 @@ type Querier interface {
 	// way the cluster's pod list is. One query rather than one per team, because
 	// an install hosting many teams is exactly the install this page is for.
 	ListAllAppFootprints(ctx context.Context) ([]ListAllAppFootprintsRow, error)
+	// Every team's, newest first, with the team's name: Admin › Impersonations,
+	// the operators' own record of where they went.
+	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)

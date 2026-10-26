@@ -463,7 +463,7 @@ func TestClusterPagesAreTheOperators(t *testing.T) {
 	if strings.Contains(home, ">Nodes<") {
 		t.Error("a member's overview shows the cluster's nodes")
 	}
-	if !strings.Contains(rt.getAs(t, "/", rt.owner).Body.String(), `href="/cluster/nodes"`) {
+	if !strings.Contains(rt.getAs(t, "/admin", rt.owner).Body.String(), `href="/cluster/nodes"`) {
 		t.Error("the owner, who is the operator here, is not offered the cluster's pages")
 	}
 }
