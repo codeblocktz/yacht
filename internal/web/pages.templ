@@ -423,6 +423,9 @@ type AppDetailData struct {
 	// Vars is the rest of the variables tab: what is staged, what the
 	// platform adds, and which of its controls the service supports.
 	Vars        VariablesView
+	// CLI is what the product's CLI is called, for an empty service's
+	// directions.
+	CLI         string
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -676,6 +679,18 @@ templ AppDeploymentsBody(d AppDetailData) {
 			<p class="mt-1 text-[12.5px] text-muted-foreground">
 				This workload has an immutable baseline, but no legacy deployment attempt can own it.
 			</p>
+		</div>
+	} else if awaitsSource(d.App) && len(d.Deployments) == 0 {
+		<div class="panel">
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing deployed yet</p>
+				<p>Upload this service's source from its directory:</p>
+				<p class="mt-2"><code class="mono rounded bg-muted px-2 py-1 text-foreground">{ d.CLI } up --app { d.App.Name }</code></p>
+				<p class="mt-2">
+					Or connect a repository in
+					<a class="underline hover:text-foreground" href={ templ.URL("/apps/" + d.App.Name + "/settings#source") }>Settings</a>.
+				</p>
+			</div>
 		</div>
 	} else {
 		<div class="panel">
@@ -1554,6 +1569,10 @@ type NewAppData struct {
 
 	// GitHubOn offers the team's GitHub repositories beside a pasted URL.
 	GitHubOn bool
+
+	// CLI is what the product's CLI is called, for the empty service, whose
+	// source arrives through its up.
+	CLI string
 }
 
 // NewAppForm preserves what the user typed so a validation error does not
@@ -1579,6 +1598,8 @@ type NewAppForm struct {
 templ NewApp(d NewAppData) {
 	if d.Source == "" {
 		@sourcePicker(d)
+	} else if d.Source == sourceEmpty {
+		@newEmptyForm(d)
 	} else {
 		@newAppForm(d)
 	}
@@ -1654,6 +1675,22 @@ templ sourcePicker(d NewAppData) {
 						}
 					</div>
 				}
+			}
+			// Railway's Empty Service: last, as theirs is, and only where
+			// something could build what is later given to it.
+			if sourcesCanBuild(d.Sources) {
+				<a href={ templ.SafeURL(sourceHref(sourceEmpty, d.Project)) } class="row-link">
+					<span class="text-muted-foreground">
+						@icon("square-dashed")
+					</span>
+					<span class="min-w-0 flex-1">
+						<span class="block font-medium">Empty service</span>
+						<span class="block text-muted-foreground">
+							Nothing to run yet. Upload its source with <code class="mono">{ d.CLI } up</code>, or connect a repository later.
+						</span>
+					</span>
+					<span class="text-muted-foreground">&rsaquo;</span>
+				</a>
 			}
 		</div>
 	</div>
@@ -1827,6 +1864,48 @@ templ newAppForm(d NewAppData) {
 		<div class="mt-4 flex items-center gap-2">
 			<button class="btn btn-primary" type="submit">Deploy</button>
 			<a class="btn btn-ghost" href="/apps">Cancel</a>
+		</div>
+	</form>
+}
+
+// newEmptyForm names an empty service. Nothing else is asked: its source,
+// and so its port and how it starts, come with what is uploaded to it or the
+// repository connected to it, and everything else is in its settings.
+templ newEmptyForm(d NewAppData) {
+	@pageHead("Empty service", "A service with nothing to run yet.", backToSources())
+	if d.Error != "" {
+		<div class="callout callout-err mb-5">
+			<div>
+				<div class="font-medium">Could not create it</div>
+				<p class="mt-0.5 text-muted-foreground">{ d.Error }</p>
+			</div>
+		</div>
+	}
+	<form method="post" action="/apps" class="max-w-2xl">
+		<input type="hidden" name="source" value={ sourceEmpty }/>
+		<input type="hidden" name="project" value={ d.Project }/>
+		<div class="panel">
+			<div class="panel-body flex flex-col gap-4">
+				<div class="field">
+					<label class="label" for="name">Name</label>
+					<input class="control" id="name" name="name" value={ d.Form.Name } placeholder="api" required autofocus/>
+					<span class="hint">Lowercase letters, numbers and dashes. Becomes the DNS name.</span>
+				</div>
+				@regionField("region", d.Regions, d.Form.Region)
+				<div class="field">
+					<label class="label" for="port">Port</label>
+					<input class="control w-32" id="port" name="port" type="number" min="0" max="65535" value={ d.Form.Port } placeholder="8080"/>
+					<span class="hint">What it will listen on. 0 for a worker that serves nothing.</span>
+				</div>
+				<p class="text-[12.5px] text-muted-foreground">
+					Then, from its source's directory:
+					<code class="mono">{ d.CLI } link</code> and <code class="mono">{ d.CLI } up</code> — or connect a repository in its Settings.
+				</p>
+			</div>
+		</div>
+		<div class="mt-4 flex items-center gap-2">
+			<button class="btn btn-primary" type="submit">Create</button>
+			<a class="btn btn-ghost" href={ templ.SafeURL(newAppHref(d.Project)) }>Cancel</a>
 		</div>
 	</form>
 }

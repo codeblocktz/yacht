@@ -509,6 +509,12 @@ type CreateInput struct {
 	// source: an image nobody builds has no repository to name.
 	Repo Repo
 
+	// Empty is Railway's Empty Service: a service with nothing to run yet,
+	// built from source somebody uploads with the CLI's up, or from a
+	// repository connected later. No repository is asked for and nothing is
+	// deployed until one of those arrives.
+	Empty bool
+
 	// Region is where the app lives, on an install with regions. Empty is the
 	// default region. It has to be open to new apps and have a machine ready;
 	// on an install with no regions it has to be empty.
@@ -865,6 +871,10 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if in.Source == "" {
 		in.Source = SourceImage
 	}
+	if in.Empty {
+		// Built like a repository is, from whatever arrives first.
+		in.Source, in.Repo, in.Image = SourceGit, Repo{}, PendingImage
+	}
 	if err := s.placeInEnvironment(ctx, ownerID, &in); err != nil {
 		return App{}, err
 	}
@@ -894,11 +904,13 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 				return App{}, err
 			}
 		}
-		if !in.Repo.Set() {
+		switch {
+		case !in.Repo.Set() && !in.Empty:
 			return App{}, errors.New("app: a repository URL is required")
-		}
-		if err := in.Repo.Validate(); err != nil {
-			return App{}, err
+		case in.Repo.Set():
+			if err := in.Repo.Validate(); err != nil {
+				return App{}, err
+			}
 		}
 		if in.Image == "" {
 			in.Image = PendingImage
@@ -1150,33 +1162,12 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	// having a port. A template that knows its app is a website asks for one
 	// after the app exists; see DeployTemplateIn.
 
-	var release Release
-	if created.Source != SourceGit {
-		release, err = s.createRelease(ctx, q, created, "")
-		if err != nil {
+	// An empty service has nothing to deploy: its first deploy is the first
+	// upload, or the first build of a repository connected to it.
+	if !in.Empty {
+		if err := s.admitInitialDeploy(ctx, q, ownerID, created); err != nil {
 			return App{}, err
 		}
-	}
-	// Initial deployment is admitted like every later deployment. Nothing calls
-	// the cluster while this transaction is open, and neither an image app nor a
-	// Git app can claim success before the stage worker proves its rollout.
-	deploy, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
-		OwnerID: ownerID, AppID: created.ID, Image: created.Image,
-		Revision: "initial", Status: DeployRunning, Trigger: "initial",
-		ActorKind: "user", ReleaseID: pgUUID(release.ID),
-	})
-	if err != nil {
-		return App{}, fmt.Errorf("app: record deployment: %w", err)
-	}
-	var initialRelease *uuid.UUID
-	if release.ID != uuid.Nil {
-		initialRelease = &release.ID
-	}
-	_, err = s.enqueueOperation(
-		ctx, q, ownerID, created.ID, deploy.ID, initialRelease, created.Source == SourceGit,
-	)
-	if err != nil {
-		return App{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit: %w", err)
@@ -1189,6 +1180,38 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		slog.String("region", region))
 	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: created.ID, App: created.Name})
 	return created, nil
+}
+
+// admitInitialDeploy writes a new app's first deployment on the create's
+// transaction.
+//
+// Admitted like every later deployment. Nothing calls the cluster while the
+// transaction is open, and neither an image app nor a Git app can claim
+// success before the stage worker proves its rollout.
+func (s *Service) admitInitialDeploy(ctx context.Context, q *dbgen.Queries, ownerID string, created App) error {
+	var release Release
+	if created.Source != SourceGit {
+		var err error
+		if release, err = s.createRelease(ctx, q, created, ""); err != nil {
+			return err
+		}
+	}
+	deploy, err := q.CreateDeployment(ctx, dbgen.CreateDeploymentParams{
+		OwnerID: ownerID, AppID: created.ID, Image: created.Image,
+		Revision: "initial", Status: DeployRunning, Trigger: "initial",
+		ActorKind: "user", ReleaseID: pgUUID(release.ID),
+	})
+	if err != nil {
+		return fmt.Errorf("app: record deployment: %w", err)
+	}
+	var initialRelease *uuid.UUID
+	if release.ID != uuid.Nil {
+		initialRelease = &release.ID
+	}
+	_, err = s.enqueueOperation(
+		ctx, q, ownerID, created.ID, deploy.ID, initialRelease, created.Source == SourceGit,
+	)
+	return err
 }
 
 // apply ensures the namespace and converges the workload.
@@ -1816,7 +1839,9 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	// Both source kinds stop at durable admission. The process worker claims
 	// the row independently, so disconnecting this request cannot cancel the
 	// build or rollout it admitted.
-	if a.Source == SourceGit {
+	// A service built only from uploads has no repository to build again:
+	// it rolls out what its last upload built, as an image app would.
+	if a.Source == SourceGit && (a.Repo.Set() || a.Image == PendingImage) {
 		_, err := s.admitDeployment(ctx, ownerID, a, "redeploy", uuid.Nil, true)
 		return err
 	}

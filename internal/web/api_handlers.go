@@ -720,7 +720,7 @@ func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 			"a deploy is already in flight — wait for it to finish, or cancel it")
 	case errors.Is(err, app.ErrReleaseActive):
 		writeAPIError(w, http.StatusConflict, "already_active", "that release is already the one running")
-	case errors.Is(err, app.ErrNoBuilder), errors.Is(err, app.ErrUploadNotSource),
+	case errors.Is(err, app.ErrNoBuilder), errors.Is(err, app.ErrUploadNotSource), errors.Is(err, app.ErrNothingToBuild),
 		errors.Is(err, app.ErrUploadUnfetchable), errors.Is(err, app.ErrNoSecretKey):
 		writeAPIError(w, http.StatusConflict, "unavailable", failureReason(err.Error()))
 	case errors.Is(err, app.ErrUploadTooLarge):

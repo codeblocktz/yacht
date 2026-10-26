@@ -876,7 +876,7 @@ func ProjectObservability(d ObservabilityData) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "</div><p class=\"mt-3 text-[12px] text-muted-foreground\">Requests, errors, response times and network are what reaches each service through its public domains. A service reached only on the private network has CPU and memory alone.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 78, "</div><p class=\"mt-3 text-[12px] text-muted-foreground\">Requests, errors, response times and network are what reaches each service through its public domains. A service reached only on the private network has CPU and memory alone. Response times leave out connections held open — websockets, streams, long polls — which last as long as the page that opened them, not as long as the service took.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -933,7 +933,7 @@ func chartPanel(p ChartPanel) templ.Component {
 		var templ_7745c5c3_Var46 string
 		templ_7745c5c3_Var46, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.ID + "-title")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 257, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 259, Col: 65}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var46)
 		if templ_7745c5c3_Err != nil {
@@ -946,7 +946,7 @@ func chartPanel(p ChartPanel) templ.Component {
 		var templ_7745c5c3_Var47 string
 		templ_7745c5c3_Var47, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.ID + "-title")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 259, Col: 49}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 261, Col: 49}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var47)
 		if templ_7745c5c3_Err != nil {
@@ -959,7 +959,7 @@ func chartPanel(p ChartPanel) templ.Component {
 		var templ_7745c5c3_Var48 string
 		templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(p.Title)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 259, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 261, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 		if templ_7745c5c3_Err != nil {
@@ -972,7 +972,7 @@ func chartPanel(p ChartPanel) templ.Component {
 		var templ_7745c5c3_Var49 string
 		templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(p.Headline)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 260, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 262, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 		if templ_7745c5c3_Err != nil {
@@ -990,7 +990,7 @@ func chartPanel(p ChartPanel) templ.Component {
 			var templ_7745c5c3_Var50 string
 			templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(panelNote(p))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 263, Col: 40}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 265, Col: 40}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 			if templ_7745c5c3_Err != nil {
@@ -1012,7 +1012,7 @@ func chartPanel(p ChartPanel) templ.Component {
 			var templ_7745c5c3_Var51 string
 			templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.ID + "-data")
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 266, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 268, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var51)
 			if templ_7745c5c3_Err != nil {
@@ -1076,7 +1076,7 @@ func usageNowPanel(now []ServiceNow, known bool) templ.Component {
 				var templ_7745c5c3_Var53 string
 				templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(n.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 292, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 294, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 				if templ_7745c5c3_Err != nil {
@@ -1089,7 +1089,7 @@ func usageNowPanel(now []ServiceNow, known bool) templ.Component {
 				var templ_7745c5c3_Var54 string
 				templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(n.CPU)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 293, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 295, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 				if templ_7745c5c3_Err != nil {
@@ -1102,7 +1102,7 @@ func usageNowPanel(now []ServiceNow, known bool) templ.Component {
 				var templ_7745c5c3_Var55 string
 				templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.JoinStringErrs(n.Memory)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 294, Col: 42}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 296, Col: 42}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var55))
 				if templ_7745c5c3_Err != nil {
@@ -1184,7 +1184,7 @@ func AppMetricCharts(d AppMetricsData) templ.Component {
 				var templ_7745c5c3_Var59 string
 				templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.rangeHref(c.Key))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 315, Col: 34}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 317, Col: 34}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 				if templ_7745c5c3_Err != nil {
@@ -1207,7 +1207,7 @@ func AppMetricCharts(d AppMetricsData) templ.Component {
 				var templ_7745c5c3_Var60 string
 				templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(c.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 321, Col: 14}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 323, Col: 14}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 				if templ_7745c5c3_Err != nil {
@@ -1235,7 +1235,7 @@ func AppMetricCharts(d AppMetricsData) templ.Component {
 			var templ_7745c5c3_Var61 string
 			templ_7745c5c3_Var61, templ_7745c5c3_Err = templ.JoinStringErrs(d.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 328, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 330, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var61))
 			if templ_7745c5c3_Err != nil {
@@ -1329,7 +1329,7 @@ func appMetricsLoader(name string) templ.Component {
 		var templ_7745c5c3_Var63 string
 		templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.ResolveAttributeValue("/apps/" + name + "/metrics/charts")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 364, Col: 46}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 366, Col: 46}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var63)
 		if templ_7745c5c3_Err != nil {
@@ -1417,7 +1417,7 @@ func projectUsageSection(u *ProjectUsage) templ.Component {
 			var templ_7745c5c3_Var65 string
 			templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(u.Note)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 397, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 399, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 			if templ_7745c5c3_Err != nil {
@@ -1464,7 +1464,7 @@ func usageTable(first string, lines []UsageLine) templ.Component {
 		var templ_7745c5c3_Var67 string
 		templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(first)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 407, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 409, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 		if templ_7745c5c3_Err != nil {
@@ -1482,7 +1482,7 @@ func usageTable(first string, lines []UsageLine) templ.Component {
 			var templ_7745c5c3_Var68 string
 			templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(l.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 416, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 418, Col: 38}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 			if templ_7745c5c3_Err != nil {
@@ -1495,7 +1495,7 @@ func usageTable(first string, lines []UsageLine) templ.Component {
 			var templ_7745c5c3_Var69 string
 			templ_7745c5c3_Var69, templ_7745c5c3_Err = templ.JoinStringErrs(l.Detail)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 417, Col: 63}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 419, Col: 63}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var69))
 			if templ_7745c5c3_Err != nil {
@@ -1508,7 +1508,7 @@ func usageTable(first string, lines []UsageLine) templ.Component {
 			var templ_7745c5c3_Var70 string
 			templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(l.Current)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 418, Col: 53}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 420, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 			if templ_7745c5c3_Err != nil {
@@ -1521,7 +1521,7 @@ func usageTable(first string, lines []UsageLine) templ.Component {
 			var templ_7745c5c3_Var71 string
 			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(l.Estimated)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 419, Col: 55}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/observe.templ`, Line: 421, Col: 55}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 			if templ_7745c5c3_Err != nil {

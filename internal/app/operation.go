@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,6 +115,12 @@ func (s *Service) admitDeploymentTx(
 	ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string,
 	releaseID uuid.UUID, requiresBuild bool, actorKind string,
 ) (Operation, error) {
+	// Refused here rather than several stages in, at a clone of nothing:
+	// every build is admitted through this, and only an upload brings its
+	// own source.
+	if requiresBuild && a.Source == SourceGit && !a.Repo.Set() && !strings.HasPrefix(trigger, UploadTriggerPrefix) {
+		return Operation{}, ErrNothingToBuild
+	}
 	if err := s.wakeForDeploy(ctx, q, ownerID, a.ID); err != nil {
 		return Operation{}, err
 	}

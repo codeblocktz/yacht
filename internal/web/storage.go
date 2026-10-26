@@ -528,7 +528,7 @@ func (s *Server) appActionNoticed(
 func (s *Server) detailWith(
 	r *http.Request, a app.App, tab, notice, fail string,
 ) AppDetailData {
-	d := AppDetailData{App: a, Tab: tab, Notice: notice, Error: fail}
+	d := AppDetailData{App: a, Tab: tab, Notice: notice, Error: fail, CLI: s.cliName}
 	if s.nets != nil {
 		if n, err := s.nets.Networking(r.Context(), a.OwnerID, a.Name); err == nil {
 			d.Net = n

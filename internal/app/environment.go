@@ -285,6 +285,17 @@ func (s *Service) copyService(
 	if src.Source.Database() {
 		// Its own data and its own credentials: the blueprint makes both.
 		notes = append(notes, "starts empty, with its own credentials")
+	} else if src.Source == SourceGit && !src.Repo.Set() {
+		// An empty service is built from what is uploaded to it, and nothing
+		// was uploaded to the copy: it waits for its own up.
+		in.Empty, in.Settings = true, &src
+		notes = append(notes, "waits for its source to be uploaded")
+		vars, rewritten, err := s.copyVariables(ctx, ownerID, src, hosts, conns)
+		if err != nil {
+			return "", err
+		}
+		in.Variables = vars
+		notes = append(notes, rewritten...)
 	} else {
 		in.Image, in.Repo, in.Settings = src.Image, src.Repo, &src
 		if opts.branch != nil {

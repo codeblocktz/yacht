@@ -337,9 +337,40 @@ func imageLabel(image string) string {
 	return image
 }
 
+// appImageLabel is imageLabel for an app, which knows whether a missing
+// image is a build under way or an empty service waiting for its source.
+func appImageLabel(a app.App) string {
+	if awaitsSource(a) {
+		return "no source yet"
+	}
+	return imageLabel(a.Image)
+}
+
 // imageIsPending reports whether an app has no built image yet, so a template
 // can style the placeholder as the absence it is rather than as a value.
 func imageIsPending(image string) bool { return image == app.PendingImage }
+
+// sourceEmpty is the picker's Empty Service. Not a source of the engine's:
+// an empty service builds from source like a repository does, and is
+// created as one with nothing connected yet.
+const sourceEmpty app.Source = "empty"
+
+// awaitsSource is an empty service before anything was given to it: no
+// repository, and nothing built.
+func awaitsSource(a app.App) bool {
+	return a.Source == app.SourceGit && !a.Repo.Set() && a.Image == app.PendingImage
+}
+
+// sourcesCanBuild says the install builds from source, which an empty
+// service needs as much as a repository does.
+func sourcesCanBuild(sources []app.Blueprint) bool {
+	for _, b := range sources {
+		if b.Source == app.SourceGit {
+			return b.Available
+		}
+	}
+	return false
+}
 
 // sourceHref is where the picker sends each source.
 //

@@ -1340,7 +1340,7 @@ func (s *Server) appList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 	data := NewAppData{
 		Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
-		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
+		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil, CLI: s.cliName,
 	}
 	data.Project, data.ProjectName = s.namedProject(r, r.URL.Query().Get("project"))
 
@@ -1354,6 +1354,11 @@ func (s *Server) appNew(w http.ResponseWriter, r *http.Request) {
 	if src == "" {
 		// No source chosen: show the picker rather than defaulting to one.
 		// Defaulting is how a database gets deployed as a bare image.
+		s.render(w, r, NewApp(data))
+		return
+	}
+	if src == sourceEmpty && sourcesCanBuild(data.Sources) {
+		data.Source, data.Form = src, NewAppForm{Port: "8080"}
 		s.render(w, r, NewApp(data))
 		return
 	}
@@ -1393,6 +1398,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = app.SourceImage
 	}
+	empty := source == sourceEmpty
 
 	form := NewAppForm{
 		Name:       strings.TrimSpace(r.FormValue("name")),
@@ -1436,6 +1442,7 @@ func (s *Server) appCreate(w http.ResponseWriter, r *http.Request) {
 
 	created, err := s.apps.Create(ctx, owner.ID, app.CreateInput{
 		Source:   source,
+		Empty:    empty,
 		Name:     form.Name,
 		Image:    form.Image,
 		Port:     int32(port),
@@ -1471,10 +1478,12 @@ func (s *Server) renderErrFor(
 ) {
 	data := NewAppData{
 		Error: msg, Form: form, Sources: s.sources(r.Context()), RoomShort: s.roomShort(r.Context()),
-		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil,
+		Regions: s.regionChoice(r.Context()), GitHubOn: s.github != nil, CLI: s.cliName,
 	}
 	data.Project, data.ProjectName = s.namedProject(r, r.FormValue("project"))
-	if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
+	if src == sourceEmpty {
+		data.Source = src
+	} else if b, err := app.BlueprintForWith(src, s.capabilities(r.Context())); err == nil {
 		data.Source, data.Blueprint = src, b
 	}
 	s.renderStatus(w, r, http.StatusUnprocessableEntity, NewApp(data))

@@ -217,7 +217,7 @@ func (s *Server) renderCanvasWith(
 
 // appPanel gathers what the open panel shows about one app.
 func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetailData {
-	d := &AppDetailData{App: a, Tab: tab}
+	d := &AppDetailData{App: a, Tab: tab, CLI: s.cliName}
 
 	if pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
 		Namespace: a.Namespace, ManagedOnly: true,

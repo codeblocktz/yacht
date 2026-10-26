@@ -189,8 +189,16 @@ var panelSpecs = []panelSpec{
 		query: `(sum by (service) (rate(traefik_service_requests_total{%[2]s,code=~"5.."}[%[3]s])) or ` +
 			`0 * sum by (service) (rate(traefik_service_requests_total{%[2]s}[%[3]s]))) / ` +
 			`sum by (service) (rate(traefik_service_requests_total{%[2]s}[%[3]s]))`},
+	// A websocket, a server-sent stream or a long poll is one request held
+	// for as long as the page is open, which Traefik times like any other.
+	// Counted, every open page drags p95 to the slowest bucket and reads as
+	// a slow service. So the open-ended bucket is replaced by the largest
+	// bounded one: a response time is of requests that finished within the
+	// buckets, and those held longer are left out rather than averaged in.
 	{key: PanelLatency, title: "Response time", unit: UnitSeconds, by: "quantile",
-		query: `histogram_quantiles("quantile", 0.5, 0.9, 0.95, 0.99, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%[2]s}[%[3]s])))`},
+		query: `histogram_quantiles("quantile", 0.5, 0.9, 0.95, 0.99, ` +
+			`sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}[%[3]s])) or ` +
+			`label_set(max(sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}[%[3]s]))), "le", "+Inf"))`},
 }
 
 // Dashboard reads every panel for a scope over a window.
