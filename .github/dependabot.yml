@@ -1,0 +1,47 @@
+# Weekly bumps, each released long enough ago to trust: a malicious or broken
+# release is usually found and pulled within days, so none is proposed until
+# it has been out 7 days (14 for a minor, 30 for a major). Security updates
+# are not held back: Dependabot opens those at once, and they are read
+# before they are merged.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 14
+      semver-patch-days: 7
+    groups:
+      go:
+        patterns: ["*"]
+
+  # The dashboard's authoring-time TypeScript tooling (package.json).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 14
+      semver-patch-days: 7
+    groups:
+      assets:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 14
+      semver-patch-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
