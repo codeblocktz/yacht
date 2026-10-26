@@ -270,8 +270,12 @@ func TestTheAdminPagesAreTheOperators(t *testing.T) {
 	if strings.Contains(home, `href="/admin/teams"`) || strings.Contains(home, ">Admin<") {
 		t.Error("a member is offered the Admin area")
 	}
+	// The operator's way in is the workspace's Admin console link; the
+	// console has the pages.
 	home = rt.getAs(t, "/", rt.owner).Body.String()
-	if !strings.Contains(home, `href="/admin/teams"`) || !strings.Contains(home, `href="/admin/capacity"`) {
+	console := rt.getAs(t, "/admin", rt.owner).Body.String()
+	if !strings.Contains(home, `href="/admin"`) ||
+		!strings.Contains(console, `href="/admin/teams"`) || !strings.Contains(console, `href="/admin/capacity"`) {
 		t.Error("the operator is not offered the Admin area")
 	}
 }
