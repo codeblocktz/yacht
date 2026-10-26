@@ -128,3 +128,14 @@ func TestTheWorkspaceUsagePage(t *testing.T) {
 		t.Error("an install with no meter offers Usage")
 	}
 }
+
+// Every page of the Admin console leads back to its Overview, not to a
+// page that used to stand in for it.
+func TestTheConsolesCrumbsLeadToItsOverview(t *testing.T) {
+	for _, path := range []string{"/cluster/nodes", "/cluster/dns", "/admin/teams", "/admin/capacity", "/admin/regions", "/settings", "/admin/impersonations"} {
+		crumbs := breadcrumbFor(path)
+		if len(crumbs) == 0 || crumbs[0].Label != AdminNavHeading || crumbs[0].Href != "/admin" {
+			t.Errorf("%s: crumbs %+v, want the console's Overview first", path, crumbs)
+		}
+	}
+}

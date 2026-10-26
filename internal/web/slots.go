@@ -477,33 +477,33 @@ func breadcrumbFor(path string) []Crumb {
 	case hasPrefix(path, "/deployments"):
 		return []Crumb{{Label: "Deployments"}}
 	// The cluster's pages keep their /cluster URLs — bookmarks and the
-	// install docs point at them — and sit under Admin in the trail as they
-	// do in the sidebar. Admin links to Nodes from here because Nodes exists
-	// on every install; the teams pages need an app service behind them.
+	// install docs point at them — and sit under the console in the trail as
+	// they do in the sidebar. The console's first crumb leads to its
+	// Overview, which every install has.
 	case hasPrefix(path, "/cluster/volumes"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Volumes"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Volumes"}}
 	case hasPrefix(path, "/cluster/events"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Events"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Events"}}
 	case hasPrefix(path, "/cluster/dns"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "DNS"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "DNS"}}
 	case hasPrefix(path, "/cluster/registry"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Registry"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Registry"}}
 	case hasPrefix(path, "/cluster"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/cluster/nodes"}, {Label: "Cluster"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Cluster"}}
 	case hasPrefix(path, "/settings"):
-		return []Crumb{{Label: "Settings"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Settings"}}
 	case path == "/admin/teams":
-		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Teams"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Teams"}}
 	case hasPrefix(path, "/admin/teams/"):
 		// The team's name is appended by the handler, which knows it.
-		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Teams", Href: "/admin/teams"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Teams", Href: "/admin/teams"}}
 	case hasPrefix(path, "/admin/capacity"):
-		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Capacity"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Capacity"}}
 	case path == "/admin/regions":
-		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Regions"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Regions"}}
 	case hasPrefix(path, "/admin/regions/"):
 		// The region's name is appended by the handler, which knows it.
-		return []Crumb{{Label: AdminNavHeading, Href: "/admin/teams"}, {Label: "Regions", Href: "/admin/regions"}}
+		return []Crumb{{Label: AdminNavHeading, Href: "/admin"}, {Label: "Regions", Href: "/admin/regions"}}
 	}
 	return nil
 }
