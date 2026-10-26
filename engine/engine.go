@@ -368,6 +368,11 @@ var (
 	// SurfacesFromContext reads them, in a SlotProvider or a handler behind
 	// the engine's identity middleware.
 	SurfacesFromContext = web.SurfacesFromContext
+	// WithSurfaces sets them, for a wrapper's tests of its own chrome.
+	WithSurfaces = web.WithSurfaces
+	// WithOwner puts the resolved owner on a context, as the identity
+	// provider does for each request: for a wrapper's tests.
+	WithOwner = identity.NewContext
 	// OwnerFromContext reads the Owner identity middleware resolved.
 	OwnerFromContext = identity.FromContext
 	// MustOwnerFromContext is OwnerFromContext for a handler that is certainly

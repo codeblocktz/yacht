@@ -53,6 +53,13 @@ type Surfaces struct {
 // have the chrome offer pages that are not mounted.
 type surfacesKey struct{}
 
+// WithSurfaces puts the pages available to a request on its context, as the
+// server does for every request: for a wrapping application's tests of its
+// own chrome.
+func WithSurfaces(ctx context.Context, s Surfaces) context.Context {
+	return context.WithValue(ctx, surfacesKey{}, s)
+}
+
 // SurfacesFromContext returns the optional pages available to this request.
 func SurfacesFromContext(ctx context.Context) Surfaces {
 	s, _ := ctx.Value(surfacesKey{}).(Surfaces)

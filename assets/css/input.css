@@ -821,10 +821,62 @@
   .team-avatar-acting {
     @apply bg-warning/15 text-warning ring-warning/30;
   }
+  /* The Admin console is the install's, not a team's: neutral, so the brand
+     colour keeps meaning "a workspace". */
+  .team-avatar-admin {
+    @apply bg-foreground/10 text-foreground ring-border;
+  }
+  .team-avatar-admin svg { @apply size-3.5; }
+  /* The plan under a workspace's name, as Railway's HOBBY. */
+  .plan-badge {
+    @apply text-[10px] font-semibold uppercase tracking-wide text-brand;
+  }
   .user-avatar {
     @apply grid size-7 shrink-0 place-items-center rounded-full bg-foreground/10
            text-[11px] font-semibold uppercase text-foreground;
   }
+
+  /* ---- workspace home: Railway's Projects --------------------------- */
+  .ws-home { @apply mx-auto w-full max-w-[1120px]; }
+  .ws-home-head { @apply mb-6 flex flex-wrap items-center justify-between gap-3; }
+  .ws-search {
+    @apply flex h-9 w-[240px] items-center gap-2 rounded-md border border-border bg-background px-2.5
+           text-muted-foreground focus-within:ring-2 focus-within:ring-ring/50;
+  }
+  .ws-search svg { @apply size-4 shrink-0; }
+  .ws-search input { @apply h-full min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground; }
+  .ws-home-bar { @apply mb-4 flex items-center gap-3 text-[13px] text-muted-foreground; }
+  .ws-home-bar svg { @apply size-4; }
+  .ws-home-sep { @apply h-4 w-px bg-border; }
+  .ws-home-link { @apply text-foreground hover:underline; }
+  .project-grid { @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-3; }
+  .project-list { @apply flex flex-col overflow-hidden rounded-xl border border-border; }
+  .project-card {
+    @apply flex flex-col rounded-xl border border-border bg-card transition-colors
+           hover:border-foreground/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .project-card-head { @apply flex items-center px-4 pb-3 pt-4 text-[14px] font-semibold; }
+  .project-card-canvas {
+    @apply relative mx-2 mb-2 flex h-[200px] items-center justify-center rounded-lg border border-border bg-muted/30;
+    background-image: radial-gradient(circle, var(--color-border) 1px, transparent 1px);
+    background-size: 14px 14px;
+  }
+  .project-card-icons { @apply grid max-w-[220px] grid-cols-4 gap-2 pb-6; }
+  .project-card-icon {
+    @apply grid size-10 place-items-center rounded-lg border border-border bg-card text-foreground shadow-sm;
+  }
+  .project-card-icon svg { @apply size-5; }
+  .project-card-icon-sm { @apply size-7 rounded-md; }
+  .project-card-icon-sm svg { @apply size-4; }
+  .project-card-foot {
+    @apply absolute inset-x-0 bottom-0 flex items-center gap-1.5 px-3 pb-2.5 text-[12px] text-muted-foreground;
+  }
+  .project-card-foot .card-status-dot { @apply size-1.5; }
+  .project-row {
+    @apply flex items-center gap-4 border-b border-border bg-card px-4 py-3 text-[13px] last:border-b-0
+           hover:bg-muted/40;
+  }
+  .project-row-icons { @apply hidden items-center gap-1.5 sm:flex; }
 
   /* ---- top bar ----------------------------------------------------- */
 

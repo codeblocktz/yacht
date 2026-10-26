@@ -56,11 +56,14 @@ func TestAWrapperComposesTheEngineWithItsOwnChromeAndRoutes(t *testing.T) {
 			s.Nav = append(s.Nav, NavGroup{Heading: "Account", Items: []NavItem{
 				{Label: "Billing", Href: "/billing", Active: strings.HasPrefix(r.URL.Path, "/billing")},
 			}})
-			// An install-wide page of its own goes into the engine's Admin
-			// group, found by its heading, rather than a second group beside it.
-			for i := range s.Nav {
-				if s.Nav[i].Heading == AdminNavHeading {
-					s.Nav[i].Items = append(s.Nav[i].Items, NavItem{Label: "Plans", Href: "/admin/plans"})
+			// An install-wide page of its own goes into one of the Admin
+			// console's groups, found by its heading, when the console is
+			// what is being drawn.
+			if s.Admin {
+				for i := range s.Nav {
+					if s.Nav[i].Heading == AdminCustomersHeading {
+						s.Nav[i].Items = append(s.Nav[i].Items, NavItem{Label: "Plans", Href: "/admin/plans"})
+					}
 				}
 			}
 			return s
@@ -113,10 +116,15 @@ func TestAWrapperComposesTheEngineWithItsOwnChromeAndRoutes(t *testing.T) {
 		t.Error("the wrapper's brand mark did not replace Yacht's")
 	}
 	// One principal and no accounts: that principal runs the install, so the
-	// Admin group is theirs, with the engine's pages and the wrapper's in it.
+	// way into the Admin console is theirs, and the console has the engine's
+	// pages and the wrapper's.
+	if !strings.Contains(home.Body.String(), `href="/admin"`) {
+		t.Error("the workspace has no way into the Admin console")
+	}
+	console := get(t, h, "/admin").Body.String()
 	for _, href := range []string{`href="/admin/teams"`, `href="/admin/capacity"`, `href="/admin/plans"`} {
-		if !strings.Contains(home.Body.String(), href) {
-			t.Errorf("the Admin group is missing %s", href)
+		if !strings.Contains(console, href) {
+			t.Errorf("the Admin console is missing %s", href)
 		}
 	}
 	for _, path := range []string{"/admin/teams", "/admin/capacity", "/admin/plans"} {
@@ -133,7 +141,7 @@ func TestAWrapperComposesTheEngineWithItsOwnChromeAndRoutes(t *testing.T) {
 	if !strings.Contains(body, "Billing for kilicore-test") {
 		t.Error("the wrapper's page did not see the owner the engine resolved")
 	}
-	if !strings.Contains(body, "Kilicore") || !strings.Contains(body, "Overview") {
+	if !strings.Contains(body, "Kilicore") || !strings.Contains(body, `data-nav-label="Projects"`) {
 		t.Error("the wrapper's page is not inside the engine's layout")
 	}
 
