@@ -212,7 +212,7 @@ templ appPanelBody(d AppDetailData) {
 			}
 		} else {
 			@sheet.Description() {
-				<span class={ "mono truncate", templ.KV("italic text-muted-foreground", imageIsPending(d.App.Image)) }>{ imageLabel(d.App.Image) }</span>
+				<span class={ "mono truncate", templ.KV("italic text-muted-foreground", imageIsPending(d.App.Image)) }>{ appImageLabel(d.App) }</span>
 			}
 		}
 	}
@@ -366,6 +366,10 @@ templ canvasAdd(project string) {
 					<a class="switcher-item" href={ templ.URL(sourceHref(app.SourceGit, project)) }>
 						@icon("box")
 						<span class="flex-1">Git Repository</span>
+					</a>
+					<a class="switcher-item" href={ templ.URL(sourceHref(sourceEmpty, project)) }>
+						@icon("square-dashed")
+						<span class="flex-1">Empty Service</span>
 					</a>
 				</div>
 			}

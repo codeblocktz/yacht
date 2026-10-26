@@ -61,7 +61,13 @@ var (
 	// is nothing an upload could replace. An image-sourced app runs what it
 	// was told to; a database runs its engine.
 	ErrUploadNotSource = errors.New(
-		"app: this app runs an image rather than building from source, so there is nothing to upload to")
+		"app: this app runs an image rather than building from source, so there is nothing to upload to — " +
+			"add an Empty Service to the project and up to that")
+
+	// ErrNothingToBuild is a build of an empty service before anything has
+	// been given to it: no repository, and no upload to build.
+	ErrNothingToBuild = errors.New(
+		"app: this service has nothing to build yet — upload its source with up, or connect a repository in Settings")
 
 	// ErrUploadUnfetchable means the install has no address a build can
 	// fetch uploaded source from: it needs its base URL.

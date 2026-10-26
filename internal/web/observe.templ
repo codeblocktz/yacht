@@ -232,6 +232,8 @@ templ ProjectObservability(d ObservabilityData) {
 				<p class="mt-3 text-[12px] text-muted-foreground">
 					Requests, errors, response times and network are what reaches each service through its
 					public domains. A service reached only on the private network has CPU and memory alone.
+					Response times leave out connections held open — websockets, streams, long polls — which
+					last as long as the page that opened them, not as long as the service took.
 				</p>
 			} else {
 				if !d.Stored {

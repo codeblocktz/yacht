@@ -194,7 +194,12 @@ templ sourceCard(d AppDetailData) {
 	if repo.URL == "" {
 		<div class="source-empty">
 			@icon("external")
-			<span class="min-w-0 flex-1">No repository connected.</span>
+			<span class="min-w-0 flex-1">
+				No repository connected.
+				if d.CLI != "" {
+					<span class="text-muted-foreground">Connect one below, or upload source with <code class="mono">{ d.CLI } up --app { d.App.Name }</code>.</span>
+				}
+			</span>
 		</div>
 	} else {
 		<div class={ "source-card", templ.KV("source-card-err", d.RepoError != "") }>

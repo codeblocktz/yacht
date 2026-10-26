@@ -306,6 +306,9 @@ func cardStatus(a app.App) (label, class string) {
 	switch {
 	case a.Sleep.Asleep():
 		return "Sleeping", "card-status-idle"
+	case !a.StatusKnown && awaitsSource(a):
+		// No workload because nothing has been given to it to run.
+		return "No deploys", "card-status-idle"
 	case !a.StatusKnown:
 		return "Unknown", "card-status-idle"
 	}
