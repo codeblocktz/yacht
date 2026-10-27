@@ -158,10 +158,19 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 	}
 
 	podLabels := orchestrator.ObjectLabels(spec.Ref)
+	// The pod template carries what the pods are given and nothing else, so
+	// that only a change to it starts new ones. Not the config version: that
+	// also moves for what lives outside the pods — a domain, the install's
+	// CNAME target, a TCP proxy — and a restart for those is downtime for a
+	// database and a dropped connection for everything else.
 	podAnnotations := map[string]string{
-		orchestrator.AnnotationRevision:      specHash(spec),
-		orchestrator.AnnotationReleaseID:     spec.ReleaseID,
-		orchestrator.AnnotationConfigVersion: strconv.FormatInt(spec.ConfigVersion, 10),
+		orchestrator.AnnotationRevision:  specHash(spec),
+		orchestrator.AnnotationReleaseID: spec.ReleaseID,
+	}
+	if len(spec.Secrets) > 0 {
+		// Secret values reach the pods through a Secret, so the template has
+		// to change when they do or the pods keep the old ones.
+		podAnnotations[orchestrator.AnnotationSecrets] = secretsHash(spec.Secrets)
 	}
 	pendingAnnotations := map[string]string{
 		orchestrator.AnnotationRevision:      specHash(spec),
@@ -773,6 +782,16 @@ func specHash(spec orchestrator.AppSpec) string {
 	}
 	for _, k := range slices.Sorted(maps(spec.Env)) {
 		fmt.Fprintf(h, "env=%s=%s\n", k, spec.Env[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// secretsHash fingerprints an app's secret values: every key and value
+// together, so that no one value can be guessed from it.
+func secretsHash(secrets map[string]string) string {
+	h := sha256.New()
+	for _, k := range slices.Sorted(maps(secrets)) {
+		fmt.Fprintf(h, "%q=%q\n", k, secrets[k])
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }

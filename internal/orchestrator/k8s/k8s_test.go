@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -145,9 +146,12 @@ func TestApplyApp(t *testing.T) {
 		if got := annotations[orchestrator.AnnotationReleaseID]; got != spec.ReleaseID {
 			t.Errorf("release annotation = %q, want %q", got, spec.ReleaseID)
 		}
-		if got := annotations[orchestrator.AnnotationConfigVersion]; got != "7" {
-			t.Errorf("config annotation = %q, want 7", got)
-		}
+	}
+	if got := dep.Annotations[orchestrator.AnnotationConfigVersion]; got != "7" {
+		t.Errorf("config annotation = %q, want 7", got)
+	}
+	if _, ok := dep.Spec.Template.Annotations[orchestrator.AnnotationConfigVersion]; ok {
+		t.Error("the pod template carries the config version, so every change to it restarts the pods")
 	}
 	status, err := o.AppStatus(ctx, spec.Ref)
 	if err != nil {
@@ -584,5 +588,49 @@ func TestApplyAppRejectsInvalidInput(t *testing.T) {
 				t.Error("expected validation error, got nil")
 			}
 		})
+	}
+}
+
+// TestOnlyWhatThePodsAreGivenRestartsThem: a change that lives outside the
+// pods — a domain, the install's CNAME target — moves the config version and
+// is applied, but leaves the pod template as it was, so nothing restarts. A
+// changed secret value changes the template, since the pods would otherwise
+// keep the old one.
+func TestOnlyWhatThePodsAreGivenRestartsThem(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	spec := testSpec()
+	spec.Secrets = map[string]string{"DATABASE_URL": "postgres://one"}
+
+	template := func() map[string]string {
+		t.Helper()
+		dep, err := client.AppsV1().Deployments("yacht-demo").Get(ctx, "web", metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get deployment: %v", err)
+		}
+		return dep.Spec.Template.Annotations
+	}
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	before := template()
+
+	spec.ConfigVersion++
+	spec.Hosts = append(spec.Hosts, "shop.example.com")
+	spec.CNAMETarget = "edge.example.net"
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp with a domain: %v", err)
+	}
+	if after := template(); !reflect.DeepEqual(after, before) {
+		t.Errorf("a domain changed the pod template, restarting the pods:\nbefore %v\nafter  %v", before, after)
+	}
+
+	spec.ConfigVersion++
+	spec.Secrets = map[string]string{"DATABASE_URL": "postgres://two"}
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp with a new secret: %v", err)
+	}
+	if after := template(); after[orchestrator.AnnotationSecrets] == before[orchestrator.AnnotationSecrets] {
+		t.Errorf("a changed secret left the pod template as it was, so the pods keep the old value")
 	}
 }
