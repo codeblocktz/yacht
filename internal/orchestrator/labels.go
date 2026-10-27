@@ -39,6 +39,10 @@ const (
 	AnnotationReleaseID     = "yacht/release-id"
 	AnnotationConfigVersion = "yacht/config-version"
 
+	// AnnotationSecrets is a fingerprint of an app's secret values on its
+	// pod template, which rolls the pods when the values change.
+	AnnotationSecrets = "yacht/secrets"
+
 	// AnnotationRetiringSince marks a node being retired, with when it began
 	// as Unix seconds. The only state a retirement keeps.
 	AnnotationRetiringSince = "yacht/retiring-since"
