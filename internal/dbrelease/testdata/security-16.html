@@ -1,0 +1,92 @@
+<!doctype html><html><body>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>Reference</th>
+      <th>Affected</th>
+      <th>Fixed</th>
+      <th><a href="#comp">Component</a> & CVSS v3 Base Score</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    
+      <tr>
+        <td>
+          <span class="nobr"><a href="/support/security/CVE-2026-19385/">CVE-2026-19385</a></span><br/>
+          <a href="/about/news/postgresql-186-1711-1615-1519-1424-and-19-beta-3-released-3365/">Announcement</a><br/>
+        </td>
+        <td>18, 17, 16, 15, 14</td>
+        <td>18.6, 17.11, 16.15, 15.19, 14.24</td>
+        <td>client<br/>
+          <a href="https://nvd.nist.gov/vuln-metrics/cvss/v3-calculator?vector=AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H">8.8</a><br/><span class="cvssvector">AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H</span>
+    </td>
+        <td>PostgreSQL pg_dump heap buffer overflow executes arbitrary code<br/><br/><a href="/support/security/CVE-2026-19385/">more details</a></td>
+      </tr>
+    
+      <tr>
+        <td>
+          <span class="nobr"><a href="/support/security/CVE-2026-18408/">CVE-2026-18408</a></span><br/>
+          <a href="/about/news/postgresql-186-1711-1615-1519-1424-and-19-beta-3-released-3365/">Announcement</a><br/>
+        </td>
+        <td>18, 17, 16, 15, 14</td>
+        <td>18.6, 17.11, 16.15, 15.19, 14.24</td>
+        <td>client<br/>
+          <a href="https://nvd.nist.gov/vuln-metrics/cvss/v3-calculator?vector=AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H">8.8</a><br/><span class="cvssvector">AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H</span>
+    </td>
+        <td>PostgreSQL psql \unrestrict lets superuser of pg_dump origin server execute arbitrary code in psql client<br/><br/><a href="/support/security/CVE-2026-18408/">more details</a></td>
+      </tr>
+    
+      <tr>
+        <td>
+          <span class="nobr"><a href="/support/security/CVE-2026-18024/">CVE-2026-18024</a></span><br/>
+          <a href="/about/news/postgresql-186-1711-1615-1519-1424-and-19-beta-3-released-3365/">Announcement</a><br/>
+        </td>
+        <td>18, 17, 16, 15, 14</td>
+        <td>18.6, 17.11, 16.15, 15.19, 14.24</td>
+        <td>core server<br/>
+          <a href="https://nvd.nist.gov/vuln-metrics/cvss/v3-calculator?vector=AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N">4.3</a><br/><span class="cvssvector">AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N</span>
+    </td>
+        <td>PostgreSQL ascii() function reads past end of buffer<br/><br/><a href="/support/security/CVE-2026-18024/">more details</a></td>
+  </tbody></table>
+<h3 id="comp">Components</h3>
+
+<p>
+  The following component references are used in the above table:
+</p>
+
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>Component</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+      <tr>
+       <td>core server</td>
+       <td>This vulnerability exists in the core server product.</td>
+      </tr>
+
+      <tr>
+       <td>client</td>
+       <td>This vulnerability exists in a client library or client application only.</td>
+      </tr>
+
+      <tr>
+       <td>contrib module</td>
+       <td>This vulnerability exists in a contrib module. Contrib modules are not installed by default when PostgreSQL is installed from source. They may be installed by binary packages.</td>
+      </tr>
+
+      <tr>
+       <td>client contrib module</td>
+       <td>This vulnerability exists in a contrib module used on the client only.</td>
+      </tr>
+
+      <tr>
+       <td>packaging</td>
+       <td>This vulnerability exists in PostgreSQL binary packaging, e.g. an installer or RPM.</td>
+      </tr>
+  </tbody>
+</table>
+</body></html>

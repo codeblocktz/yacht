@@ -316,6 +316,11 @@ type Options struct {
 	// that cannot build repositories itself.
 	Manifests Manifests
 
+	// DatabaseReleases says what PostgreSQL has released since the version a
+	// database runs, and which security fixes it is without. Nil leaves the
+	// database's version shown without saying whether it is the newest.
+	DatabaseReleases DatabaseReleases
+
 	// MaxConcurrentBuilds bounds claimed build operations across the install.
 	// Zero takes the production default so tests and embedders stay safe.
 	MaxConcurrentBuilds int32
@@ -427,6 +432,12 @@ type Service struct {
 	// routesWG is the route notifications still being delivered, so a test
 	// can wait for them.
 	routesWG sync.WaitGroup
+
+	// dbVersions is the version each database release runs, and tagDigests
+	// what an image tag named when last asked. See database_release.go.
+	dbVersionsMu sync.Mutex
+	dbVersions   map[uuid.UUID]string
+	tagDigests   map[string]tagDigest
 }
 
 // NewService wires the store and the orchestrator together.

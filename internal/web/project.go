@@ -219,6 +219,8 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachProjects(ctx, d)
 	s.attachReferenceTargets(ctx, d)
 	d.Stages = s.stages()
+	d.VersionCheck = s.databaseReleases() != nil && a.Source == app.SourcePostgres &&
+		a.ActiveReleaseID != nil
 	return d
 }
 
