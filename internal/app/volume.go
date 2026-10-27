@@ -82,6 +82,9 @@ func (s *Service) AttachVolume(
 	if err != nil {
 		return Volume{}, err
 	}
+	if !a.Source.Workload() {
+		return Volume{}, ErrNoWorkload
+	}
 
 	// One replica is the condition of having storage at all. Said here as well
 	// as in the orchestrator because this is where a person can act on it.

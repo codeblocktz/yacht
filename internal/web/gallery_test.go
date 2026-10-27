@@ -49,6 +49,7 @@ func TestGallery(t *testing.T) {
 	pages := append(galleryPages(), chromeGalleryPages()...)
 	pages = append(pages, githubGalleryPages()...)
 	pages = append(pages, databaseGalleryPages()...)
+	pages = append(pages, bucketGalleryPages()...)
 	pages = append(pages, observeGalleryPages()...)
 	for _, g := range append(pages, regionGalleryPages()...) {
 		path := filepath.Join(out, g.file)

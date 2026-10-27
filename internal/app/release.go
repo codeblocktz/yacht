@@ -206,6 +206,11 @@ func pinImage(ref, digest string) string {
 func (s *Service) createRelease(
 	ctx context.Context, q *dbgen.Queries, a App, sourceRevision string,
 ) (Release, error) {
+	// Every path to a deploy passes here, so a bucket stops here whichever
+	// one forgot to ask.
+	if !a.Source.Workload() {
+		return Release{}, ErrNoWorkload
+	}
 	if s.manifests == nil {
 		return Release{}, ErrNoManifestResolver
 	}

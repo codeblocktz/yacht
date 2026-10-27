@@ -212,6 +212,9 @@ func (s *Service) GenerateDomain(ctx context.Context, ownerID, name string, port
 	if err != nil {
 		return "", err
 	}
+	if !a.Source.Workload() {
+		return "", ErrNoWorkload
+	}
 	if why := s.generateUnavailable(a); why != "" {
 		return "", errors.New(why)
 	}
@@ -389,6 +392,9 @@ func (s *Service) EnableTCPProxy(ctx context.Context, ownerID, name string) (TCP
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
 		return TCPProxy{}, err
+	}
+	if !a.Source.Workload() {
+		return TCPProxy{}, ErrNoWorkload
 	}
 	if a.Port == 0 {
 		return TCPProxy{}, errors.New("this app has no port for a TCP proxy to send connections to; set one in its settings")

@@ -641,6 +641,14 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 			"set YACHT_BACKUP_S3_* to keep them off the cluster")
 	}
 
+	buckets, err := cfg.BucketStore()
+	if err != nil {
+		return err
+	}
+	if buckets != nil {
+		log.Info("buckets are made on the install's object store", slog.String("endpoint", buckets.Endpoint))
+	}
+
 	// A project's webhooks need the key for the headers and secret they
 	// keep, and are told about deploys by the app service built next.
 	e.Audit = audit.New(e.Pool, log)
@@ -660,6 +668,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		BackupS3:            backups,
+		Buckets:             buckets,
 		BackupToolImage:     cfg.BackupToolImage,
 		Builder:             builder,
 		Images:              images,
@@ -885,6 +894,8 @@ func (e *Engine) Start(ctx context.Context) {
 	// due. Every replica may run it: the database admits one running job per
 	// app, so two replicas starting the same night's backup start one.
 	go apps.RunBackupScheduler(ctx)
+	// Gives a new object store's node its place, then measures every bucket.
+	go apps.RunBuckets(ctx, cmp.Or(e.Config.DefaultRegion, "default"))
 
 	// Records the region of every app made before regions existed, where it
 	// can be told, and does nothing on an install with none. Recording only:

@@ -39,7 +39,20 @@ const (
 	SourceMySQL Source = "mysql"
 	SourceRedis Source = "redis"
 	SourceMongo Source = "mongo"
+
+	// SourceBucket is object storage: a bucket on the install's Garage,
+	// with an access key for it alone. Nothing runs for it — see Workload.
+	SourceBucket Source = "bucket"
 )
+
+// BucketImage is what a bucket's app row names as its image, which the row
+// cannot be without. Nothing pulls it: a bucket has no workload.
+const BucketImage = "yacht.invalid/bucket:none"
+
+// Workload reports whether a source runs as pods. A bucket does not: it is a
+// bucket on the install's object store, and every path that would deploy,
+// scale, move, restart or route to it is closed to it.
+func (s Source) Workload() bool { return s != SourceBucket }
 
 // Database reports whether a source is one of the database engines.
 //
@@ -134,6 +147,10 @@ type Capabilities struct {
 	// one a build has nowhere to put the result and the cluster nothing to
 	// pull, so the source is listed and refused rather than offered.
 	CanBuild bool
+
+	// CanBucket reports whether the install has an object store to make
+	// buckets on.
+	CanBucket bool
 }
 
 // Blueprints returns every source with nothing optional available.
@@ -317,6 +334,15 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			// person's to say, because only they know what their code listens
 			// on, and guessing produces a service that routes to nothing.
 			Port: 8080,
+		},
+		{
+			Source:      SourceBucket,
+			Label:       "Bucket",
+			Description: "S3-compatible storage for files, with its own access key.",
+			Available:   c.CanBucket,
+			Because:     "this install has no object store for buckets",
+			Image:       BucketImage,
+			Internal:    true,
 		},
 		{
 			// Available, but not a source in the way the others are: a template

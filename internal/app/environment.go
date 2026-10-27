@@ -285,6 +285,10 @@ func (s *Service) copyService(
 	if src.Source.Database() {
 		// Its own data and its own credentials: the blueprint makes both.
 		notes = append(notes, "starts empty, with its own credentials")
+	} else if !src.Source.Workload() {
+		// A bucket of its own, with its own key: an environment's apps never
+		// reach production's files.
+		notes = append(notes, "a bucket of its own, starting empty")
 	} else if src.Source == SourceGit && !src.Repo.Set() {
 		// An empty service is built from what is uploaded to it, and nothing
 		// was uploaded to the copy: it waits for its own up.

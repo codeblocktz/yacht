@@ -331,6 +331,9 @@ func absoluteTime(t time.Time) string {
 // constant exists so the cluster has something syntactically valid to reject;
 // its own comment anticipates it reaching a cluster, not a person's screen.
 func imageLabel(image string) string {
+	if image == app.BucketImage {
+		return "S3-compatible bucket"
+	}
 	if image == app.PendingImage {
 		return "building…"
 	}
@@ -577,6 +580,8 @@ func sourceIcon(src app.Source) string {
 		return "external"
 	case "template":
 		return "layers"
+	case app.SourceBucket:
+		return "bucket"
 	}
 	return "box"
 }

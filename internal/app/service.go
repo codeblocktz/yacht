@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/backup"
+	"github.com/codeblocktz/yacht/internal/bucket"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
@@ -321,6 +322,10 @@ type Options struct {
 	// database's version shown without saying whether it is the newest.
 	DatabaseReleases DatabaseReleases
 
+	// Buckets is the install's Garage, which Add › Bucket makes customers'
+	// buckets on. Nil offers no buckets.
+	Buckets *bucket.Garage
+
 	// MaxConcurrentBuilds bounds claimed build operations across the install.
 	// Zero takes the production default so tests and embedders stay safe.
 	MaxConcurrentBuilds int32
@@ -397,6 +402,7 @@ type Service struct {
 	builder   Builder
 	images    Images
 	manifests Manifests
+	buckets   *bucket.Garage
 
 	// gh is the install's GitHub App, nil when it has none.
 	gh *github.App
@@ -471,7 +477,7 @@ func NewService(
 	return &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
-		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests,
+		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests, buckets: opts.Buckets,
 		gh:   opts.GitHub,
 		room: newRoomSource(orch, log), wakes: map[uuid.UUID]*wakeCall{},
 	}
@@ -644,6 +650,9 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
 		return App{}, err
+	}
+	if !a.Source.Workload() {
+		return App{}, ErrNoWorkload
 	}
 	if err := in.Validate(a.Source); err != nil {
 		return App{}, err
@@ -901,6 +910,11 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		in.Image = blueprint.Image
 		in.Port = blueprint.Port
 	}
+	// Nothing runs for a bucket, so nothing is counted for it either: no
+	// replicas, no port.
+	if !in.Source.Workload() {
+		in.Replicas, in.Port = 0, 0
+	}
 
 	// A repository is built into an image, so the app starts with a
 	// placeholder that is replaced by the first successful build. Validating
@@ -947,6 +961,23 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if len(generated) > 0 && !s.keeper.Configured() {
 		return App{}, fmt.Errorf("%w — %s needs one to store its credentials",
 			ErrNoSecretKey, blueprint.Label)
+	}
+
+	// A bucket is made on the store before the transaction, as a generated
+	// password is minted, and taken back if the transaction does not commit:
+	// a bucket nothing records is one nobody can see, empty or delete.
+	var made *bucketMade
+	committed := false
+	if in.Source == SourceBucket {
+		if made, err = s.makeBucket(ctx, in.Name); err != nil {
+			return App{}, err
+		}
+		in.Variables = append(made.variables, in.Variables...)
+		defer func() {
+			if !committed {
+				s.unmakeBucket(made.created)
+			}
+		}()
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -1045,6 +1076,15 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		}
 	}
 	created := toApp(row)
+
+	if made != nil {
+		if err := q.InsertBucket(ctx, dbgen.InsertBucketParams{
+			AppID: created.ID, OwnerID: ownerID, GarageID: made.created.ID, Name: made.created.Name,
+			KeyID: made.created.KeyID, SealedSecret: made.sealed,
+		}); err != nil {
+			return App{}, fmt.Errorf("app: record the bucket: %w", err)
+		}
+	}
 
 	// The source's own settings first, so anything the person typed with the
 	// same name wins rather than being silently overridden by a default.
@@ -1175,7 +1215,8 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 
 	// An empty service has nothing to deploy: its first deploy is the first
 	// upload, or the first build of a repository connected to it.
-	if !in.Empty {
+	// Nor has a bucket, ever.
+	if !in.Empty && in.Source.Workload() {
 		if err := s.admitInitialDeploy(ctx, q, ownerID, created); err != nil {
 			return App{}, err
 		}
@@ -1183,6 +1224,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit: %w", err)
 	}
+	committed = true
 
 	s.log.Info("app created",
 		slog.String("owner", ownerID),
@@ -1236,6 +1278,10 @@ func (s *Service) admitInitialDeploy(ctx context.Context, q *dbgen.Queries, owne
 // reconcile reads the app row it has not committed yet, everything else passes
 // the pool.
 func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
+	// Before anything reaches the cluster: not even a namespace for a bucket.
+	if !a.Source.Workload() {
+		return nil
+	}
 	if a.Image == PendingImage {
 		return s.applyRelease(ctx, q, a, nil)
 	}
@@ -1794,6 +1840,9 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	if err != nil {
 		return App{}, err
 	}
+	if !a.Source.Workload() {
+		return App{}, ErrNoWorkload
+	}
 
 	// Storage is the reason, not replicas: a volume mounts on one node at a
 	// time, so the second pod has nowhere to go. Said here rather than left to
@@ -1846,6 +1895,9 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
 		return err
+	}
+	if !a.Source.Workload() {
+		return ErrNoWorkload
 	}
 	// Both source kinds stop at durable admission. The process worker claims
 	// the row independently, so disconnecting this request cannot cancel the
@@ -1941,6 +1993,14 @@ func (s *Service) Delete(ctx context.Context, ownerID, name string) error {
 			return err
 		}
 		serving = s.servingDeployment(ctx, a)
+		// A bucket's files go before its row: once the row is gone nothing
+		// knows the bucket is there to be emptied, and it would be kept, and
+		// counted, for nobody.
+		if !a.Source.Workload() {
+			if err := s.deleteBucket(ctx, a); err != nil {
+				return err
+			}
+		}
 		if err := s.orch.DeleteApp(ctx, a.Ref()); err != nil {
 			return err
 		}

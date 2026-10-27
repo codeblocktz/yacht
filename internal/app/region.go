@@ -660,6 +660,9 @@ func (s *Service) MoveApp(ctx context.Context, ownerID, name, region string) err
 	if err != nil {
 		return err
 	}
+	if !a.Source.Workload() {
+		return ErrNoWorkload
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

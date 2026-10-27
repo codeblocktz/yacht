@@ -394,7 +394,9 @@ templ appRows(apps []app.App) {
 }
 
 templ appStatus(a app.App) {
-	if a.Sleep.Asleep() {
+	if !a.Source.Workload() {
+		@statusDot("ready", "status-ok")
+	} else if a.Sleep.Asleep() {
 		@sleepingStatus(a)
 	} else if !a.StatusKnown {
 		@statusDot("unknown", "status-neutral")
@@ -423,6 +425,9 @@ type AppDetailData struct {
 	// CLI is what the product's CLI is called, for an empty service's
 	// directions.
 	CLI         string
+	// Bucket is a bucket's own: what it holds, and where it is reached. Nil
+	// for every other service.
+	Bucket *app.Bucket
 	// VersionCheck says the Deployments tab asks, after it draws, what
 	// version the database runs and what it is without. See
 	// database_release.go.

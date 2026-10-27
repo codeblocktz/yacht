@@ -881,6 +881,7 @@ func (s *Server) Handler() http.Handler {
 			}
 			// A database's Database and Backups tabs, and Add › Database.
 			s.mountDatabases(r)
+			s.mountBuckets(r)
 
 			r.Post("/apps/{name}/scale", s.appScale)
 			r.Post("/apps/{name}/redeploy", s.appRedeploy)

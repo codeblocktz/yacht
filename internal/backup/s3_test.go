@@ -24,7 +24,7 @@ func TestPresignMatchesAWSsPublishedExample(t *testing.T) {
 	// The example is virtual-hosted: the bucket is in the host, and the path
 	// is the key alone. Signed the same way, with the bucket left out.
 	at := time.Date(2013, 5, 24, 0, 0, 0, 0, time.UTC)
-	got, err := s.presignPath(http.MethodGet, "/test.txt", 86400*time.Second, at)
+	got, err := s.presignPath(http.MethodGet, "/test.txt", nil, 86400*time.Second, at)
 	if err != nil {
 		t.Fatal(err)
 	}

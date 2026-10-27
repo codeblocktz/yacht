@@ -140,6 +140,9 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 	if err != nil {
 		return err
 	}
+	if !a.Source.Workload() {
+		return ErrNoWorkload
+	}
 	if _, err := domain.AddCustom(ctx, s.q, ownerID, a.ID, host,
 		s.domainTarget(ctx, a), s.opts.AppDomain, s.opts.ReservedDomains); err != nil {
 		return err
