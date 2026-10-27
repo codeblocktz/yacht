@@ -39,6 +39,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/audit"
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
+	"github.com/codeblocktz/yacht/internal/dbrelease"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -663,6 +664,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Builder:             builder,
 		Images:              images,
 		Manifests:           manifests,
+		DatabaseReleases:    &dbrelease.Postgres{},
 		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
 		AppDomain:           cfg.AppDomain,
 		WildcardTLS:         cfg.WildcardTLS,

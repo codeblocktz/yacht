@@ -59,6 +59,9 @@ func (s *Server) mountDatabases(r chi.Router) {
 		r.Get("/apps/{name}/database", s.databaseTab)
 		r.Post("/apps/{name}/database/query", s.databaseQuery)
 	}
+	if s.databaseReleases() != nil {
+		r.Get("/apps/{name}/database/release", s.databaseRelease)
+	}
 	if s.backupsService() != nil {
 		r.Get("/apps/{name}/backups", s.backupsTab)
 		r.Get("/apps/{name}/backups/fragment", s.backupsFragment)

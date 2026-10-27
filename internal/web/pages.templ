@@ -423,6 +423,10 @@ type AppDetailData struct {
 	// CLI is what the product's CLI is called, for an empty service's
 	// directions.
 	CLI         string
+	// VersionCheck says the Deployments tab asks, after it draws, what
+	// version the database runs and what it is without. See
+	// database_release.go.
+	VersionCheck bool
 	App         app.App
 	Siblings    []app.App
 	Tab         string
@@ -669,6 +673,9 @@ templ AppDeploymentsBody(d AppDetailData) {
 	}
 	if active, ok := activeDeploymentOf(d.Deployments); ok {
 		@deploymentsHeader(d)
+		if d.VersionCheck {
+			@databaseReleaseSlot(d.App.Name)
+		}
 		@activeDeployment(d, active)
 	} else if d.App.ActiveReleaseID != nil {
 		<div class="panel border-l-2 border-l-success p-4">

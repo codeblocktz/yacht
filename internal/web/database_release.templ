@@ -1,0 +1,91 @@
+package web
+
+import (
+	"strconv"
+
+	"github.com/codeblocktz/yacht/internal/dbrelease"
+)
+
+// databaseReleaseSlot is where the version line goes, filled once the tab
+// has drawn.
+templ databaseReleaseSlot(name string) {
+	<div
+		id="database-release"
+		hx-get={ "/apps/" + name + "/database/release" }
+		hx-trigger="load"
+		hx-swap="outerHTML"
+	></div>
+}
+
+// databaseReleaseBlock is the version a database runs: a quiet line when
+// there is nothing to do, a warning when it is without security fixes or its
+// major version no longer gets them.
+templ databaseReleaseBlock(d DatabaseReleaseData) {
+	{{ r := d.R }}
+	<div id="database-release">
+		if r.Version == "" {
+		} else if !r.Attention() {
+			<p class="mb-3 text-[13px] text-muted-foreground">
+				<span class="font-medium text-foreground">{ r.Engine + " " + r.Version }</span>
+				{ quietRelease(r) }
+			</p>
+		} else if !r.Report.Supported {
+			<div class="callout callout-warn mb-4">
+				<div class="min-w-0">
+					<div class="font-medium">{ r.Engine } { r.Report.Running.Major } no longer gets security fixes</div>
+					<p class="mt-0.5 text-muted-foreground">
+						{ outOfSupport(r.Report.EOL) } Moving to a newer major version means a dump and a restore: deploy a new
+						database beside this one, copy the data across, and point the apps at it.
+					</p>
+				</div>
+			</div>
+		} else {
+			<div class={ "callout mb-4", templ.KV("callout-err", isSerious(r.Report.Worst())), templ.KV("callout-warn", !isSerious(r.Report.Worst())) }>
+				<div class="min-w-0 flex-1">
+					<div class="font-medium">
+						{ r.Engine } { r.Version } is missing { securityFixes(len(r.Report.Fixes)) }
+					</div>
+					<p class="mt-0.5 text-muted-foreground">
+						{ r.Report.Latest.String() + fixesThem(len(r.Report.Fixes)) }
+						if r.NewerImage {
+							The <code class="mono">{ d.Tag() }</code> image has been updated since this was
+							deployed: Redeploy to take it. The database restarts, so it is unavailable for a
+							few seconds.
+						} else if r.Pinned {
+							<code class="mono">{ d.Image }</code> names this exact release, so a redeploy
+							keeps it. Change the image to <code class="mono">{ r.Suggested }</code> in
+							<a class="underline hover:text-foreground" href={ templ.URL("/apps/" + d.Name + "/settings#source") }>Settings</a>
+							and deploy.
+						} else {
+							The <code class="mono">{ d.Tag() }</code> image does not carry it yet; its maintainers
+							usually publish within a few days, and this will say when it does.
+						}
+					</p>
+					<details class="group mt-2">
+						<summary class="cursor-pointer text-[12.5px] text-muted-foreground hover:text-foreground">Show the fixes</summary>
+						<ul class="mt-2 space-y-1.5 text-[12.5px]">
+							for _, a := range r.Report.Fixes {
+								@databaseAdvisory(a)
+							}
+						</ul>
+					</details>
+				</div>
+				if r.NewerImage {
+					@redeployButton(d.Name)
+				}
+			</div>
+		}
+	</div>
+}
+
+templ databaseAdvisory(a dbrelease.Advisory) {
+	<li class="flex flex-wrap items-baseline gap-x-2">
+		<a class="mono underline hover:text-foreground" href={ templ.URL(a.URL) } target="_blank" rel="noreferrer">{ a.ID }</a>
+		if sev := a.Severity(); sev != "" {
+			<span class={ "status", severityStatus(sev) }>{ sev } { strconv.FormatFloat(a.Score, 'f', 1, 64) }</span>
+		}
+		<span class="text-muted-foreground">{ a.Component }</span>
+		<span class="min-w-0 text-foreground">{ a.Summary }</span>
+		<span class="text-muted-foreground">fixed in { a.Fixed.String() }</span>
+	</li>
+}

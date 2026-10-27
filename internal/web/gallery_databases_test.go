@@ -3,10 +3,13 @@ package web
 import (
 	"time"
 
+	"github.com/a-h/templ"
+
 	"github.com/google/uuid"
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/database"
+	"github.com/codeblocktz/yacht/internal/dbrelease"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -109,6 +112,11 @@ func databaseGalleryPages() []galleryPage {
 			),
 		},
 		{
+			file: "states-database-version.html", path: "/apps/postgres",
+			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "postgres"}, {Label: "Deployments"}},
+			page:   databaseVersionStates(db),
+		},
+		{
 			file: "states-database-backups.html", path: "/apps/postgres/backups",
 			crumbs: []Crumb{{Label: "Apps", Href: "/apps"}, {Label: "postgres"}, {Label: "Backups"}},
 			page: stack(
@@ -123,4 +131,48 @@ func databaseGalleryPages() []galleryPage {
 			),
 		},
 	}
+}
+
+// databaseVersionStates is the line on a database's Deployments tab that
+// says what it runs, in each of the states it can be in.
+func databaseVersionStates(db app.App) templ.Component {
+	v := func(minor int) dbrelease.Version { return dbrelease.Version{Major: "16", Minor: minor} }
+	fixes := []dbrelease.Advisory{
+		{ID: "CVE-2026-19385", URL: "https://www.postgresql.org/support/security/CVE-2026-19385/", Component: "client", Score: 8.8,
+			Summary: "PostgreSQL pg_dump heap buffer overflow executes arbitrary code", Fixed: v(15)},
+		{ID: "CVE-2026-16241", URL: "https://www.postgresql.org/support/security/CVE-2026-16241/", Component: "core server", Score: 7.1,
+			Summary: "PostgreSQL CREATE STATISTICS does not check the schema privilege", Fixed: v(14)},
+		{ID: "CVE-2026-18024", URL: "https://www.postgresql.org/support/security/CVE-2026-18024/", Component: "core server", Score: 4.3,
+			Summary: "PostgreSQL ascii() function reads past end of buffer", Fixed: v(15)},
+	}
+	rel := func(fixes []dbrelease.Advisory) app.DatabaseRelease {
+		return app.DatabaseRelease{Engine: "PostgreSQL", Version: "16.4", Known: true,
+			Report: dbrelease.Report{Running: v(4), Latest: v(15), Supported: true, Fixes: fixes}}
+	}
+	data := func(image string, r app.DatabaseRelease) DatabaseReleaseData {
+		return DatabaseReleaseData{Name: db.Name, Image: image, R: r}
+	}
+	newer, pinned, waiting, medium := rel(fixes), rel(fixes[2:]), rel(fixes), rel(fixes[2:])
+	newer.NewerImage = true
+	pinned.Pinned, pinned.Suggested = true, "postgres:16.15-alpine"
+	current := app.DatabaseRelease{Engine: "PostgreSQL", Version: "16.15", Known: true,
+		Report: dbrelease.Report{Running: v(15), Latest: v(15), Supported: true}}
+	ended := app.DatabaseRelease{Engine: "PostgreSQL", Version: "12.22", Known: true, Report: dbrelease.Report{
+		Running: dbrelease.Version{Major: "12", Minor: 22}, Latest: dbrelease.Version{Major: "12", Minor: 22},
+		EOL: time.Date(2024, 11, 21, 0, 0, 0, 0, time.UTC)}}
+	medium.NewerImage = true
+	return stack(
+		section("Up to date", "the newest release of its major version",
+			panelWrap(databaseReleaseBlock(data(db.Image, current)))),
+		section("Missing fixes, image updated", "a redeploy takes the newer image",
+			panelWrap(databaseReleaseBlock(data(db.Image, newer)))),
+		section("Missing a medium fix", "amber rather than red",
+			panelWrap(databaseReleaseBlock(data(db.Image, medium)))),
+		section("Pinned to a release", "the tag to change to",
+			panelWrap(databaseReleaseBlock(data("postgres:16.4-alpine", pinned)))),
+		section("Image not yet updated", "nothing to press yet",
+			panelWrap(databaseReleaseBlock(data(db.Image, waiting)))),
+		section("Out of support", "a major version past its end",
+			panelWrap(databaseReleaseBlock(data("postgres:12-alpine", ended)))),
+	)
 }
