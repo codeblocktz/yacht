@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/codeblocktz/yacht/internal/backup"
+	"github.com/codeblocktz/yacht/internal/bucket"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -307,6 +308,17 @@ type Config struct {
 	BackupS3AccessKey string
 	BackupS3SecretKey string
 
+	// Buckets* are the install's Garage, which Add › Bucket makes customers'
+	// buckets on: its admin API and the token it was started with, its S3 API
+	// as the engine reaches it, and as apps and browsers do, and the region
+	// requests are signed for. The admin URL, token and endpoint together, or
+	// none of them; with none, Add › Bucket says buckets are not set up.
+	BucketsAdminURL   string
+	BucketsAdminToken string
+	BucketsS3URL      string
+	BucketsEndpoint   string
+	BucketsRegion     string
+
 	// BackupToolImage uploads and downloads dumps in a backup job; curl, run
 	// as the database's own non-root user. Empty is the engine's pinned
 	// default. An install that pulls from a mirror names its copy here.
@@ -392,6 +404,11 @@ func Load() (Config, error) {
 		BackupS3AccessKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_ACCESS_KEY", "")),
 		BackupS3SecretKey:        strings.TrimSpace(env("YACHT_BACKUP_S3_SECRET_KEY", "")),
 		BackupToolImage:          strings.TrimSpace(env("YACHT_BACKUP_TOOL_IMAGE", "")),
+		BucketsAdminURL:          strings.TrimSpace(env("YACHT_BUCKETS_ADMIN_URL", "")),
+		BucketsAdminToken:        strings.TrimSpace(env("YACHT_BUCKETS_ADMIN_TOKEN", "")),
+		BucketsS3URL:             strings.TrimSpace(env("YACHT_BUCKETS_S3_URL", "")),
+		BucketsEndpoint:          strings.TrimSpace(env("YACHT_BUCKETS_ENDPOINT", "")),
+		BucketsRegion:            strings.TrimSpace(env("YACHT_BUCKETS_REGION", "us-east-1")),
 		LogsURL:                  strings.TrimSpace(env("YACHT_LOGS_URL", "")),
 		MetricsURL:               strings.TrimSpace(env("YACHT_METRICS_URL", "")),
 		LogsRetention:            envDuration("YACHT_LOGS_RETENTION", 7*24*time.Hour),
@@ -483,6 +500,9 @@ func (c Config) validate() error {
 	errs = append(errs, c.accountFaults()...)
 	errs = append(errs, c.gitHubFaults()...)
 	if _, err := c.BackupStore(); err != nil {
+		errs = append(errs, err)
+	}
+	if _, err := c.BucketStore(); err != nil {
 		errs = append(errs, err)
 	}
 	errs = append(errs, c.observeFaults()...)
@@ -910,6 +930,29 @@ func (c Config) BackupStore() (*backup.S3, error) {
 		return nil, fmt.Errorf("YACHT_BACKUP_S3_*: %w", err)
 	}
 	return s3, nil
+}
+
+// BucketStore is the Garage customers' buckets are made on, or nil when the
+// install has none. Half of one is refused at startup, as half a backup
+// bucket is: Add › Bucket would be offered and fail.
+func (c Config) BucketStore() (*bucket.Garage, error) {
+	if c.BucketsAdminURL == "" && c.BucketsAdminToken == "" && c.BucketsEndpoint == "" {
+		return nil, nil
+	}
+	if c.BucketsAdminURL == "" || c.BucketsAdminToken == "" || c.BucketsEndpoint == "" {
+		return nil, errors.New("buckets need YACHT_BUCKETS_ADMIN_URL, YACHT_BUCKETS_ADMIN_TOKEN and YACHT_BUCKETS_ENDPOINT together")
+	}
+	g := &bucket.Garage{
+		AdminURL: c.BucketsAdminURL, Token: c.BucketsAdminToken,
+		// The engine reaching the S3 API the way apps do, when it is not
+		// told of a shorter way in the cluster.
+		S3URL:    cmp.Or(c.BucketsS3URL, c.BucketsEndpoint),
+		Endpoint: c.BucketsEndpoint, Region: c.BucketsRegion,
+	}
+	if err := g.Validate(); err != nil {
+		return nil, fmt.Errorf("YACHT_BUCKETS_*: %w", err)
+	}
+	return g, nil
 }
 
 // MailTransport names the transport sign-in links will be delivered through.

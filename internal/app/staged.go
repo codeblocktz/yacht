@@ -638,6 +638,20 @@ func (s *Service) DeployStaged(ctx context.Context, ownerID, appName string) err
 	}
 	trigger := stagedTrigger(changes)
 
+	// A bucket's edits are kept and nothing is deployed: its variables are
+	// read by the apps that refer to them, at their own next deploy.
+	if !a.Source.Workload() {
+		tx, err := s.pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("app: begin staged changes: %w", err)
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+		if err := s.commitStaged(ctx, s.q.WithTx(tx), &a); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
 	// A Git app that has never built has no image to make a release from;
 	// its first build makes one, and carries the staged edits with it.
 	if a.Image == PendingImage {

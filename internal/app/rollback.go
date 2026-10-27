@@ -75,6 +75,9 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 	if err != nil {
 		return err
 	}
+	if !a.Source.Workload() {
+		return ErrNoWorkload
+	}
 	if a.ActiveReleaseID != nil && *a.ActiveReleaseID == releaseID {
 		return ErrReleaseActive
 	}

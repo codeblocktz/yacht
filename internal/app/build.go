@@ -127,7 +127,7 @@ func (s *Service) CanBuild(ctx context.Context) bool {
 
 // Capabilities is what this install can do, for a picker to render honestly.
 func (s *Service) Capabilities(ctx context.Context) Capabilities {
-	return Capabilities{CanBuild: s.CanBuild(ctx)}
+	return Capabilities{CanBuild: s.CanBuild(ctx), CanBucket: s.buckets != nil}
 }
 
 // Sources lists what an app can be created from on this install.

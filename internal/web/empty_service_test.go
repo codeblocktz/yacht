@@ -50,7 +50,7 @@ func buildingServer(t *testing.T, apps *fakeApps) http.Handler {
 // that asks for a name, and a create the engine is told is empty.
 func TestAnEmptyServiceIsOfferedAndCreated(t *testing.T) {
 	var buf bytes.Buffer
-	if err := canvasAdd("shop").Render(context.Background(), &buf); err != nil {
+	if err := canvasAdd("shop", false).Render(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "Empty Service") ||

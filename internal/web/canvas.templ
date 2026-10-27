@@ -29,7 +29,7 @@ templ Canvas(d CanvasData) {
 					<a class="btn btn-primary mt-3" href={ templ.SafeURL(newAppHref(d.Project.Slug)) }>Add a service</a>
 				</div>
 			</div>
-			@canvasAdd(d.Project.Slug)
+			@canvasAdd(d.Project.Slug, d.Buckets)
 		</div>
 	} else {
 		// The geometry lives here, in one place, so the script that re-routes
@@ -128,7 +128,7 @@ templ Canvas(d CanvasData) {
 					</div>
 				}
 			</div>
-			@canvasAdd(d.Project.Slug)
+			@canvasAdd(d.Project.Slug, d.Buckets)
 			@stagedBar(d)
 			// Floating on the surface rather than in the bar, because they act on
 			// the view rather than on the project — and because an infinite canvas
@@ -225,9 +225,21 @@ templ appPanelBody(d AppDetailData) {
 			@sleepActions(d)
 		</div>
 	}
-	@appTabs(d.App.Name, d.Tab) {
-		@databaseTabs(d)
+	if !d.App.Source.Workload() {
+		@bucketTabs(d)
+		<div class="canvas-sheet-body">
+			@bucketPanelBody(d)
+		</div>
+	} else {
+		@appTabs(d.App.Name, d.Tab) {
+			@databaseTabs(d)
+		}
+		@serviceTabBody(d)
 	}
+}
+
+// serviceTabBody is a running service's tab: everything but a bucket's.
+templ serviceTabBody(d AppDetailData) {
 	<div class="canvas-sheet-body">
 		@sleepCallout(d)
 		switch d.Tab {
@@ -315,7 +327,7 @@ templ projectRow(p app.Project) {
 // canvasAdd is Railway's Add: one button on the canvas, and everything a
 // project can be given behind it. Each entry is the flow that already
 // exists for it, into this project.
-templ canvasAdd(project string) {
+templ canvasAdd(project string, buckets bool) {
 	<div class="canvas-add">
 		@popover.Root() {
 			@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
@@ -355,6 +367,9 @@ templ canvasAdd(project string) {
 						<span class="flex-1">GitHub Repository</span>
 					</a>
 					@canvasAddDatabase(project)
+					if buckets {
+						@canvasAddBucket(project)
+					}
 					<a class="switcher-item" href={ templ.URL("/templates" + projectQuery("?", project)) }>
 						@icon("layers")
 						<span class="flex-1">Template</span>

@@ -171,6 +171,7 @@ func (s *Server) renderCanvasWith(
 	data.Project = project
 	data.Env = env
 	data.Open = open
+	data.Buckets = s.canBucket(ctx)
 	s.attachStaged(ctx, owner.ID, &data)
 	if projects, err := s.apps.Projects(ctx, owner.ID); err == nil {
 		data.Projects = projects
@@ -218,6 +219,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachRegion(ctx, d)
 	s.attachProjects(ctx, d)
 	s.attachReferenceTargets(ctx, d)
+	s.attachBucket(ctx, d)
 	d.Stages = s.stages()
 	d.VersionCheck = s.databaseReleases() != nil && a.Source == app.SourcePostgres &&
 		a.ActiveReleaseID != nil

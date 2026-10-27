@@ -101,10 +101,17 @@ func (s *S3) Where() string {
 // on one object, until it expires. Anybody holding it can do exactly that and
 // nothing else.
 func (s *S3) Presign(method, key string, expires time.Duration, now time.Time) (string, error) {
-	return s.presignPath(method, s.objectPath(key), expires, now)
+	return s.presignPath(method, s.objectPath(key), nil, expires, now)
 }
 
-func (s *S3) presignPath(method, path string, expires time.Duration, now time.Time) (string, error) {
+// PresignBucket returns a URL for one request on the bucket itself, with the
+// query it is given signed in: a listing, ListObjectsV2's list-type=2 and
+// prefix.
+func (s *S3) PresignBucket(method string, query url.Values, expires time.Duration, now time.Time) (string, error) {
+	return s.presignPath(method, "/"+uriEncode(s.Bucket), query, expires, now)
+}
+
+func (s *S3) presignPath(method, path string, extra url.Values, expires time.Duration, now time.Time) (string, error) {
 	if expires <= 0 || expires > 7*24*time.Hour {
 		return "", errors.New("backup: a signed URL lasts between one second and seven days")
 	}
@@ -114,6 +121,9 @@ func (s *S3) presignPath(method, path string, expires time.Duration, now time.Ti
 	scope := day + "/" + s.Region + "/s3/aws4_request"
 
 	q := url.Values{}
+	for k, v := range extra {
+		q[k] = append([]string(nil), v...)
+	}
 	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
 	q.Set("X-Amz-Credential", s.AccessKey+"/"+scope)
 	q.Set("X-Amz-Date", amzDate)

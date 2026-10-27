@@ -265,6 +265,7 @@ type Querier interface {
 	GetAppForReleaseBackfill(ctx context.Context, arg GetAppForReleaseBackfillParams) (App, error)
 	GetAppHook(ctx context.Context, arg GetAppHookParams) (AppHook, error)
 	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
+	GetBucket(ctx context.Context, arg GetBucketParams) (Bucket, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
 	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
@@ -436,6 +437,7 @@ type Querier interface {
 	// The audit log is written here and read by audit.List, which composes its
 	// filters at runtime — the hybrid sqlc.yaml describes.
 	InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) error
+	InsertBucket(ctx context.Context, arg InsertBucketParams) error
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
 	ListAPITokens(ctx context.Context, ownerID string) ([]ListAPITokensRow, error)
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
@@ -483,6 +485,8 @@ type Querier interface {
 	// because assigning one is a write and a read should not have side effects
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
+	// Every bucket on the install, for measuring.
+	ListBuckets(ctx context.Context) ([]Bucket, error)
 	// The operator's list, newest first, with the team's name as it is now.
 	ListCapacityRefusalsSince(ctx context.Context, arg ListCapacityRefusalsSinceParams) ([]ListCapacityRefusalsSinceRow, error)
 	ListCustomDomains(ctx context.Context, arg ListCustomDomainsParams) ([]Domain, error)
@@ -743,6 +747,7 @@ type Querier interface {
 	// The idle clock restarts with the setting, so turning sleep on for an app
 	// that has been quiet all week does not put it to sleep a minute later.
 	SetAppSleepSetting(ctx context.Context, arg SetAppSleepSettingParams) (App, error)
+	SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)

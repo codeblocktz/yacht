@@ -93,6 +93,11 @@ func (s *Service) admitDeployment(
 	ctx context.Context, ownerID string, a App, trigger string,
 	releaseID uuid.UUID, requiresBuild bool,
 ) (Operation, error) {
+	// A build of a bucket — a hook, an upload, a connected repository — has
+	// nothing to build.
+	if !a.Source.Workload() {
+		return Operation{}, ErrNoWorkload
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Operation{}, fmt.Errorf("app: begin deployment admission: %w", err)

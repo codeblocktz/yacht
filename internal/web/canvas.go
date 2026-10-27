@@ -70,6 +70,9 @@ type CanvasData struct {
 	// Env is the environment drawn: production, or one made beside it.
 	Env string
 
+	// Buckets says the install has an object store, so Add offers Bucket.
+	Buckets bool
+
 	// Open is the app whose panel is showing, nil when none is. It is the same
 	// data the app page used to render, because the panel IS the app page now.
 	Open *AppDetailData
@@ -304,6 +307,9 @@ func (d CanvasData) Graph() canvasGraph {
 // rather than the orchestrator's phase.
 func cardStatus(a app.App) (label, class string) {
 	switch {
+	case !a.Source.Workload():
+		// Nothing runs to be up or down: the bucket is there or it is not.
+		return "Bucket", "card-status-ok"
 	case a.Sleep.Asleep():
 		return "Sleeping", "card-status-idle"
 	case !a.StatusKnown && awaitsSource(a):

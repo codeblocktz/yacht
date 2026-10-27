@@ -178,7 +178,9 @@ func (s *Service) setVariableNow(
 	// also removes it from the immutable environment, so that transition gets a
 	// release even though its new value lives only in the current overlay.
 	releaseOwned := !in.Secret || (exists && !existing.Secret)
-	if releaseOwned {
+	// A bucket's variables are what apps read through references; there is
+	// nothing of its own to deploy them to.
+	if releaseOwned && a.Source.Workload() {
 		release, err := s.createRelease(ctx, s.q, a, "")
 		if err != nil {
 			return err

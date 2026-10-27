@@ -172,6 +172,19 @@ type AuditEvent struct {
 	Detail     []byte
 }
 
+type Bucket struct {
+	AppID        uuid.UUID
+	OwnerID      string
+	GarageID     string
+	Name         string
+	KeyID        string
+	SealedSecret []byte
+	SizeBytes    int64
+	Objects      int64
+	MeasuredAt   pgtype.Timestamptz
+	CreatedAt    time.Time
+}
+
 type Build struct {
 	ID           uuid.UUID
 	OwnerID      string

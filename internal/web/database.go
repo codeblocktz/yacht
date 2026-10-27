@@ -142,7 +142,8 @@ func (s *Server) databaseDeploy(w http.ResponseWriter, r *http.Request) {
 func nonDatabaseSources(all []app.Blueprint) []app.Blueprint {
 	out := make([]app.Blueprint, 0, len(all))
 	for _, b := range all {
-		if !b.Source.Database() {
+		// A bucket is Add › Bucket's, one click, as a database is.
+		if !b.Source.Database() && b.Source.Workload() {
 			out = append(out, b)
 		}
 	}
