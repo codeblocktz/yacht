@@ -205,6 +205,38 @@ func (g *Garage) Usage(ctx context.Context, id string) (Usage, error) {
 	return Usage{Bytes: info.Bytes, Objects: info.Objects}, nil
 }
 
+// SetLimit is the most a bucket may hold, in bytes, which Garage enforces
+// itself: a write that would pass it is refused, and what is there stays.
+// Zero is no limit.
+func (g *Garage) SetLimit(ctx context.Context, id string, maxBytes int64) error {
+	var size *int64
+	if maxBytes > 0 {
+		size = &maxBytes
+	}
+	in := map[string]any{"quotas": map[string]any{"maxSize": size, "maxObjects": nil}}
+	return g.call(ctx, http.MethodPost, "/v2/UpdateBucket?id="+url.QueryEscape(id), in, nil)
+}
+
+// Limit is the most a bucket may hold now, zero for no limit.
+func (g *Garage) Limit(ctx context.Context, id string) (int64, error) {
+	var info struct {
+		Quotas struct {
+			MaxSize *int64 `json:"maxSize"`
+		} `json:"quotas"`
+	}
+	if err := g.call(ctx, http.MethodGet, "/v2/GetBucketInfo?id="+url.QueryEscape(id), nil, &info); err != nil {
+		return 0, err
+	}
+	if info.Quotas.MaxSize == nil {
+		return 0, nil
+	}
+	return *info.Quotas.MaxSize, nil
+}
+
+// ErrFull is a write refused because the bucket holds as much as its limit
+// allows.
+var ErrFull = errors.New("bucket: the bucket is full")
+
 // ErrNotEmpty is a bucket with files still in it, which Garage will not
 // delete.
 var ErrNotEmpty = errors.New("bucket: the bucket still has files in it")

@@ -264,6 +264,8 @@ func bucketSentence(err error) string {
 		return "The object store is not answering. Files are safe; try again in a minute."
 	case errors.Is(err, app.ErrNoBuckets):
 		return "This install has no object store for buckets."
+	case errors.Is(err, objstore.ErrFull):
+		return "The team's buckets hold as much as its plan allows. Delete some files, or move to a plan with more."
 	}
 	return strings.TrimPrefix(strings.TrimPrefix(err.Error(), "app: "), "bucket: ")
 }
@@ -322,6 +324,14 @@ func bucketReferences(name string) string {
 		b.WriteString(k + "=${{" + name + "." + k + "}}\n")
 	}
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// bucketRoom says what is left of the team's bucket storage.
+func bucketRoom(b app.Bucket) string {
+	if left := b.TeamLimit - b.TeamBytes; left > 0 {
+		return formatBytes(left) + " left"
+	}
+	return "full: uploads are refused"
 }
 
 // measuredLabel says how fresh a bucket's size is.

@@ -14,7 +14,7 @@ import (
 
 const getTeamQuota = `-- name: GetTeamQuota :one
 
-SELECT owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at FROM team_quotas WHERE owner_id = $1
+SELECT owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at, bucket_bytes FROM team_quotas WHERE owner_id = $1
 `
 
 // What a team may commit, and what it has.
@@ -33,6 +33,7 @@ func (q *Queries) GetTeamQuota(ctx context.Context, ownerID string) (TeamQuota, 
 		&i.MemoryBytes,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.BucketBytes,
 	)
 	return i, err
 }
@@ -41,10 +42,12 @@ const getTeamQuotaSummary = `-- name: GetTeamQuotaSummary :one
 SELECT t.id, t.display_name,
        (SELECT count(*) FROM memberships m WHERE m.owner_id = t.id)::bigint AS members,
        (SELECT coalesce(sum(v.size_bytes), 0) FROM volumes v WHERE v.owner_id = t.id)::bigint AS storage_bytes,
+       (SELECT coalesce(sum(b.size_bytes), 0) FROM buckets b WHERE b.owner_id = t.id)::bigint AS bucket_bytes,
        coalesce(q.max_apps, 0)::integer        AS quota_apps,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
+       coalesce(q.bucket_bytes, 0)::bigint     AS quota_bucket_bytes,
        q.updated_at                            AS quota_updated_at,
        coalesce(p.pool, '')::text              AS pool
 FROM teams t
@@ -58,10 +61,12 @@ type GetTeamQuotaSummaryRow struct {
 	DisplayName       string
 	Members           int64
 	StorageBytes      int64
+	BucketBytes       int64
 	QuotaApps         int32
 	QuotaCpuMillis    int64
 	QuotaMemoryBytes  int64
 	QuotaStorageBytes int64
+	QuotaBucketBytes  int64
 	QuotaUpdatedAt    pgtype.Timestamptz
 	Pool              string
 }
@@ -74,10 +79,12 @@ func (q *Queries) GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQu
 		&i.DisplayName,
 		&i.Members,
 		&i.StorageBytes,
+		&i.BucketBytes,
 		&i.QuotaApps,
 		&i.QuotaCpuMillis,
 		&i.QuotaMemoryBytes,
 		&i.QuotaStorageBytes,
+		&i.QuotaBucketBytes,
 		&i.QuotaUpdatedAt,
 		&i.Pool,
 	)
@@ -170,10 +177,12 @@ const listTeamQuotas = `-- name: ListTeamQuotas :many
 SELECT t.id, t.display_name,
        (SELECT count(*) FROM memberships m WHERE m.owner_id = t.id)::bigint AS members,
        (SELECT coalesce(sum(v.size_bytes), 0) FROM volumes v WHERE v.owner_id = t.id)::bigint AS storage_bytes,
+       (SELECT coalesce(sum(b.size_bytes), 0) FROM buckets b WHERE b.owner_id = t.id)::bigint AS bucket_bytes,
        coalesce(q.max_apps, 0)::integer        AS quota_apps,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
+       coalesce(q.bucket_bytes, 0)::bigint     AS quota_bucket_bytes,
        q.updated_at                            AS quota_updated_at,
        coalesce(p.pool, '')::text              AS pool
 FROM teams t
@@ -187,10 +196,12 @@ type ListTeamQuotasRow struct {
 	DisplayName       string
 	Members           int64
 	StorageBytes      int64
+	BucketBytes       int64
 	QuotaApps         int32
 	QuotaCpuMillis    int64
 	QuotaMemoryBytes  int64
 	QuotaStorageBytes int64
+	QuotaBucketBytes  int64
 	QuotaUpdatedAt    pgtype.Timestamptz
 	Pool              string
 }
@@ -211,10 +222,12 @@ func (q *Queries) ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, erro
 			&i.DisplayName,
 			&i.Members,
 			&i.StorageBytes,
+			&i.BucketBytes,
 			&i.QuotaApps,
 			&i.QuotaCpuMillis,
 			&i.QuotaMemoryBytes,
 			&i.QuotaStorageBytes,
+			&i.QuotaBucketBytes,
 			&i.QuotaUpdatedAt,
 			&i.Pool,
 		); err != nil {
@@ -229,7 +242,7 @@ func (q *Queries) ListTeamQuotas(ctx context.Context) ([]ListTeamQuotasRow, erro
 }
 
 const lockTeamQuota = `-- name: LockTeamQuota :one
-SELECT owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at FROM team_quotas WHERE owner_id = $1 FOR UPDATE
+SELECT owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at, bucket_bytes FROM team_quotas WHERE owner_id = $1 FOR UPDATE
 `
 
 // Taken at the start of anything that would raise what a team has committed,
@@ -247,6 +260,7 @@ func (q *Queries) LockTeamQuota(ctx context.Context, ownerID string) (TeamQuota,
 		&i.MemoryBytes,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.BucketBytes,
 	)
 	return i, err
 }
@@ -265,15 +279,16 @@ func (q *Queries) SumVolumeBytes(ctx context.Context, ownerID string) (int64, er
 }
 
 const upsertTeamQuota = `-- name: UpsertTeamQuota :one
-INSERT INTO team_quotas (owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO team_quotas (owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, bucket_bytes)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (owner_id) DO UPDATE
 SET max_apps      = excluded.max_apps,
     cpu_millis    = excluded.cpu_millis,
     memory_bytes  = excluded.memory_bytes,
     storage_bytes = excluded.storage_bytes,
+    bucket_bytes  = excluded.bucket_bytes,
     updated_at    = now()
-RETURNING owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at
+RETURNING owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, updated_at, bucket_bytes
 `
 
 type UpsertTeamQuotaParams struct {
@@ -282,6 +297,7 @@ type UpsertTeamQuotaParams struct {
 	CpuMillis    int64
 	MemoryBytes  int64
 	StorageBytes int64
+	BucketBytes  int64
 }
 
 func (q *Queries) UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams) (TeamQuota, error) {
@@ -291,6 +307,7 @@ func (q *Queries) UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams
 		arg.CpuMillis,
 		arg.MemoryBytes,
 		arg.StorageBytes,
+		arg.BucketBytes,
 	)
 	var i TeamQuota
 	err := row.Scan(
@@ -300,6 +317,7 @@ func (q *Queries) UpsertTeamQuota(ctx context.Context, arg UpsertTeamQuotaParams
 		&i.MemoryBytes,
 		&i.StorageBytes,
 		&i.UpdatedAt,
+		&i.BucketBytes,
 	)
 	return i, err
 }

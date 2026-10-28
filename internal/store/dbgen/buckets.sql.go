@@ -100,6 +100,42 @@ func (q *Queries) ListBuckets(ctx context.Context) ([]Bucket, error) {
 	return items, nil
 }
 
+const listTeamBuckets = `-- name: ListTeamBuckets :many
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id
+`
+
+// A team's buckets, with what each held when last measured.
+func (q *Queries) ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket, error) {
+	rows, err := q.db.Query(ctx, listTeamBuckets, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Bucket{}
+	for rows.Next() {
+		var i Bucket
+		if err := rows.Scan(
+			&i.AppID,
+			&i.OwnerID,
+			&i.GarageID,
+			&i.Name,
+			&i.KeyID,
+			&i.SealedSecret,
+			&i.SizeBytes,
+			&i.Objects,
+			&i.MeasuredAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setBucketUsage = `-- name: SetBucketUsage :exec
 UPDATE buckets SET size_bytes = $2, objects = $3, measured_at = now()
 WHERE app_id = $1

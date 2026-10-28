@@ -554,6 +554,8 @@ type Querier interface {
 	ListStaleWakes(ctx context.Context, before time.Time) ([]App, error)
 	// Every port in use, so a new one is picked from those that are not.
 	ListTCPProxyPorts(ctx context.Context) ([]int32, error)
+	// A team's buckets, with what each held when last measured.
+	ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket, error)
 	ListTeamGitHubInstallations(ctx context.Context, ownerID string) ([]ListTeamGitHubInstallationsRow, error)
 	// Every team with its quota, its pool, its storage and how many people are in
 	// it. The operator's list; see ListAllAppFootprints for why it crosses teams.

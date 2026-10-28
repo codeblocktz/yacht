@@ -235,6 +235,12 @@ func bucketFiles(d AppDetailData) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
+			if b.TeamLimit > 0 {
+				templ_7745c5c3_Err = metric("Team's buckets", formatBytes(b.TeamBytes)+" of "+formatBytes(b.TeamLimit), bucketRoom(*b)).Render(ctx, templ_7745c5c3_Buffer)
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
 			templ_7745c5c3_Err = metric("Bucket", b.Name, b.Endpoint).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -251,7 +257,7 @@ func bucketFiles(d AppDetailData) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue("/apps/" + d.App.Name + "/files/list")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 62, Col: 48}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 65, Col: 48}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 		if templ_7745c5c3_Err != nil {
@@ -301,7 +307,7 @@ func bucketConnect(name string, b app.Bucket) templ.Component {
 		var templ_7745c5c3_Var10 string
 		templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(bucketReferences(name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 87, Col: 153}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 90, Col: 153}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 		if templ_7745c5c3_Err != nil {
@@ -350,7 +356,7 @@ func BucketListing(d BucketListingData) templ.Component {
 			var templ_7745c5c3_Var12 string
 			templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(d.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 102, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 105, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 			if templ_7745c5c3_Err != nil {
@@ -369,7 +375,7 @@ func BucketListing(d BucketListingData) templ.Component {
 			var templ_7745c5c3_Var13 string
 			templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(d.Notice)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 107, Col: 57}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 110, Col: 57}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 			if templ_7745c5c3_Err != nil {
@@ -405,7 +411,7 @@ func BucketListing(d BucketListingData) templ.Component {
 		var templ_7745c5c3_Var14 string
 		templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.ResolveAttributeValue("/apps/" + d.App + "/files")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 120, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 123, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var14)
 		if templ_7745c5c3_Err != nil {
@@ -418,7 +424,7 @@ func BucketListing(d BucketListingData) templ.Component {
 		var templ_7745c5c3_Var15 string
 		templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue(d.Listing.Prefix)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 127, Col: 64}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 130, Col: 64}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
 		if templ_7745c5c3_Err != nil {
@@ -482,7 +488,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.ResolveAttributeValue(bucketListHref(d.App, f, ""))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 166, Col: 47}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 169, Col: 47}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var16)
 				if templ_7745c5c3_Err != nil {
@@ -499,7 +505,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(folderName(f))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 171, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 174, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
@@ -518,7 +524,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var18 templ.SafeURL
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(bucketDownloadHref(d.App, o.Key)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 181, Col: 60}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 184, Col: 60}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -539,7 +545,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var19 string
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(o.Name())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 186, Col: 43}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 189, Col: 43}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {
@@ -552,7 +558,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var20 string
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(formatBytes(o.Size))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 189, Col: 87}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 192, Col: 87}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 				if templ_7745c5c3_Err != nil {
@@ -565,7 +571,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinStringErrs(relativeTime(o.Modified))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 190, Col: 86}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 193, Col: 86}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 				if templ_7745c5c3_Err != nil {
@@ -578,7 +584,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var22 templ.SafeURL
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(bucketDownloadHref(d.App, o.Key)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 193, Col: 101}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 196, Col: 101}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 				if templ_7745c5c3_Err != nil {
@@ -591,7 +597,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var23 string
 				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("Download " + o.Name())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 193, Col: 139}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 196, Col: 139}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 				if templ_7745c5c3_Err != nil {
@@ -612,7 +618,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.ResolveAttributeValue("/apps/" + d.App + "/files/delete")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 197, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 200, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var24)
 				if templ_7745c5c3_Err != nil {
@@ -625,7 +631,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var25 string
 				templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.ResolveAttributeValue(o.Key)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 201, Col: 56}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 204, Col: 56}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var25)
 				if templ_7745c5c3_Err != nil {
@@ -638,7 +644,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var26 string
 				templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.ResolveAttributeValue("Delete " + o.Name())
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 205, Col: 45}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 208, Col: 45}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var26)
 				if templ_7745c5c3_Err != nil {
@@ -651,7 +657,7 @@ func BucketListing(d BucketListingData) templ.Component {
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue("Delete " + o.Name() + "? It is gone from the bucket for every app that reads it.")
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 206, Col: 109}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 209, Col: 109}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
 				if templ_7745c5c3_Err != nil {
@@ -687,7 +693,7 @@ func BucketListing(d BucketListingData) templ.Component {
 					var templ_7745c5c3_Var28 string
 					templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.ResolveAttributeValue(bucketListHref(d.App, d.Listing.Prefix, ""))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 222, Col: 95}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 225, Col: 95}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var28)
 					if templ_7745c5c3_Err != nil {
@@ -711,7 +717,7 @@ func BucketListing(d BucketListingData) templ.Component {
 					var templ_7745c5c3_Var29 string
 					templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.ResolveAttributeValue(bucketListHref(d.App, d.Listing.Prefix, d.Listing.Next))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 227, Col: 107}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 230, Col: 107}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var29)
 					if templ_7745c5c3_Err != nil {
@@ -764,7 +770,7 @@ func bucketFolderLink(app, prefix, label string) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.ResolveAttributeValue(bucketListHref(app, prefix, ""))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 240, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 243, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var31)
 		if templ_7745c5c3_Err != nil {
@@ -777,7 +783,7 @@ func bucketFolderLink(app, prefix, label string) templ.Component {
 		var templ_7745c5c3_Var32 string
 		templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 243, Col: 9}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 246, Col: 9}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 		if templ_7745c5c3_Err != nil {
@@ -823,7 +829,7 @@ func bucketSettings(d AppDetailData) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(d.Error)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 252, Col: 33}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 255, Col: 33}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 			if templ_7745c5c3_Err != nil {
@@ -841,7 +847,7 @@ func bucketSettings(d AppDetailData) templ.Component {
 		var templ_7745c5c3_Var35 templ.SafeURL
 		templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/apps/" + a.Name + "/delete"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 267, Col: 53}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 270, Col: 53}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 		if templ_7745c5c3_Err != nil {
@@ -854,7 +860,7 @@ func bucketSettings(d AppDetailData) templ.Component {
 		var templ_7745c5c3_Var36 string
 		templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(a.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 272, Col: 38}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 275, Col: 38}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 		if templ_7745c5c3_Err != nil {
@@ -867,7 +873,7 @@ func bucketSettings(d AppDetailData) templ.Component {
 		var templ_7745c5c3_Var37 string
 		templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue(a.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 278, Col: 26}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 281, Col: 26}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 		if templ_7745c5c3_Err != nil {
@@ -880,7 +886,7 @@ func bucketSettings(d AppDetailData) templ.Component {
 		var templ_7745c5c3_Var38 string
 		templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.ResolveAttributeValue("Delete " + a.Name + "?")
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 287, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/bucket.templ`, Line: 290, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var38)
 		if templ_7745c5c3_Err != nil {

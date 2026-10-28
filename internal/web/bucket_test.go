@@ -37,6 +37,11 @@ func (f *fakeS3) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimPrefix(r.URL.Path, "/media-abc123/")
 	switch r.Method {
 	case http.MethodPut:
+		if key == "huge.bin" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>Forbidden: Bucket size quota is reached</Message></Error>`)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		f.puts[key] = string(b)
 	case http.MethodDelete:
@@ -96,6 +101,7 @@ func (b *bucketApps) Bucket(_ context.Context, _, name string) (app.Bucket, erro
 	return app.Bucket{
 		Name: "media-abc123", Endpoint: "https://s3.example.com", Region: "datahuru",
 		Bytes: 3 << 20, Objects: 2, MeasuredAt: time.Now().Add(-time.Minute),
+		TeamLimit: 5 << 30, TeamBytes: 1 << 30,
 	}, nil
 }
 
@@ -141,6 +147,7 @@ func TestABucketsPanelIsItsFiles(t *testing.T) {
 	for _, want := range []string{
 		">Files<", ">Variables<", ">Settings<", "media-abc123", "3.0 MiB", `hx-get="/apps/media/files/list"`,
 		"ACCESS_KEY_ID=${{media.ACCESS_KEY_ID}}", "S3-compatible bucket",
+		"1.0 GiB of 5.0 GiB", "4.0 GiB left",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the bucket's panel is missing %q", want)
@@ -181,6 +188,20 @@ func TestTheFilesTabListsUploadsAndDeletes(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), "Uploaded cat.jpg.") || s3.puts["photos/cat.jpg"] != "meow" {
 		t.Fatalf("upload = %d %q; store has %v", rec.Code, rec.Body.String(), s3.puts)
+	}
+
+	body.Reset()
+	mw = multipart.NewWriter(&body)
+	fw, _ = mw.CreateFormFile("file", "huge.bin")
+	_, _ = io.WriteString(fw, "too much")
+	_ = mw.Close()
+	req = httptest.NewRequest(http.MethodPost, "/apps/media/files", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Origin", "http://example.com")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "as much as its plan allows") {
+		t.Fatalf("an upload past the team's quota = %q", rec.Body.String())
 	}
 
 	rec = post(t, h, "/apps/media/files/delete", url.Values{"key": {"photos/cat.jpg"}})

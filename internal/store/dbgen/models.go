@@ -541,6 +541,7 @@ type TeamQuota struct {
 	MemoryBytes  int64
 	StorageBytes int64
 	UpdatedAt    time.Time
+	BucketBytes  int64
 }
 
 type TeamSleepDefault struct {

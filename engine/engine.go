@@ -790,6 +790,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.MailTransport = cfg.MailTransport()
 		opts.BootstrapEmail = cfg.OwnerEmail
 		opts.OpenSignup = cfg.OpenSignup
+		opts.RequestAccessURL = cfg.RequestAccessURL
 	}
 
 	if err := attachObserve(&opts, cfg, log); err != nil {

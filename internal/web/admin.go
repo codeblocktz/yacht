@@ -87,6 +87,7 @@ type QuotaForm struct {
 	CPU     string
 	Memory  string
 	Storage string
+	Buckets string
 }
 
 // quotaForm renders a stored quota for editing. Zero is left empty rather than
@@ -105,6 +106,9 @@ func quotaForm(q app.Quota) QuotaForm {
 	}
 	if q.StorageBytes > 0 {
 		f.Storage = strconv.FormatFloat(roundTo(float64(q.StorageBytes)/(1<<30), 3), 'f', -1, 64)
+	}
+	if q.BucketBytes > 0 {
+		f.Buckets = strconv.FormatFloat(roundTo(float64(q.BucketBytes)/(1<<30), 3), 'f', -1, 64)
 	}
 	return f
 }
@@ -135,10 +139,15 @@ func (f QuotaForm) Parse() (app.Quota, error) {
 	if err != nil {
 		return q, err
 	}
+	buckets, err := quotaNumber(f.Buckets, "Buckets", 1<<20)
+	if err != nil {
+		return q, err
+	}
 	q.Apps = int32(apps)
 	q.CPUMillis = int64(math.Round(cpu * 1000))
 	q.MemoryBytes = int64(math.Round(mem * (1 << 30)))
 	q.StorageBytes = int64(math.Round(storage * (1 << 30)))
+	q.BucketBytes = int64(math.Round(buckets * (1 << 30)))
 	return q, nil
 }
 
@@ -195,6 +204,7 @@ func (s *Server) adminTeamQuota(w http.ResponseWriter, r *http.Request) {
 	form := QuotaForm{
 		Apps: r.FormValue("apps"), CPU: r.FormValue("cpu"),
 		Memory: r.FormValue("memory"), Storage: r.FormValue("storage"),
+		Buckets: r.FormValue("buckets"),
 	}
 	refuse := func(msg string) {
 		// Re-rendered rather than redirected, so what was typed is still in
@@ -304,7 +314,8 @@ func overQuota(t app.TeamUsage) bool {
 	return (q.Apps > 0 && u.Apps > int64(q.Apps)) ||
 		(q.CPUMillis > 0 && u.CPUMillis > q.CPUMillis) ||
 		(q.MemoryBytes > 0 && u.MemoryBytes > q.MemoryBytes) ||
-		(q.StorageBytes > 0 && u.StorageBytes > q.StorageBytes)
+		(q.StorageBytes > 0 && u.StorageBytes > q.StorageBytes) ||
+		(q.BucketBytes > 0 && u.BucketBytes > q.BucketBytes)
 }
 
 func committedNow(used int64, label string) string {

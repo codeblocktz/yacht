@@ -3,14 +3,21 @@ package web
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
+	"github.com/go-chi/chi/v5"
+
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func openSignupServer(t *testing.T, accounts Accounts, mailer *fakeMailer) http.Handler {
@@ -76,6 +83,29 @@ func TestClosedSignupRefusesASignupLink(t *testing.T) {
 	}
 	if code := get(t, h, "/sign-up/anything").Code; code != http.StatusUnauthorized {
 		t.Fatalf("GET /sign-up/... with sign-up closed = %d, want 401", code)
+	}
+}
+
+// Closed, the sign-in page says accounts are by invitation, and links to
+// where somebody asks for one when the install names a place.
+func TestClosedSignupPointsAtRequestingAccess(t *testing.T) {
+	plain := get(t, signInServer(t, &fakeAccounts{}, &fakeMailer{}), "/sign-in").Body.String()
+	if !strings.Contains(plain, "by invitation") || strings.Contains(plain, "Request access") {
+		t.Error("with nowhere to ask, the page should say accounts are by invitation and link nowhere")
+	}
+	h := testServer(t, Options{
+		Accounts: &fakeAccounts{}, Mailer: &fakeMailer{}, BaseURL: "https://yacht.test",
+		BootstrapTeamID: "web-signin", RequestAccessURL: "https://yacht.test/request-access",
+		Identity: identity.ProviderFunc(func(context.Context, *http.Request) (identity.Owner, error) {
+			return identity.Owner{}, identity.ErrUnauthenticated
+		}),
+	})
+	if body := get(t, h, "/sign-in").Body.String(); !strings.Contains(body, `href="https://yacht.test/request-access"`) {
+		t.Error("the sign-in page does not link to where access is requested")
+	}
+	open := get(t, openSignupServer(t, &fakeAccounts{}, &fakeMailer{}), "/sign-in").Body.String()
+	if strings.Contains(open, "by invitation") {
+		t.Error("an install with open sign-up says accounts are by invitation")
 	}
 }
 
@@ -195,4 +225,47 @@ func (h *liveHarness) ownedBy(t *testing.T, email string) int {
 		t.Fatalf("count teams: %v", err)
 	}
 	return n
+}
+
+// A wrapping application's public pages need no session, and keep the
+// engine's check on cross-site posts.
+func TestPublicExtraRoutesNeedNoSession(t *testing.T) {
+	var srv *Server
+	opts := Options{
+		Accounts: &fakeAccounts{}, Mailer: &fakeMailer{}, BaseURL: "https://yacht.test",
+		BootstrapTeamID: "web-signin",
+		Identity: identity.ProviderFunc(func(context.Context, *http.Request) (identity.Owner, error) {
+			return identity.Owner{}, identity.ErrUnauthenticated
+		}),
+		Extra: ExtraRoutes{Public: func(r chi.Router) {
+			r.Get("/request-access", func(w http.ResponseWriter, r *http.Request) {
+				srv.RenderSignedOut(w, r, http.StatusOK, "Request access", templ.Raw("<p>ask here</p>"))
+			})
+			r.Post("/request-access", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("asked"))
+			})
+		}},
+		Orchestrator: orchestrator.NewNoop(),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	srv, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	rec := get(t, h, "/request-access")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "ask here") {
+		t.Fatalf("GET /request-access with no session = %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), `id="sidebar"`) {
+		t.Error("a public page wears the dashboard's chrome")
+	}
+	req := httptest.NewRequest(http.MethodPost, "/request-access", strings.NewReader("email=a@b.test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://elsewhere.test")
+	cross := httptest.NewRecorder()
+	h.ServeHTTP(cross, req)
+	if cross.Code != http.StatusForbidden {
+		t.Fatalf("a cross-site post to a public page = %d, want 403", cross.Code)
+	}
 }

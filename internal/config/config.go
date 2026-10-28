@@ -94,6 +94,10 @@ type Config struct {
 	// they invite.
 	OpenSignup bool
 
+	// RequestAccessURL is where somebody without an account asks for one,
+	// when sign-up is not open: the sign-in page links to it.
+	RequestAccessURL string
+
 	// Operators are the people who run the install itself, as opposed to a
 	// team on it: nodes, the registry, DNS, every team's quota. Email
 	// addresses, matched case-insensitively against the signed-in person.
@@ -356,6 +360,7 @@ func Load() (Config, error) {
 		OwnerName:                env("YACHT_OWNER_NAME", "Local"),
 		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
 		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
+		RequestAccessURL:         strings.TrimSpace(env("YACHT_REQUEST_ACCESS_URL", "")),
 		SecretKey:                strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		SecretKeyPrevious:        envList("YACHT_SECRET_KEY_PREVIOUS"),
 		AppDomain:                env("YACHT_APP_DOMAIN", ""),
@@ -673,6 +678,11 @@ func (c Config) accountFaults() []error {
 // signupFaults refuses open sign-up on an install that would hand strangers
 // more than an account.
 func (c Config) signupFaults() []error {
+	if c.RequestAccessURL != "" {
+		if u, err := url.Parse(c.RequestAccessURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return []error{errors.New("YACHT_REQUEST_ACCESS_URL must be a full http(s) address, such as https://example.com/request-access")}
+		}
+	}
 	if !c.OpenSignup {
 		return nil
 	}
