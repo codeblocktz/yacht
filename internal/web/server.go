@@ -747,6 +747,14 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/sign-out-everywhere", s.signOutEverywhere)
 	}
 
+	// A wrapping application's pages for people with no session — asking for
+	// an account, say. Outside the authenticated group like sign-in, and
+	// behind everything in front of it: the security headers, the
+	// cross-site check on posts.
+	if s.extra.Public != nil {
+		r.Group(s.extra.Public)
+	}
+
 	r.Group(func(r chi.Router) {
 		// With accounts on, an unresolved request is sent to the sign-in page
 		// rather than answered 401. A bare 401 is a dead end in a browser:
@@ -1229,6 +1237,9 @@ func (s *Server) Handler() http.Handler {
 // gates. Each is called with the group's router once, while the handler is
 // being built, and may register any routes it likes there.
 type ExtraRoutes struct {
+	// Public needs no session: pages for people who are not signed in. The
+	// handler must assume nothing about who is asking.
+	Public func(r chi.Router)
 	// Member is behind identity and the member gate: reading, and every
 	// change a redeploy undoes.
 	Member func(r chi.Router)
