@@ -2,6 +2,7 @@ package bucket
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -125,6 +126,28 @@ func TestAgainstGarage(t *testing.T) {
 	}
 	if err != nil || u.Objects != 3 || u.Bytes != int64(len("hello")+len("jpeg bytes")+len("more")) {
 		t.Fatalf("Usage = %+v, %v; want 3 objects of 19 bytes", u, err)
+	}
+
+	// A limit is Garage's to keep: past it a write is refused, and lifting
+	// it lets the write in.
+	if err := g.SetLimit(ctx, b.ID, 25); err != nil {
+		t.Fatalf("SetLimit: %v", err)
+	}
+	if l, err := g.Limit(ctx, b.ID); err != nil || l != 25 {
+		t.Fatalf("Limit = %d, %v; want 25", l, err)
+	}
+	big := strings.Repeat("x", 10)
+	if err := f.Put(ctx, "big.txt", strings.NewReader(big), 10, ""); !errors.Is(err, ErrFull) {
+		t.Fatalf("a write past the limit = %v, want ErrFull", err)
+	}
+	if err := g.SetLimit(ctx, b.ID, 0); err != nil {
+		t.Fatalf("SetLimit 0: %v", err)
+	}
+	if l, err := g.Limit(ctx, b.ID); err != nil || l != 0 {
+		t.Fatalf("Limit after lifting = %d, %v; want none", l, err)
+	}
+	if err := f.Put(ctx, "big.txt", strings.NewReader(big), 10, ""); err != nil {
+		t.Fatalf("a write once the limit is lifted: %v", err)
 	}
 
 	if err := f.Delete(ctx, "hello.txt"); err != nil {

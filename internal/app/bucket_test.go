@@ -159,3 +159,99 @@ func TestNoBucketsWithoutAStore(t *testing.T) {
 		t.Fatalf("DeployBucket with no store = %v", err)
 	}
 }
+
+// A team's quota for buckets is shared among them, and kept by the store: each
+// bucket may hold what the team may, less what its others hold, and a write
+// past that is refused. No quota, no limit.
+func TestATeamsBucketsShareItsQuota(t *testing.T) {
+	g := testGarage(t)
+	s, _, pool := testService(t, Options{Keeper: testKeeper(t), Buckets: g})
+	id := owner(t, s, pool, "svc-bucket-quota")
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, id, "Media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetQuota(ctx, id, Quota{BucketBytes: 30}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.DeployBucket(ctx, id, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.DeployBucket(ctx, id, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = s.Delete(context.Background(), id, first.Name)
+		_ = s.Delete(context.Background(), id, second.Name)
+	})
+	limit := func(a App) int64 {
+		t.Helper()
+		_, c, err := s.storedBucket(ctx, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err := g.Limit(ctx, c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	if l := limit(second); l != 30 {
+		t.Fatalf("a new bucket's limit = %d, want the team's 30", l)
+	}
+
+	files, err := s.BucketFiles(ctx, id, first.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Put(ctx, "a.txt", strings.NewReader(strings.Repeat("a", 20)), 20, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Garage counts in the background.
+	for range 50 {
+		if err := s.MeasureBucket(ctx, id, first.Name); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := s.Bucket(ctx, id, first.Name); b.Bytes == 20 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if l := limit(second); l != 10 {
+		t.Fatalf("with 20 of 30 in the first, the second's limit = %d, want 10", l)
+	}
+	b, err := s.Bucket(ctx, id, second.Name)
+	if err != nil || b.TeamLimit != 30 || b.TeamBytes != 20 {
+		t.Fatalf("the second's page = %+v, %v; want 20 of the team's 30", b, err)
+	}
+	others, err := s.BucketFiles(ctx, id, second.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := others.Put(ctx, "b.txt", strings.NewReader(strings.Repeat("b", 15)), 15, ""); !errors.Is(err, bucket.ErrFull) {
+		t.Fatalf("a write past the team's quota = %v, want ErrFull", err)
+	}
+	if u, err := s.TeamUsage(ctx, id); err != nil || u.Usage.BucketBytes != 20 || u.Quota.BucketBytes != 30 {
+		t.Fatalf("TeamUsage = %+v, %v", u, err)
+	}
+
+	if err := s.SetQuota(ctx, id, Quota{}); err != nil {
+		t.Fatal(err)
+	}
+	if l := limit(second); l != 0 {
+		t.Fatalf("with no quota the limit = %d, want none", l)
+	}
+}
+
+func TestBucketShare(t *testing.T) {
+	for _, c := range []struct{ limit, others, want int64 }{
+		{0, 100, 0}, {30, 0, 30}, {30, 20, 10}, {30, 30, 1}, {30, 50, 1},
+	} {
+		if got := bucketShare(c.limit, c.others); got != c.want {
+			t.Errorf("bucketShare(%d, %d) = %d, want %d", c.limit, c.others, got, c.want)
+		}
+	}
+}

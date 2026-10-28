@@ -1225,6 +1225,11 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		return App{}, fmt.Errorf("app: commit: %w", err)
 	}
 	committed = true
+	if made != nil {
+		// Its share of the team's bucket storage, before anything is put
+		// in it.
+		s.limitBuckets(ctx, ownerID)
+	}
 
 	s.log.Info("app created",
 		slog.String("owner", ownerID),

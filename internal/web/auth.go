@@ -515,7 +515,7 @@ func signInBody(brand, link string, ttl time.Duration) string {
 // signInForm is the sign-in page with the install's own facts filled in, so no
 // handler can render it describing a different install from the one it is.
 func (s *Server) signInForm(d SignInData) templ.Component {
-	d.OpenSignup = s.openSignup
+	d.OpenSignup, d.RequestAccess = s.openSignup, s.requestAccess
 	return SignIn(d)
 }
 

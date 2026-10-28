@@ -12,3 +12,7 @@ SELECT * FROM buckets ORDER BY measured_at NULLS FIRST, app_id;
 -- name: SetBucketUsage :exec
 UPDATE buckets SET size_bytes = $2, objects = $3, measured_at = now()
 WHERE app_id = $1;
+
+-- name: ListTeamBuckets :many
+-- A team's buckets, with what each held when last measured.
+SELECT * FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id;

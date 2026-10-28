@@ -54,6 +54,9 @@ templ bucketFiles(d AppDetailData) {
 		<div class="metrics mb-4">
 			@metric("Stored", formatBytes(b.Bytes), measuredLabel(*b))
 			@metric("Files", itoa(int(b.Objects)), "")
+			if b.TeamLimit > 0 {
+				@metric("Team's buckets", formatBytes(b.TeamBytes)+" of "+formatBytes(b.TeamLimit), bucketRoom(*b))
+			}
 			@metric("Bucket", b.Name, b.Endpoint)
 		</div>
 	}

@@ -17,13 +17,14 @@ SELECT * FROM team_quotas WHERE owner_id = @owner_id;
 SELECT * FROM team_quotas WHERE owner_id = @owner_id FOR UPDATE;
 
 -- name: UpsertTeamQuota :one
-INSERT INTO team_quotas (owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes)
-VALUES (@owner_id, @max_apps, @cpu_millis, @memory_bytes, @storage_bytes)
+INSERT INTO team_quotas (owner_id, max_apps, cpu_millis, memory_bytes, storage_bytes, bucket_bytes)
+VALUES (@owner_id, @max_apps, @cpu_millis, @memory_bytes, @storage_bytes, @bucket_bytes)
 ON CONFLICT (owner_id) DO UPDATE
 SET max_apps      = excluded.max_apps,
     cpu_millis    = excluded.cpu_millis,
     memory_bytes  = excluded.memory_bytes,
     storage_bytes = excluded.storage_bytes,
+    bucket_bytes  = excluded.bucket_bytes,
     updated_at    = now()
 RETURNING *;
 
@@ -54,10 +55,12 @@ ORDER BY owner_id;
 SELECT t.id, t.display_name,
        (SELECT count(*) FROM memberships m WHERE m.owner_id = t.id)::bigint AS members,
        (SELECT coalesce(sum(v.size_bytes), 0) FROM volumes v WHERE v.owner_id = t.id)::bigint AS storage_bytes,
+       (SELECT coalesce(sum(b.size_bytes), 0) FROM buckets b WHERE b.owner_id = t.id)::bigint AS bucket_bytes,
        coalesce(q.max_apps, 0)::integer        AS quota_apps,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
+       coalesce(q.bucket_bytes, 0)::bigint     AS quota_bucket_bytes,
        q.updated_at                            AS quota_updated_at,
        coalesce(p.pool, '')::text              AS pool
 FROM teams t
@@ -69,10 +72,12 @@ ORDER BY lower(t.display_name), t.id;
 SELECT t.id, t.display_name,
        (SELECT count(*) FROM memberships m WHERE m.owner_id = t.id)::bigint AS members,
        (SELECT coalesce(sum(v.size_bytes), 0) FROM volumes v WHERE v.owner_id = t.id)::bigint AS storage_bytes,
+       (SELECT coalesce(sum(b.size_bytes), 0) FROM buckets b WHERE b.owner_id = t.id)::bigint AS bucket_bytes,
        coalesce(q.max_apps, 0)::integer        AS quota_apps,
        coalesce(q.cpu_millis, 0)::bigint       AS quota_cpu_millis,
        coalesce(q.memory_bytes, 0)::bigint     AS quota_memory_bytes,
        coalesce(q.storage_bytes, 0)::bigint    AS quota_storage_bytes,
+       coalesce(q.bucket_bytes, 0)::bigint     AS quota_bucket_bytes,
        q.updated_at                            AS quota_updated_at,
        coalesce(p.pool, '')::text              AS pool
 FROM teams t

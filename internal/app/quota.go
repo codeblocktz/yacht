@@ -45,6 +45,11 @@ type Quota struct {
 	CPUMillis    int64
 	MemoryBytes  int64
 	StorageBytes int64
+
+	// BucketBytes is the most the team's buckets may hold together. Not
+	// committed, like the rest: a bucket fills as files are put in it, so
+	// the store refuses the write that would pass it (limitBuckets).
+	BucketBytes int64
 }
 
 // Unlimited reports whether nothing is limited, which is the answer for most
@@ -56,7 +61,7 @@ func (q Quota) Unlimited() bool {
 // Validate refuses a quota that cannot be meant. Negative is the only such
 // thing: zero already has a meaning.
 func (q Quota) Validate() error {
-	if q.Apps < 0 || q.CPUMillis < 0 || q.MemoryBytes < 0 || q.StorageBytes < 0 {
+	if q.Apps < 0 || q.CPUMillis < 0 || q.MemoryBytes < 0 || q.StorageBytes < 0 || q.BucketBytes < 0 {
 		return errors.New("a quota cannot be negative — leave it at zero for no limit")
 	}
 	return nil
@@ -69,6 +74,9 @@ type Usage struct {
 	CPUMillis    int64
 	MemoryBytes  int64
 	StorageBytes int64
+
+	// BucketBytes is what the team's buckets held when last measured.
+	BucketBytes int64
 }
 
 // TeamUsage is one team as the install's operator sees it: who it is, how many
@@ -230,11 +238,19 @@ func (s *Service) usageWith(
 	if err != nil {
 		return Usage{}, fmt.Errorf("app: read committed storage: %w", err)
 	}
+	buckets, err := q.ListTeamBuckets(ctx, ownerID)
+	if err != nil {
+		return Usage{}, fmt.Errorf("app: read buckets: %w", err)
+	}
 	apps := make([]footprint, len(rows))
 	for i, a := range rows {
 		apps[i] = footprint{ID: a.ID, shape: shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
 	}
-	return tally(apps, storage, c, 100), nil
+	u := tally(apps, storage, c, 100)
+	for _, b := range buckets {
+		u.BucketBytes += b.SizeBytes
+	}
+	return u, nil
 }
 
 // footprint is one existing app's shape, with the id a change names it by.
@@ -314,7 +330,7 @@ func (s *Service) SetQuota(ctx context.Context, ownerID string, q Quota) error {
 	}
 	_, err := s.q.UpsertTeamQuota(ctx, dbgen.UpsertTeamQuotaParams{
 		OwnerID: ownerID, MaxApps: q.Apps, CpuMillis: q.CPUMillis,
-		MemoryBytes: q.MemoryBytes, StorageBytes: q.StorageBytes,
+		MemoryBytes: q.MemoryBytes, StorageBytes: q.StorageBytes, BucketBytes: q.BucketBytes,
 	})
 	if err != nil {
 		if isForeignKeyViolation(err) {
@@ -324,7 +340,9 @@ func (s *Service) SetQuota(ctx context.Context, ownerID string, q Quota) error {
 	}
 	s.log.Info("team quota set", slog.String("team", ownerID),
 		slog.Int("apps", int(q.Apps)), slog.Int64("cpu_millis", q.CPUMillis),
-		slog.Int64("memory_bytes", q.MemoryBytes), slog.Int64("storage_bytes", q.StorageBytes))
+		slog.Int64("memory_bytes", q.MemoryBytes), slog.Int64("storage_bytes", q.StorageBytes),
+		slog.Int64("bucket_bytes", q.BucketBytes))
+	s.limitBuckets(ctx, ownerID)
 	return nil
 }
 
@@ -380,10 +398,11 @@ func (s *Service) TeamUsage(ctx context.Context, ownerID string) (TeamUsage, err
 func teamUsage(r dbgen.GetTeamQuotaSummaryRow) TeamUsage {
 	t := TeamUsage{
 		TeamID: r.ID, TeamName: r.DisplayName, Members: r.Members, Pool: r.Pool,
-		Usage: Usage{StorageBytes: r.StorageBytes},
+		Usage: Usage{StorageBytes: r.StorageBytes, BucketBytes: r.BucketBytes},
 		Quota: Quota{
 			Apps: r.QuotaApps, CPUMillis: r.QuotaCpuMillis,
 			MemoryBytes: r.QuotaMemoryBytes, StorageBytes: r.QuotaStorageBytes,
+			BucketBytes: r.QuotaBucketBytes,
 		},
 	}
 	if r.QuotaUpdatedAt.Valid {
@@ -397,6 +416,7 @@ func toQuota(row dbgen.TeamQuota) Quota {
 	return Quota{
 		Apps: row.MaxApps, CPUMillis: row.CpuMillis,
 		MemoryBytes: row.MemoryBytes, StorageBytes: row.StorageBytes,
+		BucketBytes: row.BucketBytes,
 	}
 }
 

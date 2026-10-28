@@ -23,6 +23,10 @@ type SignInData struct {
 	// OpenSignup says the emailed link also creates an account. A fact about
 	// the install, the same for every visitor, so it discloses nothing.
 	OpenSignup bool
+
+	// RequestAccess is where somebody without an account asks for one, when
+	// sign-up is not open. The install's too.
+	RequestAccess string
 }
 
 // SignInMethod is which form a submission came from.
@@ -119,6 +123,14 @@ templ SignIn(d SignInData) {
 				your account page.
 			}
 		</p>
+		if !d.OpenSignup {
+			<p class="mt-3 text-[12.5px] text-muted-foreground">
+				No account? Accounts here are by invitation.
+				if d.RequestAccess != "" {
+					<a class="text-foreground underline" href={ templ.SafeURL(d.RequestAccess) }>Request access</a>
+				}
+			</p>
+		}
 	}
 }
 

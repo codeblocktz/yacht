@@ -408,6 +408,10 @@ type Options struct {
 	// owner and invited people get in. Either way the form answers alike.
 	OpenSignup bool
 
+	// RequestAccessURL is where somebody without an account asks for one,
+	// linked from the sign-in page when sign-up is not open.
+	RequestAccessURL string
+
 	// Tokens, when set with Accounts, puts the API under /api/v1, API tokens
 	// on the Team page and on Project Settings, and signing a CLI in through
 	// the browser. Without accounts the API is on regardless, authenticated
@@ -518,6 +522,7 @@ type Server struct {
 	bootstrapName  string
 	bootstrapEmail string
 	openSignup     bool
+	requestAccess  string
 
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
@@ -638,6 +643,7 @@ func New(opts Options) (*Server, error) {
 		bootstrapName:  opts.BootstrapTeamName,
 		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
 		openSignup:     opts.OpenSignup,
+		requestAccess:  opts.RequestAccessURL,
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		signInLimit:    newAttemptLimiter(signInWindow),
 		flashKey:       flashKey,
@@ -1246,6 +1252,13 @@ func (s *Server) Render(w http.ResponseWriter, r *http.Request, page templ.Compo
 // its refusal, say.
 func (s *Server) RenderStatus(w http.ResponseWriter, r *http.Request, status int, page templ.Component) {
 	s.renderStatus(w, r, status, page)
+}
+
+// RenderSignedOut draws a page for somebody who is not signed in: the layout
+// without the dashboard's chrome, as the sign-in page is drawn. For a
+// wrapping application's own public pages.
+func (s *Server) RenderSignedOut(w http.ResponseWriter, r *http.Request, status int, title string, page templ.Component) {
+	s.renderSignedOut(w, r, status, title, page)
 }
 
 // FlashOK, FlashErr and FlashWarn leave a message for the next full page

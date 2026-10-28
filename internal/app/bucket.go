@@ -111,6 +111,10 @@ type Bucket struct {
 	// when that was; zero before the first measuring.
 	Bytes, Objects int64
 	MeasuredAt     time.Time
+
+	// TeamLimit is the most the team's buckets may hold together, zero for
+	// no limit, and TeamBytes what they all held when last measured.
+	TeamLimit, TeamBytes int64
 }
 
 // stored is a bucket's row and the key to it, which the Files tab uses.
@@ -152,6 +156,16 @@ func (s *Service) Bucket(ctx context.Context, ownerID, name string) (Bucket, err
 	if row.MeasuredAt.Valid {
 		b.MeasuredAt = row.MeasuredAt.Time
 	}
+	if q, err := s.Quota(ctx, ownerID); err == nil && q.BucketBytes > 0 {
+		b.TeamLimit = q.BucketBytes
+		rows, err := s.q.ListTeamBuckets(ctx, ownerID)
+		if err != nil {
+			return Bucket{}, fmt.Errorf("app: read buckets: %w", err)
+		}
+		for _, r := range rows {
+			b.TeamBytes += r.SizeBytes
+		}
+	}
 	return b, nil
 }
 
@@ -179,7 +193,56 @@ func (s *Service) MeasureBucket(ctx context.Context, ownerID, name string) error
 	if err != nil {
 		return err
 	}
-	return s.measure(ctx, row)
+	if err := s.measure(ctx, row); err != nil {
+		return err
+	}
+	s.limitBuckets(ctx, ownerID)
+	return nil
+}
+
+// limitBuckets gives each of a team's buckets its share of the team's
+// bucket storage, as a limit the store keeps: what the team may hold in
+// buckets, less what its other buckets hold. A bucket whose others have
+// already used it all may take nothing more. With no quota, no limit.
+//
+// Shares follow the measured sizes, so they are as fresh as the last
+// measuring: run when a quota is set, a bucket made, a file put or deleted
+// through the Files tab, and on every measuring pass. An app writing to two
+// buckets at once can pass the team's total by what it writes between two
+// passes, and no further.
+func (s *Service) limitBuckets(ctx context.Context, ownerID string) {
+	if s.buckets == nil {
+		return
+	}
+	q, err := s.Quota(ctx, ownerID)
+	if err != nil {
+		s.log.Warn("buckets: read quota", slog.String("team", ownerID), slog.String("error", err.Error()))
+		return
+	}
+	rows, err := s.q.ListTeamBuckets(ctx, ownerID)
+	if err != nil {
+		s.log.Warn("buckets: list a team's", slog.String("team", ownerID), slog.String("error", err.Error()))
+		return
+	}
+	var total int64
+	for _, r := range rows {
+		total += r.SizeBytes
+	}
+	for _, r := range rows {
+		if err := s.buckets.SetLimit(ctx, r.GarageID, bucketShare(q.BucketBytes, total-r.SizeBytes)); err != nil && ctx.Err() == nil {
+			s.log.Warn("buckets: limit", slog.String("bucket", r.Name), slog.String("error", err.Error()))
+		}
+	}
+}
+
+// bucketShare is the most one bucket may hold when the team may hold limit
+// and its other buckets hold others: zero for no limit, and never below one
+// byte, which the store would read as none.
+func bucketShare(limit, others int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	return max(limit-others, 1)
 }
 
 func (s *Service) measure(ctx context.Context, row dbgen.Bucket) error {
@@ -245,10 +308,15 @@ func (s *Service) RunBuckets(ctx context.Context, zone string) {
 		if err != nil {
 			s.log.Error("buckets: list", slog.String("error", err.Error()))
 		}
+		teams := map[string]bool{}
 		for _, row := range rows {
 			if err := s.measure(ctx, row); err != nil && ctx.Err() == nil {
 				s.log.Warn("buckets: measure", slog.String("bucket", row.Name), slog.String("error", err.Error()))
 			}
+			teams[row.OwnerID] = true
+		}
+		for owner := range teams {
+			s.limitBuckets(ctx, owner)
 		}
 		t.Reset(bucketMeasureInterval)
 	}

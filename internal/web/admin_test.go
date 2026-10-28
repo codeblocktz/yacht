@@ -74,15 +74,15 @@ func (q *fakeQuotas) SetQuota(_ context.Context, id string, quota app.Quota) err
 // the cluster is given. The conversion is the part that can quietly be off by
 // a factor of a thousand, so it is pinned both ways.
 func TestAQuotaFormRoundTripsItsUnits(t *testing.T) {
-	q, err := QuotaForm{Apps: "12", CPU: "1.5", Memory: "0.5", Storage: "20"}.Parse()
+	q, err := QuotaForm{Apps: "12", CPU: "1.5", Memory: "0.5", Storage: "20", Buckets: "5"}.Parse()
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	want := app.Quota{Apps: 12, CPUMillis: 1500, MemoryBytes: 512 << 20, StorageBytes: 20 << 30}
+	want := app.Quota{Apps: 12, CPUMillis: 1500, MemoryBytes: 512 << 20, StorageBytes: 20 << 30, BucketBytes: 5 << 30}
 	if q != want {
 		t.Fatalf("parsed %+v, want %+v", q, want)
 	}
-	if back := quotaForm(q); back != (QuotaForm{Apps: "12", CPU: "1.5", Memory: "0.5", Storage: "20"}) {
+	if back := quotaForm(q); back != (QuotaForm{Apps: "12", CPU: "1.5", Memory: "0.5", Storage: "20", Buckets: "5"}) {
 		t.Fatalf("shown back as %+v", back)
 	}
 	// Empty is no limit, and no limit is shown as empty rather than as 0,

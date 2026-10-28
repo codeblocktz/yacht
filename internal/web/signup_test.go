@@ -79,6 +79,29 @@ func TestClosedSignupRefusesASignupLink(t *testing.T) {
 	}
 }
 
+// Closed, the sign-in page says accounts are by invitation, and links to
+// where somebody asks for one when the install names a place.
+func TestClosedSignupPointsAtRequestingAccess(t *testing.T) {
+	plain := get(t, signInServer(t, &fakeAccounts{}, &fakeMailer{}), "/sign-in").Body.String()
+	if !strings.Contains(plain, "by invitation") || strings.Contains(plain, "Request access") {
+		t.Error("with nowhere to ask, the page should say accounts are by invitation and link nowhere")
+	}
+	h := testServer(t, Options{
+		Accounts: &fakeAccounts{}, Mailer: &fakeMailer{}, BaseURL: "https://yacht.test",
+		BootstrapTeamID: "web-signin", RequestAccessURL: "https://yacht.test/request-access",
+		Identity: identity.ProviderFunc(func(context.Context, *http.Request) (identity.Owner, error) {
+			return identity.Owner{}, identity.ErrUnauthenticated
+		}),
+	})
+	if body := get(t, h, "/sign-in").Body.String(); !strings.Contains(body, `href="https://yacht.test/request-access"`) {
+		t.Error("the sign-in page does not link to where access is requested")
+	}
+	open := get(t, openSignupServer(t, &fakeAccounts{}, &fakeMailer{}), "/sign-in").Body.String()
+	if strings.Contains(open, "by invitation") {
+		t.Error("an install with open sign-up says accounts are by invitation")
+	}
+}
+
 // ------------------------------------------------------------- end to end
 
 func newOpenSignupHarness(t *testing.T, teamID, ownerEmail string) *liveHarness {

@@ -279,6 +279,9 @@ func (f *Files) do(ctx context.Context, method, u string, body io.Reader, size i
 		return nil, errNoSuchBucket
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, errNotFound
+	case resp.StatusCode == http.StatusForbidden && strings.Contains(e.Message, "quota"):
+		// "Bucket size quota is reached": SetLimit's, at work.
+		return nil, fmt.Errorf("%w: %s", ErrFull, e.Message)
 	}
 	return nil, fmt.Errorf("bucket: the store answered %s: %s %s", resp.Status, e.Code, e.Message)
 }
