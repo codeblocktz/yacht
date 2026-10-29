@@ -104,6 +104,12 @@ func (s *S3) Presign(method, key string, expires time.Duration, now time.Time) (
 	return s.presignPath(method, s.objectPath(key), nil, expires, now)
 }
 
+// PresignQuery is Presign with a query signed in: one part of a multipart
+// upload, say, named by its uploadId.
+func (s *S3) PresignQuery(method, key string, query url.Values, expires time.Duration, now time.Time) (string, error) {
+	return s.presignPath(method, s.objectPath(key), query, expires, now)
+}
+
 // PresignBucket returns a URL for one request on the bucket itself, with the
 // query it is given signed in: a listing, ListObjectsV2's list-type=2 and
 // prefix.

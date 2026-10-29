@@ -342,7 +342,7 @@ func (s *Service) SetQuota(ctx context.Context, ownerID string, q Quota) error {
 		slog.Int("apps", int(q.Apps)), slog.Int64("cpu_millis", q.CPUMillis),
 		slog.Int64("memory_bytes", q.MemoryBytes), slog.Int64("storage_bytes", q.StorageBytes),
 		slog.Int64("bucket_bytes", q.BucketBytes))
-	s.limitBuckets(ctx, ownerID)
+	s.limitBuckets(ctx, false)
 	return nil
 }
 

@@ -1005,7 +1005,7 @@ func capacityBuckets(b app.BucketCapacity, warn int) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "</dd></dl><p class=\"text-[11.5px] text-muted-foreground\">Each bucket may grow by an equal part of what is free, and no further than its team's quota, so no one team can fill the store for everyone. What is kept free is for the store's own records and for what is written between measurings.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 91, "</dd></dl><p class=\"text-[11.5px] text-muted-foreground\">Every bucket keeps a small part of what is free for its next upload, and the buckets being written to share the rest, none past its team's quota: together they cannot write more than is free, so no one team can fill the store for everyone. What is kept free is for uploads in flight, which the store checks only once they are written, and for what is written between measurings.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -1052,7 +1052,7 @@ func capacityPolicyPanel(d CapacityData) templ.Component {
 			var templ_7745c5c3_Var49 string
 			templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(relativeTime(d.Snapshot.Policy.UpdatedAt))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 281, Col: 110}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 283, Col: 110}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 			if templ_7745c5c3_Err != nil {
@@ -1075,7 +1075,7 @@ func capacityPolicyPanel(d CapacityData) templ.Component {
 			var templ_7745c5c3_Var50 string
 			templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(d.FormError)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 289, Col: 59}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 291, Col: 59}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 			if templ_7745c5c3_Err != nil {
@@ -1167,7 +1167,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var52 string
 		templ_7745c5c3_Var52, templ_7745c5c3_Err = templ.ResolveAttributeValue("policy-" + name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 322, Col: 45}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 324, Col: 45}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var52)
 		if templ_7745c5c3_Err != nil {
@@ -1180,7 +1180,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var53 string
 		templ_7745c5c3_Var53, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 322, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 324, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var53))
 		if templ_7745c5c3_Err != nil {
@@ -1193,7 +1193,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var54 string
 		templ_7745c5c3_Var54, templ_7745c5c3_Err = templ.JoinStringErrs(unit)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 322, Col: 113}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 324, Col: 113}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var54))
 		if templ_7745c5c3_Err != nil {
@@ -1206,7 +1206,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var55 string
 		templ_7745c5c3_Var55, templ_7745c5c3_Err = templ.ResolveAttributeValue("policy-" + name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 325, Col: 24}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 327, Col: 24}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var55)
 		if templ_7745c5c3_Err != nil {
@@ -1219,7 +1219,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var56 string
 		templ_7745c5c3_Var56, templ_7745c5c3_Err = templ.ResolveAttributeValue(name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 326, Col: 14}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 328, Col: 14}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var56)
 		if templ_7745c5c3_Err != nil {
@@ -1232,7 +1232,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var57 string
 		templ_7745c5c3_Var57, templ_7745c5c3_Err = templ.ResolveAttributeValue(value)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 327, Col: 16}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 329, Col: 16}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var57)
 		if templ_7745c5c3_Err != nil {
@@ -1245,7 +1245,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var58 string
 		templ_7745c5c3_Var58, templ_7745c5c3_Err = templ.ResolveAttributeValue(mode)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 328, Col: 19}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 330, Col: 19}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var58)
 		if templ_7745c5c3_Err != nil {
@@ -1258,7 +1258,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var59 string
 		templ_7745c5c3_Var59, templ_7745c5c3_Err = templ.ResolveAttributeValue(placeholder)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 330, Col: 28}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 332, Col: 28}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var59)
 		if templ_7745c5c3_Err != nil {
@@ -1271,7 +1271,7 @@ func policyField(name, label, unit, value, mode, placeholder, hint string) templ
 		var templ_7745c5c3_Var60 string
 		templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(hint)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 332, Col: 27}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 334, Col: 27}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 		if templ_7745c5c3_Err != nil {
@@ -1315,7 +1315,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 		var templ_7745c5c3_Var62 string
 		templ_7745c5c3_Var62, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(d.RefusedSince(time.Now().Add(-24 * time.Hour))))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 343, Col: 67}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 345, Col: 67}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var62))
 		if templ_7745c5c3_Err != nil {
@@ -1328,7 +1328,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 		var templ_7745c5c3_Var63 string
 		templ_7745c5c3_Var63, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(len(d.Refusals)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 344, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 346, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var63))
 		if templ_7745c5c3_Err != nil {
@@ -1356,7 +1356,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 				var templ_7745c5c3_Var64 string
 				templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.ResolveAttributeValue(r.At.UTC().Format("2006-01-02 15:04:05 UTC"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 364, Col: 112}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 366, Col: 112}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var64)
 				if templ_7745c5c3_Err != nil {
@@ -1369,7 +1369,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 				var templ_7745c5c3_Var65 string
 				templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(relativeTime(r.At))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 364, Col: 135}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 366, Col: 135}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 				if templ_7745c5c3_Err != nil {
@@ -1382,7 +1382,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 				var templ_7745c5c3_Var66 templ.SafeURL
 				templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(adminTeamHref(r.TeamID)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 366, Col: 77}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 368, Col: 77}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 				if templ_7745c5c3_Err != nil {
@@ -1395,7 +1395,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 				var templ_7745c5c3_Var67 string
 				templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(r.TeamName)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 366, Col: 92}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 368, Col: 92}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 				if templ_7745c5c3_Err != nil {
@@ -1408,7 +1408,7 @@ func capacityRefusals(d CapacityData) templ.Component {
 				var templ_7745c5c3_Var68 string
 				templ_7745c5c3_Var68, templ_7745c5c3_Err = templ.JoinStringErrs(refusalAmount(r))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 368, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 370, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var68))
 				if templ_7745c5c3_Err != nil {
@@ -1467,7 +1467,7 @@ func capacityPanel(label string, committed, used, allocatable int64, usageKnown 
 		var templ_7745c5c3_Var70 string
 		templ_7745c5c3_Var70, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 387, Col: 61}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 389, Col: 61}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var70))
 		if templ_7745c5c3_Err != nil {
@@ -1493,7 +1493,7 @@ func capacityPanel(label string, committed, used, allocatable int64, usageKnown 
 			var templ_7745c5c3_Var71 string
 			templ_7745c5c3_Var71, templ_7745c5c3_Err = templ.JoinStringErrs(headroom(committed, allocatable, amount))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 392, Col: 91}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 394, Col: 91}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var71))
 			if templ_7745c5c3_Err != nil {
@@ -1540,7 +1540,7 @@ func capacityBar(label string, value, total int64, known bool, amount func(int64
 		var templ_7745c5c3_Var73 string
 		templ_7745c5c3_Var73, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 401, Col: 30}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 403, Col: 30}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var73))
 		if templ_7745c5c3_Err != nil {
@@ -1563,7 +1563,7 @@ func capacityBar(label string, value, total int64, known bool, amount func(int64
 			var templ_7745c5c3_Var74 string
 			templ_7745c5c3_Var74, templ_7745c5c3_Err = templ.JoinStringErrs(amount(value))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 406, Col: 20}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 408, Col: 20}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var74))
 			if templ_7745c5c3_Err != nil {
@@ -1576,7 +1576,7 @@ func capacityBar(label string, value, total int64, known bool, amount func(int64
 			var templ_7745c5c3_Var75 string
 			templ_7745c5c3_Var75, templ_7745c5c3_Err = templ.JoinStringErrs(amount(total))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 406, Col: 77}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 408, Col: 77}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var75))
 			if templ_7745c5c3_Err != nil {
@@ -1589,7 +1589,7 @@ func capacityBar(label string, value, total int64, known bool, amount func(int64
 			var templ_7745c5c3_Var76 string
 			templ_7745c5c3_Var76, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(quotaPercent(value, total)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 406, Col: 125}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 408, Col: 125}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var76))
 			if templ_7745c5c3_Err != nil {
@@ -1607,7 +1607,7 @@ func capacityBar(label string, value, total int64, known bool, amount func(int64
 			var templ_7745c5c3_Var77 string
 			templ_7745c5c3_Var77, templ_7745c5c3_Err = templ.JoinStringErrs(amount(value))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 409, Col: 58}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 411, Col: 58}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var77))
 			if templ_7745c5c3_Err != nil {
@@ -1670,7 +1670,7 @@ func shareCell(used, total int64, usedLabel string) templ.Component {
 		var templ_7745c5c3_Var79 string
 		templ_7745c5c3_Var79, templ_7745c5c3_Err = templ.JoinStringErrs(usedLabel)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 423, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 425, Col: 52}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var79))
 		if templ_7745c5c3_Err != nil {
@@ -1688,7 +1688,7 @@ func shareCell(used, total int64, usedLabel string) templ.Component {
 			var templ_7745c5c3_Var80 string
 			templ_7745c5c3_Var80, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(quotaPercent(used, total)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 425, Col: 107}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 427, Col: 107}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var80))
 			if templ_7745c5c3_Err != nil {
@@ -1784,7 +1784,7 @@ func capacityBanner(a capacityAlert) templ.Component {
 		var templ_7745c5c3_Var86 string
 		templ_7745c5c3_Var86, templ_7745c5c3_Err = templ.JoinStringErrs(a.Headline())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 444, Col: 42}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 446, Col: 42}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var86))
 		if templ_7745c5c3_Err != nil {
@@ -1797,7 +1797,7 @@ func capacityBanner(a capacityAlert) templ.Component {
 		var templ_7745c5c3_Var87 string
 		templ_7745c5c3_Var87, templ_7745c5c3_Err = templ.JoinStringErrs(a.Detail())
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 445, Col: 55}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 447, Col: 55}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var87))
 		if templ_7745c5c3_Err != nil {
@@ -1935,7 +1935,7 @@ func capacityMetric(s app.CapacitySnapshot) templ.Component {
 			var templ_7745c5c3_Var91 string
 			templ_7745c5c3_Var91, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(r.Percent()))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 489, Col: 52}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 491, Col: 52}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var91))
 			if templ_7745c5c3_Err != nil {
@@ -1956,7 +1956,7 @@ func capacityMetric(s app.CapacitySnapshot) templ.Component {
 			var templ_7745c5c3_Var92 string
 			templ_7745c5c3_Var92, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 491, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/capacity.templ`, Line: 493, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var92))
 			if templ_7745c5c3_Err != nil {

@@ -27,6 +27,9 @@ type Buckets interface {
 	Bucket(ctx context.Context, ownerID, name string) (app.Bucket, error)
 	BucketFiles(ctx context.Context, ownerID, name string) (*objstore.Files, error)
 	MeasureBucket(ctx context.Context, ownerID, name string) error
+	// PrepareBucketUpload gives a bucket about to be written its part of the
+	// store's free room.
+	PrepareBucketUpload(ctx context.Context, ownerID, name string) error
 }
 
 func (s *Server) buckets() Buckets {
@@ -169,6 +172,12 @@ func (s *Server) bucketUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.bucketNotFound(w, r, err)
 		return
+	}
+	// Room for it first: a bucket nobody has written to lately keeps only a
+	// small part of the store's free room. Failing that, the upload is still
+	// tried against the limit it has.
+	if err := s.buckets().PrepareBucketUpload(ctx, owner.ID, name); err != nil {
+		s.log.Warn("prepare a bucket for an upload", slog.String("app", name), slog.String("error", err.Error()))
 	}
 	var put []string
 	var written int64

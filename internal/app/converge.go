@@ -27,32 +27,8 @@ const AppReconcileInterval = 2 * time.Second
 func (s *Service) withAppConvergenceLock(
 	ctx context.Context, appID uuid.UUID, fn func() error,
 ) error {
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("app: acquire convergence connection: %w", err)
-	}
 	key := int64(binary.BigEndian.Uint64(appID[:8]))
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
-		conn.Release()
-		return fmt.Errorf("app: acquire convergence lock: %w", err)
-	}
-	defer func() {
-		unlock, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, unlockErr := conn.Exec(unlock, "SELECT pg_advisory_unlock($1)", key); unlockErr != nil {
-			s.log.Error("could not release app convergence lock",
-				slog.String("app_id", appID.String()), slog.String("error", unlockErr.Error()))
-			// A session lock survives returning a connection to the pool. Remove
-			// the broken session entirely rather than poisoning a future caller.
-			raw := conn.Hijack()
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer closeCancel()
-			_ = raw.Close(closeCtx)
-			return
-		}
-		conn.Release()
-	}()
-	return fn()
+	return s.withSessionLock(ctx, key, "convergence of app "+appID.String(), fn)
 }
 
 func convergenceMatches(status orchestrator.AppStatus, releaseID uuid.UUID, version int64) bool {

@@ -9,10 +9,20 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bucketWantsRoom = `-- name: BucketWantsRoom :exec
+UPDATE buckets SET wants_room_at = now() WHERE app_id = $1
+`
+
+func (q *Queries) BucketWantsRoom(ctx context.Context, appID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, bucketWantsRoom, appID)
+	return err
+}
+
 const getBucket = `-- name: GetBucket :one
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets WHERE owner_id = $1 AND app_id = $2
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes, uploading_bytes, wants_room_at FROM buckets WHERE owner_id = $1 AND app_id = $2
 `
 
 type GetBucketParams struct {
@@ -35,13 +45,15 @@ func (q *Queries) GetBucket(ctx context.Context, arg GetBucketParams) (Bucket, e
 		&i.MeasuredAt,
 		&i.CreatedAt,
 		&i.LimitBytes,
+		&i.UploadingBytes,
+		&i.WantsRoomAt,
 	)
 	return i, err
 }
 
 const insertBucket = `-- name: InsertBucket :exec
-INSERT INTO buckets (app_id, owner_id, garage_id, name, key_id, sealed_secret)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO buckets (app_id, owner_id, garage_id, name, key_id, sealed_secret, limit_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, 1)
 `
 
 type InsertBucketParams struct {
@@ -53,6 +65,8 @@ type InsertBucketParams struct {
 	SealedSecret []byte
 }
 
+// A bucket starts with the one byte it was made with (app.makeBucket), until
+// its limit is set.
 func (q *Queries) InsertBucket(ctx context.Context, arg InsertBucketParams) error {
 	_, err := q.db.Exec(ctx, insertBucket,
 		arg.AppID,
@@ -65,8 +79,60 @@ func (q *Queries) InsertBucket(ctx context.Context, arg InsertBucketParams) erro
 	return err
 }
 
+const listBucketLimits = `-- name: ListBucketLimits :many
+SELECT b.app_id, b.owner_id, b.garage_id, b.name, b.size_bytes, b.uploading_bytes,
+       b.limit_bytes, b.wants_room_at, coalesce(q.bucket_bytes, 0)::bigint AS team_limit
+FROM buckets b LEFT JOIN team_quotas q ON q.owner_id = b.owner_id
+ORDER BY b.owner_id, b.created_at, b.app_id
+`
+
+type ListBucketLimitsRow struct {
+	AppID          uuid.UUID
+	OwnerID        string
+	GarageID       string
+	Name           string
+	SizeBytes      int64
+	UploadingBytes int64
+	LimitBytes     int64
+	WantsRoomAt    pgtype.Timestamptz
+	TeamLimit      int64
+}
+
+// Every bucket on the install with what limits it: its size, the limit last
+// set, when it last wanted room, and its team's quota for buckets, zero for
+// none.
+func (q *Queries) ListBucketLimits(ctx context.Context) ([]ListBucketLimitsRow, error) {
+	rows, err := q.db.Query(ctx, listBucketLimits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListBucketLimitsRow{}
+	for rows.Next() {
+		var i ListBucketLimitsRow
+		if err := rows.Scan(
+			&i.AppID,
+			&i.OwnerID,
+			&i.GarageID,
+			&i.Name,
+			&i.SizeBytes,
+			&i.UploadingBytes,
+			&i.LimitBytes,
+			&i.WantsRoomAt,
+			&i.TeamLimit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBuckets = `-- name: ListBuckets :many
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets ORDER BY measured_at NULLS FIRST, app_id
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes, uploading_bytes, wants_room_at FROM buckets ORDER BY measured_at NULLS FIRST, app_id
 `
 
 // Every bucket on the install, for measuring.
@@ -91,6 +157,8 @@ func (q *Queries) ListBuckets(ctx context.Context) ([]Bucket, error) {
 			&i.MeasuredAt,
 			&i.CreatedAt,
 			&i.LimitBytes,
+			&i.UploadingBytes,
+			&i.WantsRoomAt,
 		); err != nil {
 			return nil, err
 		}
@@ -103,7 +171,7 @@ func (q *Queries) ListBuckets(ctx context.Context) ([]Bucket, error) {
 }
 
 const listTeamBuckets = `-- name: ListTeamBuckets :many
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes, uploading_bytes, wants_room_at FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id
 `
 
 // A team's buckets, with what each held when last measured.
@@ -128,6 +196,8 @@ func (q *Queries) ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket
 			&i.MeasuredAt,
 			&i.CreatedAt,
 			&i.LimitBytes,
+			&i.UploadingBytes,
+			&i.WantsRoomAt,
 		); err != nil {
 			return nil, err
 		}
@@ -137,27 +207,6 @@ func (q *Queries) ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket
 		return nil, err
 	}
 	return items, nil
-}
-
-const otherBuckets = `-- name: OtherBuckets :one
-SELECT count(*)::bigint AS buckets,
-       coalesce(sum(greatest(limit_bytes - size_bytes, 0)) FILTER (WHERE limit_bytes > 0), 0)::bigint AS granted
-FROM buckets WHERE owner_id <> $1
-`
-
-type OtherBucketsRow struct {
-	Buckets int64
-	Granted int64
-}
-
-// Every bucket on the install but a team's: how many, and how much more the
-// limits set on them let them write than they held when last measured. A
-// bucket with no limit set is counted, and gives nothing out.
-func (q *Queries) OtherBuckets(ctx context.Context, ownerID string) (OtherBucketsRow, error) {
-	row := q.db.QueryRow(ctx, otherBuckets, ownerID)
-	var i OtherBucketsRow
-	err := row.Scan(&i.Buckets, &i.Granted)
-	return i, err
 }
 
 const setBucketLimit = `-- name: SetBucketLimit :exec
@@ -175,18 +224,28 @@ func (q *Queries) SetBucketLimit(ctx context.Context, arg SetBucketLimitParams) 
 }
 
 const setBucketUsage = `-- name: SetBucketUsage :exec
-UPDATE buckets SET size_bytes = $2, objects = $3, measured_at = now()
-WHERE app_id = $1
+UPDATE buckets SET size_bytes = $1, objects = $2, uploading_bytes = $3,
+    wants_room_at = CASE WHEN $1::bigint > size_bytes THEN now() ELSE wants_room_at END,
+    measured_at = now()
+WHERE app_id = $4
 `
 
 type SetBucketUsageParams struct {
-	AppID     uuid.UUID
-	SizeBytes int64
-	Objects   int64
+	SizeBytes      int64
+	Objects        int64
+	UploadingBytes int64
+	AppID          uuid.UUID
 }
 
+// What a bucket holds, its unfinished uploads among it; a bucket that grew
+// wants room.
 func (q *Queries) SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error {
-	_, err := q.db.Exec(ctx, setBucketUsage, arg.AppID, arg.SizeBytes, arg.Objects)
+	_, err := q.db.Exec(ctx, setBucketUsage,
+		arg.SizeBytes,
+		arg.Objects,
+		arg.UploadingBytes,
+		arg.AppID,
+	)
 	return err
 }
 

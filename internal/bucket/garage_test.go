@@ -2,10 +2,12 @@ package bucket
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -125,6 +127,56 @@ func TestAgainstGarage(t *testing.T) {
 		t.Fatal("one bucket's key wrote into another bucket")
 	}
 
+	// Every bucket keeps the rule that ends unfinished uploads, added once.
+	for range 2 {
+		if err := f.KeepAbortRule(ctx); err != nil {
+			t.Fatalf("KeepAbortRule: %v", err)
+		}
+	}
+	if rules := lifecycle(t, f); strings.Count(rules, abortRuleID) != 1 || !strings.Contains(rules, "<DaysAfterInitiation>1<") {
+		t.Fatalf("the bucket's lifecycle = %s", rules)
+	}
+
+	// A customer's key may replace the lifecycle with rules of its own: the
+	// next keeping adds the rule back beside them.
+	theirs := `<LifecycleConfiguration><Rule><ID>theirs</ID><Status>Enabled</Status><Filter><Prefix>tmp/</Prefix></Filter>` +
+		`<Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>`
+	put, err := f.inside.PresignBucket(http.MethodPut, url.Values{"lifecycle": {""}}, time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := f.do(ctx, http.MethodPut, put, strings.NewReader(theirs), int64(len(theirs)), "application/xml"); err != nil {
+		t.Fatalf("a customer's lifecycle: %v", err)
+	} else {
+		resp.Body.Close()
+	}
+	if err := f.KeepAbortRule(ctx); err != nil {
+		t.Fatalf("KeepAbortRule after a customer's: %v", err)
+	}
+	if rules := lifecycle(t, f); !strings.Contains(rules, "<ID>theirs</ID>") || !strings.Contains(rules, "<Prefix>tmp/</Prefix>") ||
+		strings.Count(rules, abortRuleID) != 1 {
+		t.Fatalf("the lifecycle after keeping it beside a customer's = %s", rules)
+	}
+
+	// The parts of an unfinished upload are counted, and ended.
+	part := startUpload(t, f, "big.bin", strings.Repeat("p", 1000))
+	if !strings.Contains(part, "200") {
+		t.Fatalf("a part = %s", part)
+	}
+	var mid Usage
+	for range 50 {
+		if mid, err = g.Usage(ctx, b.ID); err == nil && mid.Uploading == 1000 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if mid.Uploading != 1000 || mid.Bytes < 1000 {
+		t.Fatalf("Usage with an upload unfinished = %+v, %v; want its 1000 bytes counted", mid, err)
+	}
+	if n, err := f.AbortUploads(ctx); err != nil || n != 1 {
+		t.Fatalf("AbortUploads = %d, %v; want the one", n, err)
+	}
+
 	// Garage counts in the background: give it a moment.
 	var u Usage
 	for range 50 {
@@ -180,9 +232,9 @@ func TestAgainstGarage(t *testing.T) {
 	}
 }
 
-// The room is the data partitions of the nodes that store objects: the
-// smallest one's, times the nodes, since objects are spread evenly and a write
-// fails once any node is full.
+// The room is the data partition of the node that stores objects. More than
+// one is refused rather than guessed at: what they hold together depends on a
+// replication factor the admin API does not say.
 func TestDiskIsTheStoringNodesDataPartitions(t *testing.T) {
 	var status string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -206,10 +258,10 @@ func TestDiskIsTheStoringNodesDataPartitions(t *testing.T) {
 		fails bool
 	}{
 		{"one node", []string{node("a", storing, true, `{"available":600,"total":1000}`)}, Disk{1000, 600}, false},
-		{"the smallest of two", []string{
+		{"more than one storing node", []string{
 			node("a", storing, true, `{"available":600,"total":1000}`),
 			node("b", storing, true, `{"available":900,"total":2000}`),
-		}, Disk{2000, 1200}, false},
+		}, Disk{}, true},
 		{"gateways and nodes with no role store nothing", []string{
 			node("a", storing, true, `{"available":600,"total":1000}`),
 			node("b", gateway, true, `{"available":1,"total":1}`),
@@ -230,4 +282,54 @@ func TestDiskIsTheStoringNodesDataPartitions(t *testing.T) {
 			t.Errorf("%s: %v is not ErrUnavailable", c.name, err)
 		}
 	}
+}
+
+// lifecycle is the bucket's lifecycle configuration, as its own key reads it.
+func lifecycle(t *testing.T, f *Files) string {
+	t.Helper()
+	u, err := f.inside.PresignBucket(http.MethodGet, url.Values{"lifecycle": {""}}, time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.do(context.Background(), http.MethodGet, u, nil, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
+// startUpload begins a multipart upload and sends one part of it, and never
+// completes it; it says how the part was answered.
+func startUpload(t *testing.T, f *Files, key, body string) string {
+	t.Helper()
+	ctx := context.Background()
+	u, err := f.inside.PresignQuery(http.MethodPost, key, url.Values{"uploads": {""}}, time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := f.do(ctx, http.MethodPost, u, nil, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var started struct {
+		UploadID string `xml:"UploadId"`
+	}
+	err = xml.NewDecoder(resp.Body).Decode(&started)
+	resp.Body.Close()
+	if err != nil || started.UploadID == "" {
+		t.Fatalf("start an upload: %v", err)
+	}
+	u, err = f.inside.PresignQuery(http.MethodPut, key, url.Values{"partNumber": {"1"}, "uploadId": {started.UploadID}},
+		time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = f.do(ctx, http.MethodPut, u, strings.NewReader(body), int64(len(body)), "")
+	if err != nil {
+		return err.Error()
+	}
+	resp.Body.Close()
+	return resp.Status
 }

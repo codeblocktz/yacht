@@ -77,8 +77,8 @@ func TestTheCapacityPageShowsTheBucketStore(t *testing.T) {
 	b := bucketsAt(20<<30, 4<<30)
 	c.snap.Buckets = &b
 	body := get(t, h, "/admin/capacity").Body.String()
-	for _, want := range []string{"data-capacity-buckets", "4 buckets", "16 GiB", "of 18 GiB", "89%",
-		"Free to write", "The bucket store is 89% full"} {
+	for _, want := range []string{"data-capacity-buckets", "4 buckets", "16 GiB", "of 18 GiB", "88%",
+		"Free to write", "The bucket store is 88% full"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the capacity page does not say %q", want)
 		}
@@ -141,7 +141,8 @@ func TestTheCapacityBannerIsOnlyForOperatorsAndOnlyWhenWarranted(t *testing.T) {
 		{"unknown while enforcing", unknown, true, false, "Capacity is unknown"},
 		{"unknown and not enforcing", unknownOff, false, false, ""},
 		{"buckets with room", withBuckets(snapshotAt(40, 30, true), 10<<30), false, false, ""},
-		{"buckets past the warning line", withBuckets(snapshotAt(40, 30, true), 4<<30), true, false, "The bucket store is 89% full"},
+		{"buckets past the warning line", withBuckets(snapshotAt(40, 30, true), 4<<30), true, false, "The bucket store is 88% full"},
+		{"buckets with a byte left are nearly full, not full", withBuckets(snapshotAt(40, 30, true), 2<<30+1), true, false, "The bucket store is 99% full"},
 		{"buckets full", withBuckets(snapshotAt(40, 30, false), 1<<30), true, true, "every upload to every bucket is refused"},
 		{"buckets full with the cluster unknown", withBuckets(unknownOff, 1<<30), true, true, "every upload to every bucket"},
 		{"CPU fuller than the buckets", withBuckets(snapshotAt(95, 30, true), 4<<30), true, false, "sellable CPU is committed"},

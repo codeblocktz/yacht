@@ -62,6 +62,7 @@ type bucketApps struct {
 	garage   *objstore.Garage
 	deployed int
 	measured int
+	prepared int
 	// teamBytes is what the team's buckets hold, of its 5 GiB.
 	teamBytes int64
 }
@@ -117,6 +118,11 @@ func (b *bucketApps) BucketFiles(_ context.Context, _, name string) (*objstore.F
 
 func (b *bucketApps) MeasureBucket(context.Context, string, string) error {
 	b.measured++
+	return nil
+}
+
+func (b *bucketApps) PrepareBucketUpload(context.Context, string, string) error {
+	b.prepared++
 	return nil
 }
 
@@ -223,8 +229,9 @@ func TestTheFilesTabListsUploadsAndDeletes(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Deleted cat.jpg.") || len(s3.dels) != 1 || s3.dels[0] != "photos/cat.jpg" {
 		t.Fatalf("delete = %q; deleted %v", rec.Body.String(), s3.dels)
 	}
-	if apps.measured != 2 {
-		t.Errorf("measured %d times, want after the upload and the delete", apps.measured)
+	if apps.measured != 2 || apps.prepared != 3 {
+		t.Errorf("measured %d times and prepared %d; want measured after the upload and the delete, "+
+			"and room made before each of the three uploads", apps.measured, apps.prepared)
 	}
 
 	dl := get(t, h, "/apps/media/files/download?key=report.pdf")

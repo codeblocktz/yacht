@@ -226,6 +226,118 @@ func (f *Files) listAll(ctx context.Context) ([]string, error) {
 	return keys, nil
 }
 
+// abortRuleID names the lifecycle rule the engine keeps on every bucket.
+const abortRuleID = "datahuru-abort-incomplete-uploads"
+
+// abortRule ends a multipart upload a day after it began. The store checks a
+// bucket's limit only when an upload is completed, so the parts of one that
+// never is would stay on its disk, outside every limit, for ever.
+const abortRule = `<Rule><ID>` + abortRuleID + `</ID><Status>Enabled</Status><Filter></Filter>` +
+	`<AbortIncompleteMultipartUpload><DaysAfterInitiation>1</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule>`
+
+// KeepAbortRule makes sure the bucket's lifecycle has the rule that ends
+// unfinished uploads, adding it beside whatever rules are there. A bucket's
+// own key may change its lifecycle, so this is checked again on every
+// measuring rather than set once.
+func (f *Files) KeepAbortRule(ctx context.Context) error {
+	if f.err != nil {
+		return f.err
+	}
+	q := url.Values{"lifecycle": {""}}
+	u, err := f.inside.PresignBucket(http.MethodGet, q, 5*time.Minute, time.Now())
+	if err != nil {
+		return err
+	}
+	var current struct {
+		Rules []struct {
+			ID    string `xml:"ID"`
+			Inner string `xml:",innerxml"`
+		} `xml:"Rule"`
+	}
+	resp, err := f.do(ctx, http.MethodGet, u, nil, 0, "")
+	switch {
+	case errors.Is(err, errNotFound):
+		// No lifecycle at all.
+	case err != nil:
+		return err
+	default:
+		err := xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&current)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("%w: a lifecycle it could not read: %v", ErrUnavailable, err)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("<LifecycleConfiguration>")
+	for _, r := range current.Rules {
+		if r.ID == abortRuleID {
+			return nil
+		}
+		b.WriteString("<Rule>" + r.Inner + "</Rule>")
+	}
+	b.WriteString(abortRule + "</LifecycleConfiguration>")
+	if u, err = f.inside.PresignBucket(http.MethodPut, q, 5*time.Minute, time.Now()); err != nil {
+		return err
+	}
+	body := b.String()
+	resp, err = f.do(ctx, http.MethodPut, u, strings.NewReader(body), int64(len(body)), "application/xml")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// AbortUploads ends every unfinished multipart upload in the bucket, and
+// says how many there were. Their parts are let go of, and the store frees
+// them as it collects unreferenced blocks.
+func (f *Files) AbortUploads(ctx context.Context) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	aborted := 0
+	for range 100 {
+		u, err := f.inside.PresignBucket(http.MethodGet, url.Values{"uploads": {""}}, 5*time.Minute, time.Now())
+		if err != nil {
+			return aborted, err
+		}
+		resp, err := f.do(ctx, http.MethodGet, u, nil, 0, "")
+		if err != nil {
+			return aborted, err
+		}
+		var out struct {
+			Uploads []struct {
+				Key      string `xml:"Key"`
+				UploadID string `xml:"UploadId"`
+			} `xml:"Upload"`
+		}
+		err = xml.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&out)
+		resp.Body.Close()
+		if err != nil {
+			return aborted, fmt.Errorf("%w: a list of uploads it could not read: %v", ErrUnavailable, err)
+		}
+		if len(out.Uploads) == 0 {
+			return aborted, nil
+		}
+		for _, up := range out.Uploads {
+			u, err := f.inside.PresignQuery(http.MethodDelete, up.Key, url.Values{"uploadId": {up.UploadID}},
+				5*time.Minute, time.Now())
+			if err != nil {
+				return aborted, err
+			}
+			resp, err := f.do(ctx, http.MethodDelete, u, nil, 0, "")
+			if err != nil && !errors.Is(err, errNotFound) {
+				return aborted, err
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+			aborted++
+		}
+	}
+	return aborted, nil
+}
+
 // ValidKey refuses a key S3 would, or that the Files tab could not show: empty,
 // over 1024 bytes, or with a part that is empty, "." or "..".
 func ValidKey(key string) error {

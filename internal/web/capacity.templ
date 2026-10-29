@@ -263,9 +263,11 @@ templ capacityBuckets(b app.BucketCapacity, warn int) {
 					<dd class="text-right font-medium tabular-nums">{ byteAmount(b.Free) }</dd>
 				</dl>
 				<p class="text-[11.5px] text-muted-foreground">
-					Each bucket may grow by an equal part of what is free, and no further than its team's
-					quota, so no one team can fill the store for everyone. What is kept free is for the store's
-					own records and for what is written between measurings.
+					Every bucket keeps a small part of what is free for its next upload, and the buckets being
+					written to share the rest, none past its team's quota: together they cannot write more than is
+					free, so no one team can fill the store for everyone. What is kept free is for uploads in
+					flight, which the store checks only once they are written, and for what is written between
+					measurings.
 				</p>
 			}
 		</div>
