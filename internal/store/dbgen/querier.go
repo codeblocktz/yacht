@@ -458,6 +458,11 @@ type Querier interface {
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
+	// Every app's namespace, for metering what each sent from a store that knows
+	// an app only by the namespace its traffic was counted under. Install-scoped
+	// like the reconciler's list: read for the operator's meter, never for a
+	// request.
+	ListAppNamespaces(ctx context.Context) ([]ListAppNamespacesRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
 	// An app's own history, newest first.
 	ListAppSleeps(ctx context.Context, arg ListAppSleepsParams) ([]AppSleep, error)

@@ -254,3 +254,11 @@ WHERE active_release_id IS NOT NULL
          AND o.status = 'queued' AND o.checkpoint IN ('applying', 'verifying')
    )
 ORDER BY id;
+
+-- Every app's namespace, for metering what each sent from a store that knows
+-- an app only by the namespace its traffic was counted under. Install-scoped
+-- like the reconciler's list: read for the operator's meter, never for a
+-- request.
+-- name: ListAppNamespaces :many
+SELECT id, owner_id, project_id, name, namespace FROM apps
+ORDER BY owner_id, name;

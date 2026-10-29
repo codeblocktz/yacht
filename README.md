@@ -527,6 +527,18 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
+to the internet in the window — the response bodies the ingress served for it,
+summed over Traefik's replicas, with counter restarts read as restarts — one
+`engine.EgressUsage` per app with its team, project and app ID. Windows that
+meet neither overlap nor leave a gap, and reading one again gives the same
+answer. It needs the metrics store: without one it returns
+`engine.ErrEgressUnmeasured`; a window that ended less than a minute ago,
+`engine.ErrEgressWindowOpen`; and a store it cannot read, an error rather than
+zero. Not counted: traffic between apps, the platform's own, what an app sends
+out on its own account, TCP proxies, and buckets, whose downloads share one S3
+address that nothing counts per bucket.
+
 ## Security posture
 
 Workloads are hardened by construction, not by configuration. Every namespace
