@@ -262,3 +262,10 @@ ORDER BY id;
 -- name: ListAppNamespaces :many
 SELECT id, owner_id, project_id, name, namespace FROM apps
 ORDER BY owner_id, name;
+
+-- Apps deleted at or after a moment, as they were, for metering an hour that
+-- ended after they went: the trigger on apps keeps them for a week.
+-- name: ListDeletedAppNamespaces :many
+SELECT id, owner_id, project_id, name, namespace, deleted_at FROM deleted_apps
+WHERE deleted_at >= $1
+ORDER BY owner_id, name, deleted_at DESC;

@@ -35,9 +35,9 @@ jobs:
         image: registry:2
         ports: ["5000:5000"]
 
-      # Egress is charged from this store's increase(), so its rules for
-      # restarts, new series and gaps are tested against the store itself,
-      # at the version installs run (kilicore deploy/versions.env).
+      # Egress is charged from what this store exports and answers, so it is
+      # tested against the store itself, at the version installs run
+      # (kilicore deploy/versions.env).
       victoriametrics:
         image: victoriametrics/victoria-metrics:v1.154.1
         ports: ["8428:8428"]

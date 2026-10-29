@@ -43,10 +43,10 @@ type egressCounter interface {
 //
 // Public egress is the bodies of the responses the install's ingress
 // (Traefik) served for an app, on its generated hostname and any custom
-// domain, counted by the ingress itself: summed over every ingress replica,
-// and indifferent to how many replicas the app runs. Traffic between apps on
-// the private network never passes through it and is not counted, nor is the
-// platform's own — the dashboard, the waker answering for a sleeping app, the
+// domain, and by its waker while it slept, counted by the ingress itself:
+// summed over every ingress replica, and indifferent to how many replicas the
+// app runs. Traffic between apps on the private network never passes through
+// it and is not counted, nor is the platform's own — the dashboard, the
 // buckets' S3 API. Not counted either: what an app sends out on its own
 // account, what a TCP proxy carries, and what a bucket serves, which reaches
 // the internet through one shared S3 address that nothing counts per bucket.
@@ -54,10 +54,14 @@ type egressCounter interface {
 // The window is whole seconds; from and to are truncated to them. Windows
 // that meet divide the counters' samples between them — one taken after from
 // and at or before to is in the window — so they neither overlap nor leave a
-// gap, and twenty-four hours read one at a time are the day read at once. A counter's restart is read
-// as a restart, not as traffic gone. Reading the same window again gives the
-// same answer, for the apps that still exist: an app deleted since is left
-// out, as it is from everything else the meter reads.
+// gap, and twenty-four hours read one at a time are the day read at once. A
+// counter's restart, or its return after the app slept, is read as starting
+// from zero; a gap in the store's scraping of up to a day loses nothing.
+//
+// An app deleted during or after the window is included, under the ID it
+// had: what it sent before it went is still its team's. Deleted apps are
+// remembered for a week. Reading the same window again gives the same answer
+// for as long as the store keeps its samples.
 //
 // A window must have ended at least a minute ago, or ErrEgressWindowOpen. An
 // install without a metrics store returns ErrEgressUnmeasured; a store that
@@ -67,7 +71,7 @@ func (e *Engine) Egress(ctx context.Context, from, to time.Time) ([]EgressUsage,
 	if e.egress == nil {
 		return nil, ErrEgressUnmeasured
 	}
-	apps, err := e.Apps.AllNamespaces(ctx)
+	apps, err := e.Apps.AllNamespaces(ctx, from.Truncate(time.Second))
 	if err != nil {
 		return nil, err
 	}

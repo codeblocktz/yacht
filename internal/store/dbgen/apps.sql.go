@@ -912,6 +912,41 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 	return items, nil
 }
 
+const listDeletedAppNamespaces = `-- name: ListDeletedAppNamespaces :many
+SELECT id, owner_id, project_id, name, namespace, deleted_at FROM deleted_apps
+WHERE deleted_at >= $1
+ORDER BY owner_id, name, deleted_at DESC
+`
+
+// Apps deleted at or after a moment, as they were, for metering an hour that
+// ended after they went: the trigger on apps keeps them for a week.
+func (q *Queries) ListDeletedAppNamespaces(ctx context.Context, deletedAt time.Time) ([]DeletedApp, error) {
+	rows, err := q.db.Query(ctx, listDeletedAppNamespaces, deletedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletedApp{}
+	for rows.Next() {
+		var i DeletedApp
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Namespace,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeployments = `-- name: ListDeployments :many
 SELECT id, owner_id, app_id, image, revision, status, message, started_at, finished_at, release_id, trigger, actor_kind, actor_id FROM deployments
 WHERE owner_id = $1 AND app_id = $2

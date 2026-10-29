@@ -275,6 +275,15 @@ type DatabaseBackupSchedule struct {
 	UpdatedAt time.Time
 }
 
+type DeletedApp struct {
+	ID        uuid.UUID
+	OwnerID   string
+	ProjectID pgtype.UUID
+	Name      string
+	Namespace string
+	DeletedAt time.Time
+}
+
 type Deployment struct {
 	ID         uuid.UUID
 	OwnerID    string

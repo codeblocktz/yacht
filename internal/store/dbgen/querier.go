@@ -511,6 +511,9 @@ type Querier interface {
 	// routed is the only kind anybody needs to find, so it sorts to the top.
 	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
 	ListDatabaseBackups(ctx context.Context, arg ListDatabaseBackupsParams) ([]DatabaseBackup, error)
+	// Apps deleted at or after a moment, as they were, for metering an hour that
+	// ended after they went: the trigger on apps keeps them for a week.
+	ListDeletedAppNamespaces(ctx context.Context, deletedAt time.Time) ([]DeletedApp, error)
 	ListDeploymentOperations(ctx context.Context, arg ListDeploymentOperationsParams) ([]DeploymentOperation, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)

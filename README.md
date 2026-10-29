@@ -528,16 +528,19 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
 For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
-to the internet in the window — the response bodies the ingress served for it,
-summed over Traefik's replicas, with counter restarts read as restarts — one
-`engine.EgressUsage` per app with its team, project and app ID. Windows that
-meet neither overlap nor leave a gap, and reading one again gives the same
-answer. It needs the metrics store: without one it returns
-`engine.ErrEgressUnmeasured`; a window that ended less than a minute ago,
-`engine.ErrEgressWindowOpen`; and a store it cannot read, an error rather than
-zero. Not counted: traffic between apps, the platform's own, what an app sends
-out on its own account, TCP proxies, and buckets, whose downloads share one S3
-address that nothing counts per bucket.
+to the internet in the window — the response bodies the ingress served for it
+and for its waker while it slept, from Traefik's counters read raw, summed over
+its replicas — one `engine.EgressUsage` per app with its team, project and app
+ID, including an app deleted during or after the window. Windows that meet
+neither overlap nor leave a gap, a counter restarting or coming back after a
+sleep counts from zero, a gap of up to a day in the store's scraping loses
+nothing, and reading a window again gives the same answer. It needs the
+metrics store, scraping Traefik and keeping the scraper's `up` series: without
+one it returns `engine.ErrEgressUnmeasured`; a window that ended less than a
+minute ago, `engine.ErrEgressWindowOpen`; and a store it cannot read, an error
+rather than zero. Not counted: traffic between apps, the platform's own, what
+an app sends out on its own account, TCP proxies, and buckets, whose downloads
+share one S3 address that nothing counts per bucket.
 
 ## Security posture
 
