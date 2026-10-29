@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -238,11 +241,66 @@ func TestATeamsBucketsShareItsQuota(t *testing.T) {
 		t.Fatalf("TeamUsage = %+v, %v", u, err)
 	}
 
+	// No quota, and the install's room still bounds it.
 	if err := s.SetQuota(ctx, id, Quota{}); err != nil {
 		t.Fatal(err)
 	}
+	if l := limit(second); l <= 30 {
+		t.Fatalf("with no quota the limit = %d, want the install's share, past the old quota", l)
+	}
+
+	// The store's disk with 10 bytes free past its reserve: the two buckets
+	// split them, so neither may take 6 more, and the page says it was the
+	// install's room and not the plan.
+	s.disk.read = func(context.Context) (bucket.Disk, error) {
+		return bucket.Disk{Total: 4 << 30, Available: 1<<30 + 10}, nil
+	}
+	s.limitBuckets(ctx, id)
+	for _, a := range []App{first, second} {
+		b, err := s.Bucket(ctx, id, a.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l := limit(a); l < 1 || l > max(b.Bytes+5, 1) {
+			t.Fatalf("%s holding %d, with 10 bytes free between two buckets: limit %d", a.Name, b.Bytes, l)
+		}
+		f, err := s.BucketFiles(ctx, id, a.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Put(ctx, "c.txt", strings.NewReader("cccccc"), 6, ""); !errors.Is(err, bucket.ErrFull) {
+			t.Fatalf("%s: a write past its part of the install's room = %v, want ErrFull", a.Name, err)
+		}
+		if b.OverPlan(6) {
+			t.Fatalf("%s: a team with no quota was told it is past its plan", a.Name)
+		}
+	}
+	snap, err := s.Capacity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.Buckets; b == nil || !b.Known || b.Total != 4<<30 || b.Reserve != 1<<30 || b.Free != 10 ||
+		b.Percent() != 100 || snap.Level != CapacityFull {
+		t.Fatalf("Capacity's buckets = %+v at %s; want 10 bytes free of a 4 GiB disk keeping 1 GiB, full", b, snap.Level)
+	}
+
+	// Room again, and the write fits.
+	s.disk.read = func(context.Context) (bucket.Disk, error) {
+		return bucket.Disk{Total: 1 << 50, Available: 1 << 49}, nil
+	}
+	s.limitBuckets(ctx, id)
+	if err := others.Put(ctx, "c.txt", strings.NewReader("cccccc"), 6, ""); err != nil {
+		t.Fatalf("a write once the store has room: %v", err)
+	}
+
+	// A store that cannot be read holds buckets to their quotas alone.
+	s.disk.read = func(context.Context) (bucket.Disk, error) { return bucket.Disk{}, bucket.ErrUnavailable }
+	s.limitBuckets(ctx, id)
 	if l := limit(second); l != 0 {
-		t.Fatalf("with no quota the limit = %d, want none", l)
+		t.Fatalf("with no quota and no disk to read the limit = %d, want none", l)
+	}
+	if snap, err := s.Capacity(ctx); err != nil || snap.Buckets == nil || snap.Buckets.Known || snap.Buckets.Reason == "" {
+		t.Fatalf("Capacity with the disk unread = %+v, %v", snap.Buckets, err)
 	}
 }
 
@@ -252,6 +310,99 @@ func TestBucketShare(t *testing.T) {
 	} {
 		if got := bucketShare(c.limit, c.others); got != c.want {
 			t.Errorf("bucketShare(%d, %d) = %d, want %d", c.limit, c.others, got, c.want)
+		}
+	}
+}
+
+func TestBucketLimits(t *testing.T) {
+	free := func(free, buckets, granted int64) *installRoom {
+		return &installRoom{Free: free, Buckets: buckets, Granted: granted}
+	}
+	for _, c := range []struct {
+		name  string
+		team  int64
+		sizes []int64
+		room  *installRoom
+		want  []int64
+	}{
+		{"no room to read, no quota", 0, []int64{5, 0}, nil, []int64{0, 0}},
+		{"no room to read, the team's share", 30, []int64{20, 0}, nil, []int64{30, 10}},
+		{"the install's room split between every bucket", 0, []int64{10, 0}, free(100, 4, 0), []int64{35, 25}},
+		{"room other teams were given is not given again", 0, []int64{10, 0}, free(100, 4, 90), []int64{15, 5}},
+		{"other teams given more than is free", 0, []int64{10, 0}, free(100, 4, 500), []int64{10, 1}},
+		{"the team's share is smaller", 30, []int64{20, 0}, free(1000, 2, 0), []int64{30, 10}},
+		{"the install's is smaller", 1000, []int64{0}, free(10, 1, 0), []int64{10}},
+		{"a full store", 0, []int64{5, 0}, free(0, 2, 0), []int64{5, 1}},
+		{"never fewer buckets than the team's", 0, []int64{0, 0}, free(10, 0, 0), []int64{5, 5}},
+	} {
+		got := bucketLimits(c.team, c.sizes, c.room)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: bucketLimits(%d, %v, %+v) = %v, want %v", c.name, c.team, c.sizes, c.room, got, c.want)
+		}
+	}
+
+	// However the room is split, the team's buckets growing together to
+	// their limits take no more than is free and not already given out.
+	for _, sizes := range [][]int64{{0}, {1, 2, 3}, {100, 0, 0, 0, 0}} {
+		for _, room := range []*installRoom{free(97, 9, 0), free(97, 5, 40), free(1<<30, 7, 1<<29)} {
+			var grow int64
+			for i, l := range bucketLimits(0, sizes, room) {
+				grow += l - sizes[i]
+			}
+			if grow > max(room.Free-room.Granted, 0) {
+				t.Errorf("sizes %v in %+v grow by %d together, past what is free", sizes, room, grow)
+			}
+		}
+	}
+}
+
+func TestBucketReserve(t *testing.T) {
+	for total, want := range map[int64]int64{
+		20 << 30: 2 << 30, 100 << 30: 10 << 30, 5 << 30: 1 << 30, 1 << 30: 512 << 20, 0: 0,
+	} {
+		if got := bucketReserve(total); got != want {
+			t.Errorf("bucketReserve(%d) = %d, want %d", total, got, want)
+		}
+	}
+}
+
+func TestBucketCapacity(t *testing.T) {
+	c := newBucketCapacity(bucket.Disk{Total: 20 << 30, Available: 4 << 30}, 3, 15<<30)
+	if c.Reserve != 2<<30 || c.Usable != 18<<30 || c.Used != 16<<30 || c.Free != 2<<30 ||
+		c.Percent() != 89 || c.level(80) != CapacityWarn || c.level(90) != CapacityOK {
+		t.Fatalf("a 20 GiB disk with 4 GiB available = %+v, %d%%", c, c.Percent())
+	}
+	c = newBucketCapacity(bucket.Disk{Total: 20 << 30, Available: 1 << 30}, 3, 15<<30)
+	if c.Free != 0 || c.level(80) != CapacityFull {
+		t.Fatalf("a 20 GiB disk with 1 GiB available = %+v, %s; want nothing free, full", c, c.level(80))
+	}
+	if (BucketCapacity{}).level(80) != CapacityUnknown || (BucketCapacity{}).Percent() != 0 {
+		t.Fatal("a disk not read is not unknown")
+	}
+}
+
+// The pages read the disk at most every diskTTL; limits are set from a
+// reading of their own.
+func TestTheDiskIsReadFreshForLimits(t *testing.T) {
+	reads := 0
+	now := time.Now()
+	d := &diskSource{
+		read: func(context.Context) (bucket.Disk, error) {
+			reads++
+			return bucket.Disk{Total: int64(reads)}, nil
+		},
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now: func() time.Time { return now },
+	}
+	ctx := context.Background()
+	for _, step := range []struct {
+		fresh bool
+		later time.Duration
+		want  int64
+	}{{false, 0, 1}, {false, 0, 1}, {true, 0, 2}, {false, 0, 2}, {false, diskTTL, 3}} {
+		now = now.Add(step.later)
+		if got, err := d.get(ctx, step.fresh); err != nil || got.Total != step.want {
+			t.Fatalf("get(fresh %v) after %v = %d, %v; want reading %d", step.fresh, step.later, got.Total, err, step.want)
 		}
 	}
 }

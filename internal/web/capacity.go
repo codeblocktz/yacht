@@ -418,7 +418,7 @@ type capacityAlert struct {
 func (a capacityAlert) warranted() bool {
 	s := a.Snapshot
 	switch {
-	case s.RefusedLast24h > 0:
+	case s.RefusedLast24h > 0, a.bucketsPercent() >= s.WarnPercent:
 		return true
 	case !s.Known:
 		return s.Enforced
@@ -426,11 +426,33 @@ func (a capacityAlert) warranted() bool {
 	return s.CPU.Percent() >= s.WarnPercent || s.Memory.Percent() >= s.WarnPercent
 }
 
-// Severe is the destructive style: past what is sellable, or demand turned
-// away. Under 100% it is a warning, and so is a cluster nobody can read.
+// bucketsPercent is how full the bucket store is, zero where there is none
+// or its disk could not be read.
+func (a capacityAlert) bucketsPercent() int {
+	if b := a.Snapshot.Buckets; b != nil && b.Known {
+		return b.Percent()
+	}
+	return 0
+}
+
+// bucketsLead says the bucket store is what the alert is about: past the
+// warning line, and fuller than whatever of the machines is.
+func (a capacityAlert) bucketsLead() bool {
+	s := a.Snapshot
+	pct := a.bucketsPercent()
+	if pct < s.WarnPercent {
+		return false
+	}
+	_, r := soldFuller(s)
+	return !s.Known || pct >= r.Percent()
+}
+
+// Severe is the destructive style: past what is sellable, a bucket store
+// refusing uploads, or demand turned away. Under 100% it is a warning, and so
+// is a cluster nobody can read.
 func (a capacityAlert) Severe() bool {
 	s := a.Snapshot
-	if s.RefusedLast24h > 0 {
+	if s.RefusedLast24h > 0 || a.bucketsPercent() >= 100 {
 		return true
 	}
 	return s.Known && (s.CPU.Percent() >= 100 || s.Memory.Percent() >= 100)
@@ -439,6 +461,12 @@ func (a capacityAlert) Severe() bool {
 // Headline is the one sentence the alert leads with.
 func (a capacityAlert) Headline() string {
 	s := a.Snapshot
+	if a.bucketsLead() {
+		if pct := a.bucketsPercent(); pct < 100 {
+			return fmt.Sprintf("The bucket store is %d%% full", pct)
+		}
+		return "The bucket store is full — every upload to every bucket is refused"
+	}
 	if !s.Known {
 		return "Capacity is unknown — nothing is being refused while the cluster cannot be read"
 	}
@@ -458,6 +486,9 @@ func (a capacityAlert) Headline() string {
 func (a capacityAlert) Detail() string {
 	s := a.Snapshot
 	switch {
+	case a.bucketsLead():
+		return "Past what buckets may fill, uploads to every team's buckets are refused until there is room. " +
+			"Grow the store's volume, or ask the teams storing the most to delete files."
 	case !s.Known:
 		return "The capacity policy is enforced, but without the cluster there is no room to hold changes to."
 	case s.RefusedLast24h > 0 && (s.CPU.Percent() >= s.WarnPercent || s.Memory.Percent() >= s.WarnPercent):

@@ -62,6 +62,8 @@ type bucketApps struct {
 	garage   *objstore.Garage
 	deployed int
 	measured int
+	// teamBytes is what the team's buckets hold, of its 5 GiB.
+	teamBytes int64
 }
 
 func newBucketApps(t *testing.T) (*bucketApps, *fakeS3) {
@@ -79,6 +81,7 @@ func newBucketApps(t *testing.T) (*bucketApps, *fakeS3) {
 			AdminURL: srv.URL, Token: strings.Repeat("t", 32),
 			S3URL: srv.URL, Endpoint: "https://s3.example.com", Region: "datahuru",
 		},
+		teamBytes: 1 << 30,
 	}, s3
 }
 
@@ -101,7 +104,7 @@ func (b *bucketApps) Bucket(_ context.Context, _, name string) (app.Bucket, erro
 	return app.Bucket{
 		Name: "media-abc123", Endpoint: "https://s3.example.com", Region: "datahuru",
 		Bytes: 3 << 20, Objects: 2, MeasuredAt: time.Now().Add(-time.Minute),
-		TeamLimit: 5 << 30, TeamBytes: 1 << 30,
+		TeamLimit: 5 << 30, TeamBytes: b.teamBytes,
 	}, nil
 }
 
@@ -190,18 +193,30 @@ func TestTheFilesTabListsUploadsAndDeletes(t *testing.T) {
 		t.Fatalf("upload = %d %q; store has %v", rec.Code, rec.Body.String(), s3.puts)
 	}
 
-	body.Reset()
-	mw = multipart.NewWriter(&body)
-	fw, _ = mw.CreateFormFile("file", "huge.bin")
-	_, _ = io.WriteString(fw, "too much")
-	_ = mw.Close()
-	req = httptest.NewRequest(http.MethodPost, "/apps/media/files", &body)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("Origin", "http://example.com")
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), "as much as its plan allows") {
-		t.Fatalf("an upload past the team's quota = %q", rec.Body.String())
+	// The store refuses a write past either share alike: the team's own
+	// numbers say which it was.
+	refused := func() string {
+		t.Helper()
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", "huge.bin")
+		_, _ = io.WriteString(fw, "too much")
+		_ = mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/apps/media/files", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Origin", "http://example.com")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	apps.teamBytes = 5 << 30
+	if got := refused(); !strings.Contains(got, "as much as its plan allows") {
+		t.Fatalf("an upload past the team's quota = %q", got)
+	}
+	apps.teamBytes = 1 << 30
+	if got := refused(); !strings.Contains(got, "This server&#39;s bucket storage is full") ||
+		strings.Contains(got, "plan") {
+		t.Fatalf("an upload within the team's quota, refused by the store = %q", got)
 	}
 
 	rec = post(t, h, "/apps/media/files/delete", url.Values{"key": {"photos/cat.jpg"}})

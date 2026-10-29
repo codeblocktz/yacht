@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +60,13 @@ func TestAgainstGarage(t *testing.T) {
 	// Twice: a node with a place keeps it.
 	if err := g.EnsureLayout(ctx, "test"); err != nil {
 		t.Fatalf("EnsureLayout again: %v", err)
+	}
+
+	// Its data partition, which the install's room for buckets is read
+	// from.
+	d, err := g.Disk(ctx)
+	if err != nil || d.Total <= 0 || d.Available <= 0 || d.Available > d.Total {
+		t.Fatalf("Disk = %+v, %v; want the data partition's size and what is free on it", d, err)
 	}
 
 	b, err := g.Create(ctx, "media")
@@ -168,5 +177,57 @@ func TestAgainstGarage(t *testing.T) {
 	}
 	if err := g.Delete(ctx, b); err != nil {
 		t.Fatalf("Delete of a bucket already gone: %v", err)
+	}
+}
+
+// The room is the data partitions of the nodes that store objects: the
+// smallest one's, times the nodes, since objects are spread evenly and a write
+// fails once any node is full.
+func TestDiskIsTheStoringNodesDataPartitions(t *testing.T) {
+	var status string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/GetClusterStatus" || r.Header.Get("Authorization") != "Bearer "+strings.Repeat("t", 32) {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, status)
+	}))
+	t.Cleanup(srv.Close)
+	g := &Garage{AdminURL: srv.URL, Token: strings.Repeat("t", 32)}
+	node := func(id, role string, up bool, partition string) string {
+		return `{"id":"` + id + `","isUp":` + strconv.FormatBool(up) + `,"role":` + role +
+			`,"dataPartition":` + partition + `}`
+	}
+	const storing, gateway = `{"zone":"z","capacity":1099511627776,"tags":[]}`, `{"zone":"z","capacity":null,"tags":[]}`
+	for _, c := range []struct {
+		name  string
+		nodes []string
+		want  Disk
+		fails bool
+	}{
+		{"one node", []string{node("a", storing, true, `{"available":600,"total":1000}`)}, Disk{1000, 600}, false},
+		{"the smallest of two", []string{
+			node("a", storing, true, `{"available":600,"total":1000}`),
+			node("b", storing, true, `{"available":900,"total":2000}`),
+		}, Disk{2000, 1200}, false},
+		{"gateways and nodes with no role store nothing", []string{
+			node("a", storing, true, `{"available":600,"total":1000}`),
+			node("b", gateway, true, `{"available":1,"total":1}`),
+			node("c", "null", true, `{"available":1,"total":1}`),
+		}, Disk{1000, 600}, false},
+		{"a storing node down", []string{
+			node("a", storing, true, `{"available":600,"total":1000}`),
+			node("b", storing, false, "null"),
+		}, Disk{}, true},
+		{"no node laid out", []string{node("a", "null", true, `{"available":600,"total":1000}`)}, Disk{}, true},
+	} {
+		status = `{"layoutVersion":1,"nodes":[` + strings.Join(c.nodes, ",") + `]}`
+		d, err := g.Disk(context.Background())
+		if (err != nil) != c.fails || d != c.want {
+			t.Errorf("%s: Disk = %+v, %v; want %+v, failing %v", c.name, d, err, c.want, c.fails)
+		}
+		if err != nil && !errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s: %v is not ErrUnavailable", c.name, err)
+		}
 	}
 }

@@ -183,6 +183,7 @@ type Bucket struct {
 	Objects      int64
 	MeasuredAt   pgtype.Timestamptz
 	CreatedAt    time.Time
+	LimitBytes   int64
 }
 
 type Build struct {

@@ -12,7 +12,7 @@ import (
 )
 
 const getBucket = `-- name: GetBucket :one
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at FROM buckets WHERE owner_id = $1 AND app_id = $2
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets WHERE owner_id = $1 AND app_id = $2
 `
 
 type GetBucketParams struct {
@@ -34,6 +34,7 @@ func (q *Queries) GetBucket(ctx context.Context, arg GetBucketParams) (Bucket, e
 		&i.Objects,
 		&i.MeasuredAt,
 		&i.CreatedAt,
+		&i.LimitBytes,
 	)
 	return i, err
 }
@@ -65,7 +66,7 @@ func (q *Queries) InsertBucket(ctx context.Context, arg InsertBucketParams) erro
 }
 
 const listBuckets = `-- name: ListBuckets :many
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at FROM buckets ORDER BY measured_at NULLS FIRST, app_id
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets ORDER BY measured_at NULLS FIRST, app_id
 `
 
 // Every bucket on the install, for measuring.
@@ -89,6 +90,7 @@ func (q *Queries) ListBuckets(ctx context.Context) ([]Bucket, error) {
 			&i.Objects,
 			&i.MeasuredAt,
 			&i.CreatedAt,
+			&i.LimitBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -101,7 +103,7 @@ func (q *Queries) ListBuckets(ctx context.Context) ([]Bucket, error) {
 }
 
 const listTeamBuckets = `-- name: ListTeamBuckets :many
-SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id
+SELECT app_id, owner_id, garage_id, name, key_id, sealed_secret, size_bytes, objects, measured_at, created_at, limit_bytes FROM buckets WHERE owner_id = $1 ORDER BY created_at, app_id
 `
 
 // A team's buckets, with what each held when last measured.
@@ -125,6 +127,7 @@ func (q *Queries) ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket
 			&i.Objects,
 			&i.MeasuredAt,
 			&i.CreatedAt,
+			&i.LimitBytes,
 		); err != nil {
 			return nil, err
 		}
@@ -134,6 +137,41 @@ func (q *Queries) ListTeamBuckets(ctx context.Context, ownerID string) ([]Bucket
 		return nil, err
 	}
 	return items, nil
+}
+
+const otherBuckets = `-- name: OtherBuckets :one
+SELECT count(*)::bigint AS buckets,
+       coalesce(sum(greatest(limit_bytes - size_bytes, 0)) FILTER (WHERE limit_bytes > 0), 0)::bigint AS granted
+FROM buckets WHERE owner_id <> $1
+`
+
+type OtherBucketsRow struct {
+	Buckets int64
+	Granted int64
+}
+
+// Every bucket on the install but a team's: how many, and how much more the
+// limits set on them let them write than they held when last measured. A
+// bucket with no limit set is counted, and gives nothing out.
+func (q *Queries) OtherBuckets(ctx context.Context, ownerID string) (OtherBucketsRow, error) {
+	row := q.db.QueryRow(ctx, otherBuckets, ownerID)
+	var i OtherBucketsRow
+	err := row.Scan(&i.Buckets, &i.Granted)
+	return i, err
+}
+
+const setBucketLimit = `-- name: SetBucketLimit :exec
+UPDATE buckets SET limit_bytes = $2 WHERE app_id = $1
+`
+
+type SetBucketLimitParams struct {
+	AppID      uuid.UUID
+	LimitBytes int64
+}
+
+func (q *Queries) SetBucketLimit(ctx context.Context, arg SetBucketLimitParams) error {
+	_, err := q.db.Exec(ctx, setBucketLimit, arg.AppID, arg.LimitBytes)
+	return err
 }
 
 const setBucketUsage = `-- name: SetBucketUsage :exec
@@ -150,4 +188,23 @@ type SetBucketUsageParams struct {
 func (q *Queries) SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error {
 	_, err := q.db.Exec(ctx, setBucketUsage, arg.AppID, arg.SizeBytes, arg.Objects)
 	return err
+}
+
+const sumBuckets = `-- name: SumBuckets :one
+SELECT count(*)::bigint AS buckets, coalesce(sum(size_bytes), 0)::bigint AS stored
+FROM buckets
+`
+
+type SumBucketsRow struct {
+	Buckets int64
+	Stored  int64
+}
+
+// Every bucket on the install: how many, and what they held when last
+// measured.
+func (q *Queries) SumBuckets(ctx context.Context) (SumBucketsRow, error) {
+	row := q.db.QueryRow(ctx, sumBuckets)
+	var i SumBucketsRow
+	err := row.Scan(&i.Buckets, &i.Stored)
+	return i, err
 }

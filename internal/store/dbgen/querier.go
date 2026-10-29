@@ -638,6 +638,10 @@ type Querier interface {
 	MoveAppsWithoutProject(ctx context.Context, arg MoveAppsWithoutProjectParams) (int64, error)
 	NormalizeLegacyDeploymentStatuses(ctx context.Context) (int64, error)
 	OpenAppSleep(ctx context.Context, arg OpenAppSleepParams) error
+	// Every bucket on the install but a team's: how many, and how much more the
+	// limits set on them let them write than they held when last measured. A
+	// bucket with no limit set is counted, and gives nothing out.
+	OtherBuckets(ctx context.Context, ownerID string) (OtherBucketsRow, error)
 	// Across every team: an installation suspended or removed on GitHub is so for
 	// all of them. Removal is final and wins over any other reason.
 	PauseGitHubInstallationApps(ctx context.Context, arg PauseGitHubInstallationAppsParams) (int64, error)
@@ -749,6 +753,7 @@ type Querier interface {
 	// The idle clock restarts with the setting, so turning sleep on for an app
 	// that has been quiet all week does not put it to sleep a minute later.
 	SetAppSleepSetting(ctx context.Context, arg SetAppSleepSettingParams) (App, error)
+	SetBucketLimit(ctx context.Context, arg SetBucketLimitParams) error
 	SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error
 	// What the build's Dockerfile declared, recorded once it has pushed. See
 	// migration 00074.
@@ -787,6 +792,9 @@ type Querier interface {
 	// Scoped by expiry so a session that has ended cannot be made to act; execrows
 	// so the caller can tell that it was not.
 	StartActing(ctx context.Context, arg StartActingParams) (int64, error)
+	// Every bucket on the install: how many, and what they held when last
+	// measured.
+	SumBuckets(ctx context.Context) (SumBucketsRow, error)
 	SumInstallVolumeBytes(ctx context.Context) (int64, error)
 	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
 	// Volume bytes by the region of the app holding them, for the capacity page's

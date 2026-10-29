@@ -59,6 +59,37 @@ func snapshotAt(cpuPercent, memPercent int, enforced bool) app.CapacitySnapshot 
 	}
 }
 
+// bucketsAt is a bucket store's disk of total bytes with available free.
+func bucketsAt(total, available int64) app.BucketCapacity {
+	reserve := max(total/10, 1<<30)
+	return app.BucketCapacity{Known: true, Total: total, Reserve: reserve, Usable: total - reserve,
+		Used: total - available, Free: max(available-reserve, 0), Buckets: 4, Stored: total - available}
+}
+
+// The capacity page shows the bucket store's disk beside the machines, and
+// says when it is filling.
+func TestTheCapacityPageShowsTheBucketStore(t *testing.T) {
+	c := &fakeCapacity{snap: snapshotAt(40, 30, true)}
+	h := capacityServer(t, c).Handler()
+	if body := get(t, h, "/admin/capacity").Body.String(); strings.Contains(body, "data-capacity-buckets") {
+		t.Error("an install with no bucket store shows one")
+	}
+	b := bucketsAt(20<<30, 4<<30)
+	c.snap.Buckets = &b
+	body := get(t, h, "/admin/capacity").Body.String()
+	for _, want := range []string{"data-capacity-buckets", "4 buckets", "16 GiB", "of 18 GiB", "89%",
+		"Free to write", "The bucket store is 89% full"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the capacity page does not say %q", want)
+		}
+	}
+	c.snap.Buckets = &app.BucketCapacity{Reason: "node d83f does not report its data partition", Buckets: 2}
+	if body := get(t, h, "/admin/capacity").Body.String(); !strings.Contains(body, "could not be read") ||
+		!strings.Contains(body, "node d83f does not report its data partition") {
+		t.Error("the capacity page does not say the bucket store's disk could not be read, and why")
+	}
+}
+
 // requestAs is a request whose surfaces say whether its person runs the
 // install — what withSurfaces would have put there.
 func requestAs(path string, operator bool) *http.Request {
@@ -88,6 +119,13 @@ func TestTheCapacityBannerIsOnlyForOperatorsAndOnlyWhenWarranted(t *testing.T) {
 	unknownOff.Enforced = false
 	refused := snapshotAt(10, 10, true)
 	refused.RefusedLast24h = 3
+	withBuckets := func(s app.CapacitySnapshot, available int64) app.CapacitySnapshot {
+		b := bucketsAt(20<<30, available)
+		s.Buckets = &b
+		return s
+	}
+	unreadBuckets := snapshotAt(40, 30, true)
+	unreadBuckets.Buckets = &app.BucketCapacity{Reason: "the store is not answering"}
 
 	for _, tc := range []struct {
 		name   string
@@ -102,6 +140,12 @@ func TestTheCapacityBannerIsOnlyForOperatorsAndOnlyWhenWarranted(t *testing.T) {
 		{"refusals with room now", refused, true, true, "3 changes were refused"},
 		{"unknown while enforcing", unknown, true, false, "Capacity is unknown"},
 		{"unknown and not enforcing", unknownOff, false, false, ""},
+		{"buckets with room", withBuckets(snapshotAt(40, 30, true), 10<<30), false, false, ""},
+		{"buckets past the warning line", withBuckets(snapshotAt(40, 30, true), 4<<30), true, false, "The bucket store is 89% full"},
+		{"buckets full", withBuckets(snapshotAt(40, 30, false), 1<<30), true, true, "every upload to every bucket is refused"},
+		{"buckets full with the cluster unknown", withBuckets(unknownOff, 1<<30), true, true, "every upload to every bucket"},
+		{"CPU fuller than the buckets", withBuckets(snapshotAt(95, 30, true), 4<<30), true, false, "sellable CPU is committed"},
+		{"a bucket store that cannot be read", unreadBuckets, false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := capacityServer(t, &fakeCapacity{snap: tc.snap})

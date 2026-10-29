@@ -130,6 +130,66 @@ func (g *Garage) EnsureLayout(ctx context.Context, zone string) error {
 	return g.call(ctx, http.MethodPost, "/v2/ApplyClusterLayout", map[string]any{"version": layout.Version + 1}, nil)
 }
 
+// Disk is the room the store has for objects, as Garage reports it.
+type Disk struct {
+	// Total is the size of the disk objects are kept on, and Available what
+	// is free on it now. Both are what the filesystem says, so Total less
+	// Available is everything on it: every bucket's blocks as stored, and
+	// anything else the disk holds.
+	Total, Available int64
+}
+
+// Disk reads the room on the data partitions of the nodes that store
+// objects, which every Garage reports in its cluster status.
+//
+// One node is the disk it has. With more, Garage spreads objects evenly over
+// nodes weighed alike, as EnsureLayout weighs them, so a write fails once the
+// fullest node is full: the room is the smallest node's, as many times over
+// as there are nodes. A storing node that does not report its partition — a
+// node that is down — leaves the room unknown, as an error.
+func (g *Garage) Disk(ctx context.Context) (Disk, error) {
+	var status struct {
+		Nodes []struct {
+			ID   string `json:"id"`
+			IsUp bool   `json:"isUp"`
+			Role *struct {
+				Capacity *int64 `json:"capacity"`
+			} `json:"role"`
+			DataPartition *struct {
+				Available int64 `json:"available"`
+				Total     int64 `json:"total"`
+			} `json:"dataPartition"`
+		} `json:"nodes"`
+	}
+	if err := g.call(ctx, http.MethodGet, "/v2/GetClusterStatus", nil, &status); err != nil {
+		return Disk{}, err
+	}
+	var d Disk
+	nodes := int64(0)
+	for _, n := range status.Nodes {
+		// A node with no role, or a gateway's role with no capacity, keeps
+		// no objects.
+		if n.Role == nil || n.Role.Capacity == nil {
+			continue
+		}
+		p := n.DataPartition
+		if !n.IsUp || p == nil || p.Total <= 0 {
+			return Disk{}, fmt.Errorf("%w: node %.16s does not report its data partition", ErrUnavailable, n.ID)
+		}
+		if nodes == 0 || p.Total < d.Total {
+			d.Total = p.Total
+		}
+		if nodes == 0 || p.Available < d.Available {
+			d.Available = p.Available
+		}
+		nodes++
+	}
+	if nodes == 0 {
+		return Disk{}, fmt.Errorf("%w: no node has a place in the layout yet", ErrUnavailable)
+	}
+	return Disk{Total: d.Total * nodes, Available: min(d.Available, d.Total) * nodes}, nil
+}
+
 // nameRE is what a bucket's name may be: S3's rule, which Garage keeps.
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 

@@ -420,6 +420,10 @@ type Service struct {
 	// admission and for the pages that show the install's capacity.
 	room *roomSource
 
+	// disk is the bucket store's room for objects, read at most every
+	// diskTTL for the pages and afresh whenever limits are set.
+	disk *diskSource
+
 	// refusals is the capacity refusals still being recorded, so a test can
 	// wait for them rather than poll.
 	refusals sync.WaitGroup
@@ -479,7 +483,8 @@ func NewService(
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests, buckets: opts.Buckets,
 		gh:   opts.GitHub,
-		room: newRoomSource(orch, log), wakes: map[uuid.UUID]*wakeCall{},
+		room: newRoomSource(orch, log), disk: newDiskSource(opts.Buckets, log),
+		wakes: map[uuid.UUID]*wakeCall{},
 	}
 }
 

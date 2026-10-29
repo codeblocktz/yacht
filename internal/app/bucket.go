@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -117,6 +119,14 @@ type Bucket struct {
 	TeamLimit, TeamBytes int64
 }
 
+// OverPlan says whether writing size more bytes would take the team's
+// buckets past its plan, as last measured. The store refuses a write past a
+// bucket's limit the same way whichever share set it, so a refused write
+// that is not past the plan was refused for the install's room.
+func (b Bucket) OverPlan(size int64) bool {
+	return b.TeamLimit > 0 && b.TeamBytes+size > b.TeamLimit
+}
+
 // stored is a bucket's row and the key to it, which the Files tab uses.
 func (s *Service) storedBucket(ctx context.Context, a App) (dbgen.Bucket, bucket.Created, error) {
 	if a.Source != SourceBucket {
@@ -200,16 +210,28 @@ func (s *Service) MeasureBucket(ctx context.Context, ownerID, name string) error
 	return nil
 }
 
-// limitBuckets gives each of a team's buckets its share of the team's
-// bucket storage, as a limit the store keeps: what the team may hold in
-// buckets, less what its other buckets hold. A bucket whose others have
-// already used it all may take nothing more. With no quota, no limit.
+// limitBuckets gives each of a team's buckets the most it may hold, as a
+// limit the store keeps: the smaller of its share of the team's bucket
+// storage and its share of the install's.
+//
+// The team's share is what the team may hold in buckets, less what its other
+// buckets hold; with no quota there is none. The install's is what the bucket
+// holds and a part of the store's free room (bucketLimits), so that every
+// bucket on the install, a team's with no quota included, stops before the
+// store's disk is full, and one team filling it cannot fail every other
+// team's uploads.
 //
 // Shares follow the measured sizes, so they are as fresh as the last
 // measuring: run when a quota is set, a bucket made, a file put or deleted
 // through the Files tab, and on every measuring pass. An app writing to two
 // buckets at once can pass the team's total by what it writes between two
-// passes, and no further.
+// passes, and no further; it cannot pass the install's, which is split
+// between the buckets rather than given to each.
+//
+// Only the team's own buckets are changed. Room another team frees, or
+// leaves unused, reaches this team's buckets on the next measuring pass,
+// which limits every team; until then the limits already set are the safe
+// side of it.
 func (s *Service) limitBuckets(ctx context.Context, ownerID string) {
 	if s.buckets == nil {
 		return
@@ -224,15 +246,105 @@ func (s *Service) limitBuckets(ctx context.Context, ownerID string) {
 		s.log.Warn("buckets: list a team's", slog.String("team", ownerID), slog.String("error", err.Error()))
 		return
 	}
-	var total int64
-	for _, r := range rows {
-		total += r.SizeBytes
+	if len(rows) == 0 {
+		return
 	}
-	for _, r := range rows {
-		if err := s.buckets.SetLimit(ctx, r.GarageID, bucketShare(q.BucketBytes, total-r.SizeBytes)); err != nil && ctx.Err() == nil {
+	room, err := s.installRoom(ctx, ownerID, len(rows))
+	if err != nil {
+		s.log.Warn("buckets: read the install's", slog.String("team", ownerID), slog.String("error", err.Error()))
+		return
+	}
+	sizes := make([]int64, len(rows))
+	for i, r := range rows {
+		sizes[i] = r.SizeBytes
+	}
+	for i, limit := range bucketLimits(q.BucketBytes, sizes, room) {
+		r := rows[i]
+		// Recorded before the store is told, so that another team's buckets
+		// are never given room this one has been, even for a moment: a
+		// limit recorded and not set leaves room unused until the next
+		// pass, and a limit set and not recorded would give it out twice.
+		if err := s.q.SetBucketLimit(ctx, dbgen.SetBucketLimitParams{AppID: r.AppID, LimitBytes: limit}); err != nil {
+			s.log.Warn("buckets: record limit", slog.String("bucket", r.Name), slog.String("error", err.Error()))
+			continue
+		}
+		if err := s.buckets.SetLimit(ctx, r.GarageID, limit); err != nil && ctx.Err() == nil {
 			s.log.Warn("buckets: limit", slog.String("bucket", r.Name), slog.String("error", err.Error()))
 		}
 	}
+}
+
+// installRoom is the store's room as a team with n buckets is limited in it,
+// read afresh. Nil when the store's disk cannot be read: like the capacity
+// policy with a cluster it cannot see, buckets are then held to their teams'
+// quotas alone rather than refused everything — and a store that cannot be
+// read is refusing writes itself.
+func (s *Service) installRoom(ctx context.Context, ownerID string, n int) (*installRoom, error) {
+	d, err := s.disk.get(ctx, true)
+	if err != nil {
+		return nil, nil
+	}
+	others, err := s.q.OtherBuckets(ctx, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	return &installRoom{
+		Free:    newBucketCapacity(d, 0, 0).Free,
+		Buckets: others.Buckets + int64(n),
+		Granted: others.Granted,
+	}, nil
+}
+
+// installRoom is the store's room, as the buckets of one team are limited in
+// it.
+type installRoom struct {
+	// Free is what the store's disk may still take, past its reserve.
+	Free int64
+	// Buckets is every bucket on the install, the team's own among them.
+	Buckets int64
+	// Granted is what other teams' buckets may still write under the limits
+	// set on them: room already given out.
+	Granted int64
+}
+
+// bucketLimits is the most each of a team's buckets may hold, given the
+// team's quota for buckets and each bucket's measured size, in the same
+// order. Zero is no limit, which only a bucket with no quota and no room to
+// read is given.
+//
+// Each bucket may grow by an equal part of the store's free room: the free
+// room split between every bucket on the install, so that buckets growing at
+// once between two measurings cannot together write more than is free.
+// Never more than is left of the free room once other teams' buckets have
+// what they were given, split between this team's: the free room is read
+// now, and their limits were set from what was free then.
+//
+// The team's share, when it has a quota, bounds a bucket as before; the
+// install's bounds it always. Never below one byte, which the store would
+// read as no limit.
+func bucketLimits(teamLimit int64, sizes []int64, room *installRoom) []int64 {
+	var total int64
+	for _, size := range sizes {
+		total += size
+	}
+	var grow int64
+	if room != nil && len(sizes) > 0 {
+		n := int64(len(sizes))
+		fair := room.Free / max(room.Buckets, n)
+		left := max(room.Free-room.Granted, 0) / n
+		grow = min(fair, left)
+	}
+	out := make([]int64, len(sizes))
+	for i, size := range sizes {
+		limit := bucketShare(teamLimit, total-size)
+		if room != nil {
+			if install := max(size+grow, 1); limit == 0 || install < limit {
+				limit = install
+			}
+		}
+		out[i] = limit
+	}
+	return out
 }
 
 // bucketShare is the most one bucket may hold when the team may hold limit
@@ -243,6 +355,170 @@ func bucketShare(limit, others int64) int64 {
 		return 0
 	}
 	return max(limit-others, 1)
+}
+
+// The store's reserve: what is kept free on its disk whatever the buckets'
+// limits say. For the store's own metadata where it shares the disk, for
+// blocks a delete has not yet let go of, and for what the limits miss —
+// sizes are measured every few minutes, and the disk fills with what is
+// written in between.
+//
+// A tenth of the disk, and at least a GiB, but never more than half of it: a
+// small disk keeps half of itself rather than all.
+const (
+	bucketReservePercent = 10
+	bucketReserveMin     = 1 << 30
+)
+
+// bucketReserve is what is kept free of a disk of total bytes.
+func bucketReserve(total int64) int64 {
+	return min(max(total*bucketReservePercent/100, bucketReserveMin), total/2)
+}
+
+// BucketCapacity is the install's room for buckets: the bucket store's disk,
+// less what is kept free on it, against what is on it now. Bytes throughout.
+//
+// The disk is what Garage reports of its data partition, so it grows with
+// the volume under it. Every bucket's limit is held under Usable together
+// (limitBuckets), and past it every upload to every bucket is refused until
+// there is room; Stored is what the teams are billed for.
+type BucketCapacity struct {
+	// Known is whether the store's disk could be read. Without it nothing
+	// below but Buckets and Stored is filled in, and buckets are held to
+	// their teams' quotas alone. Reason is why not.
+	Known  bool
+	Reason string
+
+	// Total is the store's disk. Reserve is kept free on it, and Usable is
+	// the rest: what buckets may fill, and what a plan's bucket storage can
+	// be checked against.
+	Total   int64
+	Reserve int64
+	Usable  int64
+
+	// Used is what is on the disk now: every bucket's objects as stored,
+	// and the store's own metadata where it shares the disk. Free is Usable
+	// less Used, never below zero: what buckets may still write.
+	Used int64
+	Free int64
+
+	// Buckets is how many there are, across every team, and Stored what
+	// they held when last measured.
+	Buckets int64
+	Stored  int64
+}
+
+func newBucketCapacity(d bucket.Disk, buckets, stored int64) BucketCapacity {
+	c := BucketCapacity{Known: true, Total: d.Total, Reserve: bucketReserve(d.Total), Buckets: buckets, Stored: stored}
+	c.Usable = c.Total - c.Reserve
+	c.Used = max(d.Total-d.Available, 0)
+	c.Free = max(c.Usable-c.Used, 0)
+	return c
+}
+
+// Percent is how much of Usable is used: 100 and past is a store refusing
+// every upload.
+func (c BucketCapacity) Percent() int {
+	if c.Usable <= 0 {
+		if c.Known {
+			return 100
+		}
+		return 0
+	}
+	return int(math.Round(float64(c.Used) * 100 / float64(c.Usable)))
+}
+
+// level is the store's fullness in a word, warned at warn percent.
+func (c BucketCapacity) level(warn int) CapacityLevel {
+	switch {
+	case !c.Known:
+		return CapacityUnknown
+	case c.Percent() >= 100:
+		return CapacityFull
+	case c.Percent() >= warn:
+		return CapacityWarn
+	}
+	return CapacityOK
+}
+
+// bucketCapacity is the install's room for buckets now, the disk as last
+// read within diskTTL.
+func (s *Service) bucketCapacity(ctx context.Context) (BucketCapacity, error) {
+	sum, err := s.q.SumBuckets(ctx)
+	if err != nil {
+		return BucketCapacity{}, fmt.Errorf("app: sum buckets: %w", err)
+	}
+	d, err := s.disk.get(ctx, false)
+	if err != nil {
+		return BucketCapacity{Reason: err.Error(), Buckets: sum.Buckets, Stored: sum.Stored}, nil
+	}
+	return newBucketCapacity(d, sum.Buckets, sum.Stored), nil
+}
+
+// diskTTL is how long a reading of the store's disk is trusted by the pages
+// that show it, which ask on every page an operator opens. Limits are set
+// from a fresh reading instead.
+const diskTTL = 30 * time.Second
+
+// diskReadTimeout bounds one reading, so a store that has stopped answering
+// slows a page by seconds rather than stopping it.
+const diskReadTimeout = 5 * time.Second
+
+// diskSource is the store's disk, read when asked and kept for diskTTL.
+type diskSource struct {
+	read func(context.Context) (bucket.Disk, error)
+	log  *slog.Logger
+	now  func() time.Time
+
+	// mu is held across a reading, so a burst of pages on a stale reading
+	// reads the store once rather than once each.
+	mu   sync.Mutex
+	disk bucket.Disk
+	err  error
+	at   time.Time
+
+	// unknown is whether the last reading failed, so that a store that stays
+	// unreadable is logged when it becomes so and not at every reading.
+	unknown bool
+}
+
+func newDiskSource(g *bucket.Garage, log *slog.Logger) *diskSource {
+	read := func(context.Context) (bucket.Disk, error) {
+		return bucket.Disk{}, ErrNoBuckets
+	}
+	if g != nil {
+		read = g.Disk
+	}
+	return &diskSource{read: read, log: log, now: time.Now}
+}
+
+// get returns the disk, read again when fresh is asked for or the last
+// reading is older than diskTTL.
+func (d *diskSource) get(ctx context.Context, fresh bool) (bucket.Disk, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !fresh && !d.at.IsZero() && d.now().Sub(d.at) < diskTTL {
+		return d.disk, d.err
+	}
+	readCtx, cancel := context.WithTimeout(ctx, diskReadTimeout)
+	defer cancel()
+	disk, err := d.read(readCtx)
+	// A reading cut short by the caller going away says nothing about the
+	// store.
+	if ctx.Err() != nil {
+		return disk, err
+	}
+	d.disk, d.err, d.at = disk, err, d.now()
+	switch {
+	case err != nil && !d.unknown:
+		d.unknown = true
+		d.log.Warn("the bucket store's disk is unknown — buckets are held to their teams' quotas "+
+			"alone until it can be read", slog.String("reason", err.Error()))
+	case err == nil && d.unknown:
+		d.unknown = false
+		d.log.Info("the bucket store's disk can be read again")
+	}
+	return disk, err
 }
 
 func (s *Service) measure(ctx context.Context, row dbgen.Bucket) error {
