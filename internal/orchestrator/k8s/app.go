@@ -628,6 +628,25 @@ func (o *Orchestrator) AppStatus(
 		return orchestrator.AppStatus{}, fmt.Errorf("k8s: get deployment %s: %w", ref, err)
 	}
 
+	status := deploymentStatus(dep)
+	// A container that cannot start fails the rollout now, not at the
+	// progress deadline ten minutes on: its start script not executable,
+	// its config missing, a crash on every start. Only the release being
+	// rolled out is looked at; an old pod's trouble is not this deploy's.
+	if needsPodCheck(status) {
+		pods, err := o.client.CoreV1().Pods(ref.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
+		})
+		if err == nil {
+			applyUnstartable(&status, pods.Items, crashLimit(dep.Annotations))
+		}
+	}
+	return finishStatus(status), nil
+}
+
+// deploymentStatus reads a workload's state from its Deployment, before its
+// pods are looked at: see needsPodCheck.
+func deploymentStatus(dep *appsv1.Deployment) orchestrator.AppStatus {
 	var desired int32
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
@@ -678,21 +697,32 @@ func (o *Orchestrator) AppStatus(
 		}
 	}
 
-	// A container that cannot start fails the rollout now, not at the
-	// progress deadline ten minutes on: its start script not executable,
-	// its config missing, a crash on every start. Only the release being
-	// rolled out is looked at; an old pod's trouble is not this deploy's.
-	if !status.Terminal && status.Ready < desired && status.ReleaseID != "" {
-		if reason, message, ok := o.unstartable(ctx, ref, status.ReleaseID, crashLimit(dep.Annotations)); ok {
-			status.Terminal = true
-			status.Reason, status.Message = reason, message
-		}
+	return status
+}
+
+// needsPodCheck is whether a workload's pods have to be read to know its
+// state: a rollout short of ready, which may be short because its container
+// cannot start. A healthy workload's pods are not read at all.
+func needsPodCheck(status orchestrator.AppStatus) bool {
+	return !status.Terminal && status.Ready < status.Desired && status.ReleaseID != ""
+}
+
+// applyUnstartable fails a status whose release's container cannot start,
+// from that workload's pods.
+func applyUnstartable(status *orchestrator.AppStatus, pods []corev1.Pod, limit int32) {
+	if reason, message, ok := unstartable(pods, status.ReleaseID, limit); ok {
+		status.Terminal = true
+		status.Reason, status.Message = reason, message
 	}
+}
+
+// finishStatus settles the phase once everything is known: a rollout that
+// has failed is failing, not merely pending.
+func finishStatus(status orchestrator.AppStatus) orchestrator.AppStatus {
 	if status.Terminal && status.Phase == orchestrator.PhasePending {
 		status.Phase = orchestrator.PhaseFailing
 	}
-
-	return status, nil
+	return status
 }
 
 // crashesBeforeFailing is how many times a release's container may crash
@@ -727,16 +757,8 @@ func progressDeadline(spec orchestrator.AppSpec) int32 {
 // unstartable reports why a release's container cannot start, if it
 // cannot: a reason Kubernetes will not get past by trying again, or more
 // crashes than the restart policy allows.
-func (o *Orchestrator) unstartable(
-	ctx context.Context, ref orchestrator.Ref, releaseID string, limit int32,
-) (string, string, bool) {
-	pods, err := o.client.CoreV1().Pods(ref.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
-	})
-	if err != nil {
-		return "", "", false
-	}
-	for _, p := range pods.Items {
+func unstartable(pods []corev1.Pod, releaseID string, limit int32) (string, string, bool) {
+	for _, p := range pods {
 		if p.Annotations[orchestrator.AnnotationReleaseID] != releaseID {
 			continue
 		}

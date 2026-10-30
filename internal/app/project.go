@@ -208,11 +208,9 @@ func (s *Service) ListInProject(ctx context.Context, ownerID string, projectID u
 
 	out := make([]App, 0, len(rows))
 	for _, row := range rows {
-		a := toApp(row)
-		s.attachStatus(ctx, &a)
-		s.attachHost(ctx, &a)
-		out = append(out, a)
+		out = append(out, toApp(row))
 	}
+	s.attachListed(ctx, out, false)
 	return out, nil
 }
 

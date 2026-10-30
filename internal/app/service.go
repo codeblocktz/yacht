@@ -1582,12 +1582,71 @@ func (s *Service) List(ctx context.Context, ownerID string) ([]App, error) {
 	for _, row := range rows {
 		a := toApp(row.App)
 		a.LastDeploy = row.LastDeployStatus
-		s.attachStatus(ctx, &a)
-		s.attachHost(ctx, &a)
-		s.attachBaseline(ctx, &a)
 		out = append(out, a)
 	}
+	s.attachListed(ctx, out, true)
 	return out, nil
+}
+
+// attachListed gives a list's apps what Get gives one: live status, the
+// hostname, variables and volumes, and the baseline when asked for.
+//
+// The cluster is asked once for the lot, not once per app, and while the
+// database is being read: a project of fifteen services was fifteen GETs one
+// after another, each waiting on the client's rate limit, and the page with
+// them. Nothing is cached; every status is read for this call.
+func (s *Service) attachListed(ctx context.Context, apps []App, baseline bool) {
+	var (
+		statuses map[orchestrator.Ref]orchestrator.AppStatus
+		wg       sync.WaitGroup
+	)
+	// What the cluster is asked about is read before the database pass
+	// starts writing to the apps, and the answer applied once both are done:
+	// neither side may read an App the other is writing.
+	refs := make([]orchestrator.Ref, len(apps))
+	names := make([]string, len(apps))
+	for i := range apps {
+		refs[i], names[i] = apps[i].Ref(), apps[i].Name
+	}
+	wg.Go(func() { statuses = s.listStatuses(ctx, refs, names) })
+	for i := range apps {
+		s.attachHost(ctx, &apps[i])
+		if baseline {
+			s.attachBaseline(ctx, &apps[i])
+		}
+	}
+	wg.Wait()
+	for i := range apps {
+		if status, ok := statuses[refs[i]]; ok {
+			apps[i].Status = status
+			apps[i].StatusKnown = true
+		}
+	}
+}
+
+// listStatuses reads the live status of every app it is given that has a
+// workload, tolerating an unreachable cluster as statusOf does.
+func (s *Service) listStatuses(
+	ctx context.Context, refs []orchestrator.Ref, names []string,
+) map[orchestrator.Ref]orchestrator.AppStatus {
+	if len(refs) == 0 {
+		return nil
+	}
+	if lister, ok := s.orch.(orchestrator.StatusLister); ok {
+		statuses, err := lister.AppStatuses(ctx, refs)
+		if err != nil {
+			s.log.Debug("statuses unavailable", slog.String("error", err.Error()))
+		}
+		return statuses
+	}
+	// One at a time for an orchestrator that cannot list them.
+	out := make(map[orchestrator.Ref]orchestrator.AppStatus, len(refs))
+	for i, ref := range refs {
+		if status, ok := s.statusOf(ctx, ref, names[i]); ok {
+			out[ref] = status
+		}
+	}
+	return out
 }
 
 // Count returns how many apps an owner has.
@@ -1609,9 +1668,18 @@ func (s *Service) Get(ctx context.Context, ownerID, name string) (App, error) {
 		return App{}, fmt.Errorf("app: get: %w", err)
 	}
 	a := toApp(row)
-	s.attachStatus(ctx, &a)
+	// The cluster read alongside the database's, as attachListed does.
+	var (
+		status orchestrator.AppStatus
+		known  bool
+		wg     sync.WaitGroup
+	)
+	ref, name := a.Ref(), a.Name
+	wg.Go(func() { status, known = s.statusOf(ctx, ref, name) })
 	s.attachHost(ctx, &a)
 	s.attachBaseline(ctx, &a)
+	wg.Wait()
+	a.Status, a.StatusKnown = status, known
 	return a, nil
 }
 
@@ -1672,21 +1740,21 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	}
 }
 
-// attachStatus reads live state, tolerating an unreachable cluster.
+// statusOf reads one app's live state, tolerating an unreachable cluster:
+// known is false when there is none to show.
 //
 // A cluster that cannot be reached must not turn a list page into an error
 // page: the records are still real and the operator still needs to see them.
-func (s *Service) attachStatus(ctx context.Context, a *App) {
-	status, err := s.orch.AppStatus(ctx, a.Ref())
+func (s *Service) statusOf(ctx context.Context, ref orchestrator.Ref, name string) (orchestrator.AppStatus, bool) {
+	status, err := s.orch.AppStatus(ctx, ref)
 	if err != nil {
 		if !errors.Is(err, orchestrator.ErrNotFound) {
 			s.log.Debug("status unavailable",
-				slog.String("app", a.Name), slog.String("error", err.Error()))
+				slog.String("app", name), slog.String("error", err.Error()))
 		}
-		return
+		return orchestrator.AppStatus{}, false
 	}
-	a.Status = status
-	a.StatusKnown = true
+	return status, true
 }
 
 // Deployments returns an app's deployment history, newest first.

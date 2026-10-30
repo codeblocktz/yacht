@@ -86,6 +86,7 @@ func New(ctx context.Context, cfg Config, log *slog.Logger) (*Orchestrator, erro
 	if err != nil {
 		return nil, err
 	}
+	withRateLimits(restCfg)
 
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
@@ -133,6 +134,32 @@ func NewWithClient(client kubernetes.Interface, log *slog.Logger) *Orchestrator 
 func (o *Orchestrator) WithMetrics(m metricsv.Interface) *Orchestrator {
 	o.metrics = m
 	return o
+}
+
+// clientQPS and clientBurst bound how fast the dashboard may call the
+// cluster: client-go's defaults are 5 a second, in bursts of 10.
+//
+// Those are a command-line tool's, and one client serves every page every
+// signed-in person has open, each polling. At 5 a second a few pages listing
+// their services queued behind each other, and a page that made a dozen calls
+// waited seconds on the client's own limiter with the cluster idle ("Waited
+// before sending request ... client-side throttling" in the log). The API
+// server still has its own priority and fairness to protect itself; these
+// only stop a runaway loop here from being a flood there. kubectl allows 50.
+const (
+	clientQPS   = 50
+	clientBurst = 100
+)
+
+// withRateLimits raises a config's client-side limits to clientQPS and
+// clientBurst, leaving alone any a kubeconfig or caller already set.
+func withRateLimits(c *rest.Config) {
+	if c.QPS == 0 {
+		c.QPS = clientQPS
+	}
+	if c.Burst == 0 {
+		c.Burst = clientBurst
+	}
 }
 
 func restConfig(cfg Config) (*rest.Config, error) {
