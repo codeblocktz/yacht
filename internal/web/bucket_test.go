@@ -244,3 +244,25 @@ func TestTheFilesTabListsUploadsAndDeletes(t *testing.T) {
 		t.Error("an app that is not a bucket has files")
 	}
 }
+
+// The Files tab swaps the listing into the panel, so the listing is the
+// fragment alone: a Layout around it drew the project bar and the rail a
+// second time inside the panel (DEPLOY-12).
+func TestTheFilesListingIsAFragment(t *testing.T) {
+	apps, _ := newBucketApps(t)
+	h := testServer(t, Options{Apps: apps})
+
+	req := httptest.NewRequest(http.MethodGet, "/apps/media/files/list", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.HasPrefix(strings.TrimSpace(body), `<div id="bucket-files"`) {
+		t.Fatalf("listing = %d, starts %.80q", rec.Code, body)
+	}
+	for _, chrome := range []string{"<html", "<body", "Switch project"} {
+		if strings.Contains(body, chrome) {
+			t.Errorf("the listing carries the page's chrome: %q", chrome)
+		}
+	}
+}

@@ -147,7 +147,13 @@ func (s *Server) renderBucketListing(w http.ResponseWriter, r *http.Request, pre
 	if err != nil && d.Error == "" {
 		d.Error = bucketSentence(err)
 	}
-	s.render(w, r, BucketListing(d))
+	// Bare: every request for a listing is htmx's, swapping it into the
+	// Files tab. Inside a Layout it drew the project bar and the rail a
+	// second time inside the panel.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := BucketListing(d).Render(ctx, w); err != nil {
+		s.log.Error("render bucket listing", slog.String("app", name), slog.String("error", err.Error()))
+	}
 }
 
 // maxUpload is the most one upload may carry, every file in it together.
