@@ -15,6 +15,10 @@ import (
 // all. canvas.js then hands the same cards to JointJS (vendored, no build
 // step), which routes the arrows around them and makes them movable.
 templ Canvas(d CanvasData) {
+	// The page's one heading, for whoever navigates by headings: the canvas
+	// draws the project's name in its bar rather than as a title, and the open
+	// service's panel is the heading below this one.
+	<h1 class="sr-only">{ d.Project.Name }</h1>
 	if d.Empty {
 		// An empty project is still a canvas, as Railway's is: the grid, Add
 		// in its corner, and a word in the middle about what to put on it.
@@ -170,13 +174,22 @@ templ Canvas(d CanvasData) {
 			// after the page arrives would mean the app somebody navigated
 			// straight to shows an empty sheet until a second request lands.
 			@sheet.Sheet(sheet.Props{ID: "canvas-sheet", Side: sheet.SideRight, Open: true}) {
-				@sheet.Content(sheet.ContentProps{Class: "canvas-sheet"}) {
+				// Named by the service's title, so the dialog is announced
+				// as the service rather than as an unnamed dialog.
+				@sheet.Content(sheet.ContentProps{
+					Class:      "canvas-sheet",
+					Attributes: templ.Attributes{"aria-labelledby": canvasSheetTitle},
+				}) {
 					@appPanelBody(*d.Open)
 				}
 			}
 		}
 	}
 }
+
+// canvasSheetTitle is the id of the open service's title, which names the
+// sheet it is in.
+const canvasSheetTitle = "canvas-sheet-title"
 
 // appPanelBody is the app's detail, shown in the sheet over its canvas.
 //
@@ -186,7 +199,7 @@ templ Canvas(d CanvasData) {
 // changing one.
 templ appPanelBody(d AppDetailData) {
 	@sheet.Header(sheet.HeaderProps{Class: "canvas-sheet-head"}) {
-		@sheet.Title() {
+		@sheet.Title(sheet.TitleProps{ID: canvasSheetTitle}) {
 			<span class="flex min-w-0 items-center gap-2.5">
 				@sourceMark(d.App.Source)
 				<span class="truncate">{ d.App.ServiceName() }</span>

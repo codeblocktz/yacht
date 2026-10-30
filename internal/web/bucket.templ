@@ -29,7 +29,7 @@ templ BucketFailed(reason string) {
 // and its settings. Nothing runs, so there are no deployments, metrics or
 // console.
 templ bucketTabs(d AppDetailData) {
-	<nav class="tabs canvas-sheet-tabs">
+	<nav class="tabs canvas-sheet-tabs" aria-label="Bucket">
 		@appTab(d.App.Name, bucketTab(d.Tab), "", "Files")
 		@appTab(d.App.Name, d.Tab, "variables", "Variables")
 		@appTab(d.App.Name, settingsTab(d.Tab), "settings", "Settings")

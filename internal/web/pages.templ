@@ -633,7 +633,7 @@ templ appDetailHeader(d AppDetailData) {
 // way out of itself: an open sheet makes the rest of the document inert, so
 // tabs left behind it are not merely hidden — they cannot be clicked.
 templ appTabs(name, active string) {
-	<nav class="tabs canvas-sheet-tabs">
+	<nav class="tabs canvas-sheet-tabs" aria-label="Service">
 		@appTab(name, active, "", "Deployments")
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
@@ -644,10 +644,15 @@ templ appTabs(name, active string) {
 	</nav>
 }
 
+// appTab marks the current tab for assistive technology as well as by its
+// look: the class alone left a screen reader no way to tell which was open.
 templ appTab(name, active, slug, label string) {
 	<a
 		href={ templ.URL(appTabHref(name, slug)) }
 		class={ "tab", templ.KV("tab-active", active == slug) }
+		if active == slug {
+			aria-current="page"
+		}
 	>
 		{ label }
 	</a>
@@ -1966,9 +1971,21 @@ templ Cluster(d ClusterData) {
 			clusterMemDetail(d.Summary))
 		@metric("Volumes", strconv.Itoa(d.Summary.Volumes), "")
 	</div>
-	<nav class="tabs mb-5">
-		<a class={ "tab", templ.KV("tab-active", d.Tab == "nodes") } href="/cluster/nodes">Nodes</a>
-		<a class={ "tab", templ.KV("tab-active", d.Tab == "pods") } href="/cluster/pods">Pods</a>
+	<nav class="tabs mb-5" aria-label="Cluster">
+		<a
+			class={ "tab", templ.KV("tab-active", d.Tab == "nodes") }
+			href="/cluster/nodes"
+			if d.Tab != "pods" {
+				aria-current="page"
+			}
+		>Nodes</a>
+		<a
+			class={ "tab", templ.KV("tab-active", d.Tab == "pods") }
+			href="/cluster/pods"
+			if d.Tab == "pods" {
+				aria-current="page"
+			}
+		>Pods</a>
 	</nav>
 	if d.Tab == "pods" {
 		<div class="panel">
