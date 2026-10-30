@@ -39,7 +39,10 @@ func TestAWrapperReadsWhatEachAppSentInAnHour(t *testing.T) {
 	if dsn == "" || vm == "" {
 		t.Skip("set YACHT_TEST_DATABASE_URL and YACHT_TEST_VICTORIAMETRICS_URL to read egress through the engine")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	// A deadline, so that a deploy that never finishes fails this test with
+	// its apps removed, rather than ending the package with them left in the
+	// database every package shares for the next to find.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	// Teams of this run's own: a namespace is named for its team and app,
 	// so another run's samples in the store would otherwise be this one's.
@@ -60,12 +63,14 @@ func TestAWrapperReadsWhatEachAppSentInAnHour(t *testing.T) {
 	}
 	t.Cleanup(e.Close)
 	clean := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		for _, q := range []string{
 			`DELETE FROM apps WHERE owner_id IN ($1, $2)`,
 			`DELETE FROM deleted_apps WHERE owner_id IN ($1, $2)`,
 			`DELETE FROM teams WHERE id IN ($1, $2)`,
 		} {
-			if _, err := e.Pool.Exec(context.Background(), q, teamA, teamB); err != nil {
+			if _, err := e.Pool.Exec(ctx, q, teamA, teamB); err != nil {
 				t.Errorf("remove the test's apps: %v", err)
 			}
 		}
