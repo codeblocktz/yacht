@@ -50,7 +50,7 @@ func (s *Service) makeBucket(ctx context.Context, service string) (*bucketMade, 
 		return nil, ErrNoBuckets
 	}
 	if !s.keeper.Configured() {
-		return nil, fmt.Errorf("%w — a bucket needs one to store its key", ErrNoSecretKey)
+		return nil, fmt.Errorf("%w (a bucket's key is kept as one)", ErrNoSecretKey)
 	}
 	c, err := s.buckets.Create(ctx, service)
 	if err != nil {

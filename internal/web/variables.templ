@@ -19,10 +19,9 @@ templ revealedValue(v string) {
 // whole set as a .env file, and the variables the platform adds listed apart,
 // folded away.
 templ variablesTab(d AppDetailData) {
-	if d.Error != "" {
-		<div class="callout callout-err mb-5">
-			<div class="min-w-0">{ d.Error }</div>
-		</div>
+	<div id="variables-tab">
+	if d.Error != "" && d.Vars.Failed == "" {
+		@variableRefusal(d.Error)
 	}
 	@appStagedCallout(d)
 	<div class="panel mb-5">
@@ -86,24 +85,34 @@ templ variablesTab(d AppDetailData) {
 	<div class="panel mb-5">
 		<div class="panel-header"><span class="panel-title">Set a variable</span></div>
 		<div class="panel-body">
-			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
+			if d.Vars.Failed == variableFormSet {
+				@variableRefusal(d.Error)
+			}
+			<form
+				method="post"
+				action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") }
+				hx-post={ "/apps/" + d.App.Name + "/variables" }
+				hx-target="#variables-tab"
+				hx-swap="outerHTML"
+				data-swap-refusal
+				class="flex flex-wrap items-end gap-4"
+			>
 				<div class="field">
 					<label class="label" for="var-key">Key</label>
-					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL"/>
+					<input class="control mono" id="var-key" name="key" required placeholder="DATABASE_URL" value={ d.Vars.SetKey }/>
 				</div>
 				<div class="field grow">
 					<label class="label" for="var-value">Value</label>
-					<input class="control mono" id="var-value" name="value" placeholder="postgres://…"/>
+					<input class="control mono" id="var-value" name="value" placeholder="postgres://…" value={ d.Vars.SetValue }/>
 				</div>
-				@checkField("secret", "1", "Secret", false)
+				@checkField("secret", "1", "Secret", d.Vars.SetSecret)
 				<button class="btn btn-primary" type="submit">Save</button>
 			</form>
 			<p class="mt-3 text-[12px] text-muted-foreground">
 				A secret is encrypted before it is stored and mounted from a Kubernetes
 				Secret, so it appears neither in a database dump nor in
 				<code class="mono">kubectl get deploy -o yaml</code>. Its eye opens it for whoever
-				presses it, and each time is logged. Setting one requires
-				<code class="mono">YACHT_SECRET_KEY</code>.
+				presses it, and each time is logged.
 				if d.App.Source == app.SourceGit {
 					A Dockerfile gets these as build arguments when it declares them with
 					<code class="mono">ARG</code>, and a <code class="mono">RUN</code> that uses
@@ -118,7 +127,16 @@ templ variablesTab(d AppDetailData) {
 	if d.Vars.Raw {
 		@rawEditor(d)
 	}
+	</div>
 }
+
+// variableRefusal is why a save was refused, drawn where it was made.
+templ variableRefusal(reason string) {
+	<div class="callout callout-err mb-4" role="alert">
+		<div class="min-w-0">{ reason }</div>
+	</div>
+}
+
 
 // maskedValue is a value drawn as dots, and the eye that shows it. A plain
 // value is in the page already, hidden; a secret's is fetched by the eye the
@@ -242,7 +260,7 @@ templ platformVariablesPanel(d AppDetailData) {
 // Saving replaces that set, so a line taken out is a variable removed.
 templ rawEditor(d AppDetailData) {
 	{{ secrets := secretKeys(d.App.Variables) }}
-	<details class="panel raw-editor">
+	<details class="panel raw-editor" open?={ d.Vars.Failed == variableFormRaw }>
 		<summary class="panel-header platform-vars-summary">
 			<span class="flex items-center gap-2">
 				@icon("code")
@@ -250,17 +268,35 @@ templ rawEditor(d AppDetailData) {
 			</span>
 			<span class="text-[12px] text-muted-foreground">Edit every variable as a .env file</span>
 		</summary>
-		<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/raw") } class="panel-body">
+		<form
+			method="post"
+			action={ templ.SafeURL("/apps/" + d.App.Name + "/variables/raw") }
+			hx-post={ "/apps/" + d.App.Name + "/variables/raw" }
+			hx-target="#variables-tab"
+			hx-swap="outerHTML"
+			data-swap-refusal
+			class="panel-body"
+		>
 			<label class="sr-only" for="raw-env">Variables as a .env file</label>
 			<textarea
 				id="raw-env"
 				class="control mono raw-editor-text"
 				name="raw"
-				rows={ strconv.Itoa(rawRows(d.App.Variables)) }
+				rows={ strconv.Itoa(rawRows(d.Vars.RawShown(d.App))) }
 				spellcheck="false"
 				autocomplete="off"
 				placeholder="KEY=value"
-			>{ app.FormatEnv(d.App.Variables) }</textarea>
+				if d.Vars.Failed == variableFormRaw {
+					aria-invalid="true"
+					aria-describedby="raw-env-error"
+				}
+				if d.Vars.RawLine > 0 {
+					data-error-line={ strconv.Itoa(d.Vars.RawLine) }
+				}
+			>{ textareaText(d.Vars.RawShown(d.App)) }</textarea>
+			if d.Vars.Failed == variableFormRaw {
+				@rawRefusal(d)
+			}
 			if len(secrets) > 0 {
 				<p class="hint mt-2">
 					{ plural(len(secrets), "secret") } — <span class="mono">{ strings.Join(secrets, ", ") }</span> —
@@ -280,6 +316,25 @@ templ rawEditor(d AppDetailData) {
 			</div>
 		</form>
 	</details>
+}
+
+// rawRefusal is why the Raw Editor's text was refused, under it: the line it
+// was refused for, numbered and quoted, so nobody counts lines to find it.
+templ rawRefusal(d AppDetailData) {
+	<div id="raw-env-error" class="callout callout-err mt-2" role="alert">
+		<div class="min-w-0">
+			if d.Vars.RawLine > 0 {
+				<div class="mono flex flex-wrap gap-2">
+					<span class="text-muted-foreground tabular-nums">{ "Line " + strconv.Itoa(d.Vars.RawLine) }</span>
+					if strings.TrimSpace(d.Vars.RawLineText) != "" {
+						<span class="break-all">{ d.Vars.RawLineText }</span>
+					}
+				</div>
+			}
+			<div>{ d.Error }</div>
+			<div class="mt-1 text-[12px] text-muted-foreground">Nothing was saved. Fix it and save again.</div>
+		</div>
+	</div>
 }
 
 // stagedBar is the canvas's "N changes" bar: Railway's, floating at the top

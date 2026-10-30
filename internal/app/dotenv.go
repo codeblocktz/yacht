@@ -21,6 +21,26 @@ type EnvLine struct {
 	Value string
 }
 
+// EnvLineError is a .env file refused because of one line in it, so the
+// Raw Editor can point at that line rather than leave somebody counting.
+type EnvLineError struct {
+	Line int
+	Err  error
+}
+
+func (e *EnvLineError) Error() string { return fmt.Sprintf("line %d: %v", e.Line, e.Err) }
+func (e *EnvLineError) Unwrap() error { return e.Err }
+
+func lineErr(line int, format string, args ...any) error {
+	return &EnvLineError{Line: line, Err: fmt.Errorf(format, args...)}
+}
+
+// numberedLine is an EnvLine with the line its key was written on.
+type numberedLine struct {
+	EnvLine
+	line int
+}
+
 // ParseEnv reads a .env file the way the tools people paste from write one:
 // blank lines and lines starting with # are skipped, "export " is allowed
 // in front of a name, and a value is single-quoted (taken as written),
@@ -28,9 +48,21 @@ type EnvLine struct {
 // several lines), or bare, where it ends at the line or at a " #" comment
 // and surrounding spaces are dropped. A key given twice is the last one.
 func ParseEnv(text string) ([]EnvLine, error) {
+	numbered, err := parseEnv(text)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EnvLine, len(numbered))
+	for i, l := range numbered {
+		out[i] = l.EnvLine
+	}
+	return out, nil
+}
+
+func parseEnv(text string) ([]numberedLine, error) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	var (
-		out   []EnvLine
+		out   []numberedLine
 		index = map[string]int{}
 	)
 	rest := text
@@ -39,6 +71,7 @@ func ParseEnv(text string) ([]EnvLine, error) {
 		var raw string
 		raw, rest, _ = strings.Cut(rest, "\n")
 		line++
+		start := line
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -46,11 +79,11 @@ func ParseEnv(text string) ([]EnvLine, error) {
 		trimmed = strings.TrimPrefix(trimmed, "export ")
 		key, value, ok := strings.Cut(trimmed, "=")
 		if !ok {
-			return nil, fmt.Errorf("line %d: %q has no = — write it as KEY=value", line, trimmed)
+			return nil, lineErr(line, "%q has no = — write it as KEY=value", trimmed)
 		}
 		key = strings.TrimSpace(key)
 		if err := (VariableInput{Key: key}).Validate(); err != nil {
-			return nil, fmt.Errorf("line %d: %w", line, err)
+			return nil, &EnvLineError{Line: line, Err: err}
 		}
 		value = strings.TrimLeft(value, " \t")
 
@@ -72,10 +105,10 @@ func ParseEnv(text string) ([]EnvLine, error) {
 				}
 			}
 			if !closed {
-				return nil, fmt.Errorf("line %d: %s's value opens a ' and never closes it", line, key)
+				return nil, lineErr(start, "%s's value opens a ' and never closes it", key)
 			}
 			if err := trailing(after); err != nil {
-				return nil, fmt.Errorf("line %d: %s: %w", line, key, err)
+				return nil, lineErr(line, "%s: %w", key, err)
 			}
 			value = body
 		case strings.HasPrefix(value, `"`):
@@ -89,10 +122,10 @@ func ParseEnv(text string) ([]EnvLine, error) {
 				body += "\n" + more
 			}
 			if !closed {
-				return nil, fmt.Errorf(`line %d: %s's value opens a " and never closes it`, line, key)
+				return nil, lineErr(start, `%s's value opens a " and never closes it`, key)
 			}
 			if err := trailing(after); err != nil {
-				return nil, fmt.Errorf("line %d: %s: %w", line, key, err)
+				return nil, lineErr(line, "%s: %w", key, err)
 			}
 			value = body
 		default:
@@ -108,11 +141,11 @@ func ParseEnv(text string) ([]EnvLine, error) {
 		}
 
 		if i, seen := index[key]; seen {
-			out[i].Value = value
+			out[i].Value, out[i].line = value, start
 			continue
 		}
 		index[key] = len(out)
-		out = append(out, EnvLine{Key: key, Value: value})
+		out = append(out, numberedLine{EnvLine: EnvLine{Key: key, Value: value}, line: start})
 	}
 	return out, nil
 }
@@ -197,7 +230,7 @@ func quoteEnv(value string) string {
 // All of it is staged together, or none of it is. With StageChanges off it
 // deploys at once, as one deployment rather than one per line.
 func (s *Service) SetRawVariables(ctx context.Context, ownerID, appName, raw string) error {
-	lines, err := ParseEnv(raw)
+	lines, err := parseEnv(raw)
 	if err != nil {
 		return err
 	}
@@ -216,11 +249,11 @@ func (s *Service) SetRawVariables(ctx context.Context, ownerID, appName, raw str
 	given := map[string]bool{}
 	for _, l := range lines {
 		if secret[l.Key] {
-			return fmt.Errorf("%s is a secret — change it in the table, where its value stays hidden, "+
+			return lineErr(l.line, "%s is a secret — change it in the table, where its value stays hidden, "+
 				"or remove it there first to make it plain", l.Key)
 		}
 		if err := s.checkReferences(ctx, ownerID, a, l.Value); err != nil {
-			return fmt.Errorf("%s: %w", l.Key, err)
+			return lineErr(l.line, "%s: %w", l.Key, err)
 		}
 		given[l.Key] = true
 	}

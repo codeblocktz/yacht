@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ type stagingApps struct {
 
 	deployed, discarded []string
 	raw                 string
+	rawErr              error
 	sharedSet           []app.VariableInput
 }
 
@@ -81,7 +83,7 @@ func (f *stagingApps) RevealVariable(_ context.Context, _, appName, key string) 
 
 func (f *stagingApps) SetRawVariables(_ context.Context, _, _, raw string) error {
 	f.raw = raw
-	return nil
+	return f.rawErr
 }
 
 func (f *stagingApps) PlatformVariables(context.Context, string, string) ([]app.Variable, error) {
@@ -202,6 +204,9 @@ func TestTheRawEditorLeavesSecretsOut(t *testing.T) {
 	}
 	if !strings.Contains(body, "1 secret") || !strings.Contains(body, `<span class="mono">TOKEN</span>`) {
 		t.Error("the raw editor does not say which secret it left out")
+	}
+	if strings.Contains(body, "YACHT_SECRET_KEY") {
+		t.Error("the Variables tab names the engine's encryption key setting")
 	}
 
 	rec := post(t, h, "/apps/web/variables/raw", url.Values{"raw": {"A=1\nB=2\n"}})
@@ -346,5 +351,91 @@ func TestSharedVariablesArePickedLikeAnAppsOwn(t *testing.T) {
 	post(t, h, "/apps/web/variables", url.Values{"ref": {"shared.SIGNING_KEY"}})
 	if got := apps.setVars; len(got) != 1 || got[0].Value != "${{shared.SIGNING_KEY}}" {
 		t.Errorf("set = %+v", got)
+	}
+}
+
+// A Raw Editor text the service refuses comes back as it was typed, on the
+// Variables tab as it always is — the canvas, with the panel open on it — and
+// with the line it was refused for quoted beside the reason. From htmx it is
+// the tab alone, to swap in where it was; a save from htmx is a page load.
+func TestARefusedRawEditKeepsTheTextAndPointsAtTheLine(t *testing.T) {
+	apps := newStagingApps(webWithVariables())
+	apps.rawErr = &app.EnvLineError{Line: 3, Err: errors.New(`"this is not a valid line" has no = — write it as KEY=value`)}
+	h := testServer(t, Options{Apps: apps})
+	typed := "A=1\nB=2\nthis is not a valid line\nC=<3>\n"
+
+	rec := post(t, h, "/apps/web/variables/raw", url.Values{"raw": {typed}})
+	body := rec.Body.String()
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want 422", rec.Code)
+	}
+	for _, want := range []string{
+		`class="canvas`,                          // the canvas, not a page of its own
+		`id="variables-tab"`,                     // with the Variables tab open
+		`<details class="panel raw-editor" open`, // and the Raw Editor open on it
+		"A=1\nB=2\nthis is not a valid line\nC=&lt;3&gt;\n</textarea>",
+		`data-error-line="3"`, `aria-invalid="true"`,
+		"Line 3", "has no = — write it as KEY=value",
+		"Nothing was saved.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refusal is missing %q", want)
+		}
+	}
+	if strings.Contains(body, "line 3: ") {
+		t.Error("the line number is said twice, once in the reason")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/apps/web/variables/raw", strings.NewReader(url.Values{"raw": {typed}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("HX-Request", "true")
+	rec = do(h, req)
+	body = rec.Body.String()
+	if rec.Code != http.StatusUnprocessableEntity || !strings.HasPrefix(strings.TrimSpace(body), `<div id="variables-tab">`) {
+		t.Errorf("from htmx = %d, starting %.60q; want 422 and the tab alone", rec.Code, body)
+	}
+	if strings.Contains(body, "<html") || !strings.Contains(body, "this is not a valid line\nC=&lt;3&gt;") {
+		t.Error("the fragment is a whole page, or lost the text")
+	}
+
+	apps.rawErr = nil
+	req = httptest.NewRequest(http.MethodPost, "/apps/web/variables/raw", strings.NewReader(url.Values{"raw": {"A=1\n"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("HX-Request", "true")
+	rec = do(h, req)
+	if rec.Header().Get("HX-Redirect") != "/apps/web/variables" {
+		t.Errorf("a save from htmx = %d, HX-Redirect %q", rec.Code, rec.Header().Get("HX-Redirect"))
+	}
+}
+
+// A variable the service refuses keeps what was typed in the Set form, with
+// the reason beside that form rather than at the top of the tab.
+func TestARefusedVariableKeepsTheForm(t *testing.T) {
+	apps := newStagingApps(webWithVariables())
+	apps.setVarErr = errors.New("${{api.NOPE}} refers to NOPE, which api does not have")
+	h := testServer(t, Options{Apps: apps})
+	rec := post(t, h, "/apps/web/variables", url.Values{"key": {"MISSING_REF"}, "value": {"${{api.NOPE}}"}})
+	body := rec.Body.String()
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d", rec.Code)
+	}
+	for _, want := range []string{
+		`class="canvas`, `value="MISSING_REF"`, `value="${{api.NOPE}}"`,
+		"refers to NOPE, which api does not have",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refusal is missing %q", want)
+		}
+	}
+	at := strings.Index(body, `id="variables-tab"`)
+	if at < 0 {
+		t.Fatal("the refusal is not drawn on the Variables tab")
+	}
+	tab := body[at:]
+	if reason, form := strings.Index(tab, "refers to NOPE"), strings.Index(tab, `id="var-key"`); reason < 0 || form < 0 || reason > form ||
+		reason < strings.Index(tab, "Set a variable") {
+		t.Error("the reason is not beside the Set form")
 	}
 }

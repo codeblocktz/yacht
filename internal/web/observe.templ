@@ -86,8 +86,7 @@ templ ProjectLogs(d ProjectLogsData) {
 						<div class="font-medium">Showing the running pods</div>
 						<p class="mt-0.5 text-muted-foreground">
 							This install keeps no log history, so these are the last lines each service's current
-							pod holds, and a restart takes them with it. Its operator turns history on with a log
-							store (<code class="mono">YACHT_LOGS_URL</code>).
+							pod holds, and a restart takes them with it. Its operator can turn history on.
 						</p>
 					</div>
 				</div>
@@ -241,9 +240,8 @@ templ ProjectObservability(d ObservabilityData) {
 						<div class="min-w-0">
 							<div class="font-medium">No metrics history on this install</div>
 							<p class="mt-0.5 text-muted-foreground">
-								Requests, error rate, response times and charts over time need a metrics store
-								(<code class="mono">YACHT_METRICS_URL</code>), which this install's operator has not
-								set. What the cluster can say now is below.
+								Requests, error rate, response times and charts over time need a metrics store,
+								which this install's operator has not set up yet. What the cluster can say now is below.
 							</p>
 						</div>
 					</div>
@@ -341,8 +339,8 @@ templ AppMetricCharts(d AppMetricsData) {
 				<div class="callout">
 					<div class="min-w-0">
 						<p class="text-muted-foreground">
-							Requests, error rate and response times over time need a metrics store
-							(<code class="mono">YACHT_METRICS_URL</code>), which this install does not have.
+							Requests, error rate and response times over time need a metrics store, which this
+							install does not have yet — its operator can set one up.
 						</p>
 					</div>
 				</div>

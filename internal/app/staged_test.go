@@ -464,8 +464,10 @@ func TestThePlatformVariablesReachEveryApp(t *testing.T) {
 	if a.Host == "" {
 		t.Error("the app has no host to be told about")
 	}
+	// Six: the team's default project has not been made yet, so it has no
+	// id to give, and neither has its production.
 	listed, err := s.PlatformVariables(ctx, id, "web")
-	if err != nil || len(listed) != 4 || listed[0].Key != "DATAHURU_PUBLIC_DOMAIN" {
+	if err != nil || len(listed) != 6 || listed[0].Key != "DATAHURU_PUBLIC_DOMAIN" {
 		t.Errorf("listed = %+v, %v", listed, err)
 	}
 	if err := ValidatePlatformVariablePrefix("9-bad"); err == nil {

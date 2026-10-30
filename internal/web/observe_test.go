@@ -160,10 +160,13 @@ func TestTheProjectsLogStreamsAndDownloads(t *testing.T) {
 func TestWithoutALogStoreTheLogsPageSaysItShowsTheRunningPods(t *testing.T) {
 	h := testServer(t, Options{Apps: twoTeams()})
 	body := get(t, h, "/projects/default/logs").Body.String()
-	for _, want := range []string{"Showing the running pods", "YACHT_LOGS_URL"} {
+	for _, want := range []string{"Showing the running pods", "Its operator can turn history on."} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the logs page does not have %q", want)
 		}
+	}
+	if strings.Contains(body, "YACHT_") {
+		t.Error("the logs page names one of the engine's settings")
 	}
 	if rec := get(t, h, "/projects/default/logs/stream"); rec.Code != http.StatusNotFound {
 		t.Errorf("a stream with no store = %d", rec.Code)
@@ -186,8 +189,12 @@ func TestObservabilityIsScopedToTheTeamAndSaysWhatIsMissing(t *testing.T) {
 	}
 
 	h = testServer(t, Options{Apps: twoTeams()})
-	if body := get(t, h, "/projects/default/observability").Body.String(); !strings.Contains(body, "YACHT_METRICS_URL") {
+	body = get(t, h, "/projects/default/observability").Body.String()
+	if !strings.Contains(body, "need a metrics store, which this") {
 		t.Error("without a store the dashboard does not say which is missing")
+	}
+	if strings.Contains(body, "YACHT_") {
+		t.Error("the dashboard names one of the engine's settings")
 	}
 }
 

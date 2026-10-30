@@ -247,6 +247,9 @@ templ privateNetworking(d NetworkingData) {
 						<code class="mono">{ "${{" + d.App + "." + app.RefPrivateHost + "}}" }</code> and
 						<code class="mono">{ "${{" + d.App + "." + app.RefPrivatePort + "}}" }</code>
 						so it follows if this ever changes.
+						Coming from Railway, this host is the one
+						<code class="mono">{ d.App + ".railway.internal" }</code> was: each app here has a
+						namespace of its own, so a short name does not reach it.
 					} else {
 						This app has no port, so nothing can connect to it. Set one in its
 						settings and other apps reach it here.
@@ -271,8 +274,7 @@ templ tcpProxyPanel(d NetworkingData) {
 						<p class="font-medium text-foreground">Not offered on this install</p>
 						<p>
 							A TCP proxy reaches a database or anything else that does not speak
-							HTTP from outside the cluster. Whoever runs this install turns them
-							on with YACHT_TCP_PROXY_HOST.
+							HTTP from outside the cluster. Ask your operator to turn them on.
 						</p>
 					</div>
 				case proxy.Port > 0:
