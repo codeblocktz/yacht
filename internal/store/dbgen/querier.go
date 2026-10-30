@@ -25,7 +25,9 @@ type Querier interface {
 	AppendPreDeployLog(ctx context.Context, arg AppendPreDeployLogParams) error
 	ApproveCLILogin(ctx context.Context, arg ApproveCLILoginParams) (int64, error)
 	// Teams with somebody listening for app.crashed, so the watcher only looks
-	// at apps whose failing somebody would be told about.
+	// at apps whose failing somebody would be told about. Only apps that have
+	// served: one whose first deploy has not succeeded has nothing that could
+	// start crashing, and its deploy says how it went.
 	AppsWatchedForCrashes(ctx context.Context) ([]AppsWatchedForCrashesRow, error)
 	AttachSourceUpload(ctx context.Context, arg AttachSourceUploadParams) (int64, error)
 	BucketWantsRoom(ctx context.Context, appID uuid.UUID) error
@@ -450,6 +452,11 @@ type Querier interface {
 	// its limit is set.
 	InsertBucket(ctx context.Context, arg InsertBucketParams) error
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
+	// The same latest deployment for one app, with its id, for the canvas: a
+	// card with no workload yet says whether its first deploy is under way or
+	// failed, and links to that deployment's logs.
+	//
+	LastDeployOfApp(ctx context.Context, arg LastDeployOfAppParams) (LastDeployOfAppRow, error)
 	ListAPITokens(ctx context.Context, ownerID string) ([]ListAPITokensRow, error)
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.

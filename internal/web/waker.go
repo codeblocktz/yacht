@@ -112,6 +112,7 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, a app.App, b
 	}
 	target := &url.URL{Scheme: "http", Host: addr}
 	proxy := &httputil.ReverseProxy{
+		Transport: wakerTransport(browser),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			// The app sees the request as the ingress controller would have
@@ -130,6 +131,47 @@ func (s *Server) proxyToApp(w http.ResponseWriter, r *http.Request, a app.App, b
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// backendHold bounds how long a held request keeps trying to connect to an
+// app that has just woken. Its pod is ready, but the Service may not route to
+// it yet, or the process may still be opening its port: a moment, not a wake.
+const backendHold = 15 * time.Second
+
+// backendRetry is how often a held request tries to connect again.
+const backendRetry = 200 * time.Millisecond
+
+// heldTransport is the waker's transport for requests it holds: a connection
+// that is refused is tried again until backendHold, rather than answered as
+// still waking. Safe to repeat because nothing of the request has been sent
+// before a connection is made. A browser is not held, and is given the
+// default transport; its page reloads instead.
+var heldTransport = func() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		hold, cancel := context.WithTimeout(ctx, backendHold)
+		defer cancel()
+		for {
+			conn, err := dialer.DialContext(hold, network, addr)
+			if err == nil {
+				return conn, nil
+			}
+			select {
+			case <-hold.Done():
+				return nil, err
+			case <-time.After(backendRetry):
+			}
+		}
+	}
+	return t
+}()
+
+func wakerTransport(browser bool) http.RoundTripper {
+	if browser {
+		return http.DefaultTransport
+	}
+	return heldTransport
 }
 
 // wakeAnswer is a request the app could not take yet: the waking-up page for

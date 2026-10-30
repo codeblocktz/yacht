@@ -151,6 +151,9 @@ type App struct {
 	// stays green while the change somebody made never took. Empty on an app
 	// that has never been deployed.
 	LastDeploy string
+	// LastDeployID is that deployment, uuid.Nil with none; read only where
+	// something links to it.
+	LastDeployID uuid.UUID
 
 	// Host is the platform-issued hostname, empty when no app domain is
 	// configured. Read from the domains table rather than stored on the app,
@@ -336,6 +339,11 @@ type Options struct {
 	RolloutTimeout      time.Duration
 	RolloutPollInterval time.Duration
 
+	// RolloutSettle is how long a new version must stay healthy, without a
+	// restart, before its deploy succeeds. Zero takes the default; negative
+	// is none, for tests whose orchestrator is healthy from the first look.
+	RolloutSettle time.Duration
+
 	// Waker is where a sleeping app's hostnames are routed: the engine's
 	// waker, at an address the cluster reaches it on. Nil means this install
 	// cannot wake an app, so none sleeps.
@@ -477,6 +485,9 @@ func NewService(
 	}
 	if opts.RolloutPollInterval == 0 {
 		opts.RolloutPollInterval = time.Second
+	}
+	if opts.RolloutSettle == 0 {
+		opts.RolloutSettle = DefaultRolloutSettle
 	}
 	if opts.WakeTimeout == 0 {
 		opts.WakeTimeout = DefaultWakeTimeout
@@ -1715,6 +1726,21 @@ func (s *Service) attachBaseline(ctx context.Context, a *App) {
 // every domain the app holds, as this used to, was right while every app had a
 // platform hostname to come first; an app that has none would now be shown at
 // a custom domain that may not even be proven yet.
+// attachLastDeploy reads how an app's latest deployment went, and which it
+// was. Without one the fields stay empty, as they are for an app that has
+// never deployed.
+func (s *Service) attachLastDeploy(ctx context.Context, a *App) {
+	row, err := s.q.LastDeployOfApp(ctx, dbgen.LastDeployOfAppParams{OwnerID: a.OwnerID, AppID: a.ID})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			s.log.Debug("last deploy unavailable",
+				slog.String("app", a.Name), slog.String("error", err.Error()))
+		}
+		return
+	}
+	a.LastDeploy, a.LastDeployID = row.Status, row.ID
+}
+
 func (s *Service) attachHost(ctx context.Context, a *App) {
 	if held, ok, err := domain.GetManaged(ctx, s.q, a.ID); err != nil {
 		s.log.Debug("hostname unavailable",

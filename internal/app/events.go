@@ -108,10 +108,11 @@ func (s *Service) emitDeployFinished(ctx context.Context, op Operation, cause er
 
 // crashed reports whether a failed rollout failed because the new version's
 // container crashed, which the orchestrator says in the reason it gives:
-// a crash loop, an exit under the never policy, or a process that could not
-// start at all.
+// a crash loop, an exit under the never policy, a restart after it became
+// ready, a process that could not start at all, or one killed for using more
+// memory than it may.
 func crashed(message string) bool {
-	for _, reason := range []string{"CrashLoopBackOff", "Crashed:", "StartError"} {
+	for _, reason := range []string{"CrashLoopBackOff", "Crashed:", "StartError", "OOMKilled"} {
 		if strings.Contains(message, reason) {
 			return true
 		}

@@ -281,7 +281,7 @@ func TestAPreDeployCommandWithNowhereToRunFailsTheDeploy(t *testing.T) {
 
 	deployWithCommands(t, s, orch, id, "bin/migrate", "")
 	plain := NewService(pool, plainOrchestrator{orch},
-		slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Manifests: staticManifests{}})
+		slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Manifests: staticManifests{}, RolloutSettle: -1})
 	if err := executeNamedOperation(plain, ctx, id, "web"); !errors.Is(err, ErrNoPreDeployer) {
 		t.Fatalf("deploy = %v, want ErrNoPreDeployer", err)
 	}
@@ -325,7 +325,7 @@ func firstDeployService(t *testing.T, team string) (*Service, *recordingOrchestr
 	s := NewService(pool, namespaceOrchestrator{orch},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Options{
-			Keeper: keeper, Manifests: staticManifests{}, Images: fakeImages{},
+			Keeper: keeper, Manifests: staticManifests{}, Images: fakeImages{}, RolloutSettle: -1,
 			Builder: &uploadBuilder{}, SourceFetchURL: "https://yacht.example.test",
 		})
 	id := owner(t, base, pool, team)

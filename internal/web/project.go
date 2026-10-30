@@ -379,11 +379,12 @@ func (s *Server) projectStatus(w http.ResponseWriter, r *http.Request) {
 		Label string `json:"label"`
 		Class string `json:"class"`
 		Host  string `json:"host"`
+		Href  string `json:"href"`
 	}
 	out := map[string]card{}
 	for _, a := range apps {
 		label, class := cardStatus(a)
-		out[a.Name] = card{Label: label, Class: class, Host: a.Host}
+		out[a.Name] = card{Label: label, Class: class, Host: a.Host, Href: cardHref(a)}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

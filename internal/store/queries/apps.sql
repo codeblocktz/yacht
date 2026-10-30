@@ -65,6 +65,16 @@ LEFT JOIN LATERAL (
 WHERE a.owner_id = $1
 ORDER BY a.name;
 
+-- The same latest deployment for one app, with its id, for the canvas: a
+-- card with no workload yet says whether its first deploy is under way or
+-- failed, and links to that deployment's logs.
+--
+-- name: LastDeployOfApp :one
+SELECT id, status FROM deployments
+WHERE owner_id = $1 AND app_id = $2 AND status <> 'skipped'
+ORDER BY started_at DESC
+LIMIT 1;
+
 -- name: CountApps :one
 SELECT count(*) FROM apps WHERE owner_id = $1;
 

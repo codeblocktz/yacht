@@ -595,6 +595,33 @@ func (q *Queries) IncrementGitAppConfigVersions(ctx context.Context) error {
 	return err
 }
 
+const lastDeployOfApp = `-- name: LastDeployOfApp :one
+SELECT id, status FROM deployments
+WHERE owner_id = $1 AND app_id = $2 AND status <> 'skipped'
+ORDER BY started_at DESC
+LIMIT 1
+`
+
+type LastDeployOfAppParams struct {
+	OwnerID string
+	AppID   uuid.UUID
+}
+
+type LastDeployOfAppRow struct {
+	ID     uuid.UUID
+	Status string
+}
+
+// The same latest deployment for one app, with its id, for the canvas: a
+// card with no workload yet says whether its first deploy is under way or
+// failed, and links to that deployment's logs.
+func (q *Queries) LastDeployOfApp(ctx context.Context, arg LastDeployOfAppParams) (LastDeployOfAppRow, error) {
+	row := q.db.QueryRow(ctx, lastDeployOfApp, arg.OwnerID, arg.AppID)
+	var i LastDeployOfAppRow
+	err := row.Scan(&i.ID, &i.Status)
+	return i, err
+}
+
 const listAppNamespaces = `-- name: ListAppNamespaces :many
 SELECT id, owner_id, project_id, name, namespace FROM apps
 ORDER BY owner_id, name

@@ -55,7 +55,7 @@ func databaseService(t *testing.T, addr string) (*Service, *addressedOrchestrato
 	orch := &addressedOrchestrator{
 		recordingOrchestrator: &recordingOrchestrator{Noop: orchestrator.NewNoop()}, addr: addr,
 	}
-	s := NewService(pool, orch, log, Options{Keeper: k, Manifests: staticManifests{}})
+	s := NewService(pool, orch, log, Options{Keeper: k, Manifests: staticManifests{}, RolloutSettle: -1})
 	return s, orch, owner(t, s, pool, "svc-databases")
 }
 

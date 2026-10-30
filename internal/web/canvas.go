@@ -3,6 +3,8 @@ package web
 import (
 	"sort"
 
+	"github.com/google/uuid"
+
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -301,6 +303,19 @@ func (d CanvasData) Graph() canvasGraph {
 	return g
 }
 
+// cardHref is where a card leads: the app's panel, or, while its first
+// deploy is building or has failed with nothing running, that deploy's logs,
+// which is what anybody looking at "Building" or "Failed" wants next.
+func cardHref(a app.App) string {
+	if a.Source.Workload() && !a.StatusKnown && a.LastDeployID != uuid.Nil {
+		switch a.LastDeploy {
+		case app.DeployRunning, "pending", app.DeployFailed:
+			return "/apps/" + a.Name + "/deployments/" + a.LastDeployID.String() + "/logs"
+		}
+	}
+	return "/apps/" + a.Name
+}
+
 // cardStatus is an app's state in the words Railway puts at the foot of a
 // card — Online, Deploying, Crashed — with the colour that goes with it.
 // A card is glanced at, so it says what a person would ask ("is it up?")
@@ -316,6 +331,17 @@ func cardStatus(a app.App) (label, class string) {
 		// No workload because nothing has been given to it to run.
 		return "No deploys", "card-status-idle"
 	case !a.StatusKnown:
+		// No workload to ask about, which a first deploy has none of until
+		// it is applied: its deployment says how it is going.
+		switch a.LastDeploy {
+		case app.DeployRunning, "pending":
+			if imageIsPending(a.Image) {
+				return "Building", "card-status-busy"
+			}
+			return "Deploying", "card-status-busy"
+		case app.DeployFailed:
+			return "Failed", "card-status-err"
+		}
 		return "Unknown", "card-status-idle"
 	}
 	switch a.Status.Phase {

@@ -169,6 +169,20 @@ const (
 	livenessInitialDelaySeconds = 30
 )
 
+// tcpProbe is the readiness an app without a health check gets: a connection
+// to its port. Looked at every second rather than every ten, because it is
+// also what a waking app waits on, and a first look that comes a moment too
+// soon would otherwise keep a held request waiting ten seconds more. A connect
+// is cheap to make that often.
+func tcpProbe(spec orchestrator.AppSpec) *corev1ac.ProbeApplyConfiguration {
+	return corev1ac.Probe().
+		WithTCPSocket(corev1ac.TCPSocketAction().
+			WithPort(intstr.FromInt32(spec.Port))).
+		WithPeriodSeconds(1).
+		WithTimeoutSeconds(1).
+		WithFailureThreshold(readinessFailures)
+}
+
 // httpProbe builds a GET against the workload's own service port.
 func httpProbe(spec orchestrator.AppSpec, failures int32, initialDelay int32) *corev1ac.ProbeApplyConfiguration {
 	return corev1ac.Probe().

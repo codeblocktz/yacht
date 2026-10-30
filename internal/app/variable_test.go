@@ -92,7 +92,7 @@ func TestAnUnopenableSecretStopsTheApplyAndSaysWhy(t *testing.T) {
 	}
 	after := NewService(pool, &recordingOrchestrator{Noop: orchestrator.NewNoop()},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Options{Keeper: replaced, Manifests: staticManifests{}})
+		Options{Keeper: replaced, Manifests: staticManifests{}, RolloutSettle: -1})
 
 	if err := after.SetVariable(ctx, id, "web", VariableInput{Key: "LOG_LEVEL", Value: "info"}); err != nil {
 		t.Fatalf("admit variable rollout: %v", err)

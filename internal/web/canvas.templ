@@ -87,7 +87,7 @@ templ Canvas(d CanvasData) {
 						data-has-volume={ boolAttr(n.Volume != nil) }
 					>
 						<a
-							href={ templ.URL("/apps/" + n.App.Name) }
+							href={ templ.URL(cardHref(n.App)) }
 							class={ "canvas-card",
 								templ.KV("canvas-card-open", d.Open != nil && d.Open.App.Name == n.App.Name) }
 						>
