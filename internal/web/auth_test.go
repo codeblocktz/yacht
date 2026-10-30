@@ -773,7 +773,7 @@ func newLiveHarnessWith(
 
 	accounts := account.NewService(pool, log)
 	apps := app.NewService(pool, orchestrator.NewNoop(), log,
-		app.Options{Manifests: testManifests{}})
+		app.Options{Manifests: testManifests{}, RolloutSettle: -1})
 	mailer := &fakeMailer{}
 
 	build := func(operators []string) http.Handler {

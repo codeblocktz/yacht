@@ -745,7 +745,13 @@ func rolloutHealthy(status orchestrator.AppStatus) bool {
 	if status.Desired == 0 {
 		return status.Ready == 0 && status.Available == 0
 	}
+	// Ready and Available count every revision's pods. With an old pod still
+	// serving beside a new one crash-looping, both read as enough, and the
+	// deploy was passed: the rollout is through only when no pod of the old
+	// revision is left, which with nothing unavailable allowed is only once
+	// the new ones are available.
 	return status.AvailableCondition &&
+		status.Pods <= status.Updated &&
 		status.Updated >= status.Desired &&
 		status.Ready >= status.Desired &&
 		status.Available >= status.Desired
@@ -765,6 +771,12 @@ func rolloutReason(status orchestrator.AppStatus) string {
 		status.Updated, status.Desired, status.Ready, status.Available)
 }
 
+// DefaultRolloutSettle is how long a new version must stay healthy, with no
+// restart, before its deploy succeeds: long enough for a process that dies a
+// few seconds into its start, as one with a bad flag or a missing variable
+// does, to have died.
+const DefaultRolloutSettle = 10 * time.Second
+
 // rolloutBudget is how long a release's rollout is waited for: its
 // healthcheck timeout when it has one, and the engine's otherwise. The
 // release's rather than the app's, so a rollback is given the patience the
@@ -776,22 +788,49 @@ func (s *Service) rolloutBudget(release Release) time.Duration {
 	return s.opts.RolloutTimeout
 }
 
+// readiness is what a release's pods must pass to be ready: its health check
+// when it has one, and otherwise a connection to its port; neither for one
+// with no port, which is ready when it starts.
+type readiness struct {
+	healthPath string
+	port       int32
+}
+
+func readinessOf(r Release) readiness {
+	return readiness{healthPath: r.HealthPath, port: r.Port}
+}
+
 // rolloutTimedOut is a rollout that ran out of budget, saying which budget
 // when it was the app's own: "not ready within 30s" points at the setting
-// somebody chose, where "timed out" leaves them to remember it.
-func (s *Service) rolloutTimedOut(budget time.Duration, reason string) error {
+// somebody chose, where "timed out" leaves them to remember it. And saying
+// what was not passing, so there is something to go and look at: the health
+// check's path, or the port nothing was listening on.
+func (s *Service) rolloutTimedOut(budget time.Duration, ready readiness, reason string) error {
+	within := budget.String()
 	if budget != s.opts.RolloutTimeout {
-		return fmt.Errorf("app: rollout verification timed out: not ready within the healthcheck timeout of %s: %s",
-			budget, reason)
+		within = "the healthcheck timeout of " + within
+	}
+	switch {
+	case ready.healthPath != "":
+		return fmt.Errorf("app: rollout verification timed out: the health check at %s did not pass within %s: %s",
+			ready.healthPath, within, reason)
+	case ready.port > 0:
+		return fmt.Errorf("app: rollout verification timed out: nothing was listening on port %d within %s: %s",
+			ready.port, within, reason)
+	case budget != s.opts.RolloutTimeout:
+		return fmt.Errorf("app: rollout verification timed out: not ready within %s: %s", within, reason)
 	}
 	return fmt.Errorf("app: rollout verification timed out: %s", reason)
 }
 
 func (s *Service) verifyRollout(
 	ctx context.Context, a App, releaseID uuid.UUID, configVersion int64, started time.Time,
-	budget time.Duration,
+	budget time.Duration, ready readiness,
 ) error {
-	remaining := time.Until(started.Add(budget))
+	// The settle window comes on top of the budget, so a version that is
+	// ready at the last moment of its healthcheck timeout is still watched
+	// for the whole window rather than passed for want of time.
+	remaining := time.Until(started.Add(budget + s.opts.RolloutSettle))
 	if remaining <= 0 {
 		remaining = time.Nanosecond
 	}
@@ -800,15 +839,38 @@ func (s *Service) verifyRollout(
 	ticker := time.NewTicker(s.opts.RolloutPollInterval)
 	defer ticker.Stop()
 	var last orchestrator.AppStatus
+	// healthySince is when the new version was first seen healthy in its
+	// current run, and restarts how many restarts it had by then; zero time
+	// while it is not.
+	var healthySince time.Time
+	var restarts int32
 	for {
 		status, err := s.orch.AppStatus(verify, a.Ref())
 		if err == nil {
 			last = status
-			if convergenceMatches(status, releaseID, configVersion) && rolloutHealthy(status) {
-				return nil
-			}
-			if status.Terminal {
+			healthy := convergenceMatches(status, releaseID, configVersion) && rolloutHealthy(status)
+			if status.Terminal && !healthy {
 				return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
+			}
+			switch {
+			case healthy && healthySince.IsZero():
+				if time.Since(started) > budget {
+					return s.rolloutTimedOut(budget, ready, rolloutReason(status))
+				}
+				healthySince, restarts = time.Now(), status.Restarts
+			case !healthySince.IsZero() && status.Restarts > restarts:
+				// Ready, and then crashed: a version that dies a moment after it
+				// starts is ready for that moment, and is not a deploy that
+				// succeeded.
+				return fmt.Errorf("app: rollout failed: %s", restartedReason(status, status.Restarts-restarts))
+			case !healthy:
+				// Ready and then not, without a crash: its health check stopped
+				// passing. Not a failure yet; it has the rest of its budget to
+				// pass again, and the window starts over when it does.
+				healthySince = time.Time{}
+			}
+			if healthy && time.Since(healthySince) >= s.opts.RolloutSettle {
+				return nil
 			}
 		} else if !errors.Is(err, orchestrator.ErrNotFound) {
 			return fmt.Errorf("%w: %v", ErrClusterObservation, err)
@@ -819,18 +881,33 @@ func (s *Service) verifyRollout(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return s.rolloutTimedOut(budget, rolloutReason(last))
+			return s.rolloutTimedOut(budget, ready, rolloutReason(last))
 		case <-ticker.C:
 		}
 	}
 }
 
+// restartedReason says why a version that became ready failed its settle
+// window, in the words crashed looks for, so the deploy is reported as one
+// that crashed.
+func restartedReason(status orchestrator.AppStatus, n int32) string {
+	times := "once"
+	if n > 1 {
+		times = fmt.Sprintf("%d times", n)
+	}
+	msg := fmt.Sprintf("Crashed: the new version became ready and then restarted %s", times)
+	if status.LastExit != "" {
+		msg += "; it last exited with " + status.LastExit
+	}
+	return msg
+}
+
 func (s *Service) verifyRecoveredRollout(
 	ctx context.Context, a App, releaseID uuid.UUID, configVersion int64, started time.Time,
-	budget time.Duration,
+	budget time.Duration, ready readiness,
 ) error {
 	if time.Now().Before(started.Add(budget)) {
-		return s.verifyRollout(ctx, a, releaseID, configVersion, started, budget)
+		return s.verifyRollout(ctx, a, releaseID, configVersion, started, budget, ready)
 	}
 
 	observe, cancel := context.WithTimeout(ctx, recoveredRolloutObservationTimeout)
@@ -851,7 +928,7 @@ func (s *Service) verifyRecoveredRollout(
 	if status.Terminal {
 		return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
 	}
-	return s.rolloutTimedOut(budget, rolloutReason(status))
+	return s.rolloutTimedOut(budget, ready, rolloutReason(status))
 }
 
 func (s *Service) executeOperation(ctx context.Context, op Operation) error {
@@ -911,7 +988,7 @@ func (s *Service) applyAndVerifyOperation(
 		err = s.transitionOperation(ctx, &op, OperationVerifying)
 	}
 	if err == nil {
-		err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt, s.rolloutBudget(release))
+		err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt, s.rolloutBudget(release), readinessOf(release))
 	}
 	if errors.Is(err, ErrClusterObservation) {
 		// An API outage says nothing about the rollout. Preserve the verifying
@@ -1033,7 +1110,7 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 		return err
 	}
 	err = s.verifyRecoveredRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt,
-		s.rolloutBudget(release))
+		s.rolloutBudget(release), readinessOf(release))
 	if errors.Is(err, ErrClusterObservation) {
 		if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
 			return releaseErr

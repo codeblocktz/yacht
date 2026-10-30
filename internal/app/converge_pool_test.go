@@ -35,7 +35,7 @@ func TestAsManyDeploysAsThePoolHasConnectionsStillFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	s := NewService(pool, orchestrator.NewNoop(), slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
+	s := NewService(pool, orchestrator.NewNoop(), slog.New(slog.NewTextHandler(io.Discard, nil)), Options{RolloutSettle: -1})
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2*cfg.MaxConns)

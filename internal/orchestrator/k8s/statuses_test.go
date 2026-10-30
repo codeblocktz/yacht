@@ -69,6 +69,12 @@ func TestAppStatusesSaysWhatAppStatusSays(t *testing.T) {
 	scheduled, suspended, missing := ref("o1", "scheduled"), ref("o1", "suspended"), ref("o1", "missing")
 	other := ref("o2", "theirs")
 	deployment(running, 2, 2, "r1")
+	// Up, after one restart for its memory: the restarts are a deploy's to
+	// watch, and read the same either way.
+	pod(running, "r1", corev1.ContainerStatus{Name: "app", Ready: true, RestartCount: 1,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			ExitCode: 137, Reason: "OOMKilled"}}})
 	deployment(degraded, 2, 1, "r1")
 	deployment(broken, 1, 0, "r2")
 	pod(broken, "r2", waiting("CreateContainerConfigError", 0, nil))
@@ -93,10 +99,11 @@ func TestAppStatusesSaysWhatAppStatusSays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppStatuses: %v", err)
 	}
-	// Per owner: Deployments, CronJobs, and pods for those short of ready.
-	// None of them a GET of one workload.
-	if len(calls) != 5 {
-		t.Errorf("made %d calls for %d workloads of two owners, want 5: %v", len(calls), len(refs), calls)
+	// Per owner: Deployments, CronJobs, and pods for the workloads with a
+	// release, which is every one with a Deployment. None of them a GET of
+	// one workload.
+	if len(calls) != 6 {
+		t.Errorf("made %d calls for %d workloads of two owners, want 6: %v", len(calls), len(refs), calls)
 	}
 	for _, c := range calls {
 		if c[:4] != "list" {
@@ -177,5 +184,36 @@ func TestTheClientIsNotHeldToClientGoDefaults(t *testing.T) {
 	withRateLimits(set)
 	if set.QPS != 20 || set.Burst != 30 {
 		t.Errorf("QPS %v burst %d, want the 20 and 30 that were set", set.QPS, set.Burst)
+	}
+}
+
+// The restarts a rollout is watched for are in the batched statuses too.
+func TestAppStatusesCountRestarts(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+	r := orchestrator.Ref{Owner: "o1", Namespace: "yacht-web", Name: "web"}
+	one := int32(1)
+	if _, err := client.AppsV1().Deployments(r.Namespace).Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: r.Name, Namespace: r.Namespace, Labels: orchestrator.ObjectLabels(r),
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r1"}},
+		Spec:   appsv1.DeploymentSpec{Replicas: &one},
+		Status: appsv1.DeploymentStatus{Replicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, UpdatedReplicas: 1},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CoreV1().Pods(r.Namespace).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-abc", Namespace: r.Namespace, Labels: orchestrator.ObjectLabels(r),
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r1"}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true, RestartCount: 2,
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}}}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := o.AppStatuses(ctx, []orchestrator.Ref{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := got[r]; st.Pods != 1 || st.Restarts != 2 || st.LastExit != "code 137 (OOMKilled)" {
+		t.Fatalf("pods %d, restarts %d, last exit %q; want 1, 2, code 137 (OOMKilled)", st.Pods, st.Restarts, st.LastExit)
 	}
 }

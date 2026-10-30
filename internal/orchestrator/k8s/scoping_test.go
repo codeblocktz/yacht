@@ -349,17 +349,46 @@ func TestLivenessIsOptIn(t *testing.T) {
 	}
 }
 
-func TestNoHealthPathMeansNoProbes(t *testing.T) {
+// Without a health check, ready is listening on the app's port. With no
+// probe at all a container was ready the instant it started: a deploy that
+// crashed on start passed, and a woken app was handed requests before it
+// listened. Nothing is killed on that probe's say, so no liveness.
+func TestNoHealthPathMeansReadyIsListening(t *testing.T) {
 	ctx := context.Background()
 	o, client := testOrchestrator(t)
 
-	if err := o.ApplyApp(ctx, testSpec()); err != nil {
+	spec := testSpec()
+	if err := o.ApplyApp(ctx, spec); err != nil {
+		t.Fatalf("ApplyApp: %v", err)
+	}
+	c := containerOf(t, client, "yacht-demo", "web")
+
+	if c.LivenessProbe != nil {
+		t.Fatal("a liveness probe was added to a workload that asked for none")
+	}
+	p := c.ReadinessProbe
+	if p == nil || p.TCPSocket == nil || p.TCPSocket.Port.IntValue() != int(spec.Port) || p.HTTPGet != nil {
+		t.Fatalf("readiness = %+v, want a TCP probe on port %d", p, spec.Port)
+	}
+	if p.PeriodSeconds > 2 {
+		t.Errorf("readiness looked at every %ds; a waking app waits on it", p.PeriodSeconds)
+	}
+}
+
+// A workload with no port has nothing to listen on, and gets no probe.
+func TestNoPortMeansNoProbes(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	spec := testSpec()
+	spec.Port = 0
+	if err := o.ApplyApp(ctx, spec); err != nil {
 		t.Fatalf("ApplyApp: %v", err)
 	}
 	c := containerOf(t, client, "yacht-demo", "web")
 
 	if c.ReadinessProbe != nil || c.LivenessProbe != nil {
-		t.Fatal("probes were added to a workload that asked for none")
+		t.Fatal("probes were added to a workload with no port")
 	}
 }
 

@@ -298,7 +298,7 @@ func TestAnUnresolvableImageFailsBeforeAClusterCall(t *testing.T) {
 	wantErr := errors.New("registry unavailable")
 	orch := &countingOrchestrator{Noop: orchestrator.NewNoop()}
 	s := NewService(pool, orch, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
-		Manifests: failingManifests{err: wantErr},
+		Manifests: failingManifests{err: wantErr}, RolloutSettle: -1,
 	})
 	_, err = s.Update(ctx, ownerID, created.Name, UpdateInput{
 		Image: "nginx:1.28", Port: 8080,

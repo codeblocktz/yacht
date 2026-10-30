@@ -715,6 +715,10 @@ type AppStatus struct {
 	Generation         int64
 	ObservedGeneration int64
 	Desired            int32
+	// Pods is every pod of the workload, an old revision's still serving
+	// included; Updated is the new revision's. Ready and Available count
+	// both, so a rollout is only through once Pods is down to Updated.
+	Pods               int32
 	Updated            int32
 	Ready              int32
 	Available          int32
@@ -722,6 +726,14 @@ type AppStatus struct {
 	Terminal           bool
 	Reason             string
 	Message            string
+
+	// Restarts is how many times the containers of the release being rolled
+	// out have restarted, across its pods, and LastExit how the most recent
+	// of those restarts ended: "code 137 (OOMKilled)". A deploy is not
+	// healthy while the count is still climbing, however ready the pods look
+	// between crashes; see the rollout's settle window.
+	Restarts int32
+	LastExit string
 
 	// Schedule is the cron expression a scheduled workload is running on,
 	// as the cluster has it; empty for one that always runs. LastRun is when

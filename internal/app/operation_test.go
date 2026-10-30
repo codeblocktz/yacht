@@ -342,7 +342,7 @@ func TestConcurrentAdmissionIsEnforcedByTheDatabase(t *testing.T) {
 
 func TestBuildClaimCeilingLeavesTheThirdAppQueued(t *testing.T) {
 	ctx := context.Background()
-	s, _, pool := testService(t, Options{MaxConcurrentBuilds: 2})
+	s, _, pool := testService(t, Options{MaxConcurrentBuilds: 2, RolloutSettle: -1})
 	ownerID := owner(t, s, pool, "operation-ceiling")
 	for i := range 3 {
 		a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
@@ -1021,7 +1021,7 @@ func TestExpiredRecoveredVerificationObservesOnceWithoutRestartingTheRolloutBudg
 	s.orch = script
 	err := s.verifyRecoveredRollout(ctx, App{
 		Name: "web", Namespace: "expired-recovery",
-	}, releaseID, 1, time.Now().Add(-time.Hour), s.opts.RolloutTimeout)
+	}, releaseID, 1, time.Now().Add(-time.Hour), s.opts.RolloutTimeout, readiness{})
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expired recovery = %v, want original-budget timeout", err)
 	}

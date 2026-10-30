@@ -95,6 +95,9 @@ func (o *Orchestrator) cronJob(spec orchestrator.AppSpec) (*batchv1ac.CronJobApp
 	if err != nil {
 		return nil, err
 	}
+	// Nor the readiness a server gets without a health check: a run that
+	// listens on nothing is not unready either.
+	container.ReadinessProbe = nil
 
 	// Retried by a new pod rather than restarted in place, so each attempt
 	// keeps a log of its own to read. See orchestrator.RestartPolicy for why

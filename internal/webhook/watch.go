@@ -61,7 +61,12 @@ func (s *Service) CheckCrashes(ctx context.Context) {
 			// is crashing, and neither says it has stopped.
 			continue
 		}
-		failing := status.Phase == orchestrator.PhaseFailing
+		// The version the cluster is running may be a deploy's that never
+		// became active: a redeploy whose new version could not start. It
+		// never served, and its deploy has said it failed, so it is not an
+		// app that started crashing.
+		serving := status.ReleaseID == "" || status.ReleaseID == r.ActiveReleaseID.String()
+		failing := serving && status.Phase == orchestrator.PhaseFailing
 		changed, err := s.q.SetAppFailing(ctx, dbgen.SetAppFailingParams{
 			AppID: r.ID, OwnerID: r.OwnerID, Failing: failing,
 		})

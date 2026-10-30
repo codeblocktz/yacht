@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -198,6 +199,40 @@ func TestTheWakerHoldsAnAPIRequestAndHandsItToTheApp(t *testing.T) {
 	if got.host != a.Host || got.body != `{"item":7}` || got.query != "page=2" || got.fwd != "https" {
 		t.Fatalf("the app saw host %q, body %q, query %q, proto %q; want the request as sent",
 			got.host, got.body, got.query, got.fwd)
+	}
+}
+
+// Ready is not quite answering: the Service may not route to a pod the
+// moment it is ready, and an app woken without a readiness probe was handed
+// requests before it listened. A held request is not answered as still waking
+// on that account; it is held a moment more, until the app takes it.
+func TestTheWakerHoldsAnAPIRequestUntilTheAppListens(t *testing.T) {
+	// A port nothing listens on yet.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	go func() {
+		time.Sleep(time.Second)
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "served")
+		})}
+		t.Cleanup(func() { _ = srv.Close() })
+		_ = srv.Serve(l)
+	}()
+
+	a := sleepingApp()
+	f := &fakeSleeper{byHost: map[string]app.App{a.Host: a}, backend: addr}
+	rec := httptest.NewRecorder()
+	wakerFor(t, f).ServeHTTP(rec, wakeRequest(http.MethodGet, a.Host, "*/*", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "served" {
+		t.Fatalf("held request = %d %q; want the app's own 200", rec.Code, rec.Body.String())
 	}
 }
 

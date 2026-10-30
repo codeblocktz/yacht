@@ -86,6 +86,9 @@ type failingOrchestrator struct {
 	*orchestrator.Noop
 	mu      sync.Mutex
 	failing map[string]bool
+	// release is the release a failing workload says it runs; empty is
+	// none said, as a workload written before releases were.
+	release string
 }
 
 func (f *failingOrchestrator) AppStatus(ctx context.Context, ref orchestrator.Ref) (orchestrator.AppStatus, error) {
@@ -97,7 +100,7 @@ func (f *failingOrchestrator) AppStatus(ctx context.Context, ref orchestrator.Re
 	}
 	if failing {
 		return orchestrator.AppStatus{Phase: orchestrator.PhaseFailing, Reason: "CrashLoopBackOff",
-			Message: "the container exited 5 times"}, nil
+			Message: "the container exited 5 times", ReleaseID: f.release}, nil
 	}
 	return orchestrator.AppStatus{Phase: orchestrator.PhaseRunning, Desired: 1, Ready: 1}, nil
 }
@@ -138,7 +141,7 @@ func newFixture(t *testing.T, team string, allowPrivate bool) *fixture {
 	orch := &failingOrchestrator{Noop: orchestrator.NewNoop(), failing: map[string]bool{}}
 	f := &fixture{pool: pool, keeper: keeper, team: team, orch: orch}
 	f.svc = New(pool, keeper, orch, log, Options{BaseURL: "https://dash.test", Brand: "Datahuru", AllowPrivate: allowPrivate})
-	f.apps = app.NewService(pool, orch, log, app.Options{Events: f.svc, Manifests: digests{}})
+	f.apps = app.NewService(pool, orch, log, app.Options{Events: f.svc, Manifests: digests{}, RolloutSettle: -1})
 	if err := f.apps.EnsureOwner(ctx, team, team, ""); err != nil {
 		t.Fatalf("EnsureOwner: %v", err)
 	}
@@ -389,6 +392,52 @@ func TestDiscordAndSlackAreSentTheirOwnFormat(t *testing.T) {
 	}
 }
 
+// serving records an app's first release as the one it serves, as a first
+// deploy that succeeded does.
+func (f *fixture) serving(t *testing.T, appID uuid.UUID) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		UPDATE apps SET active_release_id = (SELECT id FROM app_releases WHERE app_id = $1 LIMIT 1)
+		WHERE id = $1`, appID); err != nil {
+		t.Fatalf("activate the first release: %v", err)
+	}
+}
+
+// A first deploy that fails has said so with deploy.failed or deploy.crashed;
+// the app never served, so app.crashed ("an app that was serving started
+// crashing") is not sent for it as well. Nor for a redeploy's new version the
+// cluster is still trying to start, while the app serves the old one.
+func TestAnAppThatNeverServedIsNotSaidToHaveCrashed(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, "hook-never-served", true)
+	rc := newReceiver(t)
+	f.hook(t, rc.srv.URL, []string{app.EventAppCrashed})
+	a, err := f.apps.Create(ctx, f.team, app.CreateInput{Name: "first", Image: "nginx:alpine", Replicas: 1, ProjectID: f.project})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	f.orch.mu.Lock()
+	f.orch.failing[a.Name] = true
+	f.orch.mu.Unlock()
+	f.svc.CheckCrashes(ctx)
+	f.svc.Drain(ctx)
+	if n := len(rc.received()); n != 0 {
+		t.Fatalf("app.crashed sent %d times for an app whose first deploy failed, want none", n)
+	}
+
+	// Served, and now the cluster is rolling out a version that never became
+	// active. Its failing is its deploy's to report.
+	f.serving(t, a.ID)
+	f.orch.mu.Lock()
+	f.orch.release = uuid.NewString()
+	f.orch.mu.Unlock()
+	f.svc.CheckCrashes(ctx)
+	f.svc.Drain(ctx)
+	if n := len(rc.received()); n != 0 {
+		t.Fatalf("app.crashed sent %d times for a redeploy's version that never served, want none", n)
+	}
+}
+
 func TestAnAppStartingToCrashIsSaidOnce(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t, "hook-crash", true)
@@ -398,6 +447,7 @@ func TestAnAppStartingToCrashIsSaidOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	f.serving(t, a.ID)
 	f.orch.mu.Lock()
 	f.orch.failing[a.Name] = true
 	f.orch.mu.Unlock()

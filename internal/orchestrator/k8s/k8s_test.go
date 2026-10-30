@@ -154,6 +154,11 @@ func TestApplyApp(t *testing.T) {
 		t.Errorf("progress deadline = %v, want %d",
 			dep.Spec.ProgressDeadlineSeconds, deploymentProgressDeadline)
 	}
+	// A new pod must stay ready a while before the old one is stopped for it,
+	// so a container that dies as it starts is not taken for a working one.
+	if dep.Spec.MinReadySeconds != deploymentMinReadySeconds {
+		t.Errorf("minReadySeconds = %d, want %d", dep.Spec.MinReadySeconds, deploymentMinReadySeconds)
+	}
 	for _, annotations := range []map[string]string{
 		dep.Annotations, dep.Spec.Template.Annotations,
 	} {

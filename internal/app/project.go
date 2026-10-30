@@ -208,7 +208,11 @@ func (s *Service) ListInProject(ctx context.Context, ownerID string, projectID u
 
 	out := make([]App, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, toApp(row))
+		a := toApp(row)
+		// From the database, before the batched status read: the canvas card
+		// of an app with no workload yet says how its first deploy is going.
+		s.attachLastDeploy(ctx, &a)
+		out = append(out, a)
 	}
 	s.attachListed(ctx, out, false)
 	return out, nil

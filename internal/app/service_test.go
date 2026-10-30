@@ -43,6 +43,11 @@ func testService(t testing.TB, opts Options) (*Service, *recordingOrchestrator, 
 	if opts.Manifests == nil {
 		opts.Manifests = staticManifests{}
 	}
+	// The noop orchestrator is healthy from its first look; a test of the
+	// settle window asks for one.
+	if opts.RolloutSettle == 0 {
+		opts.RolloutSettle = -1
+	}
 	return NewService(pool, orch, log, opts), orch, pool
 }
 

@@ -26,7 +26,7 @@ var _ orchestrator.StatusLister = (*Orchestrator)(nil)
 // carried from the start; one that is not in them does not exist, as a GET
 // would have said. Nothing is cached: every call reads the cluster, so a
 // status is as fresh as AppStatus's. Deployments and CronJobs are read
-// concurrently; pods only when a rollout is short of ready, in one more list.
+// concurrently; pods, for every workload with a release, in one more list.
 func (o *Orchestrator) AppStatuses(
 	ctx context.Context, refs []orchestrator.Ref,
 ) (map[orchestrator.Ref]orchestrator.AppStatus, error) {
@@ -101,13 +101,13 @@ func (o *Orchestrator) ownerStatuses(
 	}
 
 	out := make(map[orchestrator.Ref]orchestrator.AppStatus, len(refs))
-	var short []orchestrator.Ref
+	var released []orchestrator.Ref
 	for _, ref := range refs {
 		key := types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}
 		if dep, ok := depByName[key]; ok {
 			status := deploymentStatus(dep)
 			if needsPodCheck(status) {
-				short = append(short, ref)
+				released = append(released, ref)
 			}
 			out[ref] = status
 			continue
@@ -118,12 +118,12 @@ func (o *Orchestrator) ownerStatuses(
 		}
 	}
 
-	if len(short) > 0 {
+	if len(released) > 0 {
 		// As AppStatus: pods that cannot be read leave the status as the
 		// Deployment has it.
 		pods, err := o.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, mine)
 		if err == nil {
-			for _, ref := range short {
+			for _, ref := range released {
 				selector := labels.SelectorFromSet(orchestrator.ObjectLabels(ref))
 				var its []corev1.Pod
 				for _, p := range pods.Items {
@@ -133,7 +133,7 @@ func (o *Orchestrator) ownerStatuses(
 				}
 				status := out[ref]
 				key := types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}
-				applyUnstartable(&status, its, podRelease(depByName[key], status), crashLimit(depByName[key].Annotations))
+				applyPods(&status, its, podRelease(depByName[key], status), crashLimit(depByName[key].Annotations))
 				out[ref] = status
 			}
 		}

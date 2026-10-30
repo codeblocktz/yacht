@@ -492,6 +492,9 @@
           if (!node) return;
           var state = data.apps[name];
           node.className = "canvas-card-status " + state.class;
+          // A first deploy's card leads to its logs until it is running.
+          var card = node.closest(".canvas-card");
+          if (card && state.href) card.setAttribute("href", state.href);
           var label = node.lastChild;
           if (label && label.nodeType === 3) {
             label.textContent = state.label;

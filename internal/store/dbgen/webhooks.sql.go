@@ -14,27 +14,32 @@ import (
 )
 
 const appsWatchedForCrashes = `-- name: AppsWatchedForCrashes :many
-SELECT a.id, a.owner_id, a.name, a.namespace, a.project_id, p.slug AS project_slug, p.name AS project_name
+SELECT a.id, a.owner_id, a.name, a.namespace, a.project_id, p.slug AS project_slug, p.name AS project_name,
+       a.active_release_id::uuid AS active_release_id
 FROM apps a
 JOIN projects p ON p.id = a.project_id
-WHERE EXISTS (
+WHERE a.active_release_id IS NOT NULL
+AND EXISTS (
     SELECT 1 FROM project_webhooks w
     WHERE w.project_id = a.project_id AND 'app.crashed' = ANY (w.events)
 )
 `
 
 type AppsWatchedForCrashesRow struct {
-	ID          uuid.UUID
-	OwnerID     string
-	Name        string
-	Namespace   string
-	ProjectID   pgtype.UUID
-	ProjectSlug string
-	ProjectName string
+	ID              uuid.UUID
+	OwnerID         string
+	Name            string
+	Namespace       string
+	ProjectID       pgtype.UUID
+	ProjectSlug     string
+	ProjectName     string
+	ActiveReleaseID uuid.UUID
 }
 
 // Teams with somebody listening for app.crashed, so the watcher only looks
-// at apps whose failing somebody would be told about.
+// at apps whose failing somebody would be told about. Only apps that have
+// served: one whose first deploy has not succeeded has nothing that could
+// start crashing, and its deploy says how it went.
 func (q *Queries) AppsWatchedForCrashes(ctx context.Context) ([]AppsWatchedForCrashesRow, error) {
 	rows, err := q.db.Query(ctx, appsWatchedForCrashes)
 	if err != nil {
@@ -52,6 +57,7 @@ func (q *Queries) AppsWatchedForCrashes(ctx context.Context) ([]AppsWatchedForCr
 			&i.ProjectID,
 			&i.ProjectSlug,
 			&i.ProjectName,
+			&i.ActiveReleaseID,
 		); err != nil {
 			return nil, err
 		}

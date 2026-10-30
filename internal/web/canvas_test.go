@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -209,5 +211,41 @@ func TestAnEmptyProjectHasAdd(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("an empty project is missing %q", want)
 		}
+	}
+}
+
+// A first deploy has no workload to ask about until it is applied, and the
+// card said "Unknown" all the while it built and after it failed. Its
+// deployment says how it is going, and the card leads to that deployment's
+// logs.
+func TestACardWithNoWorkloadSaysHowItsFirstDeployIsGoing(t *testing.T) {
+	dep := uuid.New()
+	logs := "/apps/api/deployments/" + dep.String() + "/logs"
+	repo := app.Repo{URL: "https://github.com/acme/api.git"}
+	for _, tc := range []struct {
+		name  string
+		a     app.App
+		label string
+		href  string
+	}{
+		{"building", app.App{Name: "api", Source: app.SourceGit, Repo: repo, Image: app.PendingImage,
+			LastDeploy: app.DeployRunning, LastDeployID: dep}, "Building", logs},
+		{"build failed", app.App{Name: "api", Source: app.SourceGit, Repo: repo, Image: app.PendingImage,
+			LastDeploy: app.DeployFailed, LastDeployID: dep}, "Failed", logs},
+		{"image deploying", app.App{Name: "api", Source: app.SourceImage, Image: "nginx:1.27",
+			LastDeploy: app.DeployRunning, LastDeployID: dep}, "Deploying", logs},
+		{"never asked", app.App{Name: "api", Source: app.SourceImage, Image: "nginx:1.27"}, "Unknown", "/apps/api"},
+		{"running", app.App{Name: "api", Source: app.SourceImage, Image: "nginx:1.27", StatusKnown: true,
+			Status:     orchestrator.AppStatus{Phase: orchestrator.PhaseRunning},
+			LastDeploy: app.DeployFailed, LastDeployID: dep}, "Online", "/apps/api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, _ := cardStatus(tc.a); got != tc.label {
+				t.Errorf("label = %q, want %q", got, tc.label)
+			}
+			if got := cardHref(tc.a); got != tc.href {
+				t.Errorf("href = %q, want %q", got, tc.href)
+			}
+		})
 	}
 }

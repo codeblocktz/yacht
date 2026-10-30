@@ -37,6 +37,14 @@ const servicePort = orchestrator.PublicServicePort
 // replica counts alone.
 const deploymentProgressDeadline int32 = 600
 
+// deploymentMinReadySeconds is how long a new pod must stay ready before it
+// counts as available, and so before the rolling update stops an old one in
+// its place. A container that dies the moment it starts is ready for an
+// instant, between starting and crashing; without this the old version was
+// stopped on the strength of that instant, and the deploy passed with
+// nothing left serving. Not in the pod template, so setting it rolls nothing.
+const deploymentMinReadySeconds int32 = 5
+
 // ApplyApp converges a workload to the given spec.
 //
 // Uses server-side apply throughout, so calling it repeatedly with the same
@@ -247,6 +255,7 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		WithSpec(appsv1ac.DeploymentSpec().
 			WithStrategy(strategy).
 			WithProgressDeadlineSeconds(progressDeadline(spec)).
+			WithMinReadySeconds(deploymentMinReadySeconds).
 			WithReplicas(spec.Replicas).
 			WithSelector(metav1ac.LabelSelector().
 				WithMatchLabels(orchestrator.SelectorLabels(spec.Name))).
@@ -488,6 +497,14 @@ func (o *Orchestrator) container(
 			c = c.WithLivenessProbe(
 				httpProbe(spec, livenessFailures, livenessInitialDelaySeconds))
 		}
+	} else if spec.Port > 0 {
+		// No health check, and a port traffic is sent to: ready is listening
+		// on it. Without any probe a container is ready the instant it
+		// starts, before its process has opened its port, or between
+		// starting and crashing. A deploy was passed on that, and its old
+		// version stopped for it, and a woken app was handed requests it
+		// refused.
+		c = c.WithReadinessProbe(tcpProbe(spec))
 	}
 
 	// envFrom rather than literals: the values stay in the Secret and out of
@@ -667,16 +684,12 @@ func (o *Orchestrator) AppStatus(
 	}
 
 	status := deploymentStatus(dep)
-	// A container that cannot start fails the rollout now, not at the
-	// progress deadline ten minutes on: its start script not executable,
-	// its config missing, a crash on every start. Only the release being
-	// rolled out is looked at; an old pod's trouble is not this deploy's.
 	if needsPodCheck(status) {
 		pods, err := o.client.CoreV1().Pods(ref.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
 		})
 		if err == nil {
-			applyUnstartable(&status, pods.Items, podRelease(dep, status), crashLimit(dep.Annotations))
+			applyPods(&status, pods.Items, podRelease(dep, status), crashLimit(dep.Annotations))
 		}
 	}
 	return finishStatus(status), nil
@@ -693,7 +706,7 @@ func deploymentStatus(dep *appsv1.Deployment) orchestrator.AppStatus {
 	status := orchestrator.AppStatus{
 		ReleaseID:  dep.Annotations[orchestrator.AnnotationReleaseID],
 		Generation: dep.Generation, ObservedGeneration: dep.Status.ObservedGeneration,
-		Desired: desired, Updated: dep.Status.UpdatedReplicas,
+		Desired: desired, Pods: dep.Status.Replicas, Updated: dep.Status.UpdatedReplicas,
 		Ready: dep.Status.ReadyReplicas, Available: dep.Status.AvailableReplicas,
 	}
 	if version, err := strconv.ParseInt(
@@ -739,20 +752,63 @@ func deploymentStatus(dep *appsv1.Deployment) orchestrator.AppStatus {
 }
 
 // needsPodCheck is whether a workload's pods have to be read to know its
-// state: a rollout short of ready, which may be short because its container
-// cannot start. A healthy workload's pods are not read at all.
+// state: any with a release, whose pods say how often it has restarted and
+// whether its container cannot start. Not only one short of ready: ready and
+// available count an old revision's pods too, so one still serving hid a new
+// one crash-looping, and a container that crashes on every start is ready
+// for a moment each time. Read for AppStatus and AppStatuses alike, so the
+// two agree.
 func needsPodCheck(status orchestrator.AppStatus) bool {
-	return !status.Terminal && status.Ready < status.Desired && status.ReleaseID != ""
+	return status.ReleaseID != ""
 }
 
-// applyUnstartable fails a status whose release's container cannot start,
-// from that workload's pods. podRelease is the release those pods are
-// stamped with: see podRelease.
-func applyUnstartable(status *orchestrator.AppStatus, pods []corev1.Pod, podRelease string, limit int32) {
+// applyPods completes a status from its workload's pods, those stamped with
+// podRelease (see podRelease): how often they have restarted and how the
+// last restart ended, which a deploy watches its new version for; and a
+// container that cannot start, which fails the rollout now rather than at
+// the progress deadline ten minutes on: its start script not executable,
+// its config missing, a crash on every start. An old revision's pods are
+// not looked at; their trouble is not this deploy's.
+func applyPods(status *orchestrator.AppStatus, pods []corev1.Pod, podRelease string, limit int32) {
+	status.Restarts, status.LastExit = restarts(releasePods(pods, podRelease))
+	if status.Terminal {
+		return
+	}
 	if reason, message, ok := unstartable(pods, podRelease, limit); ok {
 		status.Terminal = true
 		status.Reason, status.Message = reason, message
 	}
+}
+
+// releasePods is those of pods stamped with a release.
+func releasePods(pods []corev1.Pod, releaseID string) []corev1.Pod {
+	var out []corev1.Pod
+	for _, p := range pods {
+		if p.Annotations[orchestrator.AnnotationReleaseID] == releaseID {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// restarts totals pods' container restarts, and says how the latest of them
+// ended.
+func restarts(pods []corev1.Pod) (int32, string) {
+	var n int32
+	var last *corev1.ContainerStateTerminated
+	for _, p := range pods {
+		for _, cs := range p.Status.ContainerStatuses {
+			n += cs.RestartCount
+			t := cs.LastTerminationState.Terminated
+			if t != nil && (last == nil || t.FinishedAt.After(last.FinishedAt.Time)) {
+				last = t
+			}
+		}
+	}
+	if last == nil {
+		return n, ""
+	}
+	return n, fmt.Sprintf("code %d (%s)", last.ExitCode, cmp.Or(last.Reason, "no reason given"))
 }
 
 // podRelease is the release a Deployment's pods are stamped with: its

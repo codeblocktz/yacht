@@ -142,8 +142,8 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	h.audit = audit.New(pool, log)
 	h.apps = app.NewService(pool, orchestrator.NewNoop(), log, app.Options{
 		Manifests: testManifests{}, Images: apiImages{}, Builder: h.builder,
-		SourceFetchURL: base + APIPrefix + "/build-sources",
-		RolloutPollInterval: 10 * time.Millisecond,
+		SourceFetchURL:      base + APIPrefix + "/build-sources",
+		RolloutPollInterval: 10 * time.Millisecond, RolloutSettle: -1,
 	})
 	handler := testServer(t, Options{
 		Apps: h.apps, Logs: h.apps, Accounts: h.accounts,

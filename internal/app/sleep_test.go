@@ -132,6 +132,9 @@ func sleepService(t *testing.T, opts Options) (*Service, *sleepyOrchestrator, *p
 		opts.WakeTimeout = 3 * time.Second
 	}
 	opts.WakePollInterval = 5 * time.Millisecond
+	if opts.RolloutSettle == 0 {
+		opts.RolloutSettle = -1
+	}
 	s := NewService(pool, orch, log, opts)
 	t.Cleanup(func() {
 		s.wakeWG.Wait()
