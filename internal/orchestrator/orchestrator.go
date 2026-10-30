@@ -798,7 +798,11 @@ type ClusterInspector interface {
 	// Scoped rather than cluster-wide: a claim names the workload it belongs to,
 	// and one team reading another's is a disclosure. A claim the engine did not
 	// create carries no owner and belongs to whoever runs the cluster, so it is
-	// shown to nobody here.
+	// shown to no team.
+	//
+	// An empty owner is every claim in the cluster, the engine's or not, as an
+	// empty PodListOptions.Owner is every pod: the operator's view, and wrong
+	// for anything a member can reach.
 	Volumes(ctx context.Context, owner OwnerID) ([]VolumeInfo, error)
 }
 

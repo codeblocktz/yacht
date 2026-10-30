@@ -88,7 +88,8 @@ func describeObject(ref corev1.ObjectReference) string {
 	return ref.Kind + "/" + ref.Name
 }
 
-// Volumes lists an owner's persistent volume claims.
+// Volumes lists an owner's persistent volume claims, or every claim in the
+// cluster when owner is empty.
 //
 // Filtered in the API server by label rather than in Go: a filter the caller
 // applies is one a caller can forget, and forgetting it here means showing one
@@ -96,8 +97,15 @@ func describeObject(ref corev1.ObjectReference) string {
 func (o *Orchestrator) Volumes(
 	ctx context.Context, owner orchestrator.OwnerID,
 ) ([]orchestrator.VolumeInfo, error) {
-	list, err := o.client.CoreV1().PersistentVolumeClaims("").
-		List(ctx, metav1.ListOptions{LabelSelector: ownedBy(owner)})
+	// Every claim, the engine's or not, when asked for every owner's: that is
+	// the operator's view, and the claims the engine did not make — the
+	// install's database, its object store, its metrics — are the ones they
+	// most need to see filling up.
+	opts := metav1.ListOptions{}
+	if owner != "" {
+		opts.LabelSelector = ownedBy(owner)
+	}
+	list, err := o.client.CoreV1().PersistentVolumeClaims("").List(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: list volumes: %w", err)
 	}

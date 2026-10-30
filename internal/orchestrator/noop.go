@@ -180,6 +180,11 @@ func (n *Noop) Pods(_ context.Context, opts PodListOptions) ([]PodInfo, error) {
 		if opts.Namespace != "" && spec.Namespace != opts.Namespace {
 			continue
 		}
+		// As the cluster's label selector does: a page tested against this
+		// that forgot whose pods it asked for would otherwise pass.
+		if opts.Owner != "" && spec.Owner != opts.Owner {
+			continue
+		}
 		for i := range int(spec.Replicas) {
 			out = append(out, PodInfo{
 				Name:      fmt.Sprintf("%s-%d", spec.Name, i),

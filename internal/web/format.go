@@ -429,6 +429,29 @@ func plural(n int, unit string) string {
 	return fmt.Sprintf("%d %ss", n, unit)
 }
 
+// podsTitle counts the pods listed, and says how many of them the header's
+// Pods figure leaves out and why, so the two numbers are seen to agree.
+func podsTitle(pods []orchestrator.PodInfo) string {
+	title := plural(len(pods), "pod")
+	if off := len(pods) - podsOnNodes(pods); off > 0 {
+		title += fmt.Sprintf(" · %d finished or waiting for a node, not counted above", off)
+	}
+	return title
+}
+
+// teamLabel names whose a pod or claim is in a list that crosses teams. One
+// the engine did not make carries no owner and is the install's own: its
+// database, its object store, Kubernetes itself.
+func teamLabel(teams map[orchestrator.OwnerID]string, owner orchestrator.OwnerID) string {
+	if owner == "" {
+		return "Platform"
+	}
+	if name := teams[owner]; name != "" {
+		return name
+	}
+	return string(owner)
+}
+
 // clusterCPUDetail and clusterMemDetail give the absolute figures under a
 // percentage, so a number like "43%" can be checked against reality.
 func clusterCPUDetail(s orchestrator.ClusterSummary) string {

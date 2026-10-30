@@ -749,7 +749,7 @@ templ AppDeploymentsBody(d AppDetailData) {
 				<p>No pods reported. The workload may be starting, or the cluster is unreachable.</p>
 			</div>
 		} else {
-			@podTable(d.Pods, false)
+			@podTable(d.Pods, false, nil)
 		}
 	</div>
 }
@@ -1932,6 +1932,10 @@ type ClusterData struct {
 	Nodes   []orchestrator.NodeInfo
 	Pods    []orchestrator.PodInfo
 
+	// Teams names the owner of each row when the list is every team's, and is
+	// nil when it is one team's. See Server.clusterOwner.
+	Teams map[orchestrator.OwnerID]string
+
 	// CanAddNode and CanManageNodes are separate because the abilities are.
 	// Joining needs a key to seal a token; draining needs a credential that can
 	// evict across namespaces, and an install can have either without the
@@ -1972,7 +1976,10 @@ templ Cluster(d ClusterData) {
 					<p>Nothing is running, or the cluster is unreachable.</p>
 				</div>
 			} else {
-				@podTable(d.Pods, true)
+				<div class="panel-header">
+					<span class="panel-title">{ podsTitle(d.Pods) }</span>
+				</div>
+				@podTable(d.Pods, true, d.Teams)
 			}
 		</div>
 	} else {
@@ -2055,7 +2062,9 @@ templ nodeRow(n orchestrator.NodeInfo, manageable bool) {
 	</div>
 }
 
-templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
+// podTable lists pods. teams, when not nil, adds the column naming whose each
+// pod is, for a list that crosses teams.
+templ podTable(pods []orchestrator.PodInfo, showNamespace bool, teams map[orchestrator.OwnerID]string) {
 	<div class="overflow-x-auto">
 		<table class="dtable">
 			<thead>
@@ -2063,6 +2072,9 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 					<th>Pod</th>
 					if showNamespace {
 						<th>Namespace</th>
+					}
+					if teams != nil {
+						<th>Team</th>
 					}
 					<th>Ready</th>
 					<th>Restarts</th>
@@ -2076,6 +2088,9 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						<td class="mono max-w-[240px] truncate">{ p.Name }</td>
 						if showNamespace {
 							<td class="mono max-w-[200px] truncate text-muted-foreground">{ p.Namespace }</td>
+						}
+						if teams != nil {
+							<td class="max-w-[160px] truncate text-muted-foreground">{ teamLabel(teams, p.Owner) }</td>
 						}
 						<td class="tabular-nums text-muted-foreground">
 							{ fmt.Sprintf("%d/%d", p.Ready, p.Total) }
@@ -2091,7 +2106,7 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						// message is a sentence, and a table column sized for
 						// "Running" would truncate the half that says what to do.
 						<tr>
-							<td class="!pt-0 text-muted-foreground" colspan="6">
+							<td class="!pt-0 text-muted-foreground" colspan="7">
 								<span class="font-medium text-foreground">{ p.Reason }</span>
 								if p.Message != "" {
 									&mdash; { p.Message }
@@ -2169,6 +2184,9 @@ type VolumesData struct {
 	OK      bool
 	Error   string
 	Volumes []orchestrator.VolumeInfo
+
+	// Teams is as ClusterData's: nil when the list is one team's.
+	Teams map[orchestrator.OwnerID]string
 }
 
 templ Volumes(d VolumesData) {
@@ -2183,12 +2201,18 @@ templ Volumes(d VolumesData) {
 				<p>Apps with persistent storage will claim volumes here.</p>
 			</div>
 		} else {
+			<div class="panel-header">
+				<span class="panel-title">{ plural(len(d.Volumes), "claim") }</span>
+			</div>
 			<div class="overflow-x-auto">
 				<table class="dtable">
 					<thead>
 						<tr>
 							<th>Claim</th>
 							<th>Namespace</th>
+							if d.Teams != nil {
+								<th>Team</th>
+							}
 							<th>Size</th>
 							<th>Class</th>
 							<th>Access</th>
@@ -2200,6 +2224,9 @@ templ Volumes(d VolumesData) {
 							<tr>
 								<td class="mono max-w-[220px] truncate">{ v.Name }</td>
 								<td class="mono max-w-[180px] truncate text-muted-foreground">{ v.Namespace }</td>
+								if d.Teams != nil {
+									<td class="max-w-[160px] truncate text-muted-foreground">{ teamLabel(d.Teams, v.Owner) }</td>
+								}
 								<td class="tabular-nums text-muted-foreground">{ volumeSize(v) }</td>
 								<td class="text-muted-foreground">{ orDash(v.StorageClass) }</td>
 								<td class="text-muted-foreground">
