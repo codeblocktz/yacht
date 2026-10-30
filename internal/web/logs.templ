@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"strconv"
 
 	"github.com/codeblocktz/yacht/internal/app"
@@ -189,12 +190,24 @@ templ deployLogView(d DeployLogsData) {
 	if !d.Deploy.Live {
 		// Said rather than filled with the live log under an old revision's
 		// heading. That would look like history and be the current output.
-		<div class="canvas-sheet-body">
-			<div class="empty">
-				<p class="font-medium text-foreground">No logs for this deployment</p>
-				<p>{ d.Deploy.Logs.Note }</p>
+		// What its pre-deploy command printed is kept with it, though, so
+		// that much is still its own.
+		if len(d.Deploy.PreDeploy) > 0 {
+			<div class="canvas-sheet-log">
+				<div class="logs">
+					@preDeployLines(d)
+					<div class="log-section">Containers</div>
+					<div class="log-line text-muted-foreground">{ d.Deploy.Logs.Note }</div>
+				</div>
 			</div>
-		</div>
+		} else {
+			<div class="canvas-sheet-body">
+				<div class="empty">
+					<p class="font-medium text-foreground">No logs for this deployment</p>
+					<p>{ d.Deploy.Logs.Note }</p>
+				</div>
+			</div>
+		}
 	} else {
 		<div class="canvas-sheet-actions">
 			<a
@@ -218,7 +231,7 @@ templ deployLogView(d DeployLogsData) {
 		<div class="canvas-sheet-actions">
 			@findBox(d, viewDeploy)
 		</div>
-		if len(d.Deploy.Logs.Lines) == 0 {
+		if len(d.Deploy.Logs.Lines) == 0 && len(d.Deploy.PreDeploy) == 0 {
 			<div class="canvas-sheet-body">
 				<div class="empty">
 					<p class="font-medium text-foreground">Nothing to show</p>
@@ -233,6 +246,17 @@ templ deployLogView(d DeployLogsData) {
 			// with its own scrollbar inside a sheet that scrolls as well.
 			<div class="canvas-sheet-log">
 				<div class="logs">
+					// The pre-deploy command first, as it ran: before any
+					// container of this release started.
+					if len(d.Deploy.PreDeploy) > 0 {
+						@preDeployLines(d)
+						<div class="log-section">Containers</div>
+						if len(d.Deploy.Logs.Lines) == 0 {
+							<div class="log-line text-muted-foreground">
+								{ cmp.Or(d.Deploy.Logs.Note, "Nothing yet.") }
+							</div>
+						}
+					}
 					for _, l := range d.Deploy.Logs.Lines {
 						<div class="log-line">
 							if !l.At.IsZero() {
@@ -246,6 +270,20 @@ templ deployLogView(d DeployLogsData) {
 				</div>
 			</div>
 		}
+	}
+}
+
+// preDeployLines is what the deployment's pre-deploy command printed, under a
+// heading that says so. Kept with the deployment: the Job that ran it is gone
+// with its log once it finishes.
+templ preDeployLines(d DeployLogsData) {
+	<div class="log-section">Pre-deploy command</div>
+	for _, line := range d.Deploy.PreDeploy {
+		<div class="log-line">
+			<span class="log-text">
+				@highlight(line, d.Find)
+			</span>
+		</div>
 	}
 }
 

@@ -319,6 +319,13 @@ type DeploymentOperation struct {
 	StageStartedAt time.Time
 }
 
+type DeploymentPreDeployLog struct {
+	DeploymentID uuid.UUID
+	OwnerID      string
+	Output       string
+	UpdatedAt    time.Time
+}
+
 type Domain struct {
 	ID            uuid.UUID
 	OwnerID       string

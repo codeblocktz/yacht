@@ -274,6 +274,44 @@ func TestTheCanvasBarDeploysEveryChange(t *testing.T) {
 	}
 }
 
+// The open panel is modal, so the canvas's bar is out of reach behind it:
+// the panel carries the bar too, at its foot, on every tab but a Variables
+// tab whose own Deploy covers everything waiting (DEPLOY-8).
+func TestTheOpenPanelCarriesTheBar(t *testing.T) {
+	apps := newStagingApps(sampleApp("owner-1", "web"), sampleApp("owner-1", "api"))
+	apps.changes = []app.StagedChange{
+		{App: "web", Key: "Start command", Setting: true, Kind: app.StagedChanged, From: "", To: "bin/web"},
+	}
+	h := testServer(t, Options{Apps: apps})
+	docked := func(path string) bool {
+		t.Helper()
+		body := get(t, h, path).Body.String()
+		sheet, dock := strings.Index(body, `id="canvas-sheet"`), strings.Index(body, `class="staged-dock"`)
+		if dock < 0 {
+			return false
+		}
+		if sheet < 0 || dock < sheet || !strings.Contains(body[dock:], `action="/projects/default/changes/deploy"`) {
+			t.Errorf("%s: the docked bar is not in the panel with the project's Deploy", path)
+		}
+		return true
+	}
+	for _, path := range []string{"/apps/web", "/apps/web/settings", "/apps/api"} {
+		if !docked(path) {
+			t.Errorf("%s: no Deploy in reach while the panel is open", path)
+		}
+	}
+	if docked("/apps/web/variables") {
+		t.Error("the Variables tab has the bar's Deploy beside its own, for the same change")
+	}
+	apps.changes = append(apps.changes, app.StagedChange{App: "api", Key: "NEW", Kind: app.StagedAdded})
+	if !docked("/apps/web/variables") {
+		t.Error("the Variables tab leaves another app's change with no Deploy in reach")
+	}
+	if docked("/projects/default") {
+		t.Error("a bar is docked with no panel open")
+	}
+}
+
 // A service that deploys every save draws no bar, however its data looks.
 func TestNoBarWhereSavesDeploy(t *testing.T) {
 	h := testServer(t, Options{Apps: newFakeApps(sampleApp("owner-1", "web"))})

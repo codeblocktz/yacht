@@ -837,13 +837,17 @@ func containerFailing(reason string) bool {
 // deploymentImageLabel is what a deployment row shows where its image goes.
 // A deploy that builds records its image once the build has made one, so
 // one without is building, or its build failed, or it was given up before
-// the build finished.
+// the build finished. One refused for a reference it could not read never
+// started its build.
 func deploymentImageLabel(dep app.Deployment) string {
 	if !imageIsPending(dep.Image) {
 		return dep.Image
 	}
 	switch dep.Status {
 	case app.DeployFailed:
+		if app.ReferenceFailure(dep.Message) {
+			return "invalid reference"
+		}
 		return "build failed"
 	case app.DeployRunning, "pending":
 		return "building…"

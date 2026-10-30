@@ -12,13 +12,19 @@ import (
 )
 
 // A build that failed says so, rather than "building…" for ever; one that
-// built names its image.
+// built names its image. A deploy refused for a reference never built, and
+// says why instead (DEPLOY-9).
 func TestDeploymentImageLabel(t *testing.T) {
 	for _, tc := range []struct {
 		dep  app.Deployment
 		want string
 	}{
 		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed}, "build failed"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed,
+			Message: "app: MONGO_URL: ${{mongo.MONGO_URL}} refers to mongo, which no longer exists"}, "invalid reference"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed,
+			Message: "app: A refers through more than 4 variables; is there a loop?"}, "invalid reference"},
+		{app.Deployment{Image: app.PendingImage, Status: app.DeployFailed, Message: "build: exit status 1"}, "build failed"},
 		{app.Deployment{Image: app.PendingImage, Status: app.DeployRunning}, "building…"},
 		{app.Deployment{Image: app.PendingImage, Status: app.DeploySuperseded}, "not built"},
 		{app.Deployment{Image: "registry/apps/web:abc", Status: app.DeployFailed}, "registry/apps/web:abc"},

@@ -426,3 +426,24 @@ func TestLogStreamEscapesNewlinesWithinALine(t *testing.T) {
 		t.Errorf("event lost part of the line: %q", body)
 	}
 }
+
+// A deploy's pre-deploy command is in its Deploy logs, first, under its own
+// heading, and stays there once later deploys have replaced the containers
+// (DEPLOY-14).
+func TestTheDeployLogShowsThePreDeployCommandFirst(t *testing.T) {
+	d := liveDeploy()
+	d.Deploy.PreDeploy = []string{"Running the pre-deploy command: bin/migrate", "PREDEPLOY-RAN"}
+	html := renderPanel(t, d)
+	pre, ran, live := strings.Index(html, "Pre-deploy command"), strings.Index(html, "PREDEPLOY-RAN"), strings.Index(html, "listening")
+	if pre < 0 || ran < 0 || live < 0 || pre > ran || ran > live {
+		t.Fatalf("heading %d, command output %d, container output %d: want them in that order", pre, ran, live)
+	}
+
+	d.Deploy.Live, d.Deploy.Logs = false, app.Logs{Note: "This deployment has been replaced."}
+	html = renderPanel(t, d)
+	for _, want := range []string{"PREDEPLOY-RAN", "This deployment has been replaced."} {
+		if !strings.Contains(html, want) {
+			t.Errorf("a replaced deployment's log is missing %q", want)
+		}
+	}
+}

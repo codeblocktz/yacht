@@ -52,6 +52,16 @@ type Reference struct {
 
 func (r Reference) String() string { return "${{" + r.App + "." + r.Key + "}}" }
 
+// referenceFailureRE matches the message of a deploy refused because a
+// reference could not be read: every such error names the reference and
+// says what it "refers" to, or that it refers through too many.
+var referenceFailureRE = regexp.MustCompile(`\$\{\{[^}]*\}\} refers |refers through more than \d+ variables`)
+
+// ReferenceFailure reports whether a failed deployment's message is a
+// reference that could not be read. Such a deploy stops before its build
+// runs, so it is no build failure, though it has no image either.
+func ReferenceFailure(message string) bool { return referenceFailureRE.MatchString(message) }
+
 // References lists the references in a value, in order, each once.
 func References(value string) []Reference {
 	var out []Reference

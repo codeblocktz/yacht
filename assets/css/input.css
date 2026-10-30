@@ -1462,6 +1462,12 @@
     @apply absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center gap-1.5
            rounded-lg border border-border bg-card py-1 pl-3 pr-1 text-[13px] shadow-md;
   }
+  /* The same bar docked at the foot of the open service's panel, which is
+     modal and covers the canvas's. */
+  .staged-dock {
+    @apply flex shrink-0 items-center gap-1.5 border-t border-border bg-card py-2 pl-5 pr-4 text-[13px];
+  }
+  .staged-dock > form:first-of-type { @apply ml-auto; }
   .staged-bar-dot { @apply size-2 shrink-0 rounded-full bg-warning; }
   .staged-bar-count { @apply mr-1 font-medium tabular-nums whitespace-nowrap; }
   .staged-details { @apply flex max-h-[60vh] w-[340px] flex-col gap-3 overflow-y-auto p-3; }
@@ -1657,6 +1663,12 @@
     @apply shrink-0 select-none tabular-nums text-muted-foreground/70;
   }
   .log-text { @apply min-w-0; }
+  /* Where one part of a log ends and the next begins: a deploy's pre-deploy
+     command, then its containers. In the log's own type, so it reads as part
+     of the log, and dim, so it is not mistaken for output. */
+  .log-section {
+    @apply mt-2 mb-0.5 select-none px-1 font-sans text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground/80 first:mt-0.5;
+  }
 }
 
 @layer components {

@@ -181,9 +181,22 @@ templ Canvas(d CanvasData) {
 					Attributes: templ.Attributes{"aria-labelledby": canvasSheetTitle},
 				}) {
 					@appPanelBody(*d.Open)
+					@stagedDock(d)
 				}
 			}
 		}
+	}
+}
+
+// stagedDock is the staged-changes bar at the foot of the open service's
+// panel. The panel is a modal dialog: while it is open the canvas behind it,
+// and the bar floating on the canvas, cannot be reached, so Deploy has to be
+// in the panel too, as Railway's "Apply changes" stays in reach.
+templ stagedDock(d CanvasData) {
+	if stagedDocked(d) {
+		<div class="staged-dock" role="region" aria-label="Changes waiting to deploy">
+			@stagedBarControls(d, popover.PlacementTop)
+		</div>
 	}
 }
 

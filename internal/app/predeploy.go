@@ -158,7 +158,13 @@ func (s *Service) runPreDeploy(ctx context.Context, op Operation, a App, release
 		return fmt.Errorf("app: prepare the namespace for the pre-deploy command: %w", err)
 	}
 
-	logf := s.preDeployLog(ctx, op)
+	buildLog := s.preDeployLog(ctx, op)
+	var transcript strings.Builder
+	logf := func(text string) {
+		buildLog(text)
+		transcript.WriteString(text)
+	}
+	defer func() { s.keepPreDeployLog(ctx, op, transcript.String()) }()
 	logf("\nRunning the pre-deploy command: " + release.PreDeployCommand + "\n")
 	result, err := runner.PreDeploy(ctx, orchestrator.PreDeployRequest{
 		App: spec, Command: release.PreDeployCommand,
@@ -233,6 +239,42 @@ func (s *Service) preDeployLog(ctx context.Context, op Operation) func(string) {
 		return func(string) {}
 	}
 	return s.buildLogger(ctx, build.ID)
+}
+
+// keepPreDeployLog stores what a pre-deploy run printed with its deployment,
+// for the deployment's Deploy logs. The Job's pod, and its log, are deleted
+// once the command finishes, and a deploy that built nothing has no build
+// log to carry it. A store that cannot be written loses the transcript and
+// not the deploy, whose outcome is already decided.
+func (s *Service) keepPreDeployLog(ctx context.Context, op Operation, output string) {
+	if output == "" {
+		return
+	}
+	if err := s.q.AppendPreDeployLog(context.WithoutCancel(ctx), dbgen.AppendPreDeployLogParams{
+		DeploymentID: op.DeploymentID, OwnerID: op.OwnerID, Output: output,
+	}); err != nil {
+		s.log.Warn("could not keep the pre-deploy command's output",
+			"operation_id", op.ID, "error", err)
+	}
+}
+
+// preDeployOutput is what a deployment's pre-deploy command printed, line by
+// line, oldest first; none for a deploy that ran no command.
+func (s *Service) preDeployOutput(ctx context.Context, ownerID string, deployID uuid.UUID) ([]string, error) {
+	out, err := s.q.GetPreDeployLog(ctx, dbgen.GetPreDeployLogParams{
+		OwnerID: ownerID, DeploymentID: deployID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("app: read the pre-deploy output: %w", err)
+	}
+	out = strings.Trim(out, "\n")
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
 }
 
 // checkOperationClaim reports whether op still holds its claim at the stage it
