@@ -1309,23 +1309,13 @@ func (s *Service) apply(ctx context.Context, q *dbgen.Queries, a App) error {
 func (s *Service) applyRelease(
 	ctx context.Context, q *dbgen.Queries, a App, release *Release,
 ) error {
-	if err := s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
-		Owner: orchestrator.OwnerID(a.OwnerID),
-		Name:  a.Namespace,
-	}); err != nil {
+	if err := s.ensureNamespace(ctx, a); err != nil {
 		return err
 	}
 
 	effective := a
 	if release != nil {
-		effective.Port = release.Port
-		effective.Internal = release.Internal
-		effective.Source = release.Source
-		// Nothing routes to a workload on a schedule, so it holds no
-		// hostname: between runs there is nothing behind it to answer.
-		if release.CronSchedule != "" {
-			effective.Port = 0
-		}
+		effective = asReleased(a, *release)
 	}
 	hosts, err := s.reconcileHosts(ctx, q, effective)
 	if err != nil {
@@ -1386,6 +1376,34 @@ func (s *Service) applyRelease(
 	})
 	s.addPlatformVariables(ctx, q, a, hosts, &spec)
 	return s.orch.ApplyApp(ctx, spec)
+}
+
+// ensureNamespace makes the app's namespace somewhere a pod can run: there,
+// labelled for pod security, with its LimitRange and its network isolation.
+//
+// Its own step, ahead of the apply, because the apply is not the first thing
+// to run in it: a release with a pre-deploy command runs that first, and on a
+// first deploy nothing else has made the namespace yet.
+func (s *Service) ensureNamespace(ctx context.Context, a App) error {
+	return s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
+		Owner: orchestrator.OwnerID(a.OwnerID),
+		Name:  a.Namespace,
+	})
+}
+
+// asReleased is the app as a release will run it: with the release's port,
+// visibility and source rather than whatever the app row says now, which a
+// saved change not yet deployed may have moved.
+func asReleased(a App, release Release) App {
+	a.Port = release.Port
+	a.Internal = release.Internal
+	a.Source = release.Source
+	// Nothing routes to a workload on a schedule, so it holds no hostname:
+	// between runs there is nothing behind it to answer.
+	if release.CronSchedule != "" {
+		a.Port = 0
+	}
+	return a
 }
 
 // wakerFor is where a sleeping or waking app's hostnames are routed: the
@@ -1498,13 +1516,23 @@ func (s *Service) reconcileHosts(
 	if _, err := domain.ReconcileManaged(ctx, q, s.managedInput(a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
 	}
+	return routedHosts(ctx, q, a)
+}
+
+// routedHosts is every hostname routed to an app, read without reconciling
+// anything: none for an app that cannot serve HTTP.
+func routedHosts(ctx context.Context, q *dbgen.Queries, a App) ([]string, error) {
 	if !servesHTTP(a) {
 		return nil, nil
 	}
 	// Routable rather than every row: a custom domain that has not been proven
 	// is a claim, and routing one would let somebody take traffic for a name
 	// they do not control.
-	return domain.RoutableHosts(ctx, q, a.ID)
+	hosts, err := domain.RoutableHosts(ctx, q, a.ID)
+	if err != nil {
+		return nil, fmt.Errorf("app: read hostnames: %w", err)
+	}
+	return hosts, nil
 }
 
 // List returns an owner's apps with live status attached.

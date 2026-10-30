@@ -146,6 +146,17 @@ func (s *Service) runPreDeploy(ctx context.Context, op Operation, a App, release
 	if err != nil {
 		return err
 	}
+	// The namespace before the command that runs in it. The apply would make
+	// it, but the apply comes after, and on an app's first deploy nothing
+	// before it has: the run's pull secret, its Secret and its Job would each
+	// be refused for a namespace that does not exist. Only the namespace,
+	// though, and nothing of the workload — the new version is not to start
+	// until the command has succeeded, and on a first deploy that means
+	// nothing runs at all. A command that then fails leaves a namespace ready
+	// for the next deploy and empty of anything a later step trips on.
+	if err := s.ensureNamespace(ctx, a); err != nil {
+		return fmt.Errorf("app: prepare the namespace for the pre-deploy command: %w", err)
+	}
 
 	logf := s.preDeployLog(ctx, op)
 	logf("\nRunning the pre-deploy command: " + release.PreDeployCommand + "\n")
@@ -175,8 +186,13 @@ func (s *Service) runPreDeploy(ctx context.Context, op Operation, a App, release
 //
 // The same overlays applyRelease reads, for the same reasons — secrets are
 // current state, a pool and a region are where the app lives now — but not
-// its hostnames, which mean nothing to a command and are reconciled, with
+// its routing, which means nothing to a command and is reconciled, with
 // writes, as part of an apply this is not.
+//
+// The platform's variables are here, though, as the apply will set them: a
+// command that reads the app's own name or address is reading its
+// environment, and should find what the app will. Their hostname is read
+// rather than reconciled, as the Variables tab reads it.
 func (s *Service) preDeploySpec(ctx context.Context, a App, release Release) (orchestrator.AppSpec, error) {
 	_, secrets, err := s.envFor(ctx, s.q, a.OwnerID, a.ID)
 	if err != nil {
@@ -186,13 +202,18 @@ func (s *Service) preDeploySpec(ctx context.Context, a App, release Release) (or
 	if err != nil {
 		return orchestrator.AppSpec{}, err
 	}
-	effective := a
-	effective.Source = release.Source
-	return release.AppSpec(ReleaseOverlays{
+	effective := asReleased(a, release)
+	hosts, err := routedHosts(ctx, s.q, effective)
+	if err != nil {
+		return orchestrator.AppSpec{}, err
+	}
+	spec := release.AppSpec(ReleaseOverlays{
 		Ref: a.Ref(), ConfigVersion: a.ConfigVersion,
 		RegistryAuth: s.pullAuth(ctx, effective), Secrets: secrets,
 		Pool: pool, Region: a.Region,
-	}), nil
+	})
+	s.addPlatformVariables(ctx, s.q, a, hosts, &spec)
+	return spec, nil
 }
 
 // preDeployLog writes the command's output after the build's, for a deploy
