@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -133,5 +135,83 @@ func TestStagedVariablesTheImageWasBuiltWithBuildAgain(t *testing.T) {
 	}
 	if n := len(builder.built()); n != 2 {
 		t.Errorf("%d builds, want still 2", n)
+	}
+}
+
+// An image `up` built cannot be built again: its archive is gone once the
+// build is over. A staged change to an ARG its Dockerfile declared is
+// refused, saying another up is what deploys it, rather than deployed on the
+// old image as a success with the old value in it; the change stays staged,
+// and the next up builds with it. A variable the Dockerfile did not declare
+// deploys on the image as it is.
+func TestAnUploadedImagesBuildArgumentNeedsAnotherUp(t *testing.T) {
+	ctx := context.Background()
+	builder := &argsBuilder{args: []string{"FOO"}}
+	s, _, id := stagingService(t, "svc-upload-args", Options{
+		Images: fakeImages{}, Builder: builder, SourceFetchURL: "https://yacht.example.test",
+	})
+
+	if _, err := s.Create(ctx, id, CreateInput{Name: "argapp", Empty: true, Port: 8080, Replicas: 1}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.SetVariable(ctx, id, "argapp", VariableInput{Key: "FOO", Value: "alpha-1"}); err != nil {
+		t.Fatal(err)
+	}
+	archive := sourceArchive(t, map[string]string{"Dockerfile": "FROM busybox\nARG FOO\n"})
+	if _, _, err := s.DeployUpload(ctx, id, "argapp", archive); err != nil {
+		t.Fatalf("DeployUpload: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "argapp"); err != nil {
+		t.Fatalf("the upload's build: %v", err)
+	}
+	built, _ := s.Get(ctx, id, "argapp")
+
+	if err := s.SetVariable(ctx, id, "argapp", VariableInput{Key: "FOO", Value: "alpha-2"}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.DeployStaged(ctx, id, "argapp")
+	var refused UploadRebuildError
+	if !errors.As(err, &refused) || !slices.Equal(refused.Keys, []string{"FOO"}) {
+		t.Fatalf("DeployStaged = %v — want it refused, naming FOO", err)
+	}
+	if msg := refused.Explain("datahuru"); !strings.Contains(msg, "This change needs a new `datahuru up`") {
+		t.Errorf("the refusal says %q", msg)
+	}
+	a, _ := s.Get(ctx, id, "argapp")
+	if _, err := s.liveOperation(ctx, a); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a deploy was admitted all the same: %v", err)
+	}
+	if a.Image != built.Image {
+		t.Errorf("image %q, want still %q", a.Image, built.Image)
+	}
+	if changes, _ := s.StagedChanges(ctx, id, "argapp"); changeKeys(changes) == "" {
+		t.Error("the refused change is no longer staged")
+	}
+
+	// The next up builds with the staged value, and deploys it.
+	if _, _, err := s.DeployUpload(ctx, id, "argapp", archive); err != nil {
+		t.Fatalf("second DeployUpload: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "argapp"); err != nil {
+		t.Fatalf("the second upload's build: %v", err)
+	}
+	reqs := builder.built()
+	if len(reqs) != 2 || reqs[1].Variables["FOO"] != "alpha-2" {
+		t.Fatalf("builds %d, the second given FOO=%q — want alpha-2", len(reqs), reqs[len(reqs)-1].Variables["FOO"])
+	}
+	if changes, _ := s.StagedChanges(ctx, id, "argapp"); len(changes) != 0 {
+		t.Errorf("after the up, still staged: %s", changeKeys(changes))
+	}
+
+	// Not declared: deployed on the image as it is, without a build.
+	if err := s.SetVariable(ctx, id, "argapp", VariableInput{Key: "LOG_LEVEL", Value: "debug"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeployStaged(ctx, id, "argapp"); err != nil {
+		t.Fatalf("an undeclared variable's DeployStaged: %v", err)
+	}
+	a, _ = s.Get(ctx, id, "argapp")
+	if op, err := s.liveOperation(ctx, a); err != nil || op.RequiresBuild {
+		t.Fatalf("an undeclared variable's deploy: op %+v, %v — want one that does not build", op, err)
 	}
 }

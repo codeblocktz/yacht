@@ -29,19 +29,25 @@ func TestDeploymentImageLabel(t *testing.T) {
 	}
 }
 
-// An app built from GitHub was deployed from GitHub, its first deploy too.
+// An app built from GitHub was deployed from GitHub, its first deploy too;
+// one whose only source is `up` was deployed from the CLI, a variable's
+// deploy on its image too.
 func TestDeploymentSource(t *testing.T) {
 	gh := app.App{Source: app.SourceGit, Repo: app.Repo{URL: "https://github.com/acme/web.git"}}
 	git := app.App{Source: app.SourceGit, Repo: app.Repo{URL: "https://gitlab.com/acme/web.git"}}
 	image := app.App{Source: app.SourceImage}
+	uploaded := app.App{Source: app.SourceGit}
 	first := app.Deployment{Revision: "initial"}
 	push := app.Deployment{Revision: app.PushTriggerPrefix + "abc"}
+	up := app.Deployment{Revision: app.UploadTriggerPrefix + "abc"}
+	changed := app.Deployment{Revision: "changes:FOO"}
 	for _, tc := range []struct {
 		a    app.App
 		dep  app.Deployment
 		want string
 	}{
 		{gh, first, "GitHub"}, {git, first, "Git"}, {image, first, "image"}, {gh, push, "push"},
+		{uploaded, up, "CLI"}, {uploaded, changed, "CLI"}, {git, changed, "Git"},
 	} {
 		if got := deploymentSource(tc.a, tc.dep); got != tc.want {
 			t.Errorf("deploymentSource(%s, %s) = %q, want %q", tc.a.Repo.URL, tc.dep.Revision, got, tc.want)

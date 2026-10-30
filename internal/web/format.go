@@ -831,11 +831,18 @@ func deploymentImageLabel(dep app.Deployment) string {
 // deploymentSource is where a deployment came from, as a person would say
 // it. An app's first deploy is recorded as "initial", which reads as an
 // image even for one built from GitHub.
+//
+// A source app with no repository has only ever had an image from `up`, so
+// a deploy on that image — a variable changed, a redeploy — came from the
+// CLI as much as the upload's own row did.
 func deploymentSource(a app.App, dep app.Deployment) string {
 	src := dep.Source()
 	if src == "image" && a.Source == app.SourceGit {
-		if a.Repo.GitHub.Set() || strings.Contains(a.Repo.URL, "github.com") {
+		switch {
+		case a.Repo.GitHub.Set() || strings.Contains(a.Repo.URL, "github.com"):
 			return "GitHub"
+		case !a.Repo.Set():
+			return "CLI"
 		}
 		return "Git"
 	}

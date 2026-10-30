@@ -247,6 +247,7 @@ func (s *Server) appDeployStaged(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(ctx)
 	name := chi.URLParam(r, "name")
 	back := backTo(r, "/apps/"+name+"/variables")
+	var rebuild app.UploadRebuildError
 	switch err := st.DeployStaged(ctx, owner.ID, name); {
 	case err == nil:
 		s.flashOK(w, r, "Deploying "+name+".")
@@ -257,6 +258,8 @@ func (s *Server) appDeployStaged(w http.ResponseWriter, r *http.Request) {
 		s.flashOK(w, r, "Nothing to deploy — "+name+" is running everything saved.")
 	case errors.Is(err, app.ErrOperationInFlight):
 		s.flashWarn(w, r, "A deploy of "+name+" is already running. Deploy again once it finishes.")
+	case errors.As(err, &rebuild):
+		s.flashErr(w, r, rebuild.Explain(s.cliName))
 	default:
 		s.flashErr(w, r, strings.TrimPrefix(err.Error(), "app: "))
 	}

@@ -388,6 +388,9 @@ type Querier interface {
 	GetSourceUploadArchive(ctx context.Context, id uuid.UUID) (GetSourceUploadArchiveRow, error)
 	GetSourceUploadForDeployment(ctx context.Context, arg GetSourceUploadForDeploymentParams) (GetSourceUploadForDeploymentRow, error)
 	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
+	// The build that made an image, an upload's as well as a clone's: an upload
+	// has no commit, and what it declared still decides whether a changed
+	// variable is in the image.
 	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
 	GetTCPProxy(ctx context.Context, arg GetTCPProxyParams) (TcpProxy, error)
 	// Read by the apply, which has the app and not always its owner's scope in

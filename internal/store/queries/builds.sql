@@ -40,9 +40,12 @@ ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
 LIMIT 1;
 
 -- name: GetSuccessfulBuildForImage :one
+-- The build that made an image, an upload's as well as a clone's: an upload
+-- has no commit, and what it declared still decides whether a changed
+-- variable is in the image.
 SELECT * FROM builds
 WHERE owner_id = @owner_id AND app_id = @app_id
-  AND status = 'succeeded' AND commit_sha <> '' AND image = @image
+  AND status = 'succeeded' AND image = @image
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
 LIMIT 1;
 

@@ -711,6 +711,7 @@ func (s *Server) apiCLILoginPoll(w http.ResponseWriter, r *http.Request) {
 // with a status a program can act on.
 func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 	var upErr app.UploadError
+	var rebuild app.UploadRebuildError
 	switch {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, app.ErrVariableNotFound),
 		errors.Is(err, app.ErrProjectNotFound):
@@ -723,6 +724,8 @@ func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, app.ErrNoBuilder), errors.Is(err, app.ErrUploadNotSource), errors.Is(err, app.ErrNothingToBuild),
 		errors.Is(err, app.ErrUploadUnfetchable), errors.Is(err, app.ErrNoSecretKey):
 		writeAPIError(w, http.StatusConflict, "unavailable", failureReason(err.Error()))
+	case errors.As(err, &rebuild):
+		writeAPIError(w, http.StatusConflict, "needs_upload", rebuild.Explain(s.cliName))
 	case errors.Is(err, app.ErrUploadTooLarge):
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "too_large", failureReason(err.Error()))
 	case errors.As(err, &upErr), errors.As(err, new(app.MissingSecretsError)):
