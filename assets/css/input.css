@@ -1657,6 +1657,12 @@
     @apply shrink-0 select-none tabular-nums text-muted-foreground/70;
   }
   .log-text { @apply min-w-0; }
+  /* Where one part of a log ends and the next begins: a deploy's pre-deploy
+     command, then its containers. In the log's own type, so it reads as part
+     of the log, and dim, so it is not mistaken for output. */
+  .log-section {
+    @apply mt-2 mb-0.5 select-none px-1 font-sans text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground/80 first:mt-0.5;
+  }
 }
 
 @layer components {

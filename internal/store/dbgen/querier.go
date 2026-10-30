@@ -19,6 +19,10 @@ type Querier interface {
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
+	// A deployment's pre-deploy transcript, owner-scoped like the deployment.
+	// Appended rather than replaced: a run retried after its worker went away
+	// adds to what the first attempt printed, which is history too.
+	AppendPreDeployLog(ctx context.Context, arg AppendPreDeployLogParams) error
 	ApproveCLILogin(ctx context.Context, arg ApproveCLILoginParams) (int64, error)
 	// Teams with somebody listening for app.crashed, so the watcher only looks
 	// at apps whose failing somebody would be told about.
@@ -342,6 +346,7 @@ type Querier interface {
 	// The install's image registry. No owner_id, for the reason platform_dns has
 	// none: one registry serves every team's builds.
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
+	GetPreDeployLog(ctx context.Context, arg GetPreDeployLogParams) (string, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetProjectVariable(ctx context.Context, arg GetProjectVariableParams) (ProjectVariable, error)

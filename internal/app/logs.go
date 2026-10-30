@@ -68,6 +68,10 @@ type DeployLogs struct {
 	Deployment Deployment
 	Logs       Logs
 
+	// PreDeploy is what the deployment's pre-deploy command printed, kept
+	// with the deployment, so it outlives the containers that came after.
+	PreDeploy []string
+
 	// Live is true when this deployment is the one currently running, which is
 	// the only case where there are containers left to read.
 	Live bool
@@ -93,6 +97,9 @@ func (s *Service) DeploymentLogs(
 	}
 
 	out := DeployLogs{Deployment: d}
+	if out.PreDeploy, err = s.preDeployOutput(ctx, ownerID, d.ID); err != nil {
+		return DeployLogs{}, err
+	}
 	// The latest deploy's containers are the ones there, failed or not: one
 	// that could not start is still being retried, and what it printed
 	// before dying is the reason somebody opened this.

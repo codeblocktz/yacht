@@ -484,3 +484,55 @@ func TestAFailedFirstPreDeployCanBeRedeployed(t *testing.T) {
 		t.Errorf("redeploy failed: %s", deps[0].Message)
 	}
 }
+
+// What the command printed is the deployment's, in its Deploy logs, for a
+// deploy that built nothing too, and after a later deploy has replaced it:
+// the Job that ran it is deleted with its pod's log once it finishes
+// (DEPLOY-14).
+func TestAPreDeployCommandsOutputIsKeptWithItsDeployment(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{})
+	id := owner(t, s, pool, "predeploy-output")
+
+	orch.preDeploy = func(orchestrator.PreDeployRequest) (orchestrator.PreDeployResult, error) {
+		return orchestrator.PreDeployResult{
+			Succeeded: true, Output: []string{"PREDEPLOY-RAN", "PREDEPLOY-DONE"},
+		}, nil
+	}
+	a := deployWithCommands(t, s, orch, id, "bin/migrate", "")
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	deps, err := s.Deployments(ctx, id, a.ID, 1)
+	if err != nil || len(deps) == 0 {
+		t.Fatalf("Deployments: %v", err)
+	}
+	ran := deps[0].ID
+
+	want := []string{
+		"Running the pre-deploy command: bin/migrate",
+		"PREDEPLOY-RAN", "PREDEPLOY-DONE",
+		"The pre-deploy command finished.",
+	}
+	logs, err := s.DeploymentLogs(ctx, id, "web", ran, LogRequest{})
+	if err != nil {
+		t.Fatalf("DeploymentLogs: %v", err)
+	}
+	if !slices.Equal(logs.PreDeploy, want) {
+		t.Fatalf("pre-deploy output = %q, want %q", logs.PreDeploy, want)
+	}
+
+	// Replaced, it still has the output, though its containers are gone.
+	if err := s.Redeploy(ctx, id, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("redeploy: %v", err)
+	}
+	if logs, err = s.DeploymentLogs(ctx, id, "web", ran, LogRequest{}); err != nil {
+		t.Fatalf("DeploymentLogs after a redeploy: %v", err)
+	}
+	if logs.Live || !slices.Equal(logs.PreDeploy, want) {
+		t.Errorf("replaced deployment: live %v, pre-deploy output %q", logs.Live, logs.PreDeploy)
+	}
+}
