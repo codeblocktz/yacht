@@ -1345,7 +1345,7 @@ func TestSettingsShowsAccountsPosture(t *testing.T) {
 		t.Fatalf("GET /settings = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"Sign-in", "Magic link"} {
+	for _, want := range []string{"Sign-in", "Email link or password"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings does not mention %q — the posture is invisible", want)
 		}

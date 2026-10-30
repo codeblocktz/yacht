@@ -5,8 +5,10 @@ import (
 	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 	"strconv"
+	"strings"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -2359,10 +2361,25 @@ type SettingsData struct {
 	AccountsOn    bool
 	MailTransport string
 	SessionTTL    string
+
+	// Operators are the addresses YACHT_OPERATORS names, for an install with
+	// accounts. None named means each team's owner is one; see IsOperator.
+	Operators []string
+}
+
+// settingsLead says what kind of install this is. Single-owner mode is one
+// without accounts: one owner, every resource theirs. With accounts on the
+// install hosts teams, and saying "single-owner" there was left over from
+// before it could.
+func settingsLead(d SettingsData) string {
+	if d.AccountsOn {
+		return "This install hosts teams, each signing in to its own workspace."
+	}
+	return "This install runs in single-owner mode: one owner, no accounts."
 }
 
 templ Settings(d SettingsData) {
-	@pageHead("Settings", "This install runs in single-owner mode.", nil)
+	@pageHead("Settings", settingsLead(d), nil)
 	if !d.Authenticated {
 		<div class="callout callout-warn mb-5">
 			<div>
@@ -2380,19 +2397,37 @@ templ Settings(d SettingsData) {
 		</div>
 		<div class="panel-body">
 			<dl class="kv">
-				<dt>Owner</dt>
-				<dd>
-					{ d.OwnerName }
-					<span class="mono ml-1 text-muted-foreground">{ d.OwnerID }</span>
-				</dd>
-				<dt>Authentication</dt>
-				<dd>
-					if d.Authenticated {
-						@statusDot("Bearer token", "status-ok")
-					} else {
-						@statusDot("None", "status-warn")
-					}
-				</dd>
+				// With accounts on, Operators rather than an owner: there is one
+				// owner per team, and the row showed whichever team the operator
+				// was signed in as. Authentication is single-owner mode's bearer
+				// token; with accounts, Sign-in below is how people get in.
+				if d.AccountsOn {
+					<dt>Operators</dt>
+					<dd>
+						if len(d.Operators) > 0 {
+							<span class="mono">{ strings.Join(d.Operators, ", ") }</span>
+						} else {
+							@statusDot("Each team's owner", "status-warn")
+							<span class="ml-1 text-muted-foreground">
+								set <code class="mono">YACHT_OPERATORS</code> before opening sign-up, or every customer is one.
+							</span>
+						}
+					</dd>
+				} else {
+					<dt>Owner</dt>
+					<dd>
+						{ d.OwnerName }
+						<span class="mono ml-1 text-muted-foreground">{ d.OwnerID }</span>
+					</dd>
+					<dt>Authentication</dt>
+					<dd>
+						if d.Authenticated {
+							@statusDot("Bearer token", "status-ok")
+						} else {
+							@statusDot("None", "status-warn")
+						}
+					</dd>
+				}
 				<dt>Cluster</dt>
 				<dd>
 					if d.ClusterOK {
@@ -2401,6 +2436,9 @@ templ Settings(d SettingsData) {
 						@statusDot("Unreachable", "status-err")
 					}
 				</dd>
+				// The generated names services get are under up.; names issued
+				// before those existed are directly under the domain. Both have
+				// to resolve here.
 				<dt>App domain</dt>
 				<dd>
 					if d.AppDomain == "" {
@@ -2409,8 +2447,10 @@ templ Settings(d SettingsData) {
 							<code class="mono">YACHT_APP_DOMAIN</code> to give each app a URL.
 						</span>
 					} else {
-						<span class="mono">*.{ d.AppDomain }</span>
-						<span class="ml-1 text-muted-foreground">must point at this cluster</span>
+						<span class="mono">*.{ domain.GeneratedDomain(d.AppDomain) }</span>
+						<span class="ml-1 text-muted-foreground">
+							where services are given domains. It and <span class="mono">*.{ d.AppDomain }</span> must point at this cluster.
+						</span>
 					}
 				</dd>
 				<dt>Platform TLS</dt>
@@ -2426,8 +2466,9 @@ templ Settings(d SettingsData) {
 				</dd>
 				<dt>Sign-in</dt>
 				<dd>
+					// Both are offered to everyone, always; see SignIn.
 					if d.AccountsOn {
-						@statusDot("Magic link", "status-ok")
+						@statusDot("Email link or password", "status-ok")
 						<span class="ml-1 text-muted-foreground">
 							sessions last { d.SessionTTL }, links delivered by <span class="mono">{ d.MailTransport }</span>
 						</span>

@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1853,6 +1855,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		AccountsOn:    s.accounts != nil,
 		MailTransport: s.mailTransport,
 		SessionTTL:    s.sessionTTL.String(),
+		Operators:     slices.Sorted(maps.Keys(s.operators)),
 	}))
 }
 
