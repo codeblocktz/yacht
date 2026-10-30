@@ -343,40 +343,46 @@ templ rawRefusal(d AppDetailData) {
 templ stagedBar(d CanvasData) {
 	if d.Staged.Count() > 0 {
 		<div class="staged-bar" role="region" aria-label="Changes waiting to deploy" data-canvas-controls>
-			<span class="staged-bar-dot" aria-hidden="true"></span>
-			<span class="staged-bar-count">{ plural(d.Staged.Count(), "change") }</span>
-			@popover.Root() {
-				@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
-					<button type="button" class="btn btn-sm btn-ghost">Details</button>
-				}
-				@popover.Content(popover.ContentProps{Placement: popover.PlacementBottom, Exclusive: true}) {
-					<div class="staged-details">
-						for _, a := range d.Staged.ByApp {
-							<div class="staged-details-app">
-								<a class="staged-details-name" href={ templ.URL("/apps/" + a.App + "/variables") }>
-									{ a.App }
-									<span class="text-muted-foreground tabular-nums">{ strconv.Itoa(len(a.Changes)) }</span>
-								</a>
-								<ul class="staged-list">
-									for _, c := range a.Changes {
-										@stagedItem(c)
-									}
-								</ul>
-							</div>
-						}
-					</div>
-				}
-			}
-			<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/discard") }>
-				<input type="hidden" name="next" value={ canvasHere(d) }/>
-				<button class="btn btn-sm btn-ghost" type="submit">Discard</button>
-			</form>
-			<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/deploy") }>
-				<input type="hidden" name="next" value={ canvasHere(d) }/>
-				<button class="btn btn-sm btn-primary" type="submit">Deploy</button>
-			</form>
+			@stagedBarControls(d, popover.PlacementBottom)
 		</div>
 	}
+}
+
+// stagedBarControls is what the bar holds, on the canvas or docked in the
+// open service's panel, its details opening the way there is room.
+templ stagedBarControls(d CanvasData, details popover.Placement) {
+	<span class="staged-bar-dot" aria-hidden="true"></span>
+	<span class="staged-bar-count">{ plural(d.Staged.Count(), "change") }</span>
+	@popover.Root() {
+		@popover.Trigger(popover.TriggerProps{TriggerType: popover.TriggerTypeClick}) {
+			<button type="button" class="btn btn-sm btn-ghost">Details</button>
+		}
+		@popover.Content(popover.ContentProps{Placement: details, Exclusive: true}) {
+			<div class="staged-details">
+				for _, a := range d.Staged.ByApp {
+					<div class="staged-details-app">
+						<a class="staged-details-name" href={ templ.URL("/apps/" + a.App + "/variables") }>
+							{ a.App }
+							<span class="text-muted-foreground tabular-nums">{ strconv.Itoa(len(a.Changes)) }</span>
+						</a>
+						<ul class="staged-list">
+							for _, c := range a.Changes {
+								@stagedItem(c)
+							}
+						</ul>
+					</div>
+				}
+			</div>
+		}
+	}
+	<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/discard") }>
+		<input type="hidden" name="next" value={ canvasHere(d) }/>
+		<button class="btn btn-sm btn-ghost" type="submit">Discard</button>
+	</form>
+	<form method="post" action={ templ.SafeURL("/projects/" + d.Project.Slug + "/changes/deploy") }>
+		<input type="hidden" name="next" value={ canvasHere(d) }/>
+		<button class="btn btn-sm btn-primary" type="submit">Deploy</button>
+	</form>
 }
 
 // stagedMarker is the dot on a card with changes waiting. Not positioned:

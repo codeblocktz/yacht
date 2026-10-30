@@ -334,3 +334,15 @@ func cardStatus(a app.App) (label, class string) {
 	}
 	return string(a.Status.Phase), "card-status-idle"
 }
+
+// stagedDocked reports whether the open panel carries the staged-changes
+// bar: whenever anything in the project waits, except on a Variables tab
+// whose own Deploy already covers every change, where a second would only
+// be the same button twice.
+func stagedDocked(d CanvasData) bool {
+	n := d.Staged.Count()
+	if d.Open == nil || n == 0 {
+		return false
+	}
+	return d.Open.Tab != "variables" || d.Staged.For(d.Open.App.Name) != n
+}
