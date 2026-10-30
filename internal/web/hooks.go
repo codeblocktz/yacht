@@ -104,7 +104,10 @@ func (s *Server) hookEnable(w http.ResponseWriter, r *http.Request) {
 	secret, err := s.hooks.EnableGitHook(r.Context(), owner.ID, name)
 	if err != nil {
 		if errors.Is(err, app.ErrNoSecretKey) {
-			err = errors.New("deploy on push needs YACHT_SECRET_KEY set, to seal the webhook's secret")
+			// The setting's name is the operator's business, and on the
+			// Admin pages; the person here can only ask for it.
+			err = errors.New("deploy on push can't be turned on on this install yet: its webhook secret " +
+				"needs an encryption key the install does not have. Ask your operator.")
 		}
 		s.appActionFailed(w, r, name, "settings", err)
 		return

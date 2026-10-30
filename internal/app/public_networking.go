@@ -191,7 +191,7 @@ func (s *Service) generateUnavailable(a App) string {
 	switch {
 	case s.opts.AppDomain == "":
 		return "This install has no app domain, so there is nothing to put a hostname under. " +
-			"Whoever runs it sets YACHT_APP_DOMAIN."
+			"Ask your operator to set one up."
 	case a.Internal:
 		return "This app is internal: it speaks something other than HTTP, on its own port. " +
 			"Use a TCP proxy to reach it from outside, or make it public in its settings."
@@ -387,7 +387,7 @@ func (s *Service) routingChanged(ctx context.Context, a App) error {
 // connection string says.
 func (s *Service) EnableTCPProxy(ctx context.Context, ownerID, name string) (TCPProxy, error) {
 	if s.opts.TCPProxyHost == "" {
-		return TCPProxy{}, errors.New("this install does not offer TCP proxies: whoever runs it sets YACHT_TCP_PROXY_HOST")
+		return TCPProxy{}, errors.New("this install does not offer TCP proxies yet — ask your operator to turn them on")
 	}
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {

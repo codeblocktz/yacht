@@ -83,6 +83,15 @@ func (s *Server) renderCanvasWith(
 	w http.ResponseWriter, r *http.Request, slug, appName, tab string,
 	decorate func(*AppDetailData),
 ) {
+	s.renderCanvasStatus(w, r, http.StatusOK, slug, appName, tab, decorate)
+}
+
+// renderCanvasStatus is renderCanvasWith answering with status: a refusal
+// drawn on the page it was made from, rather than on a page of its own.
+func (s *Server) renderCanvasStatus(
+	w http.ResponseWriter, r *http.Request, status int, slug, appName, tab string,
+	decorate func(*AppDetailData),
+) {
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 
@@ -186,7 +195,7 @@ func (s *Server) renderCanvasWith(
 	if open != nil {
 		slots.Breadcrumb = append(slots.Breadcrumb, Crumb{Label: open.App.Name})
 	}
-	s.renderWithSlots(w, r, slots, Canvas(data))
+	s.renderWithSlotsStatus(w, r, slots, status, Canvas(data))
 }
 
 // appPanel gathers what the open panel shows about one app.

@@ -25,15 +25,22 @@ const DefaultPlatformVariablePrefix = "YACHT_"
 // set, because an app moving here from there reads RAILWAY_PUBLIC_DOMAIN and
 // the rest, and should only have to change the prefix.
 const (
-	PlatformPublicDomain  = "PUBLIC_DOMAIN"
-	PlatformPrivateDomain = "PRIVATE_DOMAIN"
-	PlatformServiceName   = "SERVICE_NAME"
-	PlatformProjectName   = "PROJECT_NAME"
+	PlatformPublicDomain    = "PUBLIC_DOMAIN"
+	PlatformPrivateDomain   = "PRIVATE_DOMAIN"
+	PlatformServiceName     = "SERVICE_NAME"
+	PlatformServiceID       = "SERVICE_ID"
+	PlatformProjectName     = "PROJECT_NAME"
+	PlatformProjectID       = "PROJECT_ID"
+	PlatformEnvironmentName = "ENVIRONMENT_NAME"
+	PlatformEnvironmentID   = "ENVIRONMENT_ID"
 )
 
 // platformNames is the order they are listed in.
 var platformNames = []string{
-	PlatformPublicDomain, PlatformPrivateDomain, PlatformServiceName, PlatformProjectName,
+	PlatformPublicDomain, PlatformPrivateDomain,
+	PlatformEnvironmentName, PlatformEnvironmentID,
+	PlatformServiceName, PlatformServiceID,
+	PlatformProjectName, PlatformProjectID,
 }
 
 // ValidatePlatformVariablePrefix refuses a prefix that would make names a
@@ -77,9 +84,13 @@ func (s *Service) platformEnv(
 	ctx context.Context, q *dbgen.Queries, a App, hosts []string,
 ) map[string]string {
 	p := s.opts.PlatformVariablePrefix
+	// The service's name, not the app's: web in staging is the app
+	// web-staging, and is told it is web, in staging, as Railway tells it.
 	env := map[string]string{
-		p + PlatformPrivateDomain: privateDomain(a),
-		p + PlatformServiceName:   a.Name,
+		p + PlatformPrivateDomain:   privateDomain(a),
+		p + PlatformServiceName:     a.ServiceName(),
+		p + PlatformServiceID:       a.ID.String(),
+		p + PlatformEnvironmentName: a.Environment(),
 	}
 	if len(hosts) > 0 {
 		env[p+PlatformPublicDomain] = hosts[0]
@@ -88,6 +99,8 @@ func (s *Service) platformEnv(
 	switch {
 	case err == nil:
 		env[p+PlatformProjectName] = project.Name
+		env[p+PlatformProjectID] = project.ID.String()
+		s.addEnvironmentVariables(ctx, q, a, project.ID, env)
 	case errors.Is(err, ErrProjectNotFound) && a.ProjectID == uuid.Nil:
 		// Not drawn on a project yet, and the team has never had its default
 		// one made: it will be, under this name, the first time anybody looks.
@@ -99,6 +112,36 @@ func (s *Service) platformEnv(
 			slog.String("app", a.Name), slog.String("error", err.Error()))
 	}
 	return env
+}
+
+// addEnvironmentVariables names the environment an app runs in, so one image
+// can behave differently in staging and production, and gives it an id.
+//
+// Production is every project's and has no row to take an id from, so its id
+// is derived from the project's: the same every time it is asked for, and
+// different in every project. Any other environment's is its row's.
+func (s *Service) addEnvironmentVariables(
+	ctx context.Context, q *dbgen.Queries, a App, projectID uuid.UUID, env map[string]string,
+) {
+	p := s.opts.PlatformVariablePrefix
+	if a.Environment() == DefaultEnvironment {
+		env[p+PlatformEnvironmentID] = productionEnvironmentID(projectID).String()
+		return
+	}
+	row, err := q.GetEnvironment(ctx, dbgen.GetEnvironmentParams{
+		OwnerID: a.OwnerID, ProjectID: projectID, Slug: a.Environment(),
+	})
+	if err != nil {
+		s.log.Debug("environment unavailable for platform variables",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		return
+	}
+	env[p+PlatformEnvironmentID] = row.ID.String()
+}
+
+// productionEnvironmentID is production's id in a project.
+func productionEnvironmentID(projectID uuid.UUID) uuid.UUID {
+	return uuid.NewSHA1(projectID, []byte("environment/"+DefaultEnvironment))
 }
 
 // addPlatformVariables gives a spec the platform's variables.
@@ -142,14 +185,15 @@ func (s *Service) PlatformVariables(ctx context.Context, ownerID, appName string
 		out = append(out, Variable{Key: key, Value: value})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return platformOrder(out[i].Key) < platformOrder(out[j].Key)
+		return s.platformOrder(out[i].Key) < s.platformOrder(out[j].Key)
 	})
 	return out, nil
 }
 
-func platformOrder(key string) int {
+func (s *Service) platformOrder(key string) int {
+	name := strings.TrimPrefix(key, s.opts.PlatformVariablePrefix)
 	for i, n := range platformNames {
-		if strings.HasSuffix(key, n) {
+		if n == name {
 			return i
 		}
 	}

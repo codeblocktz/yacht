@@ -4477,7 +4477,7 @@ func appPushSection(d AppDetailData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			if !d.HookURLPublic {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 323, "<div class=\"callout mt-3\"><div class=\"min-w-0 text-[12px] text-muted-foreground\">This address is the one your browser used, which the Git host may not be able to reach. Set <code class=\"mono\">YACHT_BASE_URL</code> to the dashboard's public address and it is used here instead.</div></div>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 323, "<div class=\"callout mt-3\"><div class=\"min-w-0 text-[12px] text-muted-foreground\">This address is the one your browser used, which the Git host may not be able to reach. Once this install's operator sets the dashboard's public address, that is used here instead.</div></div>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

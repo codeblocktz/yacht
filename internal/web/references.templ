@@ -46,7 +46,18 @@ templ addReference(d AppDetailData) {
 			<span class="text-[12px] text-muted-foreground">From another app</span>
 		</div>
 		<div class="panel-body">
-			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") } class="flex flex-wrap items-end gap-4">
+			if d.Vars.Failed == variableFormRef {
+				@variableRefusal(d.Error)
+			}
+			<form
+				method="post"
+				action={ templ.SafeURL("/apps/" + d.App.Name + "/variables") }
+				hx-post={ "/apps/" + d.App.Name + "/variables" }
+				hx-target="#variables-tab"
+				hx-swap="outerHTML"
+				data-swap-refusal
+				class="flex flex-wrap items-end gap-4"
+			>
 				<div class="field grow">
 					<label class="label" for="var-ref">Variable</label>
 					@selectbox.SelectBox(selectbox.Props{Class: "w-full min-w-[260px]"}) {

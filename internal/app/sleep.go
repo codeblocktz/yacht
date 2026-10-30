@@ -32,9 +32,10 @@ import (
 
 var (
 	// ErrSleepUnavailable means this install has no waker the cluster can
-	// reach, so an app put to sleep could never be woken again.
+	// reach (YACHT_WAKER_ADDR), so an app put to sleep could never be woken
+	// again.
 	ErrSleepUnavailable = errors.New("app: this install cannot wake apps, so none can sleep — " +
-		"set YACHT_WAKER_ADDR to an address the cluster reaches the engine at")
+		"ask your operator to turn sleeping on")
 
 	// ErrCannotSleep means this app cannot be woken by a request: it has no
 	// public hostname for one to arrive at.

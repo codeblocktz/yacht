@@ -983,7 +983,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		generated[key] = value
 	}
 	if len(generated) > 0 && !s.keeper.Configured() {
-		return App{}, fmt.Errorf("%w — %s needs one to store its credentials",
+		return App{}, fmt.Errorf("%w (%s keeps its credentials as secrets)",
 			ErrNoSecretKey, blueprint.Label)
 	}
 

@@ -18,8 +18,12 @@ import (
 //
 // Refusing is the point. Storing it readable instead would give the person the
 // protection they asked for in name only, and they would have no way to tell.
+//
+// Said in words a customer can act on: the key is the operator's setting
+// (YACHT_SECRET_KEY, or a wrapping application's own name for it), which
+// nobody reading this can set.
 var ErrNoSecretKey = errors.New(
-	"app: no YACHT_SECRET_KEY is configured, so a secret cannot be stored safely")
+	"app: secrets can't be stored on this install yet — ask your operator")
 
 // ErrSavedWhileDeploying means a variable was saved, and its rollout was not
 // started because another deploy of the app is running. The save is not

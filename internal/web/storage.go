@@ -147,23 +147,24 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		Key: r.FormValue("key"), Value: r.FormValue("value"),
 		Secret: formChecked(r, "secret"),
 	}
+	form := variableFormSet
 	if ref, ok := referenceInput(r); ok {
-		in = ref
+		in, form = ref, variableFormRef
 	}
 	err := s.apps.SetVariable(ctx, owner.ID, name, in)
 	if errors.Is(err, app.ErrSavedWhileDeploying) {
 		s.flashOK(w, r, "Saved "+strings.TrimSpace(in.Key)+". A deploy is already running — redeploy once it finishes to apply it.")
-		http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+		variableSaved(w, r, name)
 		return
 	}
 	if err != nil {
-		s.variableFailed(w, r, name, err)
+		s.variableFailed(w, r, name, form, err)
 		return
 	}
 	if s.stages() {
 		s.flashSaved(w, r, "Saved "+strings.TrimSpace(in.Key)+".")
 	}
-	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+	variableSaved(w, r, name)
 }
 
 // variableDelete removes one.
@@ -179,7 +180,7 @@ func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.variableFailed(w, r, name, err)
+		s.variableFailed(w, r, name, "", err)
 		return
 	}
 	if s.stages() {
@@ -188,9 +189,16 @@ func (s *Server) variableDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
 }
 
-// variableFailed re-renders the tab with the reason.
+// variableFailed re-renders the Variables tab with the reason, beside the
+// form that was refused and with what was typed into it still there.
+//
+// The tab is drawn on the canvas, as it is on every other visit, and not on a
+// page of its own: a refusal is a correction to make, and the Raw Editor's
+// text especially is too long to type twice. A request from htmx gets the
+// tab alone, swapped in where it was, so the address stays the tab's and a
+// reload does not post the text again.
 func (s *Server) variableFailed(
-	w http.ResponseWriter, r *http.Request, appName string, cause error,
+	w http.ResponseWriter, r *http.Request, appName, form string, cause error,
 ) {
 	status := http.StatusUnprocessableEntity
 	switch {
@@ -201,16 +209,75 @@ func (s *Server) variableFailed(
 		// condition rather than a mistake in what was typed.
 		status = http.StatusNotImplemented
 	}
-
-	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
-	if err != nil {
+	if errors.Is(cause, app.ErrNotFound) {
 		http.Error(w, cause.Error(), status)
 		return
 	}
 
-	s.renderStatus(w, r, status, AppDetail(AppDetailData{
-		App: a, Tab: "variables", Error: cause.Error(),
-	}))
+	refused := func(d *AppDetailData) {
+		d.Error = strings.TrimPrefix(cause.Error(), "app: ")
+		d.Vars.Failed = form
+		switch form {
+		case variableFormRaw:
+			d.Vars.RawText = r.FormValue("raw")
+			var le *app.EnvLineError
+			if errors.As(cause, &le) {
+				d.Vars.RawLine = le.Line
+				d.Vars.RawLineText = nthLine(d.Vars.RawText, le.Line)
+				d.Error = strings.TrimPrefix(le.Err.Error(), "app: ")
+			}
+		case variableFormSet:
+			d.Vars.SetKey, d.Vars.SetValue = r.FormValue("key"), r.FormValue("value")
+			d.Vars.SetSecret = formChecked(r, "secret")
+		}
+	}
+
+	if r.Header.Get("HX-Request") != "true" {
+		s.renderCanvasStatus(w, r, status, "", appName, "variables", refused)
+		return
+	}
+	ctx := r.Context()
+	a, err := s.apps.Get(ctx, identity.MustFromContext(ctx).ID, appName)
+	if err != nil {
+		http.Error(w, cause.Error(), status)
+		return
+	}
+	d := s.appPanel(ctx, a, "variables")
+	refused(d)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := variablesTab(*d).Render(ctx, w); err != nil {
+		s.log.Error("render variables tab", slog.String("error", err.Error()))
+	}
+}
+
+// The Variables tab's forms, as variableFailed names the one refused.
+const (
+	variableFormSet = "set"
+	variableFormRef = "ref"
+	variableFormRaw = "raw"
+)
+
+// variableSaved sends somebody back to the Variables tab after a save. A
+// save from htmx is told to load the page, rather than have the redirect's
+// page swapped into the tab, so the canvas's changes bar counts it too.
+func variableSaved(w http.ResponseWriter, r *http.Request, appName string) {
+	to := "/apps/" + appName + "/variables"
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", to)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// nthLine is line n of text, counted from 1, or "" past its end.
+func nthLine(text string, n int) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if n < 1 || n > len(lines) {
+		return ""
+	}
+	return lines[n-1]
 }
 
 // healthSet points the app's probe at a path, or removes it.

@@ -518,8 +518,13 @@ func TestNetworkingSaysWhyThereIsNoDomain(t *testing.T) {
 	if !strings.Contains(body, "This app is internal.") || strings.Contains(body, "/networking/domain/generate") {
 		t.Error("an app that cannot have a domain was not told why, or was offered one anyway")
 	}
-	if !strings.Contains(body, "YACHT_TCP_PROXY_HOST") {
+	if !strings.Contains(body, "Ask your operator to turn them on.") {
 		t.Error("an install without TCP proxies does not say so")
+	}
+	// The customer cannot set the engine's settings, and on a product built
+	// on it they are not even called that.
+	if strings.Contains(body, "YACHT_") {
+		t.Error("a customer's page names one of the engine's settings")
 	}
 }
 

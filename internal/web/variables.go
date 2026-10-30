@@ -74,6 +74,37 @@ type VariablesView struct {
 	// whether the Raw Editor can save.
 	CanReveal bool
 	Raw       bool
+
+	// Failed is the form a save was refused from — variableFormSet, Ref or
+	// Raw — so the reason is drawn beside it; "" draws it above the tab.
+	// What was typed comes back with it: the Set form's fields, or the Raw
+	// Editor's text, with the line it was refused for when there is one.
+	Failed      string
+	SetKey      string
+	SetValue    string
+	SetSecret   bool
+	RawText     string
+	RawLine     int
+	RawLineText string
+}
+
+// textareaText is text as a textarea is written with it. The HTML parser
+// drops one newline straight after <textarea>, so a text that starts with a
+// blank line is given one more to drop — otherwise every line number the
+// refusal points at would be one off.
+func textareaText(text string) string {
+	if strings.HasPrefix(text, "\n") || strings.HasPrefix(text, "\r\n") {
+		return "\n" + text
+	}
+	return text
+}
+
+// RawShown is the Raw Editor's text: what was refused, or the saved set.
+func (v VariablesView) RawShown(a app.App) string {
+	if v.Failed == variableFormRaw {
+		return v.RawText
+	}
+	return app.FormatEnv(a.Variables)
 }
 
 // Shadowed reports whether one of the app's own variables replaces the
@@ -216,15 +247,15 @@ func (s *Server) variablesRaw(w http.ResponseWriter, r *http.Request) {
 	err := rv.SetRawVariables(ctx, owner.ID, name, r.FormValue("raw"))
 	if errors.Is(err, app.ErrSavedWhileDeploying) {
 		s.flashOK(w, r, "Saved. A deploy is already running — redeploy once it finishes to apply it.")
-		http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+		variableSaved(w, r, name)
 		return
 	}
 	if err != nil {
-		s.variableFailed(w, r, name, err)
+		s.variableFailed(w, r, name, variableFormRaw, err)
 		return
 	}
 	s.flashSaved(w, r, "Variables saved.")
-	http.Redirect(w, r, "/apps/"+name+"/variables", http.StatusSeeOther)
+	variableSaved(w, r, name)
 }
 
 // flashSaved says a save went through, and — where saves wait — that it is
@@ -545,8 +576,8 @@ func secretKeys(vars []app.Variable) []string {
 
 // rawRows sizes the Raw Editor to its text, within reason: a textarea that
 // scrolls inside a scrolling panel is two scrollbars for one list.
-func rawRows(vars []app.Variable) int {
-	n := strings.Count(app.FormatEnv(vars), "\n") + 2
+func rawRows(text string) int {
+	n := strings.Count(text, "\n") + 2
 	return min(max(n, 6), 24)
 }
 
