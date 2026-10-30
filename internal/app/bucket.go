@@ -56,6 +56,18 @@ func (s *Service) makeBucket(ctx context.Context, service string) (*bucketMade, 
 	if err != nil {
 		return nil, err
 	}
+	// Never without a limit, which the store would read as none: one byte
+	// until limitBuckets gives it its part of the room, once it is recorded.
+	if err := s.buckets.SetLimit(ctx, c.ID, 1); err != nil {
+		s.unmakeBucket(c)
+		return nil, err
+	}
+	// Before anybody has its key. Not a reason to refuse the bucket: every
+	// measuring pass adds the rule where it is missing.
+	if err := s.buckets.Files(c).KeepAbortRule(ctx); err != nil {
+		s.log.Warn("buckets: the rule that ends unfinished uploads",
+			slog.String("bucket", c.Name), slog.String("error", err.Error()))
+	}
 	sealed, err := s.keeper.Seal(c.Secret)
 	if err != nil {
 		s.unmakeBucket(c)
@@ -115,6 +127,14 @@ type Bucket struct {
 	// TeamLimit is the most the team's buckets may hold together, zero for
 	// no limit, and TeamBytes what they all held when last measured.
 	TeamLimit, TeamBytes int64
+}
+
+// OverPlan says whether writing size more bytes would take the team's
+// buckets past its plan, as last measured. The store refuses a write past a
+// bucket's limit the same way whichever share set it, so a refused write
+// that is not past the plan was refused for the install's room.
+func (b Bucket) OverPlan(size int64) bool {
+	return b.TeamLimit > 0 && b.TeamBytes+size > b.TeamLimit
 }
 
 // stored is a bucket's row and the key to it, which the Files tab uses.
@@ -182,79 +202,6 @@ func (s *Service) BucketFiles(ctx context.Context, ownerID, name string) (*bucke
 	return s.buckets.Files(c), nil
 }
 
-// MeasureBucket asks the store what a bucket holds now and records it, for
-// its page to show straight after an upload or a delete.
-func (s *Service) MeasureBucket(ctx context.Context, ownerID, name string) error {
-	a, err := s.Get(ctx, ownerID, name)
-	if err != nil {
-		return err
-	}
-	row, _, err := s.storedBucket(ctx, a)
-	if err != nil {
-		return err
-	}
-	if err := s.measure(ctx, row); err != nil {
-		return err
-	}
-	s.limitBuckets(ctx, ownerID)
-	return nil
-}
-
-// limitBuckets gives each of a team's buckets its share of the team's
-// bucket storage, as a limit the store keeps: what the team may hold in
-// buckets, less what its other buckets hold. A bucket whose others have
-// already used it all may take nothing more. With no quota, no limit.
-//
-// Shares follow the measured sizes, so they are as fresh as the last
-// measuring: run when a quota is set, a bucket made, a file put or deleted
-// through the Files tab, and on every measuring pass. An app writing to two
-// buckets at once can pass the team's total by what it writes between two
-// passes, and no further.
-func (s *Service) limitBuckets(ctx context.Context, ownerID string) {
-	if s.buckets == nil {
-		return
-	}
-	q, err := s.Quota(ctx, ownerID)
-	if err != nil {
-		s.log.Warn("buckets: read quota", slog.String("team", ownerID), slog.String("error", err.Error()))
-		return
-	}
-	rows, err := s.q.ListTeamBuckets(ctx, ownerID)
-	if err != nil {
-		s.log.Warn("buckets: list a team's", slog.String("team", ownerID), slog.String("error", err.Error()))
-		return
-	}
-	var total int64
-	for _, r := range rows {
-		total += r.SizeBytes
-	}
-	for _, r := range rows {
-		if err := s.buckets.SetLimit(ctx, r.GarageID, bucketShare(q.BucketBytes, total-r.SizeBytes)); err != nil && ctx.Err() == nil {
-			s.log.Warn("buckets: limit", slog.String("bucket", r.Name), slog.String("error", err.Error()))
-		}
-	}
-}
-
-// bucketShare is the most one bucket may hold when the team may hold limit
-// and its other buckets hold others: zero for no limit, and never below one
-// byte, which the store would read as none.
-func bucketShare(limit, others int64) int64 {
-	if limit <= 0 {
-		return 0
-	}
-	return max(limit-others, 1)
-}
-
-func (s *Service) measure(ctx context.Context, row dbgen.Bucket) error {
-	u, err := s.buckets.Usage(ctx, row.GarageID)
-	if err != nil {
-		return err
-	}
-	return s.q.SetBucketUsage(ctx, dbgen.SetBucketUsageParams{
-		AppID: row.AppID, SizeBytes: u.Bytes, Objects: u.Objects,
-	})
-}
-
 // deleteBucket empties a bucket and deletes it and its key from the store.
 // A bucket with no row — a create that failed before recording it — has
 // nothing here to delete.
@@ -273,51 +220,4 @@ func (s *Service) deleteBucket(ctx context.Context, a App) error {
 		return fmt.Errorf("app: delete bucket %s: %w", row.Name, err)
 	}
 	return nil
-}
-
-// bucketMeasureInterval is how often every bucket is measured: what usage
-// and billing read, which change by the hour rather than the second.
-const bucketMeasureInterval = 5 * time.Minute
-
-// RunBuckets gives the store's node its place in the layout, which a new
-// Garage needs before it stores anything, then measures every bucket every
-// few minutes, until ctx ends. Every replica may run it: both are the same
-// whoever does them.
-func (s *Service) RunBuckets(ctx context.Context, zone string) {
-	if s.buckets == nil {
-		return
-	}
-	laidOut := false
-	t := time.NewTimer(0)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		if !laidOut {
-			if err := s.buckets.EnsureLayout(ctx, zone); err != nil {
-				s.log.Warn("buckets: the store's layout", slog.String("error", err.Error()))
-				t.Reset(30 * time.Second)
-				continue
-			}
-			laidOut = true
-		}
-		rows, err := s.q.ListBuckets(ctx)
-		if err != nil {
-			s.log.Error("buckets: list", slog.String("error", err.Error()))
-		}
-		teams := map[string]bool{}
-		for _, row := range rows {
-			if err := s.measure(ctx, row); err != nil && ctx.Err() == nil {
-				s.log.Warn("buckets: measure", slog.String("bucket", row.Name), slog.String("error", err.Error()))
-			}
-			teams[row.OwnerID] = true
-		}
-		for owner := range teams {
-			s.limitBuckets(ctx, owner)
-		}
-		t.Reset(bucketMeasureInterval)
-	}
 }

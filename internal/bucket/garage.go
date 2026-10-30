@@ -76,7 +76,11 @@ type Created struct {
 
 // Usage is what a bucket holds.
 type Usage struct {
-	Bytes, Objects int64
+	// Bytes is every object's latest version and every part of an upload
+	// not yet completed: both are on the store's disk, and the parts are
+	// not held to the bucket's limit until their upload is completed.
+	// Uploading is the parts alone.
+	Bytes, Objects, Uploading int64
 }
 
 // ErrUnavailable is Garage not answering, or answering with something the
@@ -128,6 +132,65 @@ func (g *Garage) EnsureLayout(ctx context.Context, zone string) error {
 		return err
 	}
 	return g.call(ctx, http.MethodPost, "/v2/ApplyClusterLayout", map[string]any{"version": layout.Version + 1}, nil)
+}
+
+// Disk is the room the store has for objects, as Garage reports it.
+type Disk struct {
+	// Total is the size of the disk objects are kept on, and Available what
+	// is free on it now. Both are what the filesystem says, so Total less
+	// Available is everything on it: every bucket's blocks as stored, and
+	// anything else the disk holds.
+	Total, Available int64
+}
+
+// Disk reads the room on the data partition of the node that stores
+// objects, which Garage reports in its cluster status.
+//
+// One node, as an install runs it. With more, how much they hold together
+// depends on the replication factor, which the admin API does not report, and
+// on how evenly objects are spread: rather than guess, more than one storing
+// node is an error, and the room is unknown. So is a storing node that does
+// not report its partition, which is a node that is down.
+func (g *Garage) Disk(ctx context.Context) (Disk, error) {
+	var status struct {
+		Nodes []struct {
+			ID   string `json:"id"`
+			IsUp bool   `json:"isUp"`
+			Role *struct {
+				Capacity *int64 `json:"capacity"`
+			} `json:"role"`
+			DataPartition *struct {
+				Available int64 `json:"available"`
+				Total     int64 `json:"total"`
+			} `json:"dataPartition"`
+		} `json:"nodes"`
+	}
+	if err := g.call(ctx, http.MethodGet, "/v2/GetClusterStatus", nil, &status); err != nil {
+		return Disk{}, err
+	}
+	var d Disk
+	storing := 0
+	for _, n := range status.Nodes {
+		// A node with no role, or a gateway's role with no capacity, keeps
+		// no objects.
+		if n.Role == nil || n.Role.Capacity == nil {
+			continue
+		}
+		storing++
+		p := n.DataPartition
+		if !n.IsUp || p == nil || p.Total <= 0 {
+			return Disk{}, fmt.Errorf("%w: node %.16s does not report its data partition", ErrUnavailable, n.ID)
+		}
+		d = Disk{Total: p.Total, Available: min(p.Available, p.Total)}
+	}
+	switch {
+	case storing == 0:
+		return Disk{}, fmt.Errorf("%w: no node has a place in the layout yet", ErrUnavailable)
+	case storing > 1:
+		return Disk{}, fmt.Errorf("%w: %d nodes store objects, and the room on more than one "+
+			"depends on a replication factor the admin API does not report", ErrUnavailable, storing)
+	}
+	return d, nil
 }
 
 // nameRE is what a bucket's name may be: S3's rule, which Garage keeps.
@@ -192,17 +255,18 @@ func bucketName(service string) string {
 	return base + "-" + string(b[:])
 }
 
-// Usage is what a bucket holds now: every object, and the bytes of their
-// latest versions.
+// Usage is what a bucket holds now: every object, the bytes of their latest
+// versions, and the parts of its unfinished multipart uploads.
 func (g *Garage) Usage(ctx context.Context, id string) (Usage, error) {
 	var info struct {
-		Bytes   int64 `json:"bytes"`
-		Objects int64 `json:"objects"`
+		Bytes     int64 `json:"bytes"`
+		Objects   int64 `json:"objects"`
+		Uploading int64 `json:"unfinishedMultipartUploadBytes"`
 	}
 	if err := g.call(ctx, http.MethodGet, "/v2/GetBucketInfo?id="+url.QueryEscape(id), nil, &info); err != nil {
 		return Usage{}, err
 	}
-	return Usage{Bytes: info.Bytes, Objects: info.Objects}, nil
+	return Usage{Bytes: info.Bytes + info.Uploading, Objects: info.Objects, Uploading: info.Uploading}, nil
 }
 
 // SetLimit is the most a bucket may hold, in bytes, which Garage enforces

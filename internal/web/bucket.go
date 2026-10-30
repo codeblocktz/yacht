@@ -27,6 +27,9 @@ type Buckets interface {
 	Bucket(ctx context.Context, ownerID, name string) (app.Bucket, error)
 	BucketFiles(ctx context.Context, ownerID, name string) (*objstore.Files, error)
 	MeasureBucket(ctx context.Context, ownerID, name string) error
+	// PrepareBucketUpload gives a bucket about to be written its part of the
+	// store's free room.
+	PrepareBucketUpload(ctx context.Context, ownerID, name string) error
 }
 
 func (s *Server) buckets() Buckets {
@@ -170,14 +173,26 @@ func (s *Server) bucketUpload(w http.ResponseWriter, r *http.Request) {
 		s.bucketNotFound(w, r, err)
 		return
 	}
+	// Room for it first: a bucket nobody has written to lately keeps only a
+	// small part of the store's free room. Failing that, the upload is still
+	// tried against the limit it has.
+	if err := s.buckets().PrepareBucketUpload(ctx, owner.ID, name); err != nil {
+		s.log.Warn("prepare a bucket for an upload", slog.String("app", name), slog.String("error", err.Error()))
+	}
 	var put []string
+	var written int64
 	for _, fh := range r.MultipartForm.File["file"] {
 		key := prefix + path.Base(strings.ReplaceAll(fh.Filename, `\`, "/"))
 		if err := s.putFile(ctx, files, key, fh); err != nil {
-			s.renderBucketListing(w, r, prefix, "", uploaded(put), "Could not store "+fh.Filename+": "+bucketSentence(err))
+			msg := bucketSentence(err)
+			if errors.Is(err, objstore.ErrFull) && !s.overPlan(ctx, owner.ID, name, written+fh.Size) {
+				msg = installFullSentence
+			}
+			s.renderBucketListing(w, r, prefix, "", uploaded(put), "Could not store "+fh.Filename+": "+msg)
 			return
 		}
 		put = append(put, fh.Filename)
+		written += fh.Size
 	}
 	_ = s.buckets().MeasureBucket(ctx, owner.ID, name)
 	s.renderBucketListing(w, r, prefix, "", uploaded(put), "")
@@ -255,6 +270,24 @@ func (s *Server) bucketNotFound(w http.ResponseWriter, r *http.Request, err erro
 		return
 	}
 	s.render(w, r, BucketListing(BucketListingData{App: chi.URLParam(r, "name"), Error: bucketSentence(err)}))
+}
+
+// installFullSentence is a write refused because the install's bucket store
+// has no room left, rather than the team's plan: nothing the team can do but
+// wait, and nothing about how much anybody else holds.
+const installFullSentence = "This server's bucket storage is full. Your files are safe; " +
+	"uploads will work again once an operator makes room."
+
+// overPlan says whether a write of size more bytes, refused as full, was
+// past the team's plan rather than the install's room. The store refuses
+// both alike, so the team's own numbers decide; unreadable, it is the plan,
+// which is what the sentence said before there was another.
+func (s *Server) overPlan(ctx context.Context, ownerID, name string, size int64) bool {
+	b, err := s.buckets().Bucket(ctx, ownerID, name)
+	if err != nil {
+		return true
+	}
+	return b.OverPlan(size)
 }
 
 // bucketSentence is an error as the page says it.

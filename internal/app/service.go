@@ -420,6 +420,12 @@ type Service struct {
 	// admission and for the pages that show the install's capacity.
 	room *roomSource
 
+	// limits is where buckets' limits are set, the bucket store; nil with
+	// none. disk is its room for objects, read afresh whenever limits are
+	// set and shown to the pages as last read.
+	limits bucketStore
+	disk   *diskSource
+
 	// refusals is the capacity refusals still being recorded, so a test can
 	// wait for them rather than poll.
 	refusals sync.WaitGroup
@@ -474,13 +480,20 @@ func NewService(
 	if opts.PlatformVariablePrefix == "" {
 		opts.PlatformVariablePrefix = DefaultPlatformVariablePrefix
 	}
-	return &Service{
+	s := &Service{
 		pool: pool, q: dbgen.New(pool), orch: orch, log: log, opts: opts,
 		keeper: opts.Keeper, resolver: opts.Resolver,
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests, buckets: opts.Buckets,
 		gh:   opts.GitHub,
-		room: newRoomSource(orch, log), wakes: map[uuid.UUID]*wakeCall{},
+		room: newRoomSource(orch, log), disk: newDiskSource(nil, log),
+		wakes: map[uuid.UUID]*wakeCall{},
 	}
+	// Only a store that is there: a nil Garage in the interface would be a
+	// store that is not nil.
+	if opts.Buckets != nil {
+		s.limits, s.disk = opts.Buckets, newDiskSource(opts.Buckets.Disk, log)
+	}
+	return s
 }
 
 // EnsureOwner makes sure the owner row exists, so app inserts have a parent.
@@ -1226,9 +1239,9 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 	committed = true
 	if made != nil {
-		// Its share of the team's bucket storage, before anything is put
-		// in it.
-		s.limitBuckets(ctx, ownerID)
+		// Its limit, before anything is put in it, and every other
+		// bucket's, whose part of the store's free room it now shares.
+		s.limitBuckets(ctx, false)
 	}
 
 	s.log.Info("app created",

@@ -24,6 +24,7 @@ type Querier interface {
 	// at apps whose failing somebody would be told about.
 	AppsWatchedForCrashes(ctx context.Context) ([]AppsWatchedForCrashesRow, error)
 	AttachSourceUpload(ctx context.Context, arg AttachSourceUploadParams) (int64, error)
+	BucketWantsRoom(ctx context.Context, appID uuid.UUID) error
 	CancelDeploymentOperation(ctx context.Context, arg CancelDeploymentOperationParams) (DeploymentOperation, error)
 	ClaimDeploymentOperation(ctx context.Context, arg ClaimDeploymentOperationParams) (DeploymentOperation, error)
 	// Claims the domains whose next check is due, and leases them.
@@ -437,6 +438,8 @@ type Querier interface {
 	// The audit log is written here and read by audit.List, which composes its
 	// filters at runtime — the hybrid sqlc.yaml describes.
 	InsertAuditEvent(ctx context.Context, arg InsertAuditEventParams) error
+	// A bucket starts with the one byte it was made with (app.makeBucket), until
+	// its limit is set.
 	InsertBucket(ctx context.Context, arg InsertBucketParams) error
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
 	ListAPITokens(ctx context.Context, ownerID string) ([]ListAPITokensRow, error)
@@ -488,6 +491,10 @@ type Querier interface {
 	// because assigning one is a write and a read should not have side effects
 	// that a caller cannot see.
 	ListAppsWithoutProject(ctx context.Context, ownerID string) ([]App, error)
+	// Every bucket on the install with what limits it: its size, the limit last
+	// set, when it last wanted room, and its team's quota for buckets, zero for
+	// none.
+	ListBucketLimits(ctx context.Context) ([]ListBucketLimitsRow, error)
 	// Every bucket on the install, for measuring.
 	ListBuckets(ctx context.Context) ([]Bucket, error)
 	// The operator's list, newest first, with the team's name as it is now.
@@ -752,6 +759,9 @@ type Querier interface {
 	// The idle clock restarts with the setting, so turning sleep on for an app
 	// that has been quiet all week does not put it to sleep a minute later.
 	SetAppSleepSetting(ctx context.Context, arg SetAppSleepSettingParams) (App, error)
+	SetBucketLimit(ctx context.Context, arg SetBucketLimitParams) error
+	// What a bucket holds, its unfinished uploads among it; a bucket that grew
+	// wants room.
 	SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error
 	// What the build's Dockerfile declared, recorded once it has pushed. See
 	// migration 00074.
@@ -790,6 +800,9 @@ type Querier interface {
 	// Scoped by expiry so a session that has ended cannot be made to act; execrows
 	// so the caller can tell that it was not.
 	StartActing(ctx context.Context, arg StartActingParams) (int64, error)
+	// Every bucket on the install: how many, and what they held when last
+	// measured.
+	SumBuckets(ctx context.Context) (SumBucketsRow, error)
 	SumInstallVolumeBytes(ctx context.Context) (int64, error)
 	SumVolumeBytes(ctx context.Context, ownerID string) (int64, error)
 	// Volume bytes by the region of the app holding them, for the capacity page's

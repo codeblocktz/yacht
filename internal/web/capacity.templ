@@ -77,6 +77,9 @@ templ AdminCapacity(d CapacityData) {
 	</div>
 	if d.Snapshot != nil {
 		@capacitySold(*d.Snapshot)
+		if b := d.Snapshot.Buckets; b != nil {
+			@capacityBuckets(*b, d.Snapshot.WarnPercent)
+		}
 		@capacityRegions(*d.Snapshot)
 		if d.Snapshot.Sleeping.Apps > 0 || d.Sleeping {
 			@capacitySleeping(*d.Snapshot)
@@ -200,6 +203,74 @@ templ soldResource(label string, r app.CapacityResource, known bool, ratio float
 				}
 			</p>
 		}
+	</div>
+}
+
+// capacityBuckets is the bucket store's disk: what is on it against what
+// buckets may fill, which every bucket's limit is held under together.
+templ capacityBuckets(b app.BucketCapacity, warn int) {
+	<div class="panel mb-5" data-capacity-buckets>
+		<div class="panel-header">
+			<span class="panel-title">Buckets</span>
+			<span class="text-[11.5px] text-muted-foreground tabular-nums">
+				{ plural(int(b.Buckets), "bucket") } · { byteAmount(b.Stored) } stored, as last measured
+			</span>
+		</div>
+		<div class="panel-body flex flex-col gap-4">
+			if !b.Known {
+				<p class="text-[12.5px] text-muted-foreground">
+					Unknown — the bucket store's disk could not be read. Buckets are held to their teams'
+					quotas alone until it can be.
+				</p>
+				if b.Reason != "" {
+					<p class="mono break-all text-[12px] text-muted-foreground">{ b.Reason }</p>
+				}
+			} else {
+				if b.Percent() >= warn {
+					<div class={ "callout", templ.KV("callout-warn", b.Percent() < 100), templ.KV("callout-err", b.Percent() >= 100) }>
+						<div class="min-w-0">
+							<div class="font-medium">
+								if b.Percent() >= 100 {
+									The bucket store is full — every upload to every bucket is refused
+								} else {
+									The bucket store is { strconv.Itoa(b.Percent()) }% full
+								}
+							</div>
+							<p class="mt-0.5 text-muted-foreground">
+								Grow the store's volume, or ask the teams storing the most to delete files.
+								Past { byteAmount(b.Usable) }, uploads are refused until there is room.
+							</p>
+						</div>
+					</div>
+				}
+				<div>
+					<div class="flex items-baseline justify-between gap-2">
+						<span class="micro">On the store's disk</span>
+						<span class="text-[12px] tabular-nums">
+							{ byteAmount(b.Used) } <span class="text-muted-foreground">of { byteAmount(b.Usable) } · { strconv.Itoa(b.Percent()) }%</span>
+						</span>
+					</div>
+					@meter(b.Percent(), meterClass(b.Percent()))
+				</div>
+				<dl class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-[12px] sm:max-w-sm">
+					<dt class="text-muted-foreground">Disk</dt>
+					<dd class="text-right tabular-nums">{ byteAmount(b.Total) }</dd>
+					<dt class="text-muted-foreground">Kept free</dt>
+					<dd class="text-right tabular-nums">{ byteAmount(b.Reserve) }</dd>
+					<dt class="text-muted-foreground">Buckets may fill</dt>
+					<dd class="text-right tabular-nums">{ byteAmount(b.Usable) }</dd>
+					<dt class="text-muted-foreground">Free to write</dt>
+					<dd class="text-right font-medium tabular-nums">{ byteAmount(b.Free) }</dd>
+				</dl>
+				<p class="text-[11.5px] text-muted-foreground">
+					Every bucket keeps a small part of what is free for its next upload, and the buckets being
+					written to share the rest, none past its team's quota: together they cannot write more than is
+					free, so no one team can fill the store for everyone. What is kept free is for uploads in
+					flight, which the store checks only once they are written, and for what is written between
+					measurings.
+				</p>
+			}
+		</div>
 	</div>
 }
 

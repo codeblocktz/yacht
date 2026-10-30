@@ -167,6 +167,13 @@ type (
 	// SleepingCapacity is CapacitySnapshot.Sleeping: the apps asleep across
 	// the install, their size awake, and the wake reserve held for them.
 	SleepingCapacity = app.SleepingCapacity
+	// BucketCapacity is CapacitySnapshot.Buckets, nil on an install with no
+	// bucket store: the store's disk as Garage reports it, in bytes, less a
+	// reserve kept free. Usable is what every team's buckets together may
+	// fill — what a plan's bucket storage, times the teams sold it, is to be
+	// checked against — and Free what they may still write. Past Usable the
+	// store refuses every upload until there is room.
+	BucketCapacity = app.BucketCapacity
 
 	// SleepPolicy is whether apps sleep when idle and after how long: a
 	// team's default, from Apps.TeamSleepDefault and Apps.SetTeamSleepDefault,
@@ -814,6 +821,10 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 // Known false means the cluster could not be read — nothing is being refused
 // for capacity then, and a wrapper should not advertise room it cannot see.
 // RoomShort is the one field fit to turn into something a customer is shown.
+//
+// Buckets is the bucket store's room, apart from the policy: its disk is read
+// from the store at most every 30 seconds, and Buckets.Known false means it
+// could not be.
 func (e *Engine) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	return e.Apps.Capacity(ctx)
 }

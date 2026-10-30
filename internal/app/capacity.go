@@ -645,7 +645,8 @@ const (
 	CapacityOK CapacityLevel = "ok"
 	// CapacityWarn is at or past the warning line and under what is sellable.
 	CapacityWarn CapacityLevel = "warn"
-	// CapacityFull is at or past what is sellable on any counted resource.
+	// CapacityFull is at or past what is sellable on any counted resource,
+	// or the bucket store at or past what buckets may fill.
 	CapacityFull CapacityLevel = "full"
 	// CapacityUnknown is a cluster that could not be read.
 	CapacityUnknown CapacityLevel = "unknown"
@@ -695,6 +696,12 @@ type CapacitySnapshot struct {
 	// sellable. The one thing here a customer may be told, as a notice that
 	// a change may be refused — never as a number.
 	RoomShort bool
+
+	// Buckets is the install's room for buckets: the bucket store's disk,
+	// what is kept free on it, and what is on it. Nil on an install with no
+	// bucket store. Its level is in Level; nothing in it is in RoomShort,
+	// which is about deploying.
+	Buckets *BucketCapacity
 
 	// Regions is the same, region by region, on an install with regions:
 	// each region's machines against the apps that live there, which is what
@@ -787,6 +794,18 @@ func (s *Service) Capacity(ctx context.Context) (CapacitySnapshot, error) {
 	room, nodes := s.room.snapshot(ctx)
 	snap := NewCapacitySnapshot(p, room, used, int(refused))
 	snap.Sleeping = sleepingCapacity(apps, p.WakeReservePercent)
+	if s.buckets != nil {
+		b, err := s.bucketCapacity(ctx)
+		if err != nil {
+			return CapacitySnapshot{}, err
+		}
+		snap.Buckets = &b
+		// An unreadable store is not an unknown install: it refuses nothing
+		// for room, and the page says so beside it.
+		if b.Known {
+			snap.Level = worseLevel(snap.Level, b.level(p.WarnPercent))
+		}
+	}
 
 	v, err := s.regionViewOf(ctx, s.q, room, nodes)
 	if err != nil {

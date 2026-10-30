@@ -840,11 +840,14 @@ func galleryPages() []galleryPage {
 		{
 			// The same install under a policy: CPU sold twice with a tenth
 			// kept back, storage counted, enforced — memory past the warning
-			// line, and a week of demand turned away.
+			// line, a week of demand turned away, and the bucket store's
+			// 20 GiB disk filling past the warning line too.
 			file: "states-admin-capacity-policy.html", path: "/admin/capacity",
 			crumbs: []Crumb{{Label: "Admin", Href: "/admin/teams"}, {Label: "Capacity"}},
 			page: func() templ.Component {
 				snap := galleryCapacity(nodes, now, galleryPolicy(2, 10), 2)
+				snap.Buckets = &app.BucketCapacity{Known: true, Total: 20 << 30, Reserve: 2 << 30,
+					Usable: 18 << 30, Used: 15<<30 + 400<<20, Free: 2<<30 + 624<<20, Buckets: 12, Stored: 14<<30 + 900<<20}
 				d := CapacityData{OK: true, CanAddNode: true, Form: capacityPolicyForm(snap.Policy),
 					Refusals: galleryRefusals(now)}
 				d.addSnapshot(snap)

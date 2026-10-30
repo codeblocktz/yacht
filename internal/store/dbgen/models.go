@@ -173,16 +173,19 @@ type AuditEvent struct {
 }
 
 type Bucket struct {
-	AppID        uuid.UUID
-	OwnerID      string
-	GarageID     string
-	Name         string
-	KeyID        string
-	SealedSecret []byte
-	SizeBytes    int64
-	Objects      int64
-	MeasuredAt   pgtype.Timestamptz
-	CreatedAt    time.Time
+	AppID          uuid.UUID
+	OwnerID        string
+	GarageID       string
+	Name           string
+	KeyID          string
+	SealedSecret   []byte
+	SizeBytes      int64
+	Objects        int64
+	MeasuredAt     pgtype.Timestamptz
+	CreatedAt      time.Time
+	LimitBytes     int64
+	UploadingBytes int64
+	WantsRoomAt    pgtype.Timestamptz
 }
 
 type Build struct {

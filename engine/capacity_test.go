@@ -64,6 +64,9 @@ func TestAWrapperReadsTheInstallsCapacity(t *testing.T) {
 	if snap.CPU.Allocatable != 8000 || snap.CPU.Sellable != 8000 || snap.Memory.Sellable != 16<<30 {
 		t.Fatalf("CPU %+v, memory %+v; want 8 vCPU and 16 GiB sellable at the defaults", snap.CPU, snap.Memory)
 	}
+	if snap.Buckets != nil {
+		t.Fatalf("buckets = %+v on an install with no bucket store", snap.Buckets)
+	}
 	if snap.CPU.Free != max(snap.CPU.Sellable-snap.CPU.Committed, 0) || snap.Storage.Counted {
 		t.Fatalf("free = %d of %d sellable with %d committed; storage counted = %v",
 			snap.CPU.Free, snap.CPU.Sellable, snap.CPU.Committed, snap.Storage.Counted)
