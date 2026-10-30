@@ -70,6 +70,22 @@ const (
 // buildpack step's group so all three can write the shared volume.
 const buildUID = 1000
 
+// shareSourceScript makes the checkout writable by the build's group, and is
+// the last thing the clone and the fetch do.
+//
+// Sharing a group is not enough on its own. The source belongs to the user
+// that wrote it, 1000, with the 0755 and 0644 the default umask leaves —
+// readable by the lifecycle, which runs as 1001, and not writable by it. A
+// buildpack that writes into the app directory then fails: npm-install puts
+// node_modules there, and npm cannot even create its own scratch file
+// ("open /workspace/src/executable_response…: permission denied"). fsGroup
+// does not help, since it sets the group of what is created, not its mode.
+//
+// chmod rather than a umask: an uploaded archive brings its own modes, which
+// tar keeps, so only setting them afterwards covers both kinds of source. X
+// adds execute to directories and leaves files as they were.
+const shareSourceScript = `chmod -R g+rwX /workspace/src`
+
 // insecureOutput is the BuildKit output option for a plain-HTTP registry.
 //
 // Appended to the output rather than set as a daemon-wide flag, so it applies
@@ -289,6 +305,7 @@ else
 fi
 echo "` + commitMarker + `$(git -C /workspace/src rev-parse HEAD)"
 echo "Cloned $(git -C /workspace/src rev-parse --short HEAD)"
+` + shareSourceScript + `
 `},
 		SecurityContext: hardened(buildUID),
 		VolumeMounts:    mounts,
@@ -339,6 +356,7 @@ if ! wget -q -T 60 --header "Authorization: Bearer $(cat "$SOURCE_TOKEN_FILE")" 
 fi
 tar -xzf /workspace/source.tar.gz -C /workspace/src
 rm -f /workspace/source.tar.gz
+` + shareSourceScript + `
 echo "Fetched $(find /workspace/src -type f | wc -l | tr -d ' ') files"
 `},
 		SecurityContext: hardened(buildUID),
@@ -488,6 +506,64 @@ func int64Ptr(i int64) *int64 { return &i }
 // context uses, so the two cannot drift apart.
 func itoa(i int64) string { return strconv.FormatInt(i, 10) }
 
+// The lifecycle's exit codes for a detection that nothing passed: 20 when
+// every buildpack declined, 21 when one of them also failed while looking.
+const (
+	cnbFailedDetect           = 20
+	cnbFailedDetectWithErrors = 21
+)
+
+// staticSiteScript serves a repository nothing recognised, with Apache httpd,
+// when it is a website: an index.html at the top, or in public/.
+//
+// The builder has Paketo's web-servers buildpack, and it is the one that
+// declines here: it serves a directory only when asked to, with
+// BP_WEB_SERVER, because a static site has no file that says it is one the
+// way package.json says Node. Asking for it up front is not an option either.
+// web-servers comes before Node.js in the builder's order, so setting it for
+// every build would turn a Node app with a public/index.html into a web
+// server that never runs the app. So it is asked for only once detection has
+// failed without it — a static site is what is left, which is how Railpack
+// treats one too.
+//
+// httpd rather than nginx, which is the buildpack's other server and the
+// obvious first choice, because of the read-only root filesystem every app
+// runs with. Paketo's nginx writes its configuration into the app directory
+// when the container starts, to put $PORT in it, and fails there with "open
+// /workspace/src/nginx.conf: read-only file system". Its httpd writes the
+// configuration at build time and Apache reads ${PORT} itself, so nothing is
+// written at launch. The same variables tune either server
+// (BP_WEB_SERVER_ENABLE_PUSH_STATE for a single-page app, BP_WEB_SERVER_ROOT),
+// and they are the app's own variables, so a team sets them like any other.
+//
+// A variable the app already sets is left as it is. And when nothing is
+// recognised even then, the build says what would be, in one line: the
+// lifecycle's own error is a page of every group it tried, ending in none.
+var staticSiteScript = `
+if [ "$code" -eq ` + itoa(cnbFailedDetect) + ` ] || [ "$code" -eq ` + itoa(cnbFailedDetectWithErrors) + ` ]; then
+  root=""
+  if [ -f "/workspace/src/$SUBDIR/index.html" ]; then
+    root=.
+  elif [ -f "/workspace/src/$SUBDIR/public/index.html" ]; then
+    root=public
+  fi
+  if [ -n "$root" ] && [ ! -f /workspace/platform/env/BP_WEB_SERVER ]; then
+    echo "No language was recognised, but there is an index.html: serving it as a static site with Apache httpd."
+    printf httpd > /workspace/platform/env/BP_WEB_SERVER
+    if [ ! -f /workspace/platform/env/BP_WEB_SERVER_ROOT ]; then
+      printf %s "$root" > /workspace/platform/env/BP_WEB_SERVER_ROOT
+    fi
+    # The first try left its analysis behind; this one starts clean.
+    rm -rf /workspace/layers
+    mkdir -p /workspace/layers
+    code=0
+    create || code=$?
+  fi
+fi
+if [ "$code" -eq ` + itoa(cnbFailedDetect) + ` ] || [ "$code" -eq ` + itoa(cnbFailedDetectWithErrors) + ` ]; then
+  echo "Nothing in this repository was recognised. Add a Dockerfile, or a Procfile naming the command that starts the app; a static site needs an index.html at the top or in public/."
+fi`
+
 // buildpackStep builds a repository that has no Dockerfile.
 //
 // The lifecycle runs inside the builder image rather than on its own, because
@@ -545,14 +621,22 @@ for f in "$BUILD_ARGS"/*; do
   fi
 done
 echo "` + buildArgsMarker + orchestrator.BuildArgsAll + `"
-/cnb/lifecycle/creator \
-  -app="/workspace/src/$SUBDIR" \
-  -layers=/workspace/layers \
-  -cache-dir=/workspace/cache \
-  -platform=/workspace/platform \
-  -uid=` + itoa(cnbUID) + ` -gid=` + itoa(cnbGID) + ` \
-  -log-level=info \
-  "$IMAGE"
+create() {
+  /cnb/lifecycle/creator \
+    -app="/workspace/src/$SUBDIR" \
+    -layers=/workspace/layers \
+    -cache-dir=/workspace/cache \
+    -platform=/workspace/platform \
+    -uid=` + itoa(cnbUID) + ` -gid=` + itoa(cnbGID) + ` \
+    -log-level=info \
+    "$IMAGE"
+}
+code=0
+create || code=$?
+` + staticSiteScript + `
+if [ "$code" -ne 0 ]; then
+  exit "$code"
+fi
 echo "Pushed $IMAGE"
 ` + resolveUIDScript + `
 `},
