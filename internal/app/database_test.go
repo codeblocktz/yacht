@@ -74,6 +74,7 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 		scheme  string
 		uid     int64
 		args    bool
+		memory  string // the limit; enough for the engine's first start
 	}{
 		{
 			source: SourcePostgres,
@@ -83,7 +84,7 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 				"PGDATA": "/var/lib/postgresql/data/pgdata", "PGHOST": "",
 			},
 			secrets: []string{"POSTGRES_PASSWORD", "PGPASSWORD", "DATABASE_URL"},
-			urlKey:  "DATABASE_URL", scheme: "postgres://yacht:", uid: 70,
+			urlKey:  "DATABASE_URL", scheme: "postgres://yacht:", uid: 70, memory: "512Mi",
 		},
 		{
 			source: SourceMySQL,
@@ -92,13 +93,13 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 				"MYSQLUSER": "root", "MYSQLPORT": "3306", "MYSQLHOST": "",
 			},
 			secrets: []string{"MYSQL_ROOT_PASSWORD", "MYSQLPASSWORD", "MYSQL_URL"},
-			urlKey:  "MYSQL_URL", scheme: "mysql://root:", uid: 999,
+			urlKey:  "MYSQL_URL", scheme: "mysql://root:", uid: 999, memory: "1Gi",
 		},
 		{
 			source:  SourceRedis,
 			plain:   map[string]string{"REDISUSER": "default", "REDISPORT": "6379", "REDISHOST": ""},
 			secrets: []string{"REDIS_PASSWORD", "REDISPASSWORD", "REDIS_URL"},
-			urlKey:  "REDIS_URL", scheme: "redis://default:", uid: 999, args: true,
+			urlKey:  "REDIS_URL", scheme: "redis://default:", uid: 999, args: true, memory: "512Mi",
 		},
 		{
 			source: SourceMongo,
@@ -107,7 +108,7 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 				"MONGOPORT": "27017", "MONGOHOST": "",
 			},
 			secrets: []string{"MONGO_INITDB_ROOT_PASSWORD", "MONGOPASSWORD", "MONGO_URL"},
-			urlKey:  "MONGO_URL", scheme: "mongodb://mongo:", uid: 999,
+			urlKey:  "MONGO_URL", scheme: "mongodb://mongo:", uid: 999, args: true, memory: "1Gi",
 		},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
@@ -149,10 +150,32 @@ func TestEveryDatabaseArrivesWithRailwaysVariables(t *testing.T) {
 			if spec.RunAsUser != tc.uid || spec.FSGroup != tc.uid {
 				t.Errorf("runs as %d/%d, want %d", spec.RunAsUser, spec.FSGroup, tc.uid)
 			}
+			// Its memory is set on the app, where the settings show it and the
+			// quota counts it, rather than left to a default that may not run
+			// the engine: MongoDB's first start was killed at 128 MiB, before
+			// it made its root user.
+			if a.MemoryLimit != tc.memory || spec.MemoryLimit != tc.memory || spec.MemoryRequest == "" {
+				t.Errorf("memory = %q on the app, %q/%q on the pod; want a limit of %s and a request",
+					a.MemoryLimit, spec.MemoryRequest, spec.MemoryLimit, tc.memory)
+			}
 			if tc.args {
 				joined := strings.Join(spec.Args, " ")
-				if !strings.Contains(joined, "--requirepass $(REDIS_PASSWORD)") {
-					t.Errorf("args = %q; the password reaches Redis as a flag the kubelet expands", joined)
+				switch tc.source {
+				case SourceRedis:
+					if !strings.Contains(joined, "--requirepass $(REDIS_PASSWORD)") {
+						t.Errorf("args = %q; the password reaches Redis as a flag the kubelet expands", joined)
+					}
+				case SourceMongo:
+					// Started through the image's entrypoint as before, with the
+					// root user made if a first start died before making it.
+					if !strings.HasSuffix(joined, "exec docker-entrypoint.sh mongod") ||
+						!strings.Contains(joined, "db.createUser") {
+						t.Errorf("args = %q; want the entrypoint, and the root user ensured", joined)
+					}
+					// The kubelet would expand any $( in it.
+					if strings.Contains(joined, "$") {
+						t.Errorf("args = %q; a $ in them is the kubelet's to expand", joined)
+					}
 				}
 				if strings.Contains(joined, pw) {
 					t.Error("the password itself is written into the pod template's arguments")

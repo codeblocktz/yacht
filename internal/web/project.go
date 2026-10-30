@@ -240,10 +240,11 @@ func (s *Server) attachSliders(ctx context.Context, d *AppDetailData) {
 		cpuMax, memMax = schedulableCPU(nodes), schedulableMemory(nodes)
 	}
 
-	d.CPULimit = cpuSlider("cpu_limit", "CPU", d.App.CPULimit, cpuMax)
-	d.MemoryLimit = memSlider("memory_limit", "Memory", d.App.MemoryLimit, memMax)
-	d.CPURequest = cpuSlider("cpu_request", "CPU", d.App.CPURequest, cpuMax)
-	d.MemoryRequest = memSlider("memory_request", "Memory", d.App.MemoryRequest, memMax)
+	def := orchestrator.DefaultLimits
+	d.CPULimit = cpuSlider("cpu_limit", "CPU", d.App.CPULimit, def.DefaultCPU, cpuMax)
+	d.MemoryLimit = memSlider("memory_limit", "Memory", d.App.MemoryLimit, def.DefaultMemory, memMax)
+	d.CPURequest = cpuSlider("cpu_request", "CPU", d.App.CPURequest, def.DefaultCPURequest, cpuMax)
+	d.MemoryRequest = memSlider("memory_request", "Memory", d.App.MemoryRequest, def.DefaultMemoryRequest, memMax)
 }
 
 // deploymentsFragment is the polled half of the deployments tab.

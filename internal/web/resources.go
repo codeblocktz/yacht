@@ -16,9 +16,10 @@ import (
 // no sense of whether what they typed is a lot.
 //
 // A track with a real ceiling turns it into a comparison instead. The ceiling
-// is the largest node's capacity, because that is what a single pod can
-// actually land on: a limit above it is a workload that stays Pending forever,
-// and offering it would be offering to break the app.
+// is what a single replica can actually have: the largest node's capacity,
+// and no more than the namespace allows one container. A limit above the
+// first stays Pending forever, and one above the second is refused outright;
+// offering either would be offering to break the app.
 
 // BranchData is what the branch picker swaps in.
 type BranchData struct {
@@ -115,18 +116,35 @@ type ResourceSlider struct {
 	Display    string
 	MaxDisplay string
 
-	// Unset means no limit is configured, which is a different answer from a
-	// small one and is drawn differently.
+	// Unset means nothing is configured, so the app gets the default — a
+	// different answer from a number somebody chose, and drawn differently.
 	Unset bool
+
+	// DefaultDisplay is what an unset track reads: the amount the app is
+	// given with nothing set, which is what its pod actually gets. Carried
+	// to the page so the label is still true when the handle is dragged back
+	// to zero.
+	DefaultDisplay string
 }
 
-// cpuSlider builds the CPU track from a stored limit and the cluster's shape.
-func cpuSlider(name, label, current string, capacityMillis int64) ResourceSlider {
-	max := roundUp(capacityMillis, cpuStepMillis)
-	if max <= 0 {
-		// No cluster to ask, so offer something usable rather than a track
-		// with one position on it. Four cores covers most single-box installs.
-		max = 4000
+// The ceilings when there is no cluster to ask: the most a replica may have,
+// which a single-box install usually has room for.
+var (
+	containerMaxCPUMillis = parseCPUMillis(orchestrator.ResourceLimits{}.OrDefaults().MaxCPU)
+	containerMaxMemMiB    = parseMemMiB(orchestrator.ResourceLimits{}.OrDefaults().MaxMemory)
+)
+
+// cpuSlider builds the CPU track from a stored setting, the default an app
+// with none is given, and the cluster's shape.
+//
+// The ceiling is the smaller of the largest node and the most one replica may
+// have. Past the node, the pod never schedules; past the per-replica maximum,
+// the cluster refuses to make it — and a track that offers either is offering
+// a deploy that fails.
+func cpuSlider(name, label, current, def string, capacityMillis int64) ResourceSlider {
+	max := containerMaxCPUMillis
+	if c := roundUp(capacityMillis, cpuStepMillis); c > 0 && c < max {
+		max = c
 	}
 	value := parseCPUMillis(current)
 	if value > max {
@@ -137,16 +155,18 @@ func cpuSlider(name, label, current string, capacityMillis int64) ResourceSlider
 	return ResourceSlider{
 		Name: name, Label: label,
 		Value: value, Max: max, Step: cpuStepMillis,
-		Display: cpuDisplay(value), MaxDisplay: cpuDisplay(max),
-		Unset: value == 0,
+		Display:        sliderLabel(cpuDisplay(value), value, cpuDisplay(parseCPUMillis(def))),
+		MaxDisplay:     cpuDisplay(max),
+		Unset:          value == 0,
+		DefaultDisplay: defaultLabel(cpuDisplay(parseCPUMillis(def))),
 	}
 }
 
 // memSlider builds the memory track.
-func memSlider(name, label, current string, capacityBytes int64) ResourceSlider {
-	max := roundUp(capacityBytes/(1<<20), memStepMiB)
-	if max <= 0 {
-		max = 8192
+func memSlider(name, label, current, def string, capacityBytes int64) ResourceSlider {
+	max := containerMaxMemMiB
+	if c := roundUp(capacityBytes/(1<<20), memStepMiB); c > 0 && c < max {
+		max = c
 	}
 	value := parseMemMiB(current)
 	if value > max {
@@ -155,9 +175,26 @@ func memSlider(name, label, current string, capacityBytes int64) ResourceSlider 
 	return ResourceSlider{
 		Name: name, Label: label,
 		Value: value, Max: max, Step: memStepMiB,
-		Display: memDisplay(value), MaxDisplay: memDisplay(max),
-		Unset: value == 0,
+		Display:        sliderLabel(memDisplay(value), value, memDisplay(parseMemMiB(def))),
+		MaxDisplay:     memDisplay(max),
+		Unset:          value == 0,
+		DefaultDisplay: defaultLabel(memDisplay(parseMemMiB(def))),
 	}
+}
+
+// sliderLabel is a track's label: the amount set, or the default's.
+func sliderLabel(display string, value int64, def string) string {
+	if value > 0 {
+		return display
+	}
+	return defaultLabel(def)
+}
+
+// defaultLabel says an amount is the default rather than a choice. Zero is
+// "nothing set", never "no limit": every container has one, and an app told
+// otherwise finds out when it is killed for using what it thought it had.
+func defaultLabel(amount string) string {
+	return "Default, " + amount
 }
 
 // schedulableCPU is the largest single node's CPU, which is the real ceiling.
@@ -267,7 +304,7 @@ func FormatMemory(mib int64) string {
 func cpuDisplay(millis int64) string {
 	switch {
 	case millis <= 0:
-		return "No limit"
+		return "None"
 	case millis < 1000:
 		return fmt.Sprintf("%.2g vCPU", float64(millis)/1000)
 	case millis%1000 == 0:
@@ -279,7 +316,7 @@ func cpuDisplay(millis int64) string {
 func memDisplay(mib int64) string {
 	switch {
 	case mib <= 0:
-		return "No limit"
+		return "None"
 	case mib < 1024:
 		return fmt.Sprintf("%d MB", mib)
 	case mib%1024 == 0:

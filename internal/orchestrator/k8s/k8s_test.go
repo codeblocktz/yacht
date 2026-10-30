@@ -86,8 +86,22 @@ func TestEnsureNamespace(t *testing.T) {
 	if item.Type != corev1.LimitTypeContainer {
 		t.Errorf("limitrange type = %q, want Container", item.Type)
 	}
-	if got := item.Default.Cpu().String(); got != "100m" {
-		t.Errorf("default cpu = %q, want 100m", got)
+	// Half a core and 512 MiB is what something set up with no limits gets,
+	// and a request below that is what the node holds for it.
+	for what, got := range map[string]string{
+		"default cpu":            item.Default.Cpu().String(),
+		"default memory":         item.Default.Memory().String(),
+		"default request cpu":    item.DefaultRequest.Cpu().String(),
+		"default request memory": item.DefaultRequest.Memory().String(),
+		"max cpu":                item.Max.Cpu().String(),
+	} {
+		want := map[string]string{
+			"default cpu": "500m", "default memory": "512Mi",
+			"default request cpu": "100m", "default request memory": "128Mi", "max cpu": "2",
+		}[what]
+		if got != want {
+			t.Errorf("%s = %q, want %q", what, got, want)
+		}
 	}
 	if got := item.Max.Memory().String(); got != "4Gi" {
 		t.Errorf("max memory = %q, want 4Gi", got)

@@ -1049,8 +1049,10 @@ templ appRuntimeForm(d AppDetailData) {
 			<div class="field-group">
 				<div class="field-label">Limits</div>
 				<p class="field-note mb-3">
-					The most one replica may use. The ceiling is this cluster's largest
-					node, because that is what a single pod can be scheduled onto.
+					The most one replica may use: more is throttled, for CPU, or
+					stopped and restarted, for memory. The ceiling is the most a
+					replica can have here — no more than the largest node, which is
+					where a single pod has to fit.
 				</p>
 				@resourceSlider(d.CPULimit, "cpu")
 				@resourceSlider(d.MemoryLimit, "mem")
@@ -1058,8 +1060,9 @@ templ appRuntimeForm(d AppDetailData) {
 			<div class="field-group">
 				<div class="field-label">Reserved</div>
 				<p class="field-note mb-3">
-					What the scheduler holds for it. A pod with nothing reserved can land
-					on a node that has nothing left to give it.
+					What the scheduler holds for it, whether it is used or not. Up to
+					the limit, anything above this is shared with the node's other
+					apps, and is the first to go when the node runs short.
 				</p>
 				@resourceSlider(d.CPURequest, "cpu")
 				@resourceSlider(d.MemoryRequest, "mem")

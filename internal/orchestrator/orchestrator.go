@@ -114,23 +114,42 @@ func (s NamespaceSpec) Validate() error {
 // ResourceLimits expresses CPU and memory bounds using Kubernetes quantity
 // strings ("500m", "512Mi").
 type ResourceLimits struct {
-	DefaultCPU    string // applied to containers that request nothing
+	DefaultCPU    string // the limit of a container that sets none
 	DefaultMemory string
 	MaxCPU        string // ceiling any single container may request
 	MaxMemory     string
+
+	// DefaultCPURequest and DefaultMemoryRequest are what a container that
+	// reserves nothing is given as its request: less than its limit, so an
+	// app with no settings is a burstable one rather than one holding a
+	// default's worth of the node whether it uses it or not. Empty is the
+	// default limit, which is Kubernetes' own answer.
+	DefaultCPURequest    string
+	DefaultMemoryRequest string
 }
 
 // DefaultLimits is the fallback applied when a NamespaceSpec leaves Limits
-// empty. Modest on purpose: a self-hoster running a single node should not have
-// one runaway container evict everything else.
+// empty, and what an app that sets no limit of its own is given.
+//
+// The limit is half a core and 512 MiB: enough for the apps people actually
+// deploy — Phoenix, Rails and Next.js all need more than 256 MiB to boot — so
+// leaving the sliders alone gives a working app rather than one killed for
+// memory on its first request. It was 0.1 vCPU and 128 MiB, which nothing
+// larger than a static file server starts in.
+//
+// The request stays where the limit used to be. That is what the scheduler
+// holds on the node, so raising the limit did not halve how many apps fit
+// on a small one.
 var DefaultLimits = ResourceLimits{
-	DefaultCPU:    "100m",
-	DefaultMemory: "128Mi",
-	MaxCPU:        "2",
-	MaxMemory:     "4Gi",
+	DefaultCPU:           "500m",
+	DefaultMemory:        "512Mi",
+	MaxCPU:               "2",
+	MaxMemory:            "4Gi",
+	DefaultCPURequest:    "100m",
+	DefaultMemoryRequest: "128Mi",
 }
 
-// OrEmpty returns l, substituting DefaultLimits for any unset field.
+// OrDefaults returns l, substituting DefaultLimits for any unset field.
 func (l ResourceLimits) OrDefaults() ResourceLimits {
 	if l.DefaultCPU == "" {
 		l.DefaultCPU = DefaultLimits.DefaultCPU
@@ -143,6 +162,12 @@ func (l ResourceLimits) OrDefaults() ResourceLimits {
 	}
 	if l.MaxMemory == "" {
 		l.MaxMemory = DefaultLimits.MaxMemory
+	}
+	if l.DefaultCPURequest == "" {
+		l.DefaultCPURequest = DefaultLimits.DefaultCPURequest
+	}
+	if l.DefaultMemoryRequest == "" {
+		l.DefaultMemoryRequest = DefaultLimits.DefaultMemoryRequest
 	}
 	return l
 }

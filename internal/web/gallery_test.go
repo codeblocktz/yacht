@@ -1185,10 +1185,10 @@ func settingsGallery(a app.App, cpuMax, memMax int64) AppDetailData {
 	return AppDetailData{
 		App:           a,
 		Tab:           "settings",
-		CPULimit:      cpuSlider("cpu_limit", "CPU", a.CPULimit, cpuMax),
-		MemoryLimit:   memSlider("memory_limit", "Memory", a.MemoryLimit, memMax),
-		CPURequest:    cpuSlider("cpu_request", "CPU", a.CPURequest, cpuMax),
-		MemoryRequest: memSlider("memory_request", "Memory", a.MemoryRequest, memMax),
+		CPULimit:      cpuSlider("cpu_limit", "CPU", a.CPULimit, "500m", cpuMax),
+		MemoryLimit:   memSlider("memory_limit", "Memory", a.MemoryLimit, "512Mi", memMax),
+		CPURequest:    cpuSlider("cpu_request", "CPU", a.CPURequest, "100m", cpuMax),
+		MemoryRequest: memSlider("memory_request", "Memory", a.MemoryRequest, "128Mi", memMax),
 	}
 }
 

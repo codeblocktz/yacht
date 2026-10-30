@@ -118,6 +118,7 @@ templ resourceSlider(s ResourceSlider, unit string) {
 			step={ strconv.FormatInt(s.Step, 10) }
 			value={ strconv.FormatInt(s.Value, 10) }
 			data-unit={ unit }
+			data-default={ s.DefaultDisplay }
 			style={ sliderStyle(s) }
 			aria-valuetext={ s.Display }
 		/>

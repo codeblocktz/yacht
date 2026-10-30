@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -486,38 +487,70 @@ func (o *Orchestrator) container(
 	if err != nil {
 		return nil, err
 	}
-	if res != nil {
-		c = c.WithResources(res)
-	}
+	c = c.WithResources(res)
 	return c, nil
 }
 
 func resourceRequirements(
 	spec orchestrator.AppSpec,
 ) (*corev1ac.ResourceRequirementsApplyConfiguration, error) {
-	requests, err := resourceList(spec.CPURequest, spec.MemoryRequest)
+	d := orchestrator.DefaultLimits
+	cpuRequest, cpuLimit := effective(spec.CPURequest, spec.CPULimit, d.DefaultCPURequest, d.DefaultCPU)
+	memRequest, memLimit := effective(spec.MemoryRequest, spec.MemoryLimit, d.DefaultMemoryRequest, d.DefaultMemory)
+
+	requests, err := resourceList(cpuRequest, memRequest)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: requests for %s: %w", spec.Ref, err)
 	}
-	limits, err := resourceList(spec.CPULimit, spec.MemoryLimit)
+	limits, err := resourceList(cpuLimit, memLimit)
 	if err != nil {
 		return nil, fmt.Errorf("k8s: limits for %s: %w", spec.Ref, err)
 	}
+	return corev1ac.ResourceRequirements().WithRequests(requests).WithLimits(limits), nil
+}
 
-	// Nothing specified: fall through to the namespace LimitRange rather than
-	// pinning empty values.
-	if len(requests) == 0 && len(limits) == 0 {
-		return nil, nil
+// effective is what a container asking for request and limit (either possibly
+// empty) is given: the setting where there is one, the default where not.
+//
+// Written onto the pod rather than left to the namespace LimitRange, for two
+// reasons. A LimitRange is read when a pod is admitted, so a namespace made
+// before the defaults changed would go on handing out the old ones; and the
+// pod is then the one place that says what the app has, which the dashboard
+// repeats rather than guesses at.
+//
+// A request above the default limit lifts the limit to it, and a default
+// request above the limit comes down to it: Kubernetes refuses a pod whose
+// request is above its limit, and nobody chose the half that was defaulted.
+func effective(request, limit, defRequest, defLimit string) (string, string) {
+	switch {
+	case request == "" && limit == "":
+		return defRequest, defLimit
+	case limit == "":
+		return request, larger(request, defLimit)
+	case request == "":
+		return smaller(defRequest, limit), limit
 	}
+	return request, limit
+}
 
-	req := corev1ac.ResourceRequirements()
-	if len(requests) > 0 {
-		req = req.WithRequests(requests)
+// larger and smaller compare two quantity strings and return one as written.
+// One that does not parse is kept, for resourceList to refuse by name.
+func larger(a, b string) string {
+	qa, errA := resource.ParseQuantity(a)
+	qb, errB := resource.ParseQuantity(b)
+	if errA != nil || errB != nil || qa.Cmp(qb) >= 0 {
+		return a
 	}
-	if len(limits) > 0 {
-		req = req.WithLimits(limits)
+	return b
+}
+
+func smaller(a, b string) string {
+	qa, errA := resource.ParseQuantity(a)
+	qb, errB := resource.ParseQuantity(b)
+	if errA != nil || errB != nil || qa.Cmp(qb) <= 0 {
+		return a
 	}
-	return req, nil
+	return b
 }
 
 func (o *Orchestrator) applyService(ctx context.Context, spec orchestrator.AppSpec) error {

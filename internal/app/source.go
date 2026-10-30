@@ -103,6 +103,13 @@ type Blueprint struct {
 	FSGroup      int64
 	ScratchPaths []string
 
+	// MemoryRequest and MemoryLimit are what the engine needs to run, set on
+	// the app when it is created. A database is the one thing that cannot be
+	// left to the default: it does its setup on its first start, and one
+	// killed for memory halfway through that may never be set up at all.
+	MemoryRequest string
+	MemoryLimit   string
+
 	// Volume is storage created with the app rather than attached afterwards.
 	// A database with no data directory is not a database somebody has to
 	// finish configuring; it is one that has not been deployed.
@@ -128,12 +135,34 @@ type Blueprint struct {
 	HostKeys     []string
 
 	// Args replace the image's command arguments. Only for an engine that
-	// takes its configuration nowhere else: Redis has no variable for a
-	// password, only a flag. $(NAME) is the app's variable NAME, expanded by
-	// the kubelet, which is how a generated secret reaches a flag without
-	// being written into the pod template.
+	// takes its configuration nowhere else — Redis has no variable for a
+	// password, only a flag — or whose image needs help to start: MongoDB's.
+	// $(NAME) is the app's variable NAME, expanded by the kubelet, which is
+	// how a generated secret reaches a flag without being written into the
+	// pod template.
 	Args []string
 }
+
+// mongoEnsureRoot starts mongod through the image's entrypoint, as it would
+// have started anyway, and makes the root user if the database has none.
+//
+// The entrypoint gives mongod --auth whenever a root user is configured, so a
+// database with no users at all accepts exactly one thing from localhost:
+// making the first one. The script waits for the real mongod — PID 1 once the
+// entrypoint has exec'd it, and not the temporary one the entrypoint's own
+// setup runs, whose createUser it would otherwise race — and then asks. Where
+// the user exists already that is refused, and the refusal is ignored, so
+// nothing is ever removed or overwritten.
+//
+// The password is read from the environment by mongosh rather than written
+// into the script, so it is never on a command line or quoted by a shell.
+// No $ anywhere: the kubelet expands $(NAME) in args.
+const mongoEnsureRoot = `(
+  until tr '\0' ' ' </proc/1/cmdline | grep -q '^mongod '; do sleep 1; done
+  until mongosh --quiet --norc --eval 'db.adminCommand({ping: 1})' >/dev/null 2>&1; do sleep 1; done
+  mongosh admin --quiet --norc --eval 'db.createUser({user: process.env.MONGO_INITDB_ROOT_USERNAME, pwd: process.env.MONGO_INITDB_ROOT_PASSWORD, roles: ["root"]})' >/dev/null 2>&1
+) &
+exec docker-entrypoint.sh mongod`
 
 // Capabilities is what this install can actually do.
 //
@@ -192,6 +221,10 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			// read-only.
 			ScratchPaths: []string{"/var/run/postgresql"},
 
+			// shared_buffers is 128 MB out of the box, and each connection a
+			// few more.
+			MemoryRequest: "256Mi", MemoryLimit: "512Mi",
+
 			Volume: &VolumeInput{
 				Name: "data", MountPath: "/var/lib/postgresql/data",
 				SizeBytes: 1 << 30,
@@ -238,6 +271,10 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			// The mount point itself, unlike Postgres: MySQL 8 initialises a
 			// directory holding lost+found without complaint, which is what an
 			// ext4 claim arrives with.
+			// MySQL 8 is around 400 MB idle, most of it the InnoDB buffer pool
+			// and performance_schema.
+			MemoryRequest: "512Mi", MemoryLimit: "1Gi",
+
 			Volume: &VolumeInput{
 				Name: "data", MountPath: "/var/lib/mysql",
 				SizeBytes: 1 << 30,
@@ -268,6 +305,11 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			// volume belongs to fsGroup.
 			RunAsUser: 999,
 			FSGroup:   999,
+
+			// Redis holds its whole dataset in memory, so this is also how much
+			// it can store; a rewrite of the append-only file forks and needs
+			// room for the copy.
+			MemoryRequest: "256Mi", MemoryLimit: "512Mi",
 
 			Volume: &VolumeInput{
 				Name: "data", MountPath: "/data",
@@ -309,6 +351,12 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			RunAsUser: 999,
 			FSGroup:   999,
 
+			// WiredTiger's cache is at least 256 MB whatever the limit, and the
+			// first start runs a second mongod and mongosh beside it. At the old
+			// 128 MiB default that start was killed before the root user was
+			// made, and every start after skipped the setup.
+			MemoryRequest: "512Mi", MemoryLimit: "1Gi",
+
 			Volume: &VolumeInput{
 				Name: "data", MountPath: "/data/db",
 				SizeBytes: 1 << 30,
@@ -323,6 +371,13 @@ func BlueprintsFor(c Capabilities) []Blueprint {
 			HostKeys:           []string{"MONGOHOST"},
 			ConnectionKey:      "MONGO_URL",
 			ConnectionTemplate: "mongodb://mongo:%s@%s:27017",
+
+			// The image's entrypoint makes the root user only on a start that
+			// finds the data directory empty. A first start killed after the
+			// files are written and before the user is — for memory, or a
+			// node going away — leaves a database nobody can log into, which
+			// every later start runs as if all were well.
+			Args: []string{"sh", "-c", mongoEnsureRoot},
 		},
 		{
 			Source:      SourceGit,
