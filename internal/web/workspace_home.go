@@ -145,7 +145,9 @@ func projectCards(projects []app.Project, apps []app.App, query, by string) []Pr
 		sort.Slice(services, func(i, j int) bool { return services[i].ServiceName() < services[j].ServiceName() })
 		c := ProjectCard{Project: p, Count: len(services), Active: active[p.ID.String()]}
 		for _, a := range services {
-			if label, _ := cardStatus(a); label == "Online" {
+			// Up as its card says: a bucket has nothing running to be
+			// online, and is up whenever it is there.
+			if _, class := cardStatus(a); class == "card-status-ok" {
 				c.Online++
 			}
 		}
