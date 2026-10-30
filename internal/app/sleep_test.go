@@ -770,3 +770,20 @@ func TestSleepIntervalsSayHowLongAnAppWasAwake(t *testing.T) {
 		t.Fatalf("an app with no intervals was awake %v; want the whole hour", got)
 	}
 }
+
+// The "app asleep" line says how long an app was idle as a number, and says
+// nothing of it for a sleep by hand — never a pointer's address or <nil>.
+func TestTheAsleepLogLineSaysTheIdleMinutes(t *testing.T) {
+	line := func(idle *int32) string {
+		var b strings.Builder
+		slog.New(slog.NewTextHandler(&b, nil)).Info("app asleep", slog.String("app", "api"), idleMinutes(idle))
+		return b.String()
+	}
+	thirty := int32(30)
+	if got := line(&thirty); !strings.Contains(got, "idle_minutes=30") {
+		t.Errorf("idle sleep logged %q, want idle_minutes=30", got)
+	}
+	if got := line(nil); strings.Contains(got, "idle_minutes") {
+		t.Errorf("a sleep by hand logged %q, want no idle_minutes", got)
+	}
+}

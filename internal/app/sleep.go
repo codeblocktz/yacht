@@ -543,12 +543,21 @@ func (s *Service) sleep(ctx context.Context, a App, idle *int32, still ...func(A
 		if err != nil {
 			return err
 		}
-		s.log.Info("app asleep", slog.String("app", a.Name), slog.String("owner", a.OwnerID),
-			slog.Any("idle_minutes", idle))
+		s.log.Info("app asleep", slog.String("app", a.Name), slog.String("owner", a.OwnerID), idleMinutes(idle))
 		// A failed apply leaves the new config version unconverged, and the
 		// app reconciler applies it again; the database already says asleep.
 		return s.apply(ctx, s.q, slept)
 	})
+}
+
+// idleMinutes is how long an app sat idle before it slept, for the log; a
+// sleep by hand has none, and an empty attribute is left out of the line
+// rather than printed as a nil pointer.
+func idleMinutes(idle *int32) slog.Attr {
+	if idle == nil {
+		return slog.Attr{}
+	}
+	return slog.Int("idle_minutes", int(*idle))
 }
 
 // markAsleep records the app asleep and opens its interval, together.
