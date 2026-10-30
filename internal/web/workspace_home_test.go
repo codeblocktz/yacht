@@ -61,6 +61,24 @@ func TestProjectCardsDrawProduction(t *testing.T) {
 	}
 }
 
+// A bucket has nothing running, so it is never "Online"; it is up whenever it
+// is there, and a healthy project with one is all online, with a green dot.
+func TestAProjectWithABucketIsAllOnline(t *testing.T) {
+	p := app.Project{ID: uuid.New(), Name: "Media", Slug: "media"}
+	apps := []app.App{
+		{Name: "web", Service: "web", ProjectID: p.ID, EnvSlug: app.DefaultEnvironment, StatusKnown: true,
+			Status: orchestrator.AppStatus{Phase: orchestrator.PhaseRunning}},
+		{Name: "bucket", Service: "bucket", ProjectID: p.ID, EnvSlug: app.DefaultEnvironment, Source: app.SourceBucket},
+	}
+	c := projectCards([]app.Project{p}, apps, "", sortName)[0]
+	if got := projectsSummary(c); got != "production · 2/2 services online" {
+		t.Errorf("summary = %q", got)
+	}
+	if got := projectsDot(c); got != "text-success" {
+		t.Errorf("dot = %q, want text-success", got)
+	}
+}
+
 func slugsOf(cards []ProjectCard) string {
 	var out []string
 	for _, c := range cards {
