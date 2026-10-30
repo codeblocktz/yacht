@@ -948,6 +948,7 @@ templ appRuntimeForm(d AppDetailData) {
 		<form id={ sourceDisconnectForm } method="post" action={ templ.URL("/apps/" + a.Name + "/source/disconnect") }></form>
 	}
 	<form method="post" action={ templ.URL("/apps/" + a.Name + "/runtime") }>
+		<input type="hidden" name={ runtimeVersionField } value={ runtimeVersion(a) }/>
 		<section id="source" class="settings-section">
 			<div class="settings-section-head">
 				<span class="settings-section-mark">@icon("box")</span>

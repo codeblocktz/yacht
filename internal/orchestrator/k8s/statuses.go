@@ -133,7 +133,7 @@ func (o *Orchestrator) ownerStatuses(
 				}
 				status := out[ref]
 				key := types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}
-				applyUnstartable(&status, its, crashLimit(depByName[key].Annotations))
+				applyUnstartable(&status, its, podRelease(depByName[key], status), crashLimit(depByName[key].Annotations))
 				out[ref] = status
 			}
 		}

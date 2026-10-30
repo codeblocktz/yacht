@@ -209,13 +209,8 @@ func AddCustom(
 	host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
 	host = strings.TrimSuffix(host, "/")
 
-	switch {
-	case host == "":
-		return Custom{}, errors.New("a domain is required, for example shop.example.com")
-	case len(host) > maxHostname:
-		return Custom{}, fmt.Errorf("domain: hostname exceeds %d characters", maxHostname)
-	case !domainRE.MatchString(host):
-		return Custom{}, fmt.Errorf("domain: %q is not a valid hostname", host)
+	if err := checkCustomHost(host); err != nil {
+		return Custom{}, err
 	}
 
 	// The platform's own domain is not somebody's to bring: a name under it is

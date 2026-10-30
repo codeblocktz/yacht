@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -182,5 +183,60 @@ func TestACronAppSaysWhenItNextRuns(t *testing.T) {
 	st.Message = "the last run did not succeed"
 	if got := cronStatusAt(st, now); !strings.HasSuffix(got, "· the last run did not succeed") {
 		t.Errorf("after a failed run = %q, want it said", got)
+	}
+}
+
+// Two tabs on the same settings: the later save is refused rather than
+// putting back what the earlier one changed, and the page reloads to show
+// what is there now (CONFIG-10).
+func TestAStaleSettingsSaveIsRefused(t *testing.T) {
+	a := sampleApp("owner-1", "web")
+	apps := newFakeApps(a)
+	h := testServer(t, Options{Apps: apps})
+
+	versionRE := regexp.MustCompile(`name="settings_version" value="([0-9a-f]+)"`)
+	version := func() string {
+		t.Helper()
+		m := versionRE.FindStringSubmatch(get(t, h, "/apps/web/settings").Body.String())
+		if m == nil {
+			t.Fatal("the settings form carries no version")
+		}
+		return m[1]
+	}
+	opened := version() // both tabs open the page
+	tab := func(change func(url.Values)) url.Values {
+		form := url.Values{"image": {a.Image}, "port": {"8080"}, "settings_version": {opened}}
+		change(form)
+		return form
+	}
+
+	tabA := tab(func(f url.Values) { f.Set("pre_deploy_command", "echo from-tab-A") })
+	if rec := post(t, h, "/apps/web/runtime", tabA); rec.Code != http.StatusSeeOther || len(apps.updated) != 1 {
+		t.Fatalf("tab A's save = %d, %d updates", rec.Code, len(apps.updated))
+	}
+
+	tabB := tab(func(f url.Values) { f.Set("health_timeout", "120") })
+	rec := post(t, h, "/apps/web/runtime", tabB)
+	if len(apps.updated) != 1 {
+		t.Fatalf("tab B's stale save was applied: pre-deploy now %q", apps.updated[len(apps.updated)-1].PreDeployCommand)
+	}
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/apps/web/settings" {
+		t.Errorf("a stale save = %d to %q, want back to the settings", rec.Code, rec.Header().Get("Location"))
+	}
+	if c := rec.Header().Get("Set-Cookie"); !strings.Contains(c, FlashCookie+"=") {
+		t.Errorf("a stale save said nothing: %q", c)
+	}
+
+	// Reloaded, the page has the new version, and the save goes through.
+	if v := version(); v == opened {
+		t.Fatal("tab A's change did not change the version")
+	} else {
+		tabB.Set("settings_version", v)
+		tabB.Set("pre_deploy_command", "echo from-tab-A")
+	}
+	post(t, h, "/apps/web/runtime", tabB)
+	if len(apps.updated) != 2 || apps.updated[1].HealthTimeoutSeconds != 120 ||
+		apps.updated[1].PreDeployCommand != "echo from-tab-A" {
+		t.Errorf("the save after a reload = %+v", apps.updated)
 	}
 }

@@ -207,3 +207,42 @@ func TestThePlatformWildcardCoversGeneratedNames(t *testing.T) {
 		t.Error("GeneratedDomain does not normalise, or invents one with no app domain")
 	}
 }
+
+// A custom domain has to be a name that can be pointed and certified. An IP
+// address and an over-long label both matched the dotted-name pattern and were
+// stored, then sat unverifiable forever (CONFIG-8).
+func TestCheckCustomHost(t *testing.T) {
+	label63 := strings.Repeat("x", 63)
+	ok := []string{
+		"shop.example.com",
+		"example.com",
+		label63 + ".example.com",
+		"1password.com",
+		"a.b.c.example.co.tz",
+	}
+	for _, h := range ok {
+		if err := checkCustomHost(h); err != nil {
+			t.Errorf("checkCustomHost(%q) = %v, want nil", h, err)
+		}
+	}
+
+	long := strings.Repeat(label63+".", 4) + "com" // 4*64+3 = 259 > 253
+	bad := []string{
+		"",
+		"10.0.0.1",
+		"192.168.1.256",
+		"example.123",
+		label63 + "x.example.com",
+		"shop." + label63 + "x",
+		long,
+		"localhost",
+		"not a domain",
+		"*.example.com",
+		"::1",
+	}
+	for _, h := range bad {
+		if err := checkCustomHost(h); err == nil {
+			t.Errorf("checkCustomHost(%q) = nil, want an error", h)
+		}
+	}
+}
