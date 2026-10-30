@@ -504,7 +504,7 @@ func TestTheDomainStepGoesToAServiceThatCanHaveOne(t *testing.T) {
 	bucket := app.WorkspaceApp{Name: "bucket", Source: app.SourceBucket}
 	database := app.WorkspaceApp{Name: "db", Source: app.SourcePostgres, Port: 5432}
 	worker := app.WorkspaceApp{Name: "jobs", Source: app.SourceImage}
-	preview := app.WorkspaceApp{Name: "site-pr-4", Source: app.SourceGit, Port: 3000, Environment: "pr-4"}
+	preview := app.WorkspaceApp{Name: "site-staging", Source: app.SourceGit, Port: 3000, Environment: "staging"}
 	web := app.WorkspaceApp{Name: "site", Source: app.SourceGit, Port: 3000}
 
 	for _, c := range []struct {
@@ -514,7 +514,7 @@ func TestTheDomainStepGoesToAServiceThatCanHaveOne(t *testing.T) {
 	}{
 		{"a web service, after a bucket and a database", project(bucket, database, worker, web), "/apps/site/domains"},
 		{"production's service before a preview's", project(bucket, preview, web), "/apps/site/domains"},
-		{"only a preview's", project(bucket, preview), "/apps/site-pr-4/domains"},
+		{"only a preview's", project(bucket, preview), "/apps/site-staging/domains"},
 		{"nothing that takes one", project(bucket, database, worker), "/projects/shop"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
