@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
@@ -93,8 +94,13 @@ func WaitForDatabase(ctx context.Context, dsn string, wait time.Duration, log *s
 			}
 			return nil
 		}
+		// A server that answered is the answer, even beside an address that
+		// did not: pgx tries every address a host resolves to and keeps each
+		// one's error, so localhost refused on ::1 and then refusing the login
+		// on 127.0.0.1 carries both.
 		var netErr *net.OpError
-		if !errors.As(err, &netErr) || time.Now().After(deadline) {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) || !errors.As(err, &netErr) || time.Now().After(deadline) {
 			return fmt.Errorf("store: connect: %w", err)
 		}
 		if !logged {
