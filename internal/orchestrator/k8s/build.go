@@ -402,8 +402,15 @@ func (o *Orchestrator) ensureBuildNamespace(ctx context.Context) error {
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("k8s: create build namespace: %w", err)
 	}
+	// A build reserves a quarter of a CPU and may use two. CPU is
+	// compressible: a build on a busy node is slowed, never killed, and on
+	// an idle one it has the CPU to itself. Reserving a whole CPU, as it
+	// did, left a build that needed a moment's CPU unschedulable for as long
+	// as the node's requests were near full, which on a small install is
+	// most of the time. Memory is not compressible, and a build short of it
+	// is killed, so it still reserves all it may use.
 	if err := o.ensureLimitRange(ctx, BuildNamespace, orchestrator.ResourceLimits{
-		DefaultCPU: "1", DefaultMemory: "2Gi",
+		DefaultCPU: "2", DefaultCPURequest: "250m", DefaultMemory: "2Gi",
 		MaxCPU: "4", MaxMemory: "8Gi",
 	}); err != nil {
 		return err
@@ -506,7 +513,7 @@ func (o *Orchestrator) waitForBuildPod(
 ) (string, error) {
 	logf("Scheduling the build…\n")
 
-	var pod string
+	var pod, lastWait string
 	var lastPhase corev1.PodPhase
 	err := wait.PollUntilContextCancel(ctx, time.Second, true,
 		func(ctx context.Context) (bool, error) {
@@ -523,6 +530,13 @@ func (o *Orchestrator) waitForBuildPod(
 				lastPhase = p.Status.Phase
 				logf("Build pod " + p.Name + " is " + strings.ToLower(string(p.Status.Phase)) + ".\n")
 			}
+			// A build the scheduler cannot place waits, for as long as the
+			// cluster is full, and "pending" alone reads as a hang. The
+			// scheduler's reason is said once, and again when it changes.
+			if w := schedulingWait(p); w != "" && w != lastWait {
+				lastWait = w
+				logf("Waiting for room on the cluster: " + w + ".\n")
+			}
 			// Any phase past Pending has a log; a pod that failed to start has
 			// one too, and it says why.
 			return p.Status.Phase != corev1.PodPending || startedAnyContainer(p), nil
@@ -531,6 +545,38 @@ func (o *Orchestrator) waitForBuildPod(
 		return "", fmt.Errorf("k8s: waiting for the build to start: %w", err)
 	}
 	return pod, nil
+}
+
+// schedulingWait is why the scheduler has not placed a pod, in a customer's
+// words, or "" while it has or has not yet tried. The scheduler's own message
+// ("0/1 nodes are available: 1 Insufficient cpu.") names nodes the customer
+// has never heard of; what they need is the resource that ran out.
+func schedulingWait(p corev1.Pod) string {
+	for _, c := range p.Status.Conditions {
+		if c.Type != corev1.PodScheduled || c.Status != corev1.ConditionFalse ||
+			c.Reason != corev1.PodReasonUnschedulable {
+			continue
+		}
+		var short []string
+		for _, r := range []struct{ scheduler, said string }{
+			{"Insufficient cpu", "insufficient CPU"},
+			{"Insufficient memory", "insufficient memory"},
+			{"Insufficient ephemeral-storage", "insufficient disk"},
+			{"Too many pods", "too many pods on every node"},
+		} {
+			if strings.Contains(c.Message, r.scheduler) {
+				short = append(short, r.said)
+			}
+		}
+		if len(short) > 0 {
+			return strings.Join(short, ", ")
+		}
+		if msg := strings.TrimSuffix(strings.TrimSpace(c.Message), "."); msg != "" {
+			return msg
+		}
+		return "no node can take the build yet"
+	}
+	return ""
 }
 
 // startedAnyContainer reports whether there is output to read yet.

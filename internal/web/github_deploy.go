@@ -69,6 +69,7 @@ func (s *Server) appDeployGitHub(w http.ResponseWriter, r *http.Request) {
 		fail(githubSentence(err))
 		return
 	}
+	auditTarget(ctx, a.Name)
 	http.Redirect(w, r, "/apps/"+a.Name, http.StatusSeeOther)
 }
 

@@ -134,6 +134,7 @@ func (s *Server) databaseDeploy(w http.ResponseWriter, r *http.Request) {
 		fail(strings.TrimPrefix(err.Error(), "app: "))
 		return
 	}
+	auditTarget(ctx, a.Name)
 	http.Redirect(w, r, "/apps/"+a.Name, http.StatusSeeOther)
 }
 
