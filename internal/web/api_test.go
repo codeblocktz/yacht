@@ -610,6 +610,29 @@ func TestATokenMadeOnTheTeamPageIsShownOnce(t *testing.T) {
 	if !created {
 		t.Error("making a token was not recorded")
 	}
+
+	// Revoked, it is named in the log as it was made: an id means nothing
+	// once the token is gone from the list.
+	toks, err := h.tokens.List(context.Background(), "web-api-a")
+	if err != nil || len(toks) == 0 {
+		t.Fatalf("tokens = %v, %v", toks, err)
+	}
+	var id string
+	for _, tok := range toks {
+		if tok.Name == "GitHub Actions" {
+			id = tok.ID.String()
+		}
+	}
+	if code, _ := h.form("/team/tokens/"+id+"/revoke", c, url.Values{}); code != http.StatusSeeOther {
+		t.Fatalf("revoke = %d", code)
+	}
+	var revoked bool
+	for _, e := range h.auditActions("web-api-a") {
+		revoked = revoked || (e.Action == "token.revoke" && e.Target == "GitHub Actions" && e.Detail["token"] == id)
+	}
+	if !revoked {
+		t.Errorf("the revoke is not recorded by the token's name: %+v", h.auditActions("web-api-a"))
+	}
 }
 
 func TestBuildSourceIsOnlyForTheBuildsToken(t *testing.T) {

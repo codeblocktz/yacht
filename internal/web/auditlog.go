@@ -61,8 +61,8 @@ type auditSpec struct {
 var auditRoutes = map[string]auditSpec{
 	// Deploys.
 	"POST /apps":                                {action: "app.create", targetKind: "app", target: "name", detail: map[string]string{"source": "source", "project": "project"}},
-	"POST /apps/github":                         {action: "app.create", targetKind: "app", target: "name", detail: map[string]string{"source": "=github", "project": "project"}},
-	"POST /apps/new/database":                   {action: "app.create", targetKind: "app", target: "name", detail: map[string]string{"engine": "engine", "project": "project"}},
+	"POST /apps/github":                         {action: "app.create", targetKind: "app", detail: map[string]string{"source": "=github", "kind": "=github", "project": "project"}},
+	"POST /apps/new/database":                   {action: "app.create", targetKind: "app", detail: map[string]string{"engine": "engine", "kind": "=database", "project": "project"}},
 	"POST /templates":                           {action: "app.create", targetKind: "template", target: "template", detail: map[string]string{"project": "project"}},
 	"POST /apps/{name}/redeploy":                {action: "deploy.redeploy", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/changes/deploy":          {action: "deploy.staged", targetKind: "app", target: ":name"},
@@ -78,6 +78,8 @@ var auditRoutes = map[string]auditSpec{
 	"POST /apps/{name}/source/disconnect":       {action: "app.source.disconnect", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/hook":                    {action: "app.hook.enable", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/hook/delete":             {action: "app.hook.disable", targetKind: "app", target: ":name"},
+	"POST /apps/{name}/sleep":                   {action: "app.sleep", targetKind: "app", target: ":name", detail: map[string]string{"how": "=now"}},
+	"POST /apps/{name}/wake":                    {action: "app.wake", targetKind: "app", target: ":name", detail: map[string]string{"how": "=now"}},
 	"POST /apps/{name}/sleep/settings":          {action: "app.sleep", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/backups/{id}/restore":    {action: "storage.restore", targetKind: "app", target: ":name", detail: map[string]string{"backup": ":id"}},
 	"POST /apps/{name}/backups/{id}/delete":     {action: "storage.backup.delete", targetKind: "app", target: ":name", detail: map[string]string{"backup": ":id"}},
@@ -129,9 +131,9 @@ var auditRoutes = map[string]auditSpec{
 
 	// Tokens and webhooks.
 	"POST /team/tokens":                                     {action: "token.create", targetKind: "token", target: "name", detail: map[string]string{"role": "role"}},
-	"POST /team/tokens/{id}/revoke":                         {action: "token.revoke", targetKind: "token", target: ":id"},
+	"POST /team/tokens/{id}/revoke":                         {action: "token.revoke", targetKind: "token", target: ":id", detail: map[string]string{"token": ":id"}},
 	"POST /projects/{slug}/tokens":                          {action: "token.create", targetKind: "token", target: "name", detail: map[string]string{"role": "role", "project": ":slug"}},
-	"POST /projects/{slug}/tokens/{id}/revoke":              {action: "token.revoke", targetKind: "token", target: ":id", detail: map[string]string{"project": ":slug"}},
+	"POST /projects/{slug}/tokens/{id}/revoke":              {action: "token.revoke", targetKind: "token", target: ":id", detail: map[string]string{"token": ":id", "project": ":slug"}},
 	"POST /cli/authorize":                                   {action: "token.create", targetKind: "token", target: "=CLI", detail: map[string]string{"role": "role", "origin": "=cli"}, when: func(r *http.Request) bool { return r.FormValue("decision") == "approve" }},
 	"POST /projects/{slug}/webhooks":                        {action: "webhook.create", targetKind: "project", target: ":slug", detailFn: webhookHost},
 	"POST /projects/{slug}/webhooks/{id}/delete":            {action: "webhook.delete", targetKind: "project", target: ":slug", detail: map[string]string{"webhook": ":id"}},
@@ -151,7 +153,13 @@ var auditRoutes = map[string]auditSpec{
 // auditState travels with one request, so a handler that reports failure by
 // flash rather than by status — the dashboard's way — is not recorded as
 // having succeeded.
-type auditState struct{ failed bool }
+type auditState struct {
+	failed bool
+	// target is what the handler says it acted on, for a route whose URL
+	// and form cannot say: a database's name is chosen by the server, and a
+	// revoked token is gone from the list by the time anyone reads its id.
+	target string
+}
 
 type auditStateKey struct{}
 
@@ -160,6 +168,14 @@ type auditStateKey struct{}
 func markAuditFailed(ctx context.Context) {
 	if st, ok := ctx.Value(auditStateKey{}).(*auditState); ok {
 		st.failed = true
+	}
+}
+
+// auditTarget names what a request acted on, for the log, when the table's
+// URL parameter or form field cannot. It wins over the table's target.
+func auditTarget(ctx context.Context, target string) {
+	if st, ok := ctx.Value(auditStateKey{}).(*auditState); ok {
+		st.target = target
 	}
 }
 
@@ -217,6 +233,9 @@ func (s *Server) auditEvent(r *http.Request, spec auditSpec) audit.Event {
 		ev.Target = spec.targetFn(s, r)
 	} else if spec.target != "" {
 		ev.Target = auditField(r, spec.target)
+	}
+	if st, ok := r.Context().Value(auditStateKey{}).(*auditState); ok && st.target != "" {
+		ev.Target = st.target
 	}
 	for k, from := range spec.detail {
 		if v := auditField(r, from); v != "" {

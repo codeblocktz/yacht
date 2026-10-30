@@ -146,6 +146,7 @@ func (s *Server) teamTokenRevoke(w http.ResponseWriter, r *http.Request) {
 		s.renderTeamTokens(w, r, tokenStatus(err), nil, tokenMessage(err))
 		return
 	}
+	auditTarget(ctx, tok.Name)
 	s.flashOK(w, r, "Revoked "+tok.Name+". Anything using it is refused from now on.")
 	http.Redirect(w, r, "/team/tokens", http.StatusSeeOther)
 }
@@ -239,6 +240,7 @@ func (s *Server) projectTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.flashErr(w, r, tokenMessage(err))
 	} else {
+		auditTarget(ctx, tok.Name)
 		s.flashOK(w, r, "Revoked "+tok.Name+".")
 	}
 	http.Redirect(w, r, "/projects/"+slug+"/settings#tokens", http.StatusSeeOther)
