@@ -1039,6 +1039,12 @@ type HTTPLogs struct {
 
 	// Reason explains an empty result that is not simply "no traffic".
 	Reason string
+
+	// From is when the log read begins: every request since is in it, and
+	// none from before. The controller's log is rotated away from under the
+	// reader, so this is the only honest account of how far back Lines go.
+	// Zero when nothing was read.
+	From time.Time
 }
 
 // HTTPLogLine is one request as the ingress controller saw it.

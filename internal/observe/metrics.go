@@ -138,11 +138,20 @@ func WindowFor(end time.Time, span time.Duration) Window {
 // rate always has two samples to work from, and never less than the step, so
 // no traffic between two points goes uncounted.
 func (w Window) lookback() string {
-	l := w.Step
-	if l < time.Minute {
-		l = time.Minute
+	return promDuration(w.lookbackSpan())
+}
+
+func (w Window) lookbackSpan() time.Duration {
+	if w.Step < time.Minute {
+		return time.Minute
 	}
-	return promDuration(l)
+	return w.Step
+}
+
+// lookbackSeconds is the rate window in seconds, what an increase over it is
+// divided by to be a rate.
+func (w Window) lookbackSeconds() float64 {
+	return w.lookbackSpan().Seconds()
 }
 
 // The dashboard's panels.
@@ -161,10 +170,32 @@ const (
 type panelSpec struct {
 	key, title, unit string
 	stacked          bool
-	// query is given the namespace matcher, the Traefik service matcher and
-	// the rate window, in that order.
+	// query is given the namespace matcher, the Traefik service matcher, the
+	// rate window, and the window in seconds, in that order.
 	query string
 	by    string
+}
+
+// counterRate is PromQL for the per-second rate of a Traefik counter over the
+// rate window, counting a series that is new from zero.
+//
+// rate() and increase() take a series' first sample as its baseline, and
+// Traefik makes a series only when it first counts something: a status code
+// an app had not answered before, a latency bucket it had not reached, an app
+// back from sleep. So a burst of ten 500s, all before the next scrape, was a
+// series that first read 10 and never moved, and charted as nothing — an
+// app's first errors, the very thing the error rate is for (QA OBSERVE-2).
+// increase_pure() counts a first sample from zero instead, which is right
+// when the series is new and wrong when it is only new to the store: the
+// store was away, and the counter ran on without it. So it is used only
+// where the store was scraping the counter's job, some replica answering,
+// through the window before; elsewhere increase() guesses, as rate() did.
+// Engine egress tells the two apart the same way, sample by sample
+// (egress.go).
+func counterRate(selector string) string {
+	return `((increase_pure(` + selector + `[%[3]s]) and on (job) ` +
+		`(max by (job) (max_over_time(up[%[3]s] offset %[3]s)) == 1)) or ` +
+		`increase(` + selector + `[%[3]s])) / %[4]s`
 }
 
 // Container series exclude the pod's own cgroup (container="") and the pause
@@ -176,22 +207,23 @@ var panelSpecs = []panelSpec{
 	{key: PanelMemory, title: "Memory", unit: UnitBytes, by: "namespace",
 		query: `sum by (namespace) (container_memory_working_set_bytes{%[1]s,container!="",container!="POD"})`},
 	{key: PanelEgress, title: "Public network egress", unit: UnitBytesSec, by: "service",
-		query: `sum by (service) (rate(traefik_service_responses_bytes_total{%[2]s}[%[3]s]))`},
+		query: `sum by (service) (` + counterRate(`traefik_service_responses_bytes_total{%[2]s}`) + `)`},
 	{key: PanelIngress, title: "Public network ingress", unit: UnitBytesSec, by: "service",
-		query: `sum by (service) (rate(traefik_service_requests_bytes_total{%[2]s}[%[3]s]))`},
+		query: `sum by (service) (` + counterRate(`traefik_service_requests_bytes_total{%[2]s}`) + `)`},
 	// One series per status class, stacked, so the height is the traffic and
 	// the colours are how it went.
 	{key: PanelRequests, title: "Requests", unit: UnitReqSec, stacked: true, by: "class",
-		query: `sum by (class) (label_replace(rate(traefik_service_requests_total{%[2]s}[%[3]s]), "class", "${1}xx", "code", "([1-5])[0-9][0-9]"))`},
+		query: `sum by (class) (label_replace(` + counterRate(`traefik_service_requests_total{%[2]s}`) +
+			`, "class", "${1}xx", "code", "([1-5])[0-9][0-9]"))`},
 	// Server errors over every request, per service. A service that served
 	// no 5xx has no 5xx series at all, so its errors are "or" the traffic
 	// times nothing: a rate of zero, not a missing line. A service with no
 	// traffic still divides by zero, which the store answers with no sample,
 	// and the chart draws a gap rather than a rate of nothing.
 	{key: PanelErrorRate, title: "Request error rate", unit: UnitRatio, by: "service",
-		query: `(sum by (service) (rate(traefik_service_requests_total{%[2]s,code=~"5.."}[%[3]s])) or ` +
-			`0 * sum by (service) (rate(traefik_service_requests_total{%[2]s}[%[3]s]))) / ` +
-			`sum by (service) (rate(traefik_service_requests_total{%[2]s}[%[3]s]))`},
+		query: `(sum by (service) (` + counterRate(`traefik_service_requests_total{%[2]s,code=~"5.."}`) + `) or ` +
+			`0 * sum by (service) (` + counterRate(`traefik_service_requests_total{%[2]s}`) + `)) / ` +
+			`sum by (service) (` + counterRate(`traefik_service_requests_total{%[2]s}`) + `)`},
 	// A websocket, a server-sent stream or a long poll is one request held
 	// for as long as the page is open, which Traefik times like any other.
 	// Counted, every open page drags p95 to the slowest bucket and reads as
@@ -200,8 +232,8 @@ var panelSpecs = []panelSpec{
 	// buckets, and those held longer are left out rather than averaged in.
 	{key: PanelLatency, title: "Response time", unit: UnitSeconds, by: "quantile",
 		query: `histogram_quantiles("quantile", 0.5, 0.9, 0.95, 0.99, ` +
-			`sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}[%[3]s])) or ` +
-			`label_set(max(sum by (le) (rate(traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}[%[3]s]))), "le", "+Inf"))`},
+			`sum by (le) (` + counterRate(`traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}`) + `) or ` +
+			`label_set(max(sum by (le) (` + counterRate(`traefik_service_request_duration_seconds_bucket{%[2]s,le!="+Inf"}`) + `)), "le", "+Inf"))`},
 }
 
 // Dashboard reads every panel for a scope over a window.
@@ -225,7 +257,8 @@ func (m *MetricStore) Dashboard(ctx context.Context, scope Scope, w Window) ([]P
 	failures := 0
 	for _, spec := range panelSpecs {
 		p := Panel{Key: spec.key, Title: spec.title, Unit: spec.unit, Stacked: spec.stacked, Start: w.Start, End: w.End}
-		series, err := m.rangeQuery(ctx, fmt.Sprintf(spec.query, ns, svc, w.lookback()), w)
+		query := fmt.Sprintf(spec.query, ns, svc, w.lookback(), strconv.FormatFloat(w.lookbackSeconds(), 'f', -1, 64))
+		series, err := m.rangeQuery(ctx, query, w)
 		if err != nil {
 			p.Err = err.Error()
 			failures++

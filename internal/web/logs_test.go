@@ -261,6 +261,23 @@ func TestTheHTTPTabShowsRecordedRequests(t *testing.T) {
 	}
 }
 
+// Beside the count, the tab says how far back the requests go: a count read
+// off a log rotated a minute ago read as every request (QA OBSERVE-1).
+func TestTheHTTPTabSaysHowFarBackTheRequestsGo(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{http: &app.HTTPLogs{
+		Hosts:    []string{"web.apps.example.com"},
+		Lines:    []orchestrator.HTTPLogLine{{Method: "GET", Path: "/health", Status: 200}},
+		Coverage: "Since 19:40:16 UTC, when the ingress controller's log begins.",
+	}}})
+
+	body := get(t, h, "/apps/web/deployments/"+testDeployID.String()+"/logs?view=http").
+		Body.String()
+
+	if !strings.Contains(body, "data-http-coverage") || !strings.Contains(body, "Since 19:40:16 UTC") {
+		t.Error("the request log does not say where it begins")
+	}
+}
+
 // When the access log is switched off, the page says so and hands over the
 // configuration rather than leaving somebody to work out why it is empty.
 func TestAnUnrecordedIngressHandsOverTheConfiguration(t *testing.T) {
