@@ -160,7 +160,7 @@ templ appShell(s Slots, page templ.Component) {
 	// Outside the shell rather than in it: the shell is made inert while the
 	// phone drawer is open, and a dialog inside an inert subtree cannot take
 	// focus even as a modal.
-	@palette(s.SearchIndex)
+	@palette(s.SearchIndex, s.Nav)
 	@confirmationDialog()
 	@toastHost(s.Flash)
 }
@@ -736,7 +736,7 @@ templ UserMenu(owner identity.Owner, canSignOut bool, docsHref string) {
 //
 // The actions are declared here rather than in the script so the server
 // decides what is offered, and a test can read the list.
-templ palette(index string) {
+templ palette(index string, nav []NavGroup) {
 	<dialog
 		id="palette"
 		class="palette"
@@ -773,6 +773,16 @@ templ palette(index string) {
 			<i data-palette-action data-label="New project" data-url="/projects?new=1" data-icon="plus" data-keywords="create canvas"></i>
 			<i data-palette-action data-label="Add a custom domain…" data-pick="app" data-url="/apps/{name}/domains" data-needs="domains" data-icon="globe" data-keywords="dns hostname certificate"></i>
 			<i data-palette-action data-label="Toggle theme" data-run="theme" data-icon="sun-moon" data-keywords="dark light mode appearance"></i>
+			// The pages under a sidebar item that the sidebar leaves out —
+			// Billing's Plans and Rate card, say — named with the item they
+			// are under, whose icon they borrow.
+			for _, g := range nav {
+				for _, item := range g.Items {
+					for _, p := range item.Pages {
+						<i data-palette-page data-label={ p.Label } data-url={ p.Href } data-parent={ item.Href } data-group={ item.Label }></i>
+					}
+				}
+			}
 			for _, name := range paletteIcons {
 				<template data-palette-icon={ name }>
 					@icon(name)

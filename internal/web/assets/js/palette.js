@@ -2,10 +2,12 @@
 
    What it searches comes from three places, none of them a list kept here:
 
-   - pages: every link in the sidebar, read from the sidebar itself. A
+   - pages: every link in the sidebar, read from the sidebar itself, and the
+     pages under them that the sidebar leaves out, declared in the dialog. A
      wrapping application's navigation is in it the moment it is drawn.
-   - the team's projects and apps: from the JSON index the dialog names,
-     fetched once, the first time the palette opens on a page.
+   - the team's projects and apps, and in the Admin console the install's
+     teams: from the JSON index the dialog names, fetched once, the first
+     time the palette opens on a page.
    - actions: declared by the server inside the dialog.
 
    The dialog is a native modal, so the page behind it is inert and Escape
@@ -21,8 +23,8 @@
   var pick = null; // the action whose target is being chosen
   var returnTo = null;
 
-  var KIND_ORDER = ["action", "page", "project", "app"];
-  var KIND_LABEL = { action: "Actions", page: "Pages", project: "Projects", app: "Apps" };
+  var KIND_ORDER = ["action", "page", "team", "project", "app"];
+  var KIND_LABEL = { action: "Actions", page: "Pages", team: "Customers", project: "Projects", app: "Apps" };
   var STATE_CLASS = {
     serving: "status-ok",
     "deploy-failed": "status-warn",
@@ -53,6 +55,25 @@
         detail: a.getAttribute("data-nav-group") || "",
         href: href,
         node: svg ? svg.cloneNode(true) : null,
+        // A page's group is where it sits, not what it is called: it counts
+        // only typed whole, or "cust" would list every page under Cluster.
+        wholeDetail: true,
+      });
+    }
+    var subs = dialog.querySelectorAll("[data-palette-page]");
+    for (var j = 0; j < subs.length; j++) {
+      var d = subs[j].dataset;
+      if (seen[d.url]) continue;
+      seen[d.url] = true;
+      var parent = document.querySelector('#sidebar [data-nav-item][href="' + d.parent + '"] svg');
+      out.push({
+        kind: "page",
+        name: d.label,
+        detail: d.group || "",
+        href: d.url,
+        node: parent ? parent.cloneNode(true) : null,
+        wholeDetail: true,
+        sub: true,
       });
     }
     return out;
@@ -82,13 +103,14 @@
     var items = (index && index.items) || [];
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
+      var kind = it.kind === "project" || it.kind === "team" ? it.kind : "app";
       out.push({
-        kind: it.kind === "project" ? "project" : "app",
+        kind: kind,
         name: it.name,
         href: it.href,
         detail: it.detail || "",
         status: it.status || "",
-        icon: it.kind === "project" ? "boxes" : "box",
+        icon: { project: "boxes", team: "building" }[kind] || "box",
       });
     }
     return out;
@@ -132,11 +154,29 @@
     return j === q.length && q.length >= 3 ? 10 : 0;
   }
 
+  // Detail and keywords count only from the start of one of their words: a
+  // team's id from its beginning, an app by its project's name. Letters in
+  // order anywhere is forgiving enough for a name, but beside it, it matched
+  // "cust" to "Cluster". A page's group counts only when typed whole.
+  function wordStart(text, q) {
+    text = text.toLowerCase();
+    for (var at = text.indexOf(q); at >= 0; at = text.indexOf(q, at + 1)) {
+      if (at === 0 || /[\s\-_/.]/.test(text.charAt(at - 1))) return true;
+    }
+    return false;
+  }
+
+  function wholeWord(text, q) {
+    return text.toLowerCase().split(/[\s\-_/.]+/).indexOf(q) >= 0;
+  }
+
   function rank(entry, q) {
     var s = score(entry.name, q);
     if (s) return s + 5;
-    s = Math.max(score(entry.detail || "", q), score(entry.keywords || "", q));
-    return s ? s / 4 : 0;
+    if (!q) return 0;
+    var detail = entry.detail || "";
+    if (entry.wholeDetail ? wholeWord(detail, q) : wordStart(detail, q)) return 15;
+    return wordStart(entry.keywords || "", q) ? 15 : 0;
   }
 
   function search(q) {
@@ -160,6 +200,9 @@
       var counts = {};
       return scored
         .filter(function (s) {
+          // The pages the sidebar leaves out wait to be asked for, or the
+          // list opens on every tab of every section.
+          if (s.e.sub) return false;
           counts[s.e.kind] = (counts[s.e.kind] || 0) + 1;
           return pick || s.e.kind === "action" || s.e.kind === "page" || counts[s.e.kind] <= 6;
         })

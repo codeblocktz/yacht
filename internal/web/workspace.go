@@ -1,10 +1,12 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -214,6 +216,11 @@ type searchIndex struct {
 // searchIndexPath is where the palette reads the team's projects and apps.
 const searchIndexPath = "/search/index"
 
+// searchConsoleParam asks the index for the Admin console's palette, which
+// also lists the install's teams. Asking is all it does: the teams are only
+// ever given to an operator, whatever the request says.
+const searchConsoleParam = "console"
+
 // searchIndexHandler lists the team's projects and apps for the palette.
 //
 // Behind the member gate with every other read, and scoped by the owner the
@@ -226,8 +233,41 @@ func (s *Server) searchIndexHandler(w http.ResponseWriter, r *http.Request) {
 	if ws, ok := workspaceFromContext(r.Context()); ok {
 		out.Items = searchEntries(ws)
 	}
+	if r.URL.Query().Get(searchConsoleParam) == "admin" && s.quotas != nil && s.IsOperator(r) {
+		teams, err := s.quotas.TeamUsages(r.Context())
+		if err != nil {
+			// The palette still has its pages and the operator's own things.
+			s.log.Error("list teams for the palette", slog.String("error", err.Error()))
+		}
+		out.Items = append(out.Items, s.teamEntries(teams)...)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// teamEntries are the install's teams for the Admin console's palette, found
+// by name or by id, each leading to its page there.
+func (s *Server) teamEntries(teams []app.TeamUsage) []searchEntry {
+	out := make([]searchEntry, 0, len(teams))
+	for _, t := range teams {
+		out = append(out, searchEntry{
+			Name: cmp.Or(t.TeamName, t.TeamID), Kind: "team", Href: s.teamHref(t.TeamID),
+			Detail: t.TeamID,
+		})
+	}
+	return out
+}
+
+// teamHref is where the Admin console sends an operator for a team: the
+// wrapping application's page for it when it has one, the engine's own
+// otherwise.
+func (s *Server) teamHref(id string) string {
+	if s.teamHrefFn != nil {
+		if href := s.teamHrefFn(id); href != "" {
+			return href
+		}
+	}
+	return "/admin/teams/" + url.PathEscape(id)
 }
 
 // searchEntries flattens a workspace into palette entries: every project,

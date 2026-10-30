@@ -460,6 +460,11 @@ type Overrides struct {
 	// name. Empty is "yacht", cmd/yacht-cli's own.
 	CLIName string
 
+	// TeamHref is where the Admin console's command palette sends an
+	// operator for a team: a wrapper's page for a customer, say. Nil is the
+	// engine's own team page.
+	TeamHref func(id string) string
+
 	// AfterMigrate runs once the engine's schema is current, for a wrapper's
 	// own migrations. They share the database; a wrapper keeps its own goose
 	// version table so the two histories never collide.
@@ -763,6 +768,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		WakerBrand:    ov.WakerBrand,
 		Audit:         e.Audit,
 		CLIName:       ov.CLIName,
+		TeamHref:      ov.TeamHref,
 	}
 	if e.Webhooks != nil {
 		opts.Webhooks = e.Webhooks
