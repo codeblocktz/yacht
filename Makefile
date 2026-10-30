@@ -122,13 +122,29 @@ check: require-test-database vet test ## Vet + database-backed race tests
 # The instance is torn down when make exits. An instance already running for
 # this directory is reused and left alone, so a `popgres up` you started by
 # hand survives.
+#
+# What popgres runs is make again, in plain words, not sh -c and a quoted
+# script. Not every npx is npm's own: npq's npq-hero, which is often aliased
+# to npx, joins its arguments into one shell command line, which splits the
+# script at its spaces. sh -c then ran only the assignment at its start and
+# exited 0, a pass with nothing tested.
 .PHONY: check-db
 check-db: ## make check against a throwaway Postgres
-	$(POPGRES) run -- sh -c 'YACHT_TEST_DATABASE_URL="$$DATABASE_URL" $(MAKE) check'
+	$(POPGRES) run -- $(MAKE) popgres-gate GATE=check
 
 .PHONY: verify-db
 verify-db: ## make verify against a throwaway Postgres
-	$(POPGRES) run -- sh -c 'YACHT_TEST_DATABASE_URL="$$DATABASE_URL" $(MAKE) verify'
+	$(POPGRES) run -- $(MAKE) popgres-gate GATE=verify
+
+# Inside popgres run: its database is the tests'. require-test-database already
+# refuses an empty one; this says where it should have come from.
+.PHONY: popgres-gate
+popgres-gate:
+	@if [ -z "$$DATABASE_URL" ] || [ -z "$(GATE)" ]; then \
+		echo "::error::popgres-gate runs a GATE inside popgres run: use make check-db or make verify-db"; \
+		exit 1; \
+	fi
+	YACHT_TEST_DATABASE_URL="$$DATABASE_URL" $(MAKE) $(GATE)
 
 .PHONY: shell-check
 shell-check: ## Lint the root-executed installer scripts
