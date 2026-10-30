@@ -90,7 +90,7 @@ func (s *Server) renderWorkspaceHome(w http.ResponseWriter, r *http.Request, sta
 	case viewGrid, viewList:
 		d.View = v
 		http.SetCookie(w, &http.Cookie{Name: viewCookie, Value: v, Path: "/", MaxAge: 365 * 24 * 3600,
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: requestIsTLS(r)})
 	default:
 		if c, err := r.Cookie(viewCookie); err == nil && c.Value == viewList {
 			d.View = viewList

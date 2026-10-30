@@ -113,6 +113,18 @@ func TestTheHomeIsTheProjects(t *testing.T) {
 	if remembered == nil || remembered.Value != viewList {
 		t.Fatal("the list view is not remembered")
 	}
+	if remembered.Secure {
+		t.Error("the view cookie is Secure over plain HTTP")
+	}
+	// Behind the proxy the request arrives as HTTP and says it was HTTPS;
+	// the cookie is Secure, as the session's is.
+	behind := httptest.NewRequest(http.MethodGet, "/?view=list", nil)
+	behind.Header.Set("X-Forwarded-Proto", "https")
+	for _, c := range do(h, behind).Result().Cookies() {
+		if c.Name == viewCookie && !c.Secure {
+			t.Error("the view cookie is not Secure behind a TLS-terminating proxy")
+		}
+	}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(remembered)
 	if !strings.Contains(do(h, req).Body.String(), `class="project-list"`) {
