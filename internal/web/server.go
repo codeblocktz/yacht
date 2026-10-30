@@ -1936,6 +1936,10 @@ func (s *Server) renderWithSlotsStatus(
 	// wrapper's included, whatever its SlotProvider put in Banner.
 	slots.Banner = withCapacityBanner(s.capacityBannerFor(r), slots.Banner)
 
+	// Here, after every handler has added its crumbs, so the title names the
+	// app or team a handler appended, and a wrapper's pages get one too.
+	slots.Title = pageTitle(slots)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
@@ -1946,6 +1950,40 @@ func (s *Server) renderWithSlotsStatus(
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+// pageTitle is the document title for a page: where it is, most specific
+// first, then the product — "web · Shop · datahuru", "Customers · Admin ·
+// datahuru".
+//
+// Every signed-in page was titled with the product alone, so tabs, history
+// and a screen reader announcing the page could not tell any two apart. The
+// breadcrumb already says where a page is, so the title is read from it; a
+// page with none is named by the sidebar's current item, and one with neither
+// (a signed-out page, which sets its own title) keeps the title it has.
+func pageTitle(slots Slots) string {
+	var parts []string
+	for i := len(slots.Breadcrumb) - 1; i >= 0; i-- {
+		if label := strings.TrimSpace(slots.Breadcrumb[i].Label); label != "" {
+			parts = append(parts, label)
+		}
+	}
+	if len(parts) == 0 {
+		for _, g := range slots.Nav {
+			for _, it := range g.Items {
+				if it.Active && len(parts) == 0 {
+					parts = append(parts, it.Label)
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return slots.Title
+	}
+	if slots.Title != "" {
+		parts = append(parts, slots.Title)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func displayName(o identity.Owner) string {
