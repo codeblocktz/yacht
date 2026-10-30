@@ -222,3 +222,26 @@ func testKeeper(t *testing.T) *secret.Keeper {
 	}
 	return k
 }
+
+// The wiring is part of the first release, so a stack fresh from its
+// template has nothing waiting to deploy. Set after the app was created, the
+// connection string ran in the pod but was missing from the release, and the
+// web app said "1 change not deployed: Added DATABASE_URL" (DEPLOY-11).
+func TestAFreshStackHasNothingStaged(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Keeper: testKeeper(t), StageChanges: true})
+	ownerID := owner(t, s, pool, "owner-template-staged")
+
+	if _, err := s.DeployTemplate(ctx, ownerID, "postgres-app", "shop"); err != nil {
+		t.Fatalf("DeployTemplate: %v", err)
+	}
+	for _, name := range []string{"shop-db", "shop-web"} {
+		changes, err := s.StagedChanges(ctx, ownerID, name)
+		if err != nil {
+			t.Fatalf("StagedChanges(%s): %v", name, err)
+		}
+		if len(changes) != 0 {
+			t.Errorf("%s fresh from its template has changes staged: %+v", name, changes)
+		}
+	}
+}

@@ -160,11 +160,42 @@ func (s *Service) DeployTemplateIn(
 			Region:    region,
 		}
 
+		// The wiring goes in with the app rather than after it, so the
+		// first release already names it. Set afterwards, it reached the
+		// running pod through the Secret but not the release, and the app
+		// said "1 change not deployed" for a variable it was running with.
+		var conn *VariableInput
+		if spec.NeedsFrom != "" {
+			from, ok := made[spec.NeedsFrom]
+			if !ok {
+				// A template naming an app that is not earlier in its own list.
+				// Refused rather than skipped: the stack would deploy looking
+				// complete and be missing the wiring that is the point of it.
+				return project, fmt.Errorf(
+					"app: template %s wires %s to %s, which it does not create first",
+					slug, spec.Name, spec.NeedsFrom)
+			}
+			v, err := s.connectionFor(ctx, from, in.Name)
+			if err != nil {
+				return project, err
+			}
+			conn = &v
+			in.Variables = append(in.Variables, v)
+		}
+
 		created, err := s.Create(ctx, ownerID, in)
 		if err != nil {
 			return project, fmt.Errorf("app: %s in stack %s: %w", spec.Name, stack, err)
 		}
 		made[spec.Name] = created
+
+		// The edge on the canvas exists because the value names the other
+		// app; Create writes variables without looking at what they name.
+		if conn != nil {
+			if err := s.recordLinks(ctx, s.q, ownerID, created, conn.Key, conn.Value); err != nil {
+				return project, err
+			}
+		}
 
 		// A template's website is public from the start, as Railway's are: the
 		// stack was chosen as a thing to visit, and a website nobody can open
@@ -178,22 +209,6 @@ func (s *Service) DeployTemplateIn(
 			if err := s.routingChanged(ctx, created); err != nil {
 				return project, err
 			}
-		}
-
-		if spec.NeedsFrom == "" {
-			continue
-		}
-		from, ok := made[spec.NeedsFrom]
-		if !ok {
-			// A template naming an app that is not earlier in its own list.
-			// Refused rather than skipped: the stack would deploy looking
-			// complete and be missing the wiring that is the point of it.
-			return project, fmt.Errorf(
-				"app: template %s wires %s to %s, which it does not create first",
-				slug, spec.Name, spec.NeedsFrom)
-		}
-		if err := s.copyConnection(ctx, ownerID, from, created); err != nil {
-			return project, err
 		}
 	}
 
@@ -217,36 +232,30 @@ func (s *Service) stackFits(ctx context.Context, ownerID string, tmpl Template, 
 	return s.admit(ctx, s.q, ownerID, change)
 }
 
-// copyConnection gives one app another's connection string.
+// connectionFor is the variable that gives an app, called to, another's
+// connection string.
 //
 // Opened and re-sealed rather than shared: a variable belongs to the app it is
 // set on, and there is no path here that hands a value between apps without
-// the keeper. Writing it through SetVariable rather than the store directly is
-// what records the link — the edge on the canvas exists because the value
-// names the other app, and that is noticed at the moment it is written.
-func (s *Service) copyConnection(ctx context.Context, ownerID string, from, to App) error {
+// the keeper.
+func (s *Service) connectionFor(ctx context.Context, from App, to string) (VariableInput, error) {
 	blueprint, err := BlueprintFor(from.Source)
 	if err != nil {
-		return err
+		return VariableInput{}, err
 	}
 	if blueprint.ConnectionKey == "" {
-		return fmt.Errorf("app: %s offers no connection string to give %s", from.Name, to.Name)
+		return VariableInput{}, fmt.Errorf("app: %s offers no connection string to give %s", from.Name, to)
 	}
 
 	_, secrets, err := s.envFor(ctx, s.q, from.OwnerID, from.ID)
 	if err != nil {
-		return fmt.Errorf("app: read %s connection: %w", from.Name, err)
+		return VariableInput{}, fmt.Errorf("app: read %s connection: %w", from.Name, err)
 	}
 	value, ok := secrets[blueprint.ConnectionKey]
 	if !ok {
-		return fmt.Errorf("app: %s has no %s to give", from.Name, blueprint.ConnectionKey)
+		return VariableInput{}, fmt.Errorf("app: %s has no %s to give", from.Name, blueprint.ConnectionKey)
 	}
-
-	// Applied now rather than staged: the stack is being deployed, and
-	// there is nobody to press Deploy for the wiring that is its point.
-	return s.setVariableNow(ctx, ownerID, to.Name, VariableInput{
-		Key: blueprint.ConnectionKey, Value: value, Secret: true,
-	})
+	return VariableInput{Key: blueprint.ConnectionKey, Value: value, Secret: true}, nil
 }
 
 // ValidateStackName checks the prefix every app in a stack is named with.
