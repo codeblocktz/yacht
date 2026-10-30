@@ -432,6 +432,11 @@ type Options struct {
 	// datahuru up with DATAHURU_TOKEN. Empty is the engine's own, "yacht".
 	CLIName string
 
+	// TeamHref is where the Admin console sends an operator for a team, from
+	// its command palette: a wrapping application's own page for a customer,
+	// say. Nil, or an empty answer, is the engine's /admin/teams/{id}.
+	TeamHref func(id string) string
+
 	Logger *slog.Logger
 }
 
@@ -541,6 +546,8 @@ type Server struct {
 	audit    AuditLog
 	webhooks Webhooks
 	cliName  string
+	// teamHrefFn is Options.TeamHref.
+	teamHrefFn func(id string) string
 
 	// apiRate and apiFailures are the API's brakes: requests per token, and
 	// failed authentications per address.
@@ -653,6 +660,7 @@ func New(opts Options) (*Server, error) {
 		audit:          opts.Audit,
 		webhooks:       opts.Webhooks,
 		cliName:        cmp.Or(opts.CLIName, "yacht"),
+		teamHrefFn:     opts.TeamHref,
 		apiRate:        newAPIRateLimiter(apiRatePerMinute, apiRateBurst),
 		apiFailures:    &apiFailureLimiter{l: newAttemptLimiter(time.Minute), limit: apiFailuresPerMinute},
 	}, nil

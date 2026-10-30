@@ -544,7 +544,7 @@ func appShell(s Slots, page templ.Component) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = palette(s.SearchIndex).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = palette(s.SearchIndex, s.Nav).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2465,7 +2465,7 @@ func UserMenu(owner identity.Owner, canSignOut bool, docsHref string) templ.Comp
 //
 // The actions are declared here rather than in the script so the server
 // decides what is offered, and a test can read the list.
-func palette(index string) templ.Component {
+func palette(index string, nav []NavGroup) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -2507,25 +2507,87 @@ func palette(index string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 203, "<span class=\"palette-scope\" data-palette-scope hidden></span> <input type=\"text\" class=\"palette-input\" role=\"combobox\" aria-expanded=\"true\" aria-controls=\"palette-list\" aria-autocomplete=\"list\" aria-label=\"Search pages, projects, apps and actions\" placeholder=\"Search pages, projects, apps…\" autocomplete=\"off\" spellcheck=\"false\" data-palette-input> <kbd class=\"kbd\">esc</kbd></div><div id=\"palette-list\" class=\"palette-list\" role=\"listbox\" aria-label=\"Results\" data-palette-list></div><div class=\"palette-foot\" aria-hidden=\"true\"><span><kbd class=\"kbd\">↑</kbd><kbd class=\"kbd\">↓</kbd> to move</span> <span><kbd class=\"kbd\">↵</kbd> to open</span> <span><kbd class=\"kbd\">esc</kbd> to close</span></div><div hidden><i data-palette-action data-label=\"Deploy an app\" data-url=\"/apps/new\" data-icon=\"rocket\" data-keywords=\"new create service image repository\"></i> <i data-palette-action data-label=\"New project\" data-url=\"/projects?new=1\" data-icon=\"plus\" data-keywords=\"create canvas\"></i> <i data-palette-action data-label=\"Add a custom domain…\" data-pick=\"app\" data-url=\"/apps/{name}/domains\" data-needs=\"domains\" data-icon=\"globe\" data-keywords=\"dns hostname certificate\"></i> <i data-palette-action data-label=\"Toggle theme\" data-run=\"theme\" data-icon=\"sun-moon\" data-keywords=\"dark light mode appearance\"></i> ")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 203, "<span class=\"palette-scope\" data-palette-scope hidden></span> <input type=\"text\" class=\"palette-input\" role=\"combobox\" aria-expanded=\"true\" aria-controls=\"palette-list\" aria-autocomplete=\"list\" aria-label=\"Search pages, projects, apps and actions\" placeholder=\"Search pages, projects, apps…\" autocomplete=\"off\" spellcheck=\"false\" data-palette-input> <kbd class=\"kbd\">esc</kbd></div><div id=\"palette-list\" class=\"palette-list\" role=\"listbox\" aria-label=\"Results\" data-palette-list></div><div class=\"palette-foot\" aria-hidden=\"true\"><span><kbd class=\"kbd\">↑</kbd><kbd class=\"kbd\">↓</kbd> to move</span> <span><kbd class=\"kbd\">↵</kbd> to open</span> <span><kbd class=\"kbd\">esc</kbd> to close</span></div><div hidden><i data-palette-action data-label=\"Deploy an app\" data-url=\"/apps/new\" data-icon=\"rocket\" data-keywords=\"new create service image repository\"></i> <i data-palette-action data-label=\"New project\" data-url=\"/projects?new=1\" data-icon=\"plus\" data-keywords=\"create canvas\"></i> <i data-palette-action data-label=\"Add a custom domain…\" data-pick=\"app\" data-url=\"/apps/{name}/domains\" data-needs=\"domains\" data-icon=\"globe\" data-keywords=\"dns hostname certificate\"></i> <i data-palette-action data-label=\"Toggle theme\" data-run=\"theme\" data-icon=\"sun-moon\" data-keywords=\"dark light mode appearance\"></i>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
+		for _, g := range nav {
+			for _, item := range g.Items {
+				for _, p := range item.Pages {
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 204, "<i data-palette-page data-label=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var113 string
+					templ_7745c5c3_Var113, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Label)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 782, Col: 47}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var113)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 205, "\" data-url=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var114 string
+					templ_7745c5c3_Var114, templ_7745c5c3_Err = templ.ResolveAttributeValue(p.Href)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 782, Col: 67}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var114)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 206, "\" data-parent=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var115 string
+					templ_7745c5c3_Var115, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.Href)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 782, Col: 93}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var115)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 207, "\" data-group=\"")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					var templ_7745c5c3_Var116 string
+					templ_7745c5c3_Var116, templ_7745c5c3_Err = templ.ResolveAttributeValue(item.Label)
+					if templ_7745c5c3_Err != nil {
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 782, Col: 119}
+					}
+					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var116)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 208, "\"></i> ")
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
+				}
+			}
+		}
 		for _, name := range paletteIcons {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 204, "<template data-palette-icon=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 209, "<template data-palette-icon=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var113 string
-			templ_7745c5c3_Var113, templ_7745c5c3_Err = templ.ResolveAttributeValue(name)
+			var templ_7745c5c3_Var117 string
+			templ_7745c5c3_Var117, templ_7745c5c3_Err = templ.ResolveAttributeValue(name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 777, Col: 38}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 787, Col: 38}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var113)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var117)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 205, "\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 210, "\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2533,12 +2595,12 @@ func palette(index string) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 206, "</template>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 211, "</template>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 207, "</div></dialog>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 212, "</div></dialog>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2562,12 +2624,12 @@ func topbar(s Slots) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var114 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var114 == nil {
-			templ_7745c5c3_Var114 = templ.NopComponent
+		templ_7745c5c3_Var118 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var118 == nil {
+			templ_7745c5c3_Var118 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 208, "<header class=\"topbar\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 213, "<header class=\"topbar\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2575,82 +2637,82 @@ func topbar(s Slots) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 209, "<span class=\"topbar-sep\" aria-hidden=\"true\"></span><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><ol class=\"flex min-w-0 items-center gap-1.5\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 214, "<span class=\"topbar-sep\" aria-hidden=\"true\"></span><nav class=\"crumbs\" aria-label=\"Breadcrumb\"><ol class=\"flex min-w-0 items-center gap-1.5\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		for i, crumb := range s.Breadcrumb {
 			if i > 0 {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 210, "<li class=\"crumb-sep\" aria-hidden=\"true\">/</li>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 215, "<li class=\"crumb-sep\" aria-hidden=\"true\">/</li>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 211, " <li class=\"min-w-0\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, " <li class=\"min-w-0\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if crumb.Href != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 212, "<a href=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 217, "<a href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var115 templ.SafeURL
-				templ_7745c5c3_Var115, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(crumb.Href))
+				var templ_7745c5c3_Var119 templ.SafeURL
+				templ_7745c5c3_Var119, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL(crumb.Href))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 797, Col: 38}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 807, Col: 38}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var115))
-				if templ_7745c5c3_Err != nil {
-					return templ_7745c5c3_Err
-				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 213, "\" class=\"crumb\">")
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var119))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var116 string
-				templ_7745c5c3_Var116, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
-				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 797, Col: 68}
-				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var116))
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 218, "\" class=\"crumb\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 214, "</a>")
+				var templ_7745c5c3_Var120 string
+				templ_7745c5c3_Var120, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 807, Col: 68}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var120))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 219, "</a>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			} else {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 215, "<span class=\"crumb crumb-current\" aria-current=\"page\">")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 220, "<span class=\"crumb crumb-current\" aria-current=\"page\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var117 string
-				templ_7745c5c3_Var117, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
+				var templ_7745c5c3_Var121 string
+				templ_7745c5c3_Var121, templ_7745c5c3_Err = templ.JoinStringErrs(crumb.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 799, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/layout.templ`, Line: 809, Col: 74}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var117))
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var121))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 216, "</span>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 221, "</span>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 217, "</li>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 222, "</li>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 218, "</ol></nav><div class=\"flex-1\"></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 223, "</ol></nav><div class=\"flex-1\"></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		if s.HeaderTools != nil {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 219, "<div class=\"flex items-center gap-2\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 224, "<div class=\"flex items-center gap-2\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -2658,12 +2720,12 @@ func topbar(s Slots) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 220, "</div>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 225, "</div>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 221, "</header>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 226, "</header>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2692,12 +2754,12 @@ func themeScript() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var118 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var118 == nil {
-			templ_7745c5c3_Var118 = templ.NopComponent
+		templ_7745c5c3_Var122 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var122 == nil {
+			templ_7745c5c3_Var122 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 222, "<script nonce=\"\">\n\t\t(function() {\n\t\t\ttry {\n\t\t\t\tvar stored = localStorage.getItem(\"yacht-theme\");\n\t\t\t\tvar dark = stored\n\t\t\t\t\t? stored === \"dark\"\n\t\t\t\t\t: window.matchMedia(\"(prefers-color-scheme: dark)\").matches;\n\t\t\t\tdocument.documentElement.classList.toggle(\"dark\", dark);\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. The OS preference\n\t\t\t\t   is a fine fallback and a broken toggle must not break the page. */\n\t\t\t}\n\t\t})();\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, "<script nonce=\"\">\n\t\t(function() {\n\t\t\ttry {\n\t\t\t\tvar stored = localStorage.getItem(\"yacht-theme\");\n\t\t\t\tvar dark = stored\n\t\t\t\t\t? stored === \"dark\"\n\t\t\t\t\t: window.matchMedia(\"(prefers-color-scheme: dark)\").matches;\n\t\t\t\tdocument.documentElement.classList.toggle(\"dark\", dark);\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. The OS preference\n\t\t\t\t   is a fine fallback and a broken toggle must not break the page. */\n\t\t\t}\n\t\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2727,12 +2789,12 @@ func sidebarToggle() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var119 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var119 == nil {
-			templ_7745c5c3_Var119 = templ.NopComponent
+		templ_7745c5c3_Var123 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var123 == nil {
+			templ_7745c5c3_Var123 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 223, "<button type=\"button\" class=\"btn btn-ghost btn-icon -ml-2\" aria-label=\"Toggle sidebar\" aria-controls=\"sidebar\" aria-expanded=\"true\" data-sidebar-toggle onclick=\"yachtSidebarToggle()\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 228, "<button type=\"button\" class=\"btn btn-ghost btn-icon -ml-2\" aria-label=\"Toggle sidebar\" aria-controls=\"sidebar\" aria-expanded=\"true\" data-sidebar-toggle onclick=\"yachtSidebarToggle()\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2740,7 +2802,7 @@ func sidebarToggle() templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 224, "</button>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, "</button>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2773,12 +2835,12 @@ func sidebarScript() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var120 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var120 == nil {
-			templ_7745c5c3_Var120 = templ.NopComponent
+		templ_7745c5c3_Var124 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var124 == nil {
+			templ_7745c5c3_Var124 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 225, "<script nonce=\"\">\n\t\t(function() {\n\t\t\tvar root = document.documentElement;\n\t\t\tvar previousFocus = null;\n\t\t\tfunction drawer() { return document.getElementById(\"sidebar\"); }\n\t\t\tfunction shell() { return document.querySelector(\"[data-app-shell]\"); }\n\t\t\tfunction setDrawerInert(open) {\n\t\t\t\tvar content = shell();\n\t\t\t\tif (content) content.inert = open;\n\t\t\t}\n\t\t\tfunction focusDrawer() {\n\t\t\t\tvar panel = drawer();\n\t\t\t\tif (!panel) return;\n\t\t\t\tvar target = panel.querySelector(\"a, button, summary, input, select, textarea, [tabindex]:not([tabindex='-1'])\");\n\t\t\t\tif (target) target.focus();\n\t\t\t}\n\t\t\tfunction trapFocus(event) {\n\t\t\t\tif (event.key !== \"Tab\" || !onPhone() || root.getAttribute(\"data-nav\") !== \"open\") return;\n\t\t\t\tvar panel = drawer();\n\t\t\t\tvar focusable = panel ? panel.querySelectorAll(\"a, button, summary, input, select, textarea, [tabindex]:not([tabindex='-1'])\") : [];\n\t\t\t\tif (!focusable.length) return;\n\t\t\t\tvar first = focusable[0], last = focusable[focusable.length - 1];\n\t\t\t\tif (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }\n\t\t\t\telse if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }\n\t\t\t}\n\t\t\ttry {\n\t\t\t\tif (localStorage.getItem(\"yacht-sidebar\") === \"collapsed\") {\n\t\t\t\t\troot.setAttribute(\"data-sidebar\", \"collapsed\");\n\t\t\t\t}\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. An expanded\n\t\t\t\t   sidebar is the right fallback and a broken toggle must not\n\t\t\t\t   break the page. */\n\t\t\t}\n\t\t\tfunction sync() {\n\t\t\t\tvar open = onPhone()\n\t\t\t\t\t? root.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t\t: root.getAttribute(\"data-sidebar\") !== \"collapsed\";\n\t\t\t\tvar buttons = document.querySelectorAll(\"[data-sidebar-toggle]\");\n\t\t\t\tfor (var i = 0; i < buttons.length; i++) {\n\t\t\t\t\tbuttons[i].setAttribute(\"aria-expanded\", open ? \"true\" : \"false\");\n\t\t\t\t}\n\t\t\t}\n\t\t\t/* Below md the same button opens a drawer instead of collapsing a\n\t\t\t   rail, because there is no room beside the page for a rail and no\n\t\t\t   other way to reach another page.\n\n\t\t\t   The drawer state is deliberately not stored. Every link here is a\n\t\t\t   full page load, so a drawer that remembered being open would\n\t\t\t   reopen itself over whatever you had just navigated to. The rail's\n\t\t\t   collapsed state is stored for the opposite reason: it is where you\n\t\t\t   left the furniture, not a thing you are in the middle of. */\n\t\t\tfunction onPhone() {\n\t\t\t\treturn !window.matchMedia(\"(min-width: 768px)\").matches;\n\t\t\t}\n\n\t\t\twindow.yachtSidebarToggle = function() {\n\t\t\t\tif (onPhone()) {\n\t\t\t\t\tvar open = root.getAttribute(\"data-nav\") === \"open\";\n\t\t\t\t\troot.setAttribute(\"data-nav\", open ? \"closed\" : \"open\");\n\t\t\t\t\tsetDrawerInert(!open);\n\t\t\t\t\tif (!open) {\n\t\t\t\t\t\tpreviousFocus = document.activeElement;\n\t\t\t\t\t\twindow.requestAnimationFrame(focusDrawer);\n\t\t\t\t\t} else if (previousFocus) {\n\t\t\t\t\t\tpreviousFocus.focus();\n\t\t\t\t\t}\n\t\t\t\t\tsync();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tvar collapsed = root.getAttribute(\"data-sidebar\") === \"collapsed\";\n\t\t\t\troot.setAttribute(\"data-sidebar\", collapsed ? \"expanded\" : \"collapsed\");\n\t\t\t\ttry {\n\t\t\t\t\tlocalStorage.setItem(\n\t\t\t\t\t\t\"yacht-sidebar\",\n\t\t\t\t\t\tcollapsed ? \"expanded\" : \"collapsed\"\n\t\t\t\t\t);\n\t\t\t\t} catch (e) {}\n\t\t\t\tsync();\n\t\t\t};\n\t\t\t/* Escape closes the drawer. It covers the page, so the usual way\n\t\t\t   out of something covering the page has to work. */\n\t\t\tdocument.addEventListener(\"keydown\", function(event) {\n\t\t\t\t/* Already answered — by a menu inside the drawer closing. */\n\t\t\t\tif (event.defaultPrevented) return;\n\t\t\t\tif (\n\t\t\t\t\tevent.key === \"Escape\" &&\n\t\t\t\t\troot.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t) {\n\t\t\t\t\troot.setAttribute(\"data-nav\", \"closed\");\n\t\t\t\t\tsetDrawerInert(false);\n\t\t\t\t\tif (previousFocus) previousFocus.focus();\n\t\t\t\t\tsync();\n\t\t\t\t}\n\t\t\t});\n\t\t\tdocument.addEventListener(\"keydown\", trapFocus);\n\n\t\t\t/* The button does not exist yet at this point in the head, so the\n\t\t\t   state it advertises is corrected once the body has parsed. On a\n\t\t\t   phone that correction matters: the markup says expanded, and the\n\t\t\t   drawer starts shut. */\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", sync);\n\t\t})();\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "<script nonce=\"\">\n\t\t(function() {\n\t\t\tvar root = document.documentElement;\n\t\t\tvar previousFocus = null;\n\t\t\tfunction drawer() { return document.getElementById(\"sidebar\"); }\n\t\t\tfunction shell() { return document.querySelector(\"[data-app-shell]\"); }\n\t\t\tfunction setDrawerInert(open) {\n\t\t\t\tvar content = shell();\n\t\t\t\tif (content) content.inert = open;\n\t\t\t}\n\t\t\tfunction focusDrawer() {\n\t\t\t\tvar panel = drawer();\n\t\t\t\tif (!panel) return;\n\t\t\t\tvar target = panel.querySelector(\"a, button, summary, input, select, textarea, [tabindex]:not([tabindex='-1'])\");\n\t\t\t\tif (target) target.focus();\n\t\t\t}\n\t\t\tfunction trapFocus(event) {\n\t\t\t\tif (event.key !== \"Tab\" || !onPhone() || root.getAttribute(\"data-nav\") !== \"open\") return;\n\t\t\t\tvar panel = drawer();\n\t\t\t\tvar focusable = panel ? panel.querySelectorAll(\"a, button, summary, input, select, textarea, [tabindex]:not([tabindex='-1'])\") : [];\n\t\t\t\tif (!focusable.length) return;\n\t\t\t\tvar first = focusable[0], last = focusable[focusable.length - 1];\n\t\t\t\tif (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }\n\t\t\t\telse if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }\n\t\t\t}\n\t\t\ttry {\n\t\t\t\tif (localStorage.getItem(\"yacht-sidebar\") === \"collapsed\") {\n\t\t\t\t\troot.setAttribute(\"data-sidebar\", \"collapsed\");\n\t\t\t\t}\n\t\t\t} catch (e) {\n\t\t\t\t/* Private browsing can throw on localStorage. An expanded\n\t\t\t\t   sidebar is the right fallback and a broken toggle must not\n\t\t\t\t   break the page. */\n\t\t\t}\n\t\t\tfunction sync() {\n\t\t\t\tvar open = onPhone()\n\t\t\t\t\t? root.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t\t: root.getAttribute(\"data-sidebar\") !== \"collapsed\";\n\t\t\t\tvar buttons = document.querySelectorAll(\"[data-sidebar-toggle]\");\n\t\t\t\tfor (var i = 0; i < buttons.length; i++) {\n\t\t\t\t\tbuttons[i].setAttribute(\"aria-expanded\", open ? \"true\" : \"false\");\n\t\t\t\t}\n\t\t\t}\n\t\t\t/* Below md the same button opens a drawer instead of collapsing a\n\t\t\t   rail, because there is no room beside the page for a rail and no\n\t\t\t   other way to reach another page.\n\n\t\t\t   The drawer state is deliberately not stored. Every link here is a\n\t\t\t   full page load, so a drawer that remembered being open would\n\t\t\t   reopen itself over whatever you had just navigated to. The rail's\n\t\t\t   collapsed state is stored for the opposite reason: it is where you\n\t\t\t   left the furniture, not a thing you are in the middle of. */\n\t\t\tfunction onPhone() {\n\t\t\t\treturn !window.matchMedia(\"(min-width: 768px)\").matches;\n\t\t\t}\n\n\t\t\twindow.yachtSidebarToggle = function() {\n\t\t\t\tif (onPhone()) {\n\t\t\t\t\tvar open = root.getAttribute(\"data-nav\") === \"open\";\n\t\t\t\t\troot.setAttribute(\"data-nav\", open ? \"closed\" : \"open\");\n\t\t\t\t\tsetDrawerInert(!open);\n\t\t\t\t\tif (!open) {\n\t\t\t\t\t\tpreviousFocus = document.activeElement;\n\t\t\t\t\t\twindow.requestAnimationFrame(focusDrawer);\n\t\t\t\t\t} else if (previousFocus) {\n\t\t\t\t\t\tpreviousFocus.focus();\n\t\t\t\t\t}\n\t\t\t\t\tsync();\n\t\t\t\t\treturn;\n\t\t\t\t}\n\t\t\t\tvar collapsed = root.getAttribute(\"data-sidebar\") === \"collapsed\";\n\t\t\t\troot.setAttribute(\"data-sidebar\", collapsed ? \"expanded\" : \"collapsed\");\n\t\t\t\ttry {\n\t\t\t\t\tlocalStorage.setItem(\n\t\t\t\t\t\t\"yacht-sidebar\",\n\t\t\t\t\t\tcollapsed ? \"expanded\" : \"collapsed\"\n\t\t\t\t\t);\n\t\t\t\t} catch (e) {}\n\t\t\t\tsync();\n\t\t\t};\n\t\t\t/* Escape closes the drawer. It covers the page, so the usual way\n\t\t\t   out of something covering the page has to work. */\n\t\t\tdocument.addEventListener(\"keydown\", function(event) {\n\t\t\t\t/* Already answered — by a menu inside the drawer closing. */\n\t\t\t\tif (event.defaultPrevented) return;\n\t\t\t\tif (\n\t\t\t\t\tevent.key === \"Escape\" &&\n\t\t\t\t\troot.getAttribute(\"data-nav\") === \"open\"\n\t\t\t\t) {\n\t\t\t\t\troot.setAttribute(\"data-nav\", \"closed\");\n\t\t\t\t\tsetDrawerInert(false);\n\t\t\t\t\tif (previousFocus) previousFocus.focus();\n\t\t\t\t\tsync();\n\t\t\t\t}\n\t\t\t});\n\t\t\tdocument.addEventListener(\"keydown\", trapFocus);\n\n\t\t\t/* The button does not exist yet at this point in the head, so the\n\t\t\t   state it advertises is corrected once the body has parsed. On a\n\t\t\t   phone that correction matters: the markup says expanded, and the\n\t\t\t   drawer starts shut. */\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", sync);\n\t\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2802,12 +2864,12 @@ func confirmationDialog() templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var121 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var121 == nil {
-			templ_7745c5c3_Var121 = templ.NopComponent
+		templ_7745c5c3_Var125 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var125 == nil {
+			templ_7745c5c3_Var125 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 226, "<dialog class=\"confirm-dialog\" data-confirm-dialog aria-labelledby=\"confirm-title\" aria-describedby=\"confirm-description\"><div class=\"flex flex-col gap-2\"><h2 id=\"confirm-title\" class=\"text-[16px] font-semibold tracking-tight\">Confirm action</h2><p id=\"confirm-description\" class=\"text-[12.5px] text-muted-foreground\"></p></div><div class=\"mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end\"><button class=\"btn\" type=\"button\" data-confirm-cancel>Cancel</button> <button class=\"btn btn-danger\" type=\"button\" data-confirm-submit>Confirm</button></div></dialog><script nonce=\"\">\n\t\t(function() {\n\t\t\tvar dialog, pendingForm, pendingSubmitter, trigger;\n\t\t\tfunction closeDialog() { if (dialog && dialog.open) dialog.close(); }\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", function() {\n\t\t\t\tdialog = document.querySelector(\"[data-confirm-dialog]\");\n\t\t\t\tif (!dialog) return;\n\t\t\t\tdocument.addEventListener(\"submit\", function(event) {\n\t\t\t\t\tvar form = event.target;\n\t\t\t\t\tvar source = form.matches(\"form[data-confirm]\") ? form : event.submitter;\n\t\t\t\t\tif (!source || !source.matches(\"[data-confirm]\") || form.dataset.confirmed === \"true\") return;\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tpendingForm = form;\n\t\t\t\t\tpendingSubmitter = event.submitter;\n\t\t\t\t\ttrigger = document.activeElement;\n\t\t\t\t\tdialog.querySelector(\"#confirm-title\").textContent = source.dataset.confirmTitle || \"Confirm action\";\n\t\t\t\t\tdialog.querySelector(\"#confirm-description\").textContent = source.dataset.confirm;\n\t\t\t\t\tdialog.querySelector(\"[data-confirm-submit]\").textContent = source.dataset.confirmLabel || \"Confirm\";\n\t\t\t\t\tdialog.showModal();\n\t\t\t\t\tdialog.querySelector(\"[data-confirm-cancel]\").focus();\n\t\t\t\t});\n\t\t\t\tdialog.querySelector(\"[data-confirm-cancel]\").addEventListener(\"click\", closeDialog);\n\t\t\t\tdialog.querySelector(\"[data-confirm-submit]\").addEventListener(\"click\", function() {\n\t\t\t\t\tif (!pendingForm) return;\n\t\t\t\t\tpendingForm.dataset.confirmed = \"true\";\n\t\t\t\t\tcloseDialog();\n\t\t\t\t\tpendingForm.requestSubmit(pendingSubmitter || undefined);\n\t\t\t\t});\n\t\t\t\tdialog.addEventListener(\"close\", function() {\n\t\t\t\t\tif (pendingForm) delete pendingForm.dataset.confirmed;\n\t\t\t\t\tpendingForm = null;\n\t\t\t\t\tpendingSubmitter = null;\n\t\t\t\t\tif (trigger) trigger.focus();\n\t\t\t\t});\n\t\t\t});\n\t\t})();\n\t</script>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, "<dialog class=\"confirm-dialog\" data-confirm-dialog aria-labelledby=\"confirm-title\" aria-describedby=\"confirm-description\"><div class=\"flex flex-col gap-2\"><h2 id=\"confirm-title\" class=\"text-[16px] font-semibold tracking-tight\">Confirm action</h2><p id=\"confirm-description\" class=\"text-[12.5px] text-muted-foreground\"></p></div><div class=\"mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end\"><button class=\"btn\" type=\"button\" data-confirm-cancel>Cancel</button> <button class=\"btn btn-danger\" type=\"button\" data-confirm-submit>Confirm</button></div></dialog><script nonce=\"\">\n\t\t(function() {\n\t\t\tvar dialog, pendingForm, pendingSubmitter, trigger;\n\t\t\tfunction closeDialog() { if (dialog && dialog.open) dialog.close(); }\n\t\t\tdocument.addEventListener(\"DOMContentLoaded\", function() {\n\t\t\t\tdialog = document.querySelector(\"[data-confirm-dialog]\");\n\t\t\t\tif (!dialog) return;\n\t\t\t\tdocument.addEventListener(\"submit\", function(event) {\n\t\t\t\t\tvar form = event.target;\n\t\t\t\t\tvar source = form.matches(\"form[data-confirm]\") ? form : event.submitter;\n\t\t\t\t\tif (!source || !source.matches(\"[data-confirm]\") || form.dataset.confirmed === \"true\") return;\n\t\t\t\t\tevent.preventDefault();\n\t\t\t\t\tpendingForm = form;\n\t\t\t\t\tpendingSubmitter = event.submitter;\n\t\t\t\t\ttrigger = document.activeElement;\n\t\t\t\t\tdialog.querySelector(\"#confirm-title\").textContent = source.dataset.confirmTitle || \"Confirm action\";\n\t\t\t\t\tdialog.querySelector(\"#confirm-description\").textContent = source.dataset.confirm;\n\t\t\t\t\tdialog.querySelector(\"[data-confirm-submit]\").textContent = source.dataset.confirmLabel || \"Confirm\";\n\t\t\t\t\tdialog.showModal();\n\t\t\t\t\tdialog.querySelector(\"[data-confirm-cancel]\").focus();\n\t\t\t\t});\n\t\t\t\tdialog.querySelector(\"[data-confirm-cancel]\").addEventListener(\"click\", closeDialog);\n\t\t\t\tdialog.querySelector(\"[data-confirm-submit]\").addEventListener(\"click\", function() {\n\t\t\t\t\tif (!pendingForm) return;\n\t\t\t\t\tpendingForm.dataset.confirmed = \"true\";\n\t\t\t\t\tcloseDialog();\n\t\t\t\t\tpendingForm.requestSubmit(pendingSubmitter || undefined);\n\t\t\t\t});\n\t\t\t\tdialog.addEventListener(\"close\", function() {\n\t\t\t\t\tif (pendingForm) delete pendingForm.dataset.confirmed;\n\t\t\t\t\tpendingForm = null;\n\t\t\t\t\tpendingSubmitter = null;\n\t\t\t\t\tif (trigger) trigger.focus();\n\t\t\t\t});\n\t\t\t});\n\t\t})();\n\t</script>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -2843,293 +2905,293 @@ func icon(name string) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var122 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var122 == nil {
-			templ_7745c5c3_Var122 = templ.NopComponent
+		templ_7745c5c3_Var126 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var126 == nil {
+			templ_7745c5c3_Var126 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 227, "<svg class=\"size-4 shrink-0 opacity-70\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "<svg class=\"size-4 shrink-0 opacity-70\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		switch name {
 		case "github":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 228, "<path d=\"M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4\"></path> <path d=\"M9 18c-4.51 2-5-2-7-2\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, "<path d=\"M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4\"></path> <path d=\"M9 18c-4.51 2-5-2-7-2\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "bucket":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 229, "<rect width=\"20\" height=\"5\" x=\"2\" y=\"3\" rx=\"1\"></rect> <path d=\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8\"></path> <path d=\"M10 12h4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "<rect width=\"20\" height=\"5\" x=\"2\" y=\"3\" rx=\"1\"></rect> <path d=\"M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8\"></path> <path d=\"M10 12h4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "folder":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 230, "<path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "<path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "file":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 231, "<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"></path> <path d=\"M14 2v4a2 2 0 0 0 2 2h4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"></path> <path d=\"M14 2v4a2 2 0 0 0 2 2h4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "upload":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 232, "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path> <path d=\"m17 8-5-5-5 5\"></path> <path d=\"M12 3v12\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path> <path d=\"m17 8-5-5-5 5\"></path> <path d=\"M12 3v12\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "trash":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 233, "<path d=\"M3 6h18\"></path> <path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"></path> <path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "<path d=\"M3 6h18\"></path> <path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\"></path> <path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "grid":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 234, "<rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\"></rect>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "<rect width=\"7\" height=\"7\" x=\"3\" y=\"3\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"14\" y=\"3\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"14\" y=\"14\" rx=\"1\"></rect> <rect width=\"7\" height=\"7\" x=\"3\" y=\"14\" rx=\"1\"></rect>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "boxes":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 235, "<path d=\"M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z\"></path> <path d=\"m7 16.5-4.74-2.85\"></path> <path d=\"m7 16.5 5-3\"></path> <path d=\"M7 16.5v5.17\"></path> <path d=\"M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z\"></path> <path d=\"m17 16.5-5-3\"></path> <path d=\"m17 16.5 4.74-2.85\"></path> <path d=\"M17 16.5v5.17\"></path> <path d=\"M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z\"></path> <path d=\"M12 8 7.26 5.15\"></path> <path d=\"m12 8 4.74-2.85\"></path> <path d=\"M12 13.5V8\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "<path d=\"M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z\"></path> <path d=\"m7 16.5-4.74-2.85\"></path> <path d=\"m7 16.5 5-3\"></path> <path d=\"M7 16.5v5.17\"></path> <path d=\"M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z\"></path> <path d=\"m17 16.5-5-3\"></path> <path d=\"m17 16.5 4.74-2.85\"></path> <path d=\"M17 16.5v5.17\"></path> <path d=\"M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z\"></path> <path d=\"M12 8 7.26 5.15\"></path> <path d=\"m12 8 4.74-2.85\"></path> <path d=\"M12 13.5V8\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "maximize":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 236, "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"></path> <path d=\"M21 8V5a2 2 0 0 0-2-2h-3\"></path> <path d=\"M3 16v3a2 2 0 0 0 2 2h3\"></path> <path d=\"M16 21h3a2 2 0 0 0 2-2v-3\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\"></path> <path d=\"M21 8V5a2 2 0 0 0-2-2h-3\"></path> <path d=\"M3 16v3a2 2 0 0 0 2 2h3\"></path> <path d=\"M16 21h3a2 2 0 0 0 2-2v-3\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "list":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 237, "<path d=\"M3 12h.01\"></path> <path d=\"M3 18h.01\"></path> <path d=\"M3 6h.01\"></path> <path d=\"M8 12h13\"></path> <path d=\"M8 18h13\"></path> <path d=\"M8 6h13\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "<path d=\"M3 12h.01\"></path> <path d=\"M3 18h.01\"></path> <path d=\"M3 6h.01\"></path> <path d=\"M8 12h13\"></path> <path d=\"M8 18h13\"></path> <path d=\"M8 6h13\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "plus":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 238, "<path d=\"M5 12h14\"></path> <path d=\"M12 5v14\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, "<path d=\"M5 12h14\"></path> <path d=\"M12 5v14\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "minus":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 239, "<path d=\"M5 12h14\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "<path d=\"M5 12h14\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "box":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 240, "<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"></path> <path d=\"m3.3 7 8.7 5 8.7-5\"></path> <path d=\"M12 22V12\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 245, "<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"></path> <path d=\"m3.3 7 8.7 5 8.7-5\"></path> <path d=\"M12 22V12\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "lock":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 241, "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"></rect> <path d=\"M7 11V7a5 5 0 0 1 10 0v4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"></rect> <path d=\"M7 11V7a5 5 0 0 1 10 0v4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "lock-open":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 242, "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"></rect> <path d=\"M7 11V7a5 5 0 0 1 9.9-1\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\"></rect> <path d=\"M7 11V7a5 5 0 0 1 9.9-1\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "globe":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 243, "<circle cx=\"12\" cy=\"12\" r=\"10\"></circle> <path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path> <path d=\"M2 12h20\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "<circle cx=\"12\" cy=\"12\" r=\"10\"></circle> <path d=\"M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20\"></path> <path d=\"M2 12h20\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "map-pin":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 244, "<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\"></path> <circle cx=\"12\" cy=\"10\" r=\"3\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\"></path> <circle cx=\"12\" cy=\"10\" r=\"3\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "square-dashed":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 245, "<path d=\"M5 3a2 2 0 0 0-2 2\"></path> <path d=\"M19 3a2 2 0 0 1 2 2\"></path> <path d=\"M21 19a2 2 0 0 1-2 2\"></path> <path d=\"M5 21a2 2 0 0 1-2-2\"></path> <path d=\"M9 3h1\"></path> <path d=\"M9 21h1\"></path> <path d=\"M14 3h1\"></path> <path d=\"M14 21h1\"></path> <path d=\"M3 9v1\"></path> <path d=\"M21 9v1\"></path> <path d=\"M3 14v1\"></path> <path d=\"M21 14v1\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, "<path d=\"M5 3a2 2 0 0 0-2 2\"></path> <path d=\"M19 3a2 2 0 0 1 2 2\"></path> <path d=\"M21 19a2 2 0 0 1-2 2\"></path> <path d=\"M5 21a2 2 0 0 1-2-2\"></path> <path d=\"M9 3h1\"></path> <path d=\"M9 21h1\"></path> <path d=\"M14 3h1\"></path> <path d=\"M14 21h1\"></path> <path d=\"M3 9v1\"></path> <path d=\"M21 9v1\"></path> <path d=\"M3 14v1\"></path> <path d=\"M21 14v1\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "package":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 246, "<path d=\"m7.5 4.27 9 5.15\"></path> <path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"></path> <path d=\"m3.3 7 8.7 5 8.7-5\"></path> <path d=\"M12 22V12\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "<path d=\"m7.5 4.27 9 5.15\"></path> <path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\"></path> <path d=\"m3.3 7 8.7 5 8.7-5\"></path> <path d=\"M12 22V12\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "server":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 247, "<rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"></rect> <rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"></rect> <line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"></line> <line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"></line>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "<rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"></rect> <rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"></rect> <line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"></line> <line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"></line>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "cpu":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 248, "<rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"></rect> <rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"></rect> <path d=\"M15 2v2\"></path> <path d=\"M15 20v2\"></path> <path d=\"M2 15h2\"></path> <path d=\"M2 9h2\"></path> <path d=\"M20 15h2\"></path> <path d=\"M20 9h2\"></path> <path d=\"M9 2v2\"></path> <path d=\"M9 20v2\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, "<rect width=\"16\" height=\"16\" x=\"4\" y=\"4\" rx=\"2\"></rect> <rect width=\"6\" height=\"6\" x=\"9\" y=\"9\" rx=\"1\"></rect> <path d=\"M15 2v2\"></path> <path d=\"M15 20v2\"></path> <path d=\"M2 15h2\"></path> <path d=\"M2 9h2\"></path> <path d=\"M20 15h2\"></path> <path d=\"M20 9h2\"></path> <path d=\"M9 2v2\"></path> <path d=\"M9 20v2\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "layers":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 249, "<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\"></path> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\"></path> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, "<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\"></path> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\"></path> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "rocket":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 250, "<path d=\"M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z\"></path> <path d=\"m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z\"></path> <path d=\"M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0\"></path> <path d=\"M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, "<path d=\"M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z\"></path> <path d=\"m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z\"></path> <path d=\"M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0\"></path> <path d=\"M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "disk":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 251, "<line x1=\"22\" x2=\"2\" y1=\"12\" y2=\"12\"></line> <path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"></path> <line x1=\"6\" x2=\"6.01\" y1=\"16\" y2=\"16\"></line> <line x1=\"10\" x2=\"10.01\" y1=\"16\" y2=\"16\"></line>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, "<line x1=\"22\" x2=\"2\" y1=\"12\" y2=\"12\"></line> <path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"></path> <line x1=\"6\" x2=\"6.01\" y1=\"16\" y2=\"16\"></line> <line x1=\"10\" x2=\"10.01\" y1=\"16\" y2=\"16\"></line>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "storage":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 252, "<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"></ellipse> <path d=\"M3 5V19A9 3 0 0 0 21 19V5\"></path> <path d=\"M3 12A9 3 0 0 0 21 12\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, "<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"></ellipse> <path d=\"M3 5V19A9 3 0 0 0 21 19V5\"></path> <path d=\"M3 12A9 3 0 0 0 21 12\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "grip":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 253, "<circle cx=\"9\" cy=\"12\" r=\"1\"></circle> <circle cx=\"9\" cy=\"5\" r=\"1\"></circle> <circle cx=\"9\" cy=\"19\" r=\"1\"></circle> <circle cx=\"15\" cy=\"12\" r=\"1\"></circle> <circle cx=\"15\" cy=\"5\" r=\"1\"></circle> <circle cx=\"15\" cy=\"19\" r=\"1\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 258, "<circle cx=\"9\" cy=\"12\" r=\"1\"></circle> <circle cx=\"9\" cy=\"5\" r=\"1\"></circle> <circle cx=\"9\" cy=\"19\" r=\"1\"></circle> <circle cx=\"15\" cy=\"12\" r=\"1\"></circle> <circle cx=\"15\" cy=\"5\" r=\"1\"></circle> <circle cx=\"15\" cy=\"19\" r=\"1\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "activity":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 254, "<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "external":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 255, "<path d=\"M15 3h6v6\"></path> <path d=\"M10 14 21 3\"></path> <path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 260, "<path d=\"M15 3h6v6\"></path> <path d=\"M10 14 21 3\"></path> <path d=\"M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "panel-left":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 256, "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"></rect> <path d=\"M9 3v18\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, "<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\"></rect> <path d=\"M9 3v18\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "log-out":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 257, "<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"></path> <polyline points=\"16 17 21 12 16 7\"></polyline> <line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\"></line>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, "<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\"></path> <polyline points=\"16 17 21 12 16 7\"></polyline> <line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\"></line>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "users":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 258, "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"></path> <circle cx=\"9\" cy=\"7\" r=\"4\"></circle> <path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"></path> <path d=\"M16 3.13a4 4 0 0 1 0 7.75\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 263, "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"></path> <circle cx=\"9\" cy=\"7\" r=\"4\"></circle> <path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"></path> <path d=\"M16 3.13a4 4 0 0 1 0 7.75\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "settings":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 259, "<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"></path> <circle cx=\"12\" cy=\"12\" r=\"3\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 264, "<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"></path> <circle cx=\"12\" cy=\"12\" r=\"3\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "user":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 260, "<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"></path> <circle cx=\"12\" cy=\"7\" r=\"4\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 265, "<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"></path> <circle cx=\"12\" cy=\"7\" r=\"4\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "key":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 261, "<path d=\"m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4\"></path> <path d=\"m21 2-9.6 9.6\"></path> <circle cx=\"7.5\" cy=\"15.5\" r=\"5.5\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 266, "<path d=\"m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4\"></path> <path d=\"m21 2-9.6 9.6\"></path> <circle cx=\"7.5\" cy=\"15.5\" r=\"5.5\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "building":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 262, "<path d=\"M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z\"></path> <path d=\"M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2\"></path> <path d=\"M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2\"></path> <path d=\"M10 6h4\"></path> <path d=\"M10 10h4\"></path> <path d=\"M10 14h4\"></path> <path d=\"M10 18h4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 267, "<path d=\"M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z\"></path> <path d=\"M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2\"></path> <path d=\"M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2\"></path> <path d=\"M10 6h4\"></path> <path d=\"M10 10h4\"></path> <path d=\"M10 14h4\"></path> <path d=\"M10 18h4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "gauge":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 263, "<path d=\"m12 14 4-4\"></path> <path d=\"M3.34 19a10 10 0 1 1 17.32 0\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 268, "<path d=\"m12 14 4-4\"></path> <path d=\"M3.34 19a10 10 0 1 1 17.32 0\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "monitor":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 264, "<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\"></rect> <line x1=\"8\" x2=\"16\" y1=\"21\" y2=\"21\"></line> <line x1=\"12\" x2=\"12\" y1=\"17\" y2=\"21\"></line>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 269, "<rect width=\"20\" height=\"14\" x=\"2\" y=\"3\" rx=\"2\"></rect> <line x1=\"8\" x2=\"16\" y1=\"21\" y2=\"21\"></line> <line x1=\"12\" x2=\"12\" y1=\"17\" y2=\"21\"></line>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "search":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 265, "<circle cx=\"11\" cy=\"11\" r=\"8\"></circle> <path d=\"m21 21-4.3-4.3\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 270, "<circle cx=\"11\" cy=\"11\" r=\"8\"></circle> <path d=\"m21 21-4.3-4.3\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "chevrons-up-down":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 266, "<path d=\"m7 15 5 5 5-5\"></path> <path d=\"m7 9 5-5 5 5\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 271, "<path d=\"m7 15 5 5 5-5\"></path> <path d=\"m7 9 5-5 5 5\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "chevron-right":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 267, "<path d=\"m9 18 6-6-6-6\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 272, "<path d=\"m9 18 6-6-6-6\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "check":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 268, "<path d=\"M20 6 9 17l-5-5\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 273, "<path d=\"M20 6 9 17l-5-5\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "sun":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 269, "<circle cx=\"12\" cy=\"12\" r=\"4\"></circle> <path d=\"M12 2v2\"></path> <path d=\"M12 20v2\"></path> <path d=\"m4.93 4.93 1.41 1.41\"></path> <path d=\"m17.66 17.66 1.41 1.41\"></path> <path d=\"M2 12h2\"></path> <path d=\"M20 12h2\"></path> <path d=\"m6.34 17.66-1.41 1.41\"></path> <path d=\"m19.07 4.93-1.41 1.41\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 274, "<circle cx=\"12\" cy=\"12\" r=\"4\"></circle> <path d=\"M12 2v2\"></path> <path d=\"M12 20v2\"></path> <path d=\"m4.93 4.93 1.41 1.41\"></path> <path d=\"m17.66 17.66 1.41 1.41\"></path> <path d=\"M2 12h2\"></path> <path d=\"M20 12h2\"></path> <path d=\"m6.34 17.66-1.41 1.41\"></path> <path d=\"m19.07 4.93-1.41 1.41\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "moon":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 270, "<path d=\"M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 275, "<path d=\"M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "sun-moon":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 271, "<path d=\"M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4\"></path> <path d=\"M12 2v2\"></path> <path d=\"M12 20v2\"></path> <path d=\"m4.9 4.9 1.4 1.4\"></path> <path d=\"m17.7 17.7 1.4 1.4\"></path> <path d=\"M2 12h2\"></path> <path d=\"M20 12h2\"></path> <path d=\"m6.3 17.7-1.4 1.4\"></path> <path d=\"m19.1 4.9-1.4 1.4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 276, "<path d=\"M12 8a2.83 2.83 0 0 0 4 4 4 4 0 1 1-4-4\"></path> <path d=\"M12 2v2\"></path> <path d=\"M12 20v2\"></path> <path d=\"m4.9 4.9 1.4 1.4\"></path> <path d=\"m17.7 17.7 1.4 1.4\"></path> <path d=\"M2 12h2\"></path> <path d=\"M20 12h2\"></path> <path d=\"m6.3 17.7-1.4 1.4\"></path> <path d=\"m19.1 4.9-1.4 1.4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "book-open":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 272, "<path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"></path> <path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 277, "<path d=\"M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z\"></path> <path d=\"M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "arrow-right":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 273, "<path d=\"M5 12h14\"></path> <path d=\"m12 5 7 7-7 7\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 278, "<path d=\"M5 12h14\"></path> <path d=\"m12 5 7 7-7 7\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "logs":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 274, "<path d=\"M13 12h8\"></path> <path d=\"M13 18h8\"></path> <path d=\"M13 6h8\"></path> <path d=\"M3 12h1\"></path> <path d=\"M3 18h1\"></path> <path d=\"M3 6h1\"></path> <path d=\"M8 12h1\"></path> <path d=\"M8 18h1\"></path> <path d=\"M8 6h1\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 279, "<path d=\"M13 12h8\"></path> <path d=\"M13 18h8\"></path> <path d=\"M13 6h8\"></path> <path d=\"M3 12h1\"></path> <path d=\"M3 18h1\"></path> <path d=\"M3 6h1\"></path> <path d=\"M8 12h1\"></path> <path d=\"M8 18h1\"></path> <path d=\"M8 6h1\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "download":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 275, "<path d=\"M12 15V3\"></path> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path> <path d=\"m7 10 5 5 5-5\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 280, "<path d=\"M12 15V3\"></path> <path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"></path> <path d=\"m7 10 5 5 5-5\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "network":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 276, "<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"></rect> <rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"></rect> <rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\"></rect> <path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\"></path> <path d=\"M12 12V8\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 281, "<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"></rect> <rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"></rect> <rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\"></rect> <path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\"></path> <path d=\"M12 12V8\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "link":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 277, "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"></path> <path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 282, "<path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"></path> <path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "corner-down-left":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 278, "<polyline points=\"9 10 4 15 9 20\"></polyline> <path d=\"M20 4v7a4 4 0 0 1-4 4H4\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 283, "<polyline points=\"9 10 4 15 9 20\"></polyline> <path d=\"M20 4v7a4 4 0 0 1-4 4H4\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "arrow-left":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 279, "<path d=\"m12 19-7-7 7-7\"></path> <path d=\"M19 12H5\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 284, "<path d=\"m12 19-7-7 7-7\"></path> <path d=\"M19 12H5\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "eye":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 280, "<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"></path> <circle cx=\"12\" cy=\"12\" r=\"3\"></circle>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 285, "<path d=\"M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0\"></path> <circle cx=\"12\" cy=\"12\" r=\"3\"></circle>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "eye-off":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 281, "<path d=\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49\"></path> <path d=\"M14.084 14.158a3 3 0 0 1-4.242-4.242\"></path> <path d=\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143\"></path> <path d=\"m2 2 20 20\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 286, "<path d=\"M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49\"></path> <path d=\"M14.084 14.158a3 3 0 0 1-4.242-4.242\"></path> <path d=\"M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143\"></path> <path d=\"m2 2 20 20\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		case "code":
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 282, "<polyline points=\"16 18 22 12 16 6\"></polyline> <polyline points=\"8 6 2 12 8 18\"></polyline>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 287, "<polyline points=\"16 18 22 12 16 6\"></polyline> <polyline points=\"8 6 2 12 8 18\"></polyline>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 283, "</svg>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 288, "</svg>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -107,5 +108,55 @@ func TestDestructiveActionsDoNotUseNativeConfirm(t *testing.T) {
 	}
 	if triggers < 6 {
 		t.Errorf("found %d shared confirmation triggers, want at least 6", triggers)
+	}
+}
+
+// Shut, the phone drawer and a closed sheet take no focus. Both sat just off
+// screen with every link and button in them still in the tab order, so Tab
+// walked through things nobody could see.
+func TestClosedPanelsAreOutOfTheTabOrder(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "assets", "css", "input.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(src)
+
+	// The drawer: hidden while shut, shown while open, below md.
+	from := strings.Index(css, "fixed bottom-0 left-0 top-0 z-50 w-[284px]")
+	to := strings.Index(css, ".nav-backdrop {")
+	if from < 0 || to < from {
+		t.Fatal("no phone drawer rules in input.css")
+	}
+	phone := css[from:to]
+	for _, want := range []string{
+		"visibility: hidden;",
+		"transition-property: transform, translate, visibility;",
+		`:root[data-nav="open"] .sidebar { @apply translate-x-0; visibility: visible; }`,
+	} {
+		if !strings.Contains(phone, want) {
+			t.Errorf("the phone drawer lacks %q", want)
+		}
+	}
+
+	// The sheet: no display of its own. The rule is outside any layer, so a
+	// display there beats the dialog's hidden-while-closed utility. Checked
+	// in the compiled stylesheet too, which is what a browser reads.
+	sheet := regexp.MustCompile(`(?s)\.canvas-sheet \{(.*?)\}`).FindStringSubmatch(css)
+	if sheet == nil {
+		t.Fatal("no .canvas-sheet rule in input.css")
+	}
+	for _, word := range strings.Fields(sheet[1]) {
+		if word == "flex" || word == "block" || word == "grid" || strings.HasPrefix(word, "display") {
+			t.Errorf(".canvas-sheet sets a display (%s): a closed sheet stays drawn off screen", word)
+		}
+	}
+	built, err := os.ReadFile(filepath.Join("assets", "css", "app.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range regexp.MustCompile(`\.canvas-sheet\{[^}]*\}`).FindAllString(string(built), -1) {
+		if strings.Contains(rule, "display:") {
+			t.Errorf("the built stylesheet gives .canvas-sheet a display: %s", rule)
+		}
 	}
 }

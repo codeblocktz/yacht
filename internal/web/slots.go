@@ -43,6 +43,13 @@ type NavItem struct {
 	// and as a dot on the icon in the collapsed rail.
 	Live   bool
 	Active bool
+
+	// Pages are the pages under this one that the sidebar does not draw:
+	// a section's tabs, its "new" form. The command palette offers them
+	// beside this item, named "Plans" with "Billing" beside it, so ⌘K
+	// reaches every page and not only every row of the sidebar. Each needs
+	// only a Label and an Href.
+	Pages []NavItem
 }
 
 // SidebarProjects is the sidebar's Projects section: the team's projects,
@@ -342,6 +349,11 @@ func (d DefaultSlots) Slots(ctx context.Context, r *http.Request) Slots {
 		slots.Project = nil
 		slots.SidebarTop = AdminConsoleTop(signedIn)
 		slots.Nav = adminConsoleNav(ctx, path)
+		// The console's palette finds the install's teams as well as the
+		// operator's own projects: from here, "algo" is a customer.
+		if searchIndex != "" {
+			slots.SearchIndex = searchIndex + "?" + searchConsoleParam + "=admin"
+		}
 		return slots
 	}
 	slots.Nav = workspaceNav(ctx, path, surfaces, len(teams) > 0)
@@ -565,9 +577,14 @@ func slot(c templ.Component) templ.Component {
 func adminNav(ctx context.Context, path string) []NavItem {
 	var items []NavItem
 	s := SurfacesFromContext(ctx)
+	nodes := NavItem{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
+		Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")}
+	if s.DNS {
+		// Gated as its route is: joining a node needs the joiner, as DNS does.
+		nodes.Pages = []NavItem{{Label: "Add a node", Href: "/cluster/nodes/add"}}
+	}
 	items = append(items,
-		NavItem{Label: "Nodes", Href: "/cluster/nodes", Icon: "server",
-			Active: path == "/cluster" || hasPrefix(path, "/cluster/nodes")},
+		nodes,
 		NavItem{Label: "Pods", Href: "/cluster/pods", Icon: "layers",
 			Active: hasPrefix(path, "/cluster/pods")},
 		NavItem{Label: "Volumes", Href: "/cluster/volumes", Icon: "disk",

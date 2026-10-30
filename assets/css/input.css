@@ -923,11 +923,18 @@
      Everything in it — the nav, the switcher, the footer — is the same markup,
      because a second copy for small screens is a second copy to keep correct. */
   @media (max-width: 767px) {
+    /* Shut, the drawer is hidden as well as slid away: off screen is not
+       out of the tab order, and Tab from the top of the page walked through
+       every link in it with nothing visible holding focus. visibility
+       transitions with the slide, so it stays visible until the drawer is
+       out of sight and becomes visible the moment it starts to open. */
     .sidebar {
       @apply fixed bottom-0 left-0 top-0 z-50 w-[284px] max-w-[86vw] -translate-x-full
              transition-transform shadow-xl;
+      visibility: hidden;
+      transition-property: transform, translate, visibility;
     }
-    :root[data-nav="open"] .sidebar { @apply translate-x-0; }
+    :root[data-nav="open"] .sidebar { @apply translate-x-0; visibility: visible; }
 
     .nav-backdrop {
       @apply fixed inset-0 z-40 bg-black/50 opacity-0 pointer-events-none
@@ -1472,9 +1479,15 @@
   .raw-editor-text { @apply h-auto min-h-[140px] w-full resize-y py-2 text-[12.5px] leading-relaxed; }
 
   /* The panel over the canvas. Wider than a default sheet because it holds the
-     app's whole detail — a variables table at 24rem wraps every row. */
+     app's whole detail — a variables table at 24rem wraps every row.
+
+     No display here. This part of the file is outside any layer, and an
+     unlayered display beats every utility: it beat the dialog's own
+     hidden-while-closed one, so a closed sheet stayed drawn just past the
+     window's right edge with its Close button in the tab order. The dialog's
+     classes already make it flex while it is open. */
   .canvas-sheet {
-    @apply flex w-full flex-col gap-0 p-0;
+    @apply w-full flex-col gap-0 p-0;
   }
   .canvas-sheet-head { @apply shrink-0 border-b border-border !px-5 !py-4; }
   .canvas-sheet-actions {

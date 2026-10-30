@@ -532,3 +532,113 @@ func TestTheDomainStepGoesToAServiceThatCanHaveOne(t *testing.T) {
 		})
 	}
 }
+
+// ------------------------------------------------ the Admin console's palette
+
+// In the Admin console the palette finds the install's teams, by name and by
+// id, beside the operator's own projects. Only there, and only for an
+// operator: asking for them is all the request can do.
+func TestTheConsolesSearchIndexFindsTeams(t *testing.T) {
+	teams := func(h http.Handler, path string, cookie bool) []searchEntry {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if cookie {
+			req.AddCookie(&http.Cookie{Name: SessionCookie, Value: "probe-session"})
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rec.Code)
+		}
+		var got searchIndex
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		var out []searchEntry
+		for _, it := range got.Items {
+			if it.Kind == "team" {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+
+	quotas := newFakeQuotas()
+	quotas.add(app.TeamUsage{TeamID: "org-9c7faf00", TeamName: "Algolab"})
+	quotas.add(app.TeamUsage{TeamID: "org-unnamed"})
+	h := testServer(t, Options{Apps: newFakeApps(), Quotas: quotas})
+
+	want := []searchEntry{
+		{Name: "Algolab", Kind: "team", Href: "/admin/teams/org-9c7faf00", Detail: "org-9c7faf00"},
+		// A team with no name is still found, by its id.
+		{Name: "org-unnamed", Kind: "team", Href: "/admin/teams/org-unnamed", Detail: "org-unnamed"},
+	}
+	if got := teams(h, "/search/index?console=admin", false); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("console index teams = %+v\nwant %+v", got, want)
+	}
+	if got := teams(h, "/search/index", false); len(got) != 0 {
+		t.Errorf("the workspace's palette lists teams: %+v", got)
+	}
+
+	// A wrapping application sends the operator to its own page for one.
+	custom := testServer(t, Options{Apps: newFakeApps(), Quotas: quotas,
+		TeamHref: func(id string) string { return "/admin/customers/" + id }})
+	if got := teams(custom, "/search/index?console=admin", false); len(got) != 2 || got[0].Href != "/admin/customers/org-9c7faf00" {
+		t.Errorf("TeamHref was not used: %+v", got)
+	}
+
+	// A member who is not an operator asks and gets no teams.
+	const team = "web-search-console"
+	member := gatedServer(t, &roledAccounts{fakeAccounts: &fakeAccounts{}, team: team, role: account.RoleMember}, team)
+	if got := teams(member, "/search/index?console=admin", true); len(got) != 0 {
+		t.Errorf("a non-operator was given the install's teams: %+v", got)
+	}
+}
+
+// The console's chrome asks its index for the teams; the workspace's does not.
+func TestTheConsolesPaletteAsksForTeams(t *testing.T) {
+	ctx := context.WithValue(context.Background(), surfacesKey{}, Surfaces{Operator: true, Quotas: true, DNS: true})
+	ctx = identity.NewContext(ctx, identity.Owner{ID: "owner-1"})
+	console := DefaultSlots{}.Slots(ctx, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if console.SearchIndex != "/search/index?console=admin" {
+		t.Errorf("the console's index is %q", console.SearchIndex)
+	}
+	home := DefaultSlots{}.Slots(ctx, httptest.NewRequest(http.MethodGet, "/", nil))
+	if home.SearchIndex != "/search/index" {
+		t.Errorf("the workspace's index is %q", home.SearchIndex)
+	}
+	// Add a node is a page the sidebar leaves out, under Nodes.
+	var pages []NavItem
+	for _, g := range console.Nav {
+		for _, it := range g.Items {
+			if it.Href == "/cluster/nodes" {
+				pages = it.Pages
+			}
+		}
+	}
+	if len(pages) != 1 || pages[0].Href != "/cluster/nodes/add" {
+		t.Errorf("Nodes' pages = %+v, want Add a node", pages)
+	}
+}
+
+// The pages under a sidebar item that the sidebar leaves out are declared to
+// the palette, named with the item they are under, and drawn nowhere else.
+func TestThePaletteOffersThePagesTheSidebarLeavesOut(t *testing.T) {
+	nav := []NavGroup{{Heading: AdminCustomersHeading, Items: []NavItem{{
+		Label: "Billing", Href: "/admin/billing", Icon: "key",
+		Pages: []NavItem{{Label: "Plans", Href: "/admin/billing/plans"}, {Label: "Rate card", Href: "/admin/billing/prices"}},
+	}}}}
+	page := renderToString(t, Layout(Slots{Title: "t", Nav: nav, SearchIndex: searchIndexPath}, templ.Raw("page")))
+	for _, want := range []string{
+		`<i data-palette-page data-label="Plans" data-url="/admin/billing/plans" data-parent="/admin/billing" data-group="Billing"></i>`,
+		`<i data-palette-page data-label="Rate card" data-url="/admin/billing/prices" data-parent="/admin/billing" data-group="Billing"></i>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the palette lacks %s", want)
+		}
+	}
+	sidebar := page[strings.Index(page, `id="sidebar"`):strings.Index(page, "</aside>")]
+	if strings.Contains(sidebar, "/admin/billing/plans") {
+		t.Error("the sidebar draws a page it should leave to the palette")
+	}
+}

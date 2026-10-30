@@ -136,5 +136,5 @@ func roleLabel(r account.Role) string {
 // builds itself — projects, apps and actions. Pages carry their own, copied
 // from the sidebar link they came from.
 var paletteIcons = []string{
-	"boxes", "box", "rocket", "plus", "globe", "sun-moon", "arrow-right", "corner-down-left",
+	"boxes", "box", "building", "rocket", "plus", "globe", "sun-moon", "arrow-right", "corner-down-left",
 }
