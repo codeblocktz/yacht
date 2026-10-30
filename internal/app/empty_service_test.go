@@ -114,6 +114,27 @@ func TestAnEmptyServiceWaitsForItsSource(t *testing.T) {
 	}
 }
 
+// A service that has never deployed — an empty service, a bucket — has no
+// last deploy, and it is listed beside the rest rather than failing the list
+// it is in: the workspace home showed a project with three services as having
+// none because of one.
+func TestAServiceThatNeverDeployedIsListed(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Images: fakeImages{}, Builder: &uploadBuilder{}, SourceFetchURL: "https://yacht.example.test"})
+	team := owner(t, s, pool, "never-deployed")
+
+	if _, err := s.Create(ctx, team, CreateInput{Name: "api", Empty: true, Port: 8080, Replicas: 1}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	list, err := s.List(ctx, team)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].LastDeploy != "" {
+		t.Fatalf("listed %+v — want the one service, with no last deploy", list)
+	}
+}
+
 // A service built from uploads is copied into a new environment as an empty
 // service: what was uploaded to production is not the copy's to run.
 func TestAnEmptyServiceIsCopiedEmpty(t *testing.T) {

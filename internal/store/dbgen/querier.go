@@ -478,6 +478,9 @@ type Querier interface {
 	//
 	// LATERAL rather than a window function or a join on max(started_at): one index
 	// lookup per app, and it reads as what it is — the latest row for this app.
+	// An app that has never deployed (an empty service, a bucket) has no last
+	// deploy: an empty status, not a NULL that fails the whole list.
+	//
 	ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([]ListAppsWithLastDeployRow, error)
 	// Apps that predate projects, or whose project was deleted.
 	//
