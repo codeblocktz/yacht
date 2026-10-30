@@ -371,6 +371,15 @@ templ httpLogView(d DeployLogsData) {
 			{ plural(d.HTTPPage.Matched, "request") }
 		</span>
 	</div>
+	// How far back the count goes, beside the count: without it a number
+	// read off a log that had been rotated away read as every request.
+	if d.HTTP.Coverage != "" && len(d.HTTP.Lines) > 0 {
+		<div class="canvas-sheet-actions">
+			<span class="min-w-0 flex-1 text-[12px] text-muted-foreground" data-http-coverage>
+				{ d.HTTP.Coverage }
+			</span>
+		</div>
+	}
 	if len(d.HTTP.Hosts) > 0 {
 		<div class="canvas-sheet-actions">
 			@methodPicker(d)

@@ -449,6 +449,12 @@ type Service struct {
 	// can wait for them.
 	routesWG sync.WaitGroup
 
+	// requestLog is where apps' HTTP logs are read from when the install
+	// keeps them, and requestLogRetention how long it does; nil reads the
+	// ingress controller's pod. See UseRequestLog.
+	requestLog          RequestLog
+	requestLogRetention time.Duration
+
 	// dbVersions is the version each database release runs, and tagDigests
 	// what an image tag named when last asked. See database_release.go.
 	dbVersionsMu sync.Mutex

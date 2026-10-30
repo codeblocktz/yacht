@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 
@@ -65,9 +66,14 @@ func (o *Orchestrator) HTTPLogs(
 	var sawAccessLine bool
 
 	for _, pod := range pods {
-		lines, saw := o.readAccessLog(ctx, ns, pod, want)
-		out.Lines = append(out.Lines, lines...)
-		sawAccessLine = sawAccessLine || saw
+		read := o.readAccessLog(ctx, ns, pod, want)
+		out.Lines = append(out.Lines, read.lines...)
+		sawAccessLine = sawAccessLine || read.saw
+		// Each controller's log begins somewhere else; the requests are
+		// whole only from the latest of those beginnings.
+		if read.from.After(out.From) {
+			out.From = read.from
+		}
 	}
 
 	if !sawAccessLine {
@@ -102,28 +108,41 @@ func (o *Orchestrator) ingressPods(ctx context.Context) ([]string, string, error
 	return nil, "", nil
 }
 
+// accessLog is what one controller pod's log held.
+type accessLog struct {
+	lines []orchestrator.HTTPLogLine
+
+	// saw is whether any access line was seen at all, which is how "access
+	// logging is switched off" is told from "this app had no traffic" — the
+	// two look identical from an empty result.
+	saw bool
+
+	// from is when the first access line read began, whoever it was for:
+	// how far back this pod's log reaches. The pod log API serves only the
+	// container's current file, and the kubelet rotates it every 10 MiB, so
+	// on a busy cluster this is minutes ago, not when the pod started.
+	from time.Time
+}
+
 // readAccessLog pulls one controller pod's log and keeps the matching requests.
-//
-// Reports separately whether any access line was seen at all, which is how
-// "access logging is switched off" is told from "this app had no traffic" —
-// the two look identical from an empty result.
 func (o *Orchestrator) readAccessLog(
 	ctx context.Context, namespace, pod string, want map[string]bool,
-) ([]orchestrator.HTTPLogLine, bool) {
+) accessLog {
 	tail := int64(httpLogTail)
 	stream, err := o.client.CoreV1().Pods(namespace).GetLogs(pod, &corev1.PodLogOptions{
 		TailLines: &tail,
 	}).Stream(ctx)
 	if err != nil {
-		return nil, false
+		return accessLog{}
 	}
 	defer stream.Close() //nolint:errcheck // reading is done
+	return scanAccessLog(stream, want)
+}
 
-	var (
-		out []orchestrator.HTTPLogLine
-		saw bool
-	)
-	sc := bufio.NewScanner(stream)
+// scanAccessLog reads a controller's log for the requests to want's hosts.
+func scanAccessLog(r io.Reader, want map[string]bool) accessLog {
+	var out accessLog
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for sc.Scan() {
@@ -131,12 +150,15 @@ func (o *Orchestrator) readAccessLog(
 		if !ok {
 			continue
 		}
-		saw = true
+		out.saw = true
+		if !line.At.IsZero() && (out.from.IsZero() || line.At.Before(out.from)) {
+			out.from = line.At
+		}
 		if want[strings.ToLower(line.Host)] {
-			out = append(out, line)
+			out.lines = append(out.lines, line)
 		}
 	}
-	return out, saw
+	return out
 }
 
 // accessLine is the subset of Traefik's JSON access log this reads.

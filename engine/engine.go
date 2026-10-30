@@ -803,9 +803,15 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.RequestAccessURL = cfg.RequestAccessURL
 	}
 
-	metrics, err := attachObserve(&opts, cfg, log)
+	logs, metrics, err := attachObserve(&opts, cfg, log)
 	if err != nil {
 		return err
+	}
+	// An app's HTTP log from the store, which keeps the ingress
+	// controller's access log after the controller has rotated it away.
+	// Only a store that is there, for the reason given for metrics below.
+	if logs != nil {
+		e.Apps.UseRequestLog(logs, cfg.LogsRetention)
 	}
 	// Set only with a store: a nil *observe.MetricStore in the interface
 	// would be a store that is there, and Egress could not say there is none.

@@ -269,6 +269,36 @@ type HTTPLogs struct {
 	// fix it when the answer is a setting somebody else has to apply.
 	Note string
 	Hint string
+
+	// Since is when Lines begin being whole: every request to the app from
+	// then on is in them, and none from before. Coverage says the same for a
+	// person, and is shown whatever the count, because a count with no
+	// beginning reads as everything (QA OBSERVE-1).
+	Since    time.Time
+	Coverage string
+}
+
+// RequestLog is the log store's copy of the ingress controller's access log:
+// every request, kept for the store's retention rather than until the
+// controller's log is next rotated. observe.LogStore is the engine's.
+type RequestLog interface {
+	Requests(ctx context.Context, hosts []string, start, end time.Time, limit int) (
+		lines []orchestrator.HTTPLogLine, more bool, err error)
+}
+
+// requestLogSpan is how far back an app's HTTP log reads from the store, at
+// most: a day of requests is what the page is for, and the store's retention
+// is often longer than anybody wants to scan for one app.
+const requestLogSpan = 24 * time.Hour
+
+// requestLogLimit is the most requests the page is given, the same as the
+// pod log reader's tail.
+const requestLogLimit = 5000
+
+// UseRequestLog reads apps' HTTP logs from the log store, which keeps them for
+// retention, rather than from the controller's pod.
+func (s *Service) UseRequestLog(l RequestLog, retention time.Duration) {
+	s.requestLog, s.requestLogRetention = l, retention
 }
 
 // canApplyHTTPLogs reports whether Yacht can configure this cluster's ingress
@@ -321,11 +351,29 @@ func (s *Service) DeploymentHTTPLogs(
 		return out, nil
 	}
 
+	if s.requestLog != nil {
+		// The pod log is the fallback, not the answer: a store that cannot
+		// be read now is better covered by what the controller still has
+		// than by nothing.
+		stored, err := s.storedHTTPLogs(ctx, hosts, out)
+		if err == nil {
+			return stored, nil
+		}
+		s.log.Warn("read http logs from the log store; reading the ingress controller's instead",
+			slog.String("error", err.Error()))
+	}
+
 	got, err := logger.HTTPLogs(ctx, orchestrator.HTTPLogOptions{Hosts: hosts})
 	if err != nil {
 		return HTTPLogs{}, fmt.Errorf("app: read http logs: %w", err)
 	}
 	out.Lines = got.Lines
+	if !got.From.IsZero() {
+		out.Since = got.From
+		out.Coverage = "Since " + coverageTime(got.From, time.Now()) + ", when the ingress " +
+			"controller's log begins. Requests before then are not kept, and every app's " +
+			"traffic shares that one log, so a busy cluster moves this forward quickly."
+	}
 
 	switch got.Reason {
 	case orchestrator.HTTPLogNotEnabled:
@@ -354,6 +402,57 @@ func (s *Service) DeploymentHTTPLogs(
 		}
 	}
 	return out, nil
+}
+
+// storedHTTPLogs reads an app's requests from the log store.
+func (s *Service) storedHTTPLogs(ctx context.Context, hosts []string, out HTTPLogs) (HTTPLogs, error) {
+	now := time.Now()
+	span := requestLogSpan
+	if s.requestLogRetention > 0 && s.requestLogRetention < span {
+		span = s.requestLogRetention
+	}
+	lines, more, err := s.requestLog.Requests(ctx, hosts, now.Add(-span), now, requestLogLimit)
+	if err != nil {
+		return HTTPLogs{}, err
+	}
+	out.Lines = lines
+	out.Since = now.Add(-span)
+	if more && len(lines) > 0 {
+		out.Since = lines[0].At
+		out.Coverage = fmt.Sprintf("The newest %d requests, since %s. Older ones are kept, "+
+			"and are past what one page holds.", len(lines), coverageTime(out.Since, now))
+	} else {
+		out.Coverage = "Every request in the last " + spanText(span) + "."
+	}
+	if len(lines) == 0 {
+		out.Note = "No requests to this app in the last " + spanText(span) + "."
+	}
+	return out, nil
+}
+
+// coverageTime names a moment the way the rows beside it do: a time of day
+// in UTC, with the day when it is not today's.
+func coverageTime(t, now time.Time) string {
+	t, now = t.UTC(), now.UTC()
+	if t.YearDay() == now.YearDay() && t.Year() == now.Year() {
+		return t.Format("15:04:05") + " UTC"
+	}
+	return t.Format("Jan 2, 15:04:05") + " UTC"
+}
+
+// spanText is a whole number of hours or days, as a person says it.
+func spanText(d time.Duration) string {
+	switch {
+	case d >= 48*time.Hour && d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%d days", int(d/(24*time.Hour)))
+	case d == 24*time.Hour:
+		return "24 hours"
+	case d >= 2*time.Hour:
+		return fmt.Sprintf("%d hours", int(d/time.Hour))
+	case d >= time.Hour:
+		return "hour"
+	}
+	return d.String()
 }
 
 // EnsureHTTPLogs turns the ingress controller's access log on at startup.

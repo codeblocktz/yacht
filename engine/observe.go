@@ -9,20 +9,20 @@ import (
 )
 
 // attachObserve gives the dashboard the install's log and metrics stores,
-// where it has them, and returns the metrics store for Egress: nil without
-// one.
+// where it has them, and returns them: the metrics store for Egress, and the
+// log store for apps' HTTP logs, each nil without one.
 //
 // Set only when configured: a nil *observe.LogStore in the interface would
 // be a store that is there and fails every read, and the pages tell "no
 // store" from "a store that failed" to say the right thing.
-func attachObserve(opts *web.Options, cfg config.Config, log *slog.Logger) (*observe.MetricStore, error) {
+func attachObserve(opts *web.Options, cfg config.Config, log *slog.Logger) (*observe.LogStore, *observe.MetricStore, error) {
 	logs, err := observe.NewLogStore(cfg.LogsURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	metrics, err := observe.NewMetricStore(cfg.MetricsURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if logs != nil {
 		opts.LogHistory = logs
@@ -39,5 +39,5 @@ func attachObserve(opts *web.Options, cfg config.Config, log *slog.Logger) (*obs
 		log.Info("no metrics store — Observability shows metrics-server's current reading; " +
 			"set YACHT_METRICS_URL for requests, latency and history")
 	}
-	return metrics, nil
+	return logs, metrics, nil
 }
