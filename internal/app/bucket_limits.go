@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/codeblocktz/yacht/internal/bucket"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -670,10 +672,31 @@ func (d *diskSource) keep(disk bucket.Disk, err error) {
 	}
 }
 
+// lockSlots is how many session locks may be held, or waited for, at once:
+// half the pool. Each holds a connection for as long as fn runs, and fn reads
+// through the pool too, so as many deploys as the pool has connections —
+// four, on a four-core machine — would each hold one and wait forever for
+// another. No fn takes a second session lock, which would wait on a slot its
+// own first one holds.
+func lockSlots(pool *pgxpool.Pool) chan struct{} {
+	if pool == nil {
+		return nil
+	}
+	return make(chan struct{}, max(1, pool.Config().MaxConns/2))
+}
+
 // withSessionLock runs fn holding a Postgres advisory lock on a connection of
 // its own, for as long as fn takes: longer than a transaction lock could be
 // held, since what fn does includes calls to other services.
 func (s *Service) withSessionLock(ctx context.Context, key int64, what string, fn func() error) error {
+	if s.lockSlots != nil {
+		select {
+		case s.lockSlots <- struct{}{}:
+			defer func() { <-s.lockSlots }()
+		case <-ctx.Done():
+			return fmt.Errorf("app: wait to take the %s lock: %w", what, ctx.Err())
+		}
+	}
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("app: acquire a connection for the %s lock: %w", what, err)
