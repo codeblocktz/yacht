@@ -224,8 +224,8 @@ func TestGettingStartedIsComputedFromWhatTheTeamHas(t *testing.T) {
 		}
 	}
 
-	// The domain step goes to an app's domains tab once there is an app.
-	c := gettingStarted(checklistFacts{Domains: true, FirstApp: "web"})
+	// The domain step goes where it is told; see domainStepHref.
+	c := gettingStarted(checklistFacts{Domains: true, DomainHref: "/apps/web/domains"})
 	if c.Steps[2].Href != "/apps/web/domains" {
 		t.Errorf("domain step goes to %q", c.Steps[2].Href)
 	}
@@ -485,5 +485,50 @@ func TestAProjectIsDrawnInItsOwnChrome(t *testing.T) {
 	outside := DefaultSlots{}.Slots(ctx, httptest.NewRequest("GET", "/projects", nil))
 	if outside.Project != nil {
 		t.Error("the list of projects is drawn as a project")
+	}
+}
+
+// "Add a domain" goes to a service a domain can be pointed at. It went to the
+// workspace's first app of any kind, which on a project with a bucket was
+// the bucket — /apps/bucket/domains, a page for something a bucket cannot
+// have — and with no such service it goes to the project, to add one.
+func TestTheDomainStepGoesToAServiceThatCanHaveOne(t *testing.T) {
+	project := func(apps ...app.WorkspaceApp) app.Workspace {
+		return app.Workspace{
+			Onboarding: app.Onboarding{HasApps: true},
+			Projects: []app.WorkspaceProject{{
+				ID: fakeProject.ID, Slug: "shop", Name: "Shop", Apps: apps,
+			}},
+		}
+	}
+	bucket := app.WorkspaceApp{Name: "bucket", Source: app.SourceBucket}
+	database := app.WorkspaceApp{Name: "db", Source: app.SourcePostgres, Port: 5432}
+	worker := app.WorkspaceApp{Name: "jobs", Source: app.SourceImage}
+	preview := app.WorkspaceApp{Name: "site-pr-4", Source: app.SourceGit, Port: 3000, Environment: "pr-4"}
+	web := app.WorkspaceApp{Name: "site", Source: app.SourceGit, Port: 3000}
+
+	for _, c := range []struct {
+		name string
+		ws   app.Workspace
+		want string
+	}{
+		{"a web service, after a bucket and a database", project(bucket, database, worker, web), "/apps/site/domains"},
+		{"production's service before a preview's", project(bucket, preview, web), "/apps/site/domains"},
+		{"only a preview's", project(bucket, preview), "/apps/site-pr-4/domains"},
+		{"nothing that takes one", project(bucket, database, worker), "/projects/shop"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			apps := newFakeApps()
+			apps.workspace = map[string]app.Workspace{"owner-1": c.ws}
+			h := testServer(t, Options{Apps: apps, Nets: &fakeNets{}})
+
+			body := get(t, h, "/").Body.String()
+			if !strings.Contains(body, `href="`+c.want+`"`) {
+				t.Errorf("the domain step does not go to %s", c.want)
+			}
+			if strings.Contains(body, `href="/apps/bucket/domains"`) {
+				t.Error("the domain step goes to a bucket")
+			}
+		})
 	}
 }

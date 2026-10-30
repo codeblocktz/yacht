@@ -309,8 +309,8 @@ type checklistFacts struct {
 	// do would sit undone forever.
 	Accounts bool
 	Domains  bool
-	// FirstApp is where "Add a custom domain" goes: an app's domains tab.
-	FirstApp string
+	// DomainHref is where "Add a custom domain" goes; see domainStepHref.
+	DomainHref string
 }
 
 // gettingStarted computes the checklist, or nil when there is nothing to show:
@@ -339,9 +339,9 @@ func gettingStarted(f checklistFacts) *Checklist {
 		},
 	}}
 	if f.Domains {
-		href := "/apps/new"
-		if f.FirstApp != "" {
-			href = "/apps/" + f.FirstApp + "/domains"
+		href := f.DomainHref
+		if href == "" {
+			href = "/apps/new"
 		}
 		c.Steps = append(c.Steps, ChecklistStep{
 			Title:  "Add a custom domain",
@@ -364,15 +364,35 @@ func gettingStarted(f checklistFacts) *Checklist {
 	return &c
 }
 
-// firstAppName is the first app in a workspace, for a step that needs one.
-func firstAppName(ws app.Workspace) string {
+// domainStepHref is where the checklist's domain step goes: the domains tab
+// of the first service a domain can be pointed at, production's before an
+// environment's copy.
+//
+// Not merely the first app. That was a project's bucket as often as not —
+// "bucket" sorts before most names — and a bucket's domains tab is a page
+// for something it cannot have. With no such service yet, the step goes to
+// the project, where one is added; with no project, to adding an app.
+func domainStepHref(ws app.Workspace) string {
+	var apps []app.WorkspaceApp
 	for _, p := range ws.Projects {
-		if len(p.Apps) > 0 {
-			return p.Apps[0].Name
+		apps = append(apps, p.Apps...)
+	}
+	apps = append(apps, ws.Unplaced...)
+	for _, production := range []bool{true, false} {
+		for _, a := range apps {
+			isProduction := a.Environment == "" || a.Environment == app.DefaultEnvironment
+			if a.TakesDomain() && isProduction == production {
+				return "/apps/" + a.Name + "/domains"
+			}
 		}
 	}
-	if len(ws.Unplaced) > 0 {
-		return ws.Unplaced[0].Name
+	for _, p := range ws.Projects {
+		if len(p.Apps) > 0 {
+			return "/projects/" + p.Slug
+		}
+	}
+	if len(ws.Projects) > 0 {
+		return "/projects/" + ws.Projects[0].Slug
 	}
 	return ""
 }
@@ -388,7 +408,7 @@ func (s *Server) checklistFor(r *http.Request) *Checklist {
 		Onboarding: ws.Onboarding,
 		Domains:    s.nets != nil,
 		Accounts:   s.accounts != nil,
-		FirstApp:   firstAppName(ws),
+		DomainHref: domainStepHref(ws),
 	}
 	if f.Onboarding.Dismissed {
 		return nil
