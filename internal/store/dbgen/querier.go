@@ -750,6 +750,9 @@ type Querier interface {
 	// that has been quiet all week does not put it to sleep a minute later.
 	SetAppSleepSetting(ctx context.Context, arg SetAppSleepSettingParams) (App, error)
 	SetBucketUsage(ctx context.Context, arg SetBucketUsageParams) error
+	// What the build's Dockerfile declared, recorded once it has pushed. See
+	// migration 00074.
+	SetBuildArgs(ctx context.Context, arg SetBuildArgsParams) error
 	SetBuildJob(ctx context.Context, arg SetBuildJobParams) error
 	SetCapacityPolicy(ctx context.Context, arg SetCapacityPolicyParams) (CapacityPolicy, error)
 	SetClaimedOperationRelease(ctx context.Context, arg SetClaimedOperationReleaseParams) (int64, error)

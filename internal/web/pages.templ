@@ -1178,7 +1178,10 @@ templ appBuildSection(a app.App) {
 			<label class="field-label" for="dockerfile_path">Dockerfile path</label>
 			<p class="field-note">
 				Relative to the repository's directory above. Empty builds the Dockerfile
-				there, or works out how to build the code when there is none.
+				there, or works out how to build the code when there is none. A Dockerfile
+				gets the app's variables as build arguments when it declares them with
+				<code class="mono">ARG</code>; a <code class="mono">RUN</code> that uses one can
+				leave it in the image, so a secret is better read at runtime.
 			</p>
 			<input class="control mono mt-1.5" id="dockerfile_path" name="dockerfile_path" value={ a.DockerfilePath } placeholder="Dockerfile" autocomplete="off" spellcheck="false"/>
 		</div>

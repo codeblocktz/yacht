@@ -115,7 +115,7 @@ func TestTheRepositoryTokenReachesOnlyTheCloneThroughASecret(t *testing.T) {
 func TestAPublicRepositoryClonesWithNoCredential(t *testing.T) {
 	req := tokenBuild()
 	req.RepoToken = ""
-	job := buildJob("build-x", req, buildRegistrySecret, "")
+	job := buildJob("build-x", req, buildRegistrySecret, "", "")
 	for _, v := range job.Spec.Template.Spec.Volumes {
 		if v.Name == repoCredentialVolume {
 			t.Fatal("a public repository's build mounts a credential")

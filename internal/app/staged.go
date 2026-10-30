@@ -661,6 +661,23 @@ func (s *Service) DeployStaged(ctx context.Context, ownerID, appName string) err
 		_, err := s.admitDeployment(ctx, ownerID, a, trigger, uuid.Nil, true)
 		return err
 	}
+	// A changed variable the image was built with is a deploy that builds:
+	// the image has the old value in it. Admitted the way a first build is,
+	// leaving the edits staged — the build reads them, and the release it
+	// makes commits them — so a build that fails leaves them waiting, not
+	// half-deployed.
+	rebuild, err := s.variablesNeedBuild(ctx, a, changes)
+	if err != nil {
+		return err
+	}
+	if rebuild {
+		if _, err := s.admitDeployment(ctx, ownerID, a, trigger, uuid.Nil, true); err != nil {
+			return err
+		}
+		s.log.Info("staged changes deployed with a build",
+			slog.String("app", appName), slog.Int("changes", len(changes)))
+		return nil
+	}
 	if s.manifests == nil {
 		return ErrNoManifestResolver
 	}

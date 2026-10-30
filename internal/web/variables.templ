@@ -104,6 +104,11 @@ templ variablesTab(d AppDetailData) {
 				<code class="mono">kubectl get deploy -o yaml</code>. Its eye opens it for whoever
 				presses it, and each time is logged. Setting one requires
 				<code class="mono">YACHT_SECRET_KEY</code>.
+				if d.App.Source == app.SourceGit {
+					A Dockerfile gets these as build arguments when it declares them with
+					<code class="mono">ARG</code>, and a <code class="mono">RUN</code> that uses
+					one can leave it in the image.
+				}
 				if d.Vars.Stages {
 					Saving deploys nothing: changes wait for Deploy.
 				}

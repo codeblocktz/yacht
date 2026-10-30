@@ -38,6 +38,19 @@ const dockerfileMarker = "/workspace/.dockerfile-built"
 // buildVolume holds the checkout and the marker, shared by all three steps.
 const buildVolume = "workspace"
 
+// buildArgsMarker prefixes the names the Dockerfile declares with ARG, or
+// orchestrator.BuildArgsAll from a buildpacks build. Names only, never
+// values: they are how a deploy knows which variables the image was built
+// with.
+const buildArgsMarker = "yacht-build-args:"
+
+// The app's variables, one file per variable from the build's own Secret,
+// mounted by the two steps that build and not by the clone.
+const (
+	buildArgsVolume = "build-args"
+	buildArgsPath   = "/build-args"
+)
+
 // The user the Cloud Native Buildpacks lifecycle runs as, and which it stamps
 // on the layers it writes.
 //
@@ -121,7 +134,7 @@ fi`
 // gets its own image — clone, BuildKit, buildpacks — so none of them has to be
 // a custom image this project builds and publishes, which would make running
 // Yacht depend on Yacht having somewhere to push.
-func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret string) *batchv1.Job {
+func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret, argsSecret string) *batchv1.Job {
 	// Never retried. A build that failed will fail the same way, and a second
 	// attempt would double the log, double the wait, and end where it started.
 	// Kubernetes' own default is six.
@@ -172,6 +185,18 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret
 		})
 	}
 
+	if argsSecret != "" {
+		// The same mode as the token's. The clone does not mount it: it runs
+		// before anything of the app's own and needs none of this.
+		mode := int32(0o440)
+		volumes = append(volumes, corev1.Volume{
+			Name: buildArgsVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: argsSecret, DefaultMode: &mode},
+			},
+		})
+	}
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: BuildNamespace, Labels: labels,
@@ -205,9 +230,9 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret
 					Volumes: volumes,
 					InitContainers: []corev1.Container{
 						sourceStep(req, repoSecret != ""),
-						dockerfileStep(req),
+						dockerfileStep(req, argsSecret != ""),
 					},
-					Containers: []corev1.Container{buildpackStep(req)},
+					Containers: []corev1.Container{buildpackStep(req, argsSecret != "")},
 				},
 			},
 		},
@@ -328,10 +353,19 @@ echo "Fetched $(find /workspace/src -type f | wc -l | tr -d ' ') files"
 // stated rather than hidden: builds are less isolated from each other than
 // they would be under a privileged daemon, which is why this namespace runs
 // nothing but these Jobs.
-func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
+func dockerfileStep(req orchestrator.BuildRequest, withArgs bool) corev1.Container {
 	unconfined := corev1.SeccompProfileTypeUnconfined
 	user := int64(buildUID)
 	group := int64(cnbGID)
+	mounts := []corev1.VolumeMount{
+		{Name: buildVolume, MountPath: "/workspace"},
+		{Name: "registry", MountPath: "/registry", ReadOnly: true},
+	}
+	if withArgs {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name: buildArgsVolume, MountPath: buildArgsPath, ReadOnly: true,
+		})
+	}
 
 	return corev1.Container{
 		Name:  dockerfileContainer,
@@ -351,6 +385,9 @@ func dockerfileStep(req orchestrator.BuildRequest) corev1.Container {
 			// declared to the daemon as well: the output option covers the
 			// push, and pulling from one is daemon configuration.
 			{Name: "INSECURE_HOST", Value: insecureHost(req)},
+			// Where the variables are, not what they are. Set whether or not
+			// there are any, so the script reads one way.
+			{Name: "BUILD_ARGS", Value: buildArgsPath},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
@@ -379,6 +416,7 @@ else
   exit 0
 fi
 echo "Building $dockerfile and pushing $IMAGE"
+` + buildArgsScript + `
 # The context stays the directory being built; only where the Dockerfile is
 # read from moves, which is what a Dockerfile path means everywhere else.
 buildctl-daemonless.sh build \
@@ -387,7 +425,8 @@ buildctl-daemonless.sh build \
   --local dockerfile="$(dirname "$dockerfile")" \
   --opt filename="$(basename "$dockerfile")" \
   --output type=image,name=$IMAGE,push=true$INSECURE \
-  --progress plain
+  --progress plain \
+  "$@"
 touch ` + dockerfileMarker + `
 echo "Pushed $IMAGE"
 ` + resolveUIDScript + `
@@ -418,10 +457,7 @@ echo "Pushed $IMAGE"
 			SeccompProfile:  &corev1.SeccompProfile{Type: unconfined},
 			AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: buildVolume, MountPath: "/workspace"},
-			{Name: "registry", MountPath: "/registry", ReadOnly: true},
-		},
+		VolumeMounts: mounts,
 	}
 }
 
@@ -461,8 +497,16 @@ func itoa(i int64) string { return strconv.FormatInt(i, 10) }
 // It exits immediately when the Dockerfile step already pushed. Every
 // container in a pod runs, so "did the previous step handle this" is a
 // question this one has to ask rather than something the pod can express.
-func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
-
+func buildpackStep(req orchestrator.BuildRequest, withArgs bool) corev1.Container {
+	mounts := []corev1.VolumeMount{
+		{Name: buildVolume, MountPath: "/workspace"},
+		{Name: "registry", MountPath: "/registry", ReadOnly: true},
+	}
+	if withArgs {
+		mounts = append(mounts, corev1.VolumeMount{
+			Name: buildArgsVolume, MountPath: buildArgsPath, ReadOnly: true,
+		})
+	}
 	return corev1.Container{
 		Name:  buildpackContainer,
 		Image: packImage,
@@ -479,6 +523,7 @@ func buildpackStep(req orchestrator.BuildRequest) corev1.Container {
 			// The lifecycle takes its insecure registries as a list rather
 			// than a flag on the output, so the same fact is spelled twice.
 			{Name: "CNB_INSECURE_REGISTRIES", Value: insecureHost(req)},
+			{Name: "BUILD_ARGS", Value: buildArgsPath},
 		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
@@ -491,6 +536,15 @@ echo "No Dockerfile — detecting what this is with buildpacks."
 # to guess where. They go on the shared volume rather than the image's own
 # filesystem, which is read-only to a non-root user.
 mkdir -p /workspace/layers /workspace/cache /workspace/platform/env
+# Every variable, as the platform environment: one file a variable, which is
+# how the buildpacks spec gives a build its environment. Which of them a
+# buildpack reads is up to the buildpack.
+for f in "$BUILD_ARGS"/*; do
+  if [ -f "$f" ]; then
+    cat "$f" > "/workspace/platform/env/${f##*/}"
+  fi
+done
+echo "` + buildArgsMarker + orchestrator.BuildArgsAll + `"
 /cnb/lifecycle/creator \
   -app="/workspace/src/$SUBDIR" \
   -layers=/workspace/layers \
@@ -503,9 +557,6 @@ echo "Pushed $IMAGE"
 ` + resolveUIDScript + `
 `},
 		SecurityContext: hardenedAs(cnbUID, cnbGID),
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: buildVolume, MountPath: "/workspace"},
-			{Name: "registry", MountPath: "/registry", ReadOnly: true},
-		},
+		VolumeMounts:    mounts,
 	}
 }
