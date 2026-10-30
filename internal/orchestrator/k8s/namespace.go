@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -67,6 +68,15 @@ func (o *Orchestrator) ensureLimitRange(
 	if err != nil {
 		return fmt.Errorf("k8s: default limits: %w", err)
 	}
+	// A request of its own where the limits say one, so a container that
+	// sets nothing is burstable rather than holding its whole limit on the
+	// node; the limit itself where they do not, as Kubernetes would.
+	defaultRequest, err := resourceList(
+		cmp.Or(limits.DefaultCPURequest, limits.DefaultCPU),
+		cmp.Or(limits.DefaultMemoryRequest, limits.DefaultMemory))
+	if err != nil {
+		return fmt.Errorf("k8s: default requests: %w", err)
+	}
 	maxLimit, err := resourceList(limits.MaxCPU, limits.MaxMemory)
 	if err != nil {
 		return fmt.Errorf("k8s: max limits: %w", err)
@@ -80,7 +90,7 @@ func (o *Orchestrator) ensureLimitRange(
 			corev1ac.LimitRangeItem().
 				WithType(corev1.LimitTypeContainer).
 				WithDefault(defaultLimit).
-				WithDefaultRequest(defaultLimit).
+				WithDefaultRequest(defaultRequest).
 				WithMax(maxLimit),
 		))
 

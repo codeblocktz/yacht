@@ -265,9 +265,7 @@ func preDeployContainerSpec(
 	if err != nil {
 		return nil, err
 	}
-	if res != nil {
-		c = c.WithResources(res)
-	}
+	c = c.WithResources(res)
 	return c, nil
 }
 

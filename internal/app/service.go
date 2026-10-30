@@ -654,6 +654,9 @@ func (in UpdateInput) Validate(source Source) error {
 	if err := validateDockerfilePath(in.DockerfilePath); err != nil {
 		return err
 	}
+	if err := validateResources(in.CPURequest, in.CPULimit, in.MemoryRequest, in.MemoryLimit); err != nil {
+		return err
+	}
 	return validateWatchPaths(in.WatchPaths)
 }
 
@@ -905,7 +908,7 @@ func (in CreateInput) Validate() error {
 	case in.Port < 0 || in.Port > 65535:
 		return errors.New("port must be between 0 and 65535")
 	}
-	return nil
+	return validateResources(in.CPURequest, in.CPULimit, in.MemoryRequest, in.MemoryLimit)
 }
 
 // Create stores the app, its first immutable release, and a deployment
@@ -934,6 +937,10 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 		in.Image = blueprint.Image
 		in.Port = blueprint.Port
 	}
+	// And the memory its engine needs, unless the person chose some: written
+	// on the app, so the settings show it and the quota counts it.
+	in.MemoryRequest = cmp.Or(in.MemoryRequest, blueprint.MemoryRequest)
+	in.MemoryLimit = cmp.Or(in.MemoryLimit, blueprint.MemoryLimit)
 	// Nothing runs for a bucket, so nothing is counted for it either: no
 	// replicas, no port.
 	if !in.Source.Workload() {

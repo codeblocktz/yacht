@@ -22,14 +22,14 @@
 	// deliberately close to cpuDisplay and memDisplay in resources.go: if they
 	// drift, the number jumps the moment somebody touches the handle.
 	function cpuLabel(millis) {
-		if (millis <= 0) return "No limit";
+		if (millis <= 0) return "None";
 		if (millis < 1000) return Number((millis / 1000).toPrecision(2)) + " vCPU";
 		if (millis % 1000 === 0) return millis / 1000 + " vCPU";
 		return (millis / 1000).toFixed(1) + " vCPU";
 	}
 
 	function memLabel(mib) {
-		if (mib <= 0) return "No limit";
+		if (mib <= 0) return "None";
 		if (mib < 1024) return mib + " MB";
 		if (mib % 1024 === 0) return mib / 1024 + " GB";
 		return (mib / 1024).toFixed(1) + " GB";
@@ -44,11 +44,17 @@
 		if (!out) return;
 
 		var value = Number(input.value);
-		out.textContent =
-			input.getAttribute("data-unit") === "cpu" ? cpuLabel(value) : memLabel(value);
+		// Zero is nothing set, which is the default the server named: what
+		// the app is actually given, rather than an absence of any limit.
+		var unset = value <= 0 && input.getAttribute("data-default");
+		out.textContent = unset
+			? input.getAttribute("data-default")
+			: input.getAttribute("data-unit") === "cpu"
+				? cpuLabel(value)
+				: memLabel(value);
 
-		// "No limit" is a different kind of answer from a small number, and
-		// reads differently. The class is what says so.
+		// The default is a different kind of answer from a number somebody
+		// chose, and reads differently. The class is what says so.
 		wrap.classList.toggle("slider-none", value <= 0);
 	}
 

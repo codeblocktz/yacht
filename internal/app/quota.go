@@ -121,6 +121,60 @@ var defaultCPUMillis, defaultMemoryBytes = func() (int64, int64) {
 	return cpu.MilliValue(), mem.Value()
 }()
 
+// maxCPUMillis and maxMemoryBytes are the most one container may be given:
+// the namespace LimitRange's max, which refuses the pod of an app asking for
+// more.
+var maxCPUMillis, maxMemoryBytes = func() (int64, int64) {
+	d := orchestrator.ResourceLimits{}.OrDefaults()
+	cpu, mem := resource.MustParse(d.MaxCPU), resource.MustParse(d.MaxMemory)
+	return cpu.MilliValue(), mem.Value()
+}()
+
+// validateResources refuses limits and reservations the cluster would.
+//
+// Here, when they are saved, rather than at the deploy: the LimitRange says no
+// only when the pod is made, and by then the setting is saved, the deploy has
+// started and the refusal is Kubernetes' — "maximum cpu usage per Container
+// is 2, but limit is 4" — on a page that said 4 was fine.
+func validateResources(cpuRequest, cpuLimit, memRequest, memLimit string) error {
+	type amount struct {
+		what, value string
+		max         int64
+		read        func(resource.Quantity) int64
+		unit        func(int64) string
+	}
+	cpu := func(q resource.Quantity) int64 { return q.MilliValue() }
+	mem := func(q resource.Quantity) int64 { return q.Value() }
+	read := map[string]int64{}
+	for _, a := range []amount{
+		{"CPU reserved", cpuRequest, maxCPUMillis, cpu, cpuUnit},
+		{"CPU limit", cpuLimit, maxCPUMillis, cpu, cpuUnit},
+		{"memory reserved", memRequest, maxMemoryBytes, mem, bytesUnit},
+		{"memory limit", memLimit, maxMemoryBytes, mem, bytesUnit},
+	} {
+		if a.value == "" {
+			continue
+		}
+		q, err := resource.ParseQuantity(a.value)
+		if err != nil || q.Sign() < 0 {
+			return fmt.Errorf("the %s %q is not an amount", a.what, a.value)
+		}
+		n := a.read(q)
+		if n > a.max {
+			return fmt.Errorf("the %s is %s, and a replica can have at most %s on this install",
+				a.what, a.unit(n), a.unit(a.max))
+		}
+		read[a.what] = n
+	}
+	if cpuRequest != "" && cpuLimit != "" && read["CPU reserved"] > read["CPU limit"] {
+		return errors.New("the CPU reserved cannot be more than the CPU limit")
+	}
+	if memRequest != "" && memLimit != "" && read["memory reserved"] > read["memory limit"] {
+		return errors.New("the memory reserved cannot be more than the memory limit")
+	}
+	return nil
+}
+
 // cost is what one app commits: its replicas times each limit.
 //
 // A limit the cluster would not parse is counted at the default too, rather
@@ -442,7 +496,7 @@ func cpuUnit(millis int64) string {
 }
 
 // bytesUnit says GiB from one upward and MiB below it. A default memory limit
-// is 128 MiB, and "0.13 GiB" is a number nobody recognises as that.
+// is 512 MiB, and "0.5 GiB" is a number nobody recognises as that.
 func bytesUnit(b int64) string {
 	if b < 1<<30 {
 		return strconv.FormatInt(int64(math.Round(float64(b)/(1<<20))), 10) + " MiB"

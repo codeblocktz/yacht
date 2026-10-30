@@ -95,15 +95,15 @@ func TestCreateIsHeldToTheQuota(t *testing.T) {
 		t.Fatalf("the refused create left %d apps, want 2", n)
 	}
 
-	// CPU counts replicas times the limit: 2 existing apps at the 100m default
-	// is 200m, so 2 × 400m more is exactly 1000m and 2 × 401m is not.
-	setQuota(t, s, id, Quota{CPUMillis: 1000})
+	// CPU counts replicas times the limit: 2 existing apps at the 500m default
+	// is 1000m, so 2 × 500m more is exactly 2000m and 2 × 501m is not.
+	setQuota(t, s, id, Quota{CPUMillis: 2000})
 	_, err = s.Create(ctx, id, CreateInput{
-		Name: "wide", Image: "nginx:alpine", Replicas: 2, CPULimit: "401m",
+		Name: "wide", Image: "nginx:alpine", Replicas: 2, CPULimit: "501m",
 	})
-	wantQuotaRefusal(t, "2 × 401m on top of 200m against 1000m", err, "CPU")
+	wantQuotaRefusal(t, "2 × 501m on top of 1000m against 2000m", err, "CPU")
 	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
-		Name: "wide", Image: "nginx:alpine", Replicas: 2, CPULimit: "400m",
+		Name: "wide", Image: "nginx:alpine", Replicas: 2, CPULimit: "500m",
 	}); err != nil {
 		t.Fatalf("a create landing exactly on the quota was refused: %v", err)
 	}
@@ -361,5 +361,41 @@ func TestTeamUsagesReadsEveryTeam(t *testing.T) {
 	}
 	if err := s.SetQuota(ctx, a, Quota{Apps: -1}); err == nil {
 		t.Error("a negative quota was stored")
+	}
+}
+
+// A limit the namespace would refuse is refused when it is saved, in words,
+// rather than accepted and then failed at the deploy by Kubernetes: "maximum
+// cpu usage per Container is 2, but limit is 4".
+func TestResourcesPastWhatOneReplicaMayHaveAreRefusedWhenSaved(t *testing.T) {
+	for _, tc := range []struct {
+		name                           string
+		cpuReq, cpuLim, memReq, memLim string
+		want                           string // in the error; empty for allowed
+	}{
+		{name: "nothing set"},
+		{name: "the most there is", cpuLim: "2", memLim: "4Gi", cpuReq: "2", memReq: "4Gi"},
+		{name: "cpu past it", cpuLim: "4", want: "CPU limit is 4 vCPU, and a replica can have at most 2 vCPU"},
+		{name: "memory past it", memLim: "9984Mi", want: "memory limit is 9.75 GiB, and a replica can have at most 4 GiB"},
+		{name: "reserved past it", cpuReq: "2500m", want: "at most 2 vCPU"},
+		{name: "reserved above the limit", memReq: "1Gi", memLim: "512Mi", want: "memory reserved cannot be more"},
+		{name: "not an amount", cpuLim: "lots", want: "is not an amount"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			create := CreateInput{Name: "web", Image: "nginx", CPURequest: tc.cpuReq, CPULimit: tc.cpuLim,
+				MemoryRequest: tc.memReq, MemoryLimit: tc.memLim}
+			update := UpdateInput{Image: "nginx", CPURequest: tc.cpuReq, CPULimit: tc.cpuLim,
+				MemoryRequest: tc.memReq, MemoryLimit: tc.memLim}
+			for what, err := range map[string]error{
+				"create": create.Validate(), "update": update.Validate(SourceImage),
+			} {
+				switch {
+				case tc.want == "" && err != nil:
+					t.Errorf("%s: %v, want allowed", what, err)
+				case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+					t.Errorf("%s: %v, want an error saying %q", what, err, tc.want)
+				}
+			}
+		})
 	}
 }
