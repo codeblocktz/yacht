@@ -229,7 +229,7 @@ func (q *Queries) GetLatestSuccessfulBuildForApp(ctx context.Context, arg GetLat
 const getSuccessfulBuildForImage = `-- name: GetSuccessfulBuildForImage :one
 SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
 WHERE owner_id = $1 AND app_id = $2
-  AND status = 'succeeded' AND commit_sha <> '' AND image = $3
+  AND status = 'succeeded' AND image = $3
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
 LIMIT 1
 `
@@ -240,6 +240,9 @@ type GetSuccessfulBuildForImageParams struct {
 	Image   string
 }
 
+// The build that made an image, an upload's as well as a clone's: an upload
+// has no commit, and what it declared still decides whether a changed
+// variable is in the image.
 func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error) {
 	row := q.db.QueryRow(ctx, getSuccessfulBuildForImage, arg.OwnerID, arg.AppID, arg.Image)
 	var i Build

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -106,10 +107,17 @@ func (s *Service) recordBuildArgs(ctx context.Context, buildID uuid.UUID, result
 // The names are the ones the image's build recorded. The Dockerfile can only
 // change with a commit, and a commit builds, so they are current. A build
 // from before builds were given variables recorded none, and is assumed to
-// need one; an image that came from an upload has no repository to build
-// from again, and is deployed as it is.
+// need one.
+//
+// An image built from an upload cannot be built again: the archive goes
+// once its build is over, and building the repository, where there is one,
+// would ship different code under the same change. A declared ARG that
+// changed is refused with an UploadRebuildError rather than deployed on the
+// old image, which would say it succeeded and ship the old value. Only a
+// declared one: a build that did not say, or a buildpacks build that was
+// given everything, would refuse every variable an uploaded app ever has.
 func (s *Service) variablesNeedBuild(ctx context.Context, a App, changes []StagedChange) (bool, error) {
-	if a.Source != SourceGit || !a.Repo.Set() || a.Image == PendingImage {
+	if a.Source != SourceGit || a.Image == PendingImage {
 		return false, nil
 	}
 	var keys []string
@@ -130,7 +138,47 @@ func (s *Service) variablesNeedBuild(ctx context.Context, a App, changes []Stage
 	if err != nil {
 		return false, fmt.Errorf("app: read the image's build: %w", err)
 	}
+	if strings.HasPrefix(build.RepoUrl, UploadTriggerPrefix) {
+		var declared []string
+		for _, k := range keys {
+			if slices.Contains(build.BuildArgs, k) {
+				declared = append(declared, k)
+			}
+		}
+		if len(declared) > 0 {
+			return false, UploadRebuildError{Keys: declared}
+		}
+		return false, nil
+	}
+	if !a.Repo.Set() {
+		return false, nil
+	}
 	return argsUseAny(build.BuildArgs, keys), nil
+}
+
+// UploadRebuildError is a staged change to a variable the running image's
+// Dockerfile declared as an ARG, when that image was built from source
+// uploaded with up: only another up can build it with the new value. The
+// change stays staged, and the next up's build carries it.
+type UploadRebuildError struct{ Keys []string }
+
+func (e UploadRebuildError) Error() string { return "app: " + e.Explain("") }
+
+// Explain is the refusal in words, naming the CLI the way its users call it;
+// the service does not know its name, and says up alone.
+func (e UploadRebuildError) Explain(cli string) string {
+	up := "up"
+	if cli != "" {
+		up = cli + " up"
+	}
+	verb := "is a build argument"
+	if len(e.Keys) > 1 {
+		verb = "are build arguments"
+	}
+	return fmt.Sprintf("%s %s of this service's image, which was built from source uploaded with `%s`, "+
+		"and that source is not kept to build again. This change needs a new `%s`: "+
+		"run it where the source is, and the build takes the new value. The change stays staged until then.",
+		strings.Join(e.Keys, ", "), verb, up, up)
 }
 
 // argsUseAny reports whether a build given these arguments used any of the
