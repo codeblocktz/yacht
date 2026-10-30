@@ -105,7 +105,7 @@ templ AppLogLines(d LogsData) {
 						if !l.At.IsZero() {
 							<span class="log-time">{ l.At.Format("15:04:05") }</span>
 						}
-						<span class="log-text">{ l.Text }</span>
+						<span class="log-text">{ plainLog(l.Text) }</span>
 					</div>
 				}
 			</div>
@@ -263,7 +263,7 @@ templ deployLogView(d DeployLogsData) {
 								<span class="log-time">{ l.At.Format("15:04:05") }</span>
 							}
 							<span class="log-text">
-								@highlight(l.Text, d.Find)
+								@highlight(plainLog(l.Text), d.Find)
 							</span>
 						</div>
 					}
