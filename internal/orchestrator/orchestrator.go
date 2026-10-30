@@ -598,6 +598,21 @@ type Certificate struct {
 	Trusted bool
 }
 
+// StatusLister reports many workloads' observed state in one pass.
+//
+// Optional, and asserted for like CertificateReader. A page that lists a
+// project's services wants every one's state, and asking for them one at a
+// time is a request to the cluster per service: fifteen services was fifteen
+// GETs queued behind the client's rate limit, seconds of a page load with
+// the cluster idle. An implementation reads each kind once per owner
+// instead, as live as AppStatus: nothing is cached between calls.
+//
+// The result holds a status for every workload that exists; one that does not
+// is left out, as AppStatus would have returned ErrNotFound for it.
+type StatusLister interface {
+	AppStatuses(ctx context.Context, refs []Ref) (map[Ref]AppStatus, error)
+}
+
 // CertificateReader reports on certificates issued for IssuedHosts.
 //
 // Optional, and asserted for like NodeManager. An implementation that cannot

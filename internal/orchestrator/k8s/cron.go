@@ -178,6 +178,11 @@ func (o *Orchestrator) scheduledStatus(
 		}
 		return orchestrator.AppStatus{}, fmt.Errorf("k8s: get cron job %s: %w", ref, err)
 	}
+	return cronStatus(cj), nil
+}
+
+// cronStatus reads a scheduled workload's state from its CronJob.
+func cronStatus(cj *batchv1.CronJob) orchestrator.AppStatus {
 	status := orchestrator.AppStatus{
 		Phase:              orchestrator.PhaseScheduled,
 		ReleaseID:          cj.Annotations[orchestrator.AnnotationReleaseID],
@@ -201,7 +206,7 @@ func (o *Orchestrator) scheduledStatus(
 		(cj.Status.LastSuccessfulTime == nil || cj.Status.LastSuccessfulTime.Before(t)) {
 		status.Message = "the last run did not succeed"
 	}
-	return status, nil
+	return status
 }
 
 // deleteCronJob removes a workload's CronJob and the runs it made, tolerating

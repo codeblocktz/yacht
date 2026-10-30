@@ -21,7 +21,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/store"
 )
 
-func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, *pgxpool.Pool) {
+func testService(t testing.TB, opts Options) (*Service, *recordingOrchestrator, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("YACHT_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -50,7 +50,7 @@ func testService(t *testing.T, opts Options) (*Service, *recordingOrchestrator, 
 // focused on an already-active app. Production callers stop at Create's
 // durable queued row; tests that care about that boundary call Create directly.
 func createAndDeploy(
-	t *testing.T, s *Service, ctx context.Context, ownerID string, in CreateInput,
+	t testing.TB, s *Service, ctx context.Context, ownerID string, in CreateInput,
 ) (App, error) {
 	t.Helper()
 	a, err := s.Create(ctx, ownerID, in)
@@ -203,7 +203,7 @@ func (r *recordingOrchestrator) lastAppSpecFor(t *testing.T, name string) orches
 }
 
 // owner registers an owner and removes it (and its apps, by cascade) after.
-func owner(t *testing.T, s *Service, pool *pgxpool.Pool, id string) string {
+func owner(t testing.TB, s *Service, pool *pgxpool.Pool, id string) string {
 	t.Helper()
 	ctx := context.Background()
 
