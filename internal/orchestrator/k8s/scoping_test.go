@@ -419,3 +419,45 @@ func TestPublicServiceKeepsTheFixedPort(t *testing.T) {
 		t.Fatalf("service port = %d, want the fixed %d", got, servicePort)
 	}
 }
+
+// Asked for every owner's, as the operator's Admin console asks, the list is
+// every claim in the cluster: each team's, and the install's own that the
+// engine did not make — its database, its object store — which a managed-only
+// filter left out while the header beside it counted them.
+func TestVolumesForEveryOwnerAreEveryClaim(t *testing.T) {
+	ctx := context.Background()
+	o, client := testOrchestrator(t)
+
+	for _, v := range []struct{ ns, name, owner string }{
+		{"yacht-a", "data-a", "team-a"},
+		{"yacht-b", "data-b", "team-b"},
+		{"datahuru", "datahuru-db-1", ""},
+	} {
+		labels := map[string]string{}
+		if v.owner != "" {
+			labels[orchestrator.LabelManagedBy] = orchestrator.ManagedByValue
+			labels[orchestrator.LabelOwner] = v.owner
+		}
+		if _, err := client.CoreV1().PersistentVolumeClaims(v.ns).Create(ctx,
+			&corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: v.name, Namespace: v.ns, Labels: labels},
+			}, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create pvc %s: %v", v.name, err)
+		}
+	}
+
+	vols, err := o.Volumes(ctx, "")
+	if err != nil {
+		t.Fatalf("Volumes: %v", err)
+	}
+	got := map[string]orchestrator.OwnerID{}
+	for _, v := range vols {
+		got[v.Name] = v.Owner
+	}
+	if len(got) != 3 || got["data-a"] != "team-a" || got["data-b"] != "team-b" {
+		t.Fatalf("volumes = %v, want all three claims with their owners", got)
+	}
+	if owner, ok := got["datahuru-db-1"]; !ok || owner != "" {
+		t.Fatalf("the platform's own claim = %q, %v; want it listed with no owner", owner, ok)
+	}
+}

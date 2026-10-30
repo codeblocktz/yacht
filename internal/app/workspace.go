@@ -49,6 +49,19 @@ type WorkspaceApp struct {
 	// Environment is the app's, so the sidebar can list production's
 	// services and leave each environment's copies to its canvas.
 	Environment string
+	// Source and Port say what the app is and what it listens on, so a link
+	// that needs a particular kind of service, such as one a domain can be
+	// pointed at, can pick one.
+	Source Source
+	Port   int32
+}
+
+// TakesDomain reports whether the app is a service a custom domain can be
+// pointed at: one that runs and listens on a port. Not a bucket, which runs
+// nothing, and not a database, which is reached by its private host or a TCP
+// proxy rather than over HTTP.
+func (a WorkspaceApp) TakesDomain() bool {
+	return a.Source.Workload() && !a.Source.Database() && a.Port > 0
 }
 
 // AppState is how an app stands according to the database: what the
@@ -150,6 +163,8 @@ func assembleWorkspace(
 		entry := WorkspaceApp{
 			Name:        a.Name,
 			Environment: a.Environment,
+			Source:      Source(a.Source),
+			Port:        a.Port,
 			State:       appStateOf(a.Deploying, a.Replicas, a.Serving, a.LastDeploy),
 		}
 		if a.ProjectID.Valid {

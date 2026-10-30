@@ -5,8 +5,10 @@ import (
 	"github.com/codeblocktz/yacht/internal/web/ui/selectbox"
 	"github.com/codeblocktz/yacht/internal/web/ui/sheet"
 	"strconv"
+	"strings"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -631,7 +633,7 @@ templ appDetailHeader(d AppDetailData) {
 // way out of itself: an open sheet makes the rest of the document inert, so
 // tabs left behind it are not merely hidden — they cannot be clicked.
 templ appTabs(name, active string) {
-	<nav class="tabs canvas-sheet-tabs">
+	<nav class="tabs canvas-sheet-tabs" aria-label="Service">
 		@appTab(name, active, "", "Deployments")
 		@appTab(name, active, "variables", "Variables")
 		@appTab(name, active, "metrics", "Metrics")
@@ -642,10 +644,15 @@ templ appTabs(name, active string) {
 	</nav>
 }
 
+// appTab marks the current tab for assistive technology as well as by its
+// look: the class alone left a screen reader no way to tell which was open.
 templ appTab(name, active, slug, label string) {
 	<a
 		href={ templ.URL(appTabHref(name, slug)) }
 		class={ "tab", templ.KV("tab-active", active == slug) }
+		if active == slug {
+			aria-current="page"
+		}
 	>
 		{ label }
 	</a>
@@ -749,7 +756,7 @@ templ AppDeploymentsBody(d AppDetailData) {
 				<p>No pods reported. The workload may be starting, or the cluster is unreachable.</p>
 			</div>
 		} else {
-			@podTable(d.Pods, false)
+			@podTable(d.Pods, false, nil)
 		}
 	</div>
 }
@@ -1932,6 +1939,10 @@ type ClusterData struct {
 	Nodes   []orchestrator.NodeInfo
 	Pods    []orchestrator.PodInfo
 
+	// Teams names the owner of each row when the list is every team's, and is
+	// nil when it is one team's. See Server.clusterOwner.
+	Teams map[orchestrator.OwnerID]string
+
 	// CanAddNode and CanManageNodes are separate because the abilities are.
 	// Joining needs a key to seal a token; draining needs a credential that can
 	// evict across namespaces, and an install can have either without the
@@ -1960,9 +1971,21 @@ templ Cluster(d ClusterData) {
 			clusterMemDetail(d.Summary))
 		@metric("Volumes", strconv.Itoa(d.Summary.Volumes), "")
 	</div>
-	<nav class="tabs mb-5">
-		<a class={ "tab", templ.KV("tab-active", d.Tab == "nodes") } href="/cluster/nodes">Nodes</a>
-		<a class={ "tab", templ.KV("tab-active", d.Tab == "pods") } href="/cluster/pods">Pods</a>
+	<nav class="tabs mb-5" aria-label="Cluster">
+		<a
+			class={ "tab", templ.KV("tab-active", d.Tab == "nodes") }
+			href="/cluster/nodes"
+			if d.Tab != "pods" {
+				aria-current="page"
+			}
+		>Nodes</a>
+		<a
+			class={ "tab", templ.KV("tab-active", d.Tab == "pods") }
+			href="/cluster/pods"
+			if d.Tab == "pods" {
+				aria-current="page"
+			}
+		>Pods</a>
 	</nav>
 	if d.Tab == "pods" {
 		<div class="panel">
@@ -1972,7 +1995,10 @@ templ Cluster(d ClusterData) {
 					<p>Nothing is running, or the cluster is unreachable.</p>
 				</div>
 			} else {
-				@podTable(d.Pods, true)
+				<div class="panel-header">
+					<span class="panel-title">{ podsTitle(d.Pods) }</span>
+				</div>
+				@podTable(d.Pods, true, d.Teams)
 			}
 		</div>
 	} else {
@@ -2055,7 +2081,9 @@ templ nodeRow(n orchestrator.NodeInfo, manageable bool) {
 	</div>
 }
 
-templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
+// podTable lists pods. teams, when not nil, adds the column naming whose each
+// pod is, for a list that crosses teams.
+templ podTable(pods []orchestrator.PodInfo, showNamespace bool, teams map[orchestrator.OwnerID]string) {
 	<div class="overflow-x-auto">
 		<table class="dtable">
 			<thead>
@@ -2063,6 +2091,9 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 					<th>Pod</th>
 					if showNamespace {
 						<th>Namespace</th>
+					}
+					if teams != nil {
+						<th>Team</th>
 					}
 					<th>Ready</th>
 					<th>Restarts</th>
@@ -2076,6 +2107,9 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						<td class="mono max-w-[240px] truncate">{ p.Name }</td>
 						if showNamespace {
 							<td class="mono max-w-[200px] truncate text-muted-foreground">{ p.Namespace }</td>
+						}
+						if teams != nil {
+							<td class="max-w-[160px] truncate text-muted-foreground">{ teamLabel(teams, p.Owner) }</td>
 						}
 						<td class="tabular-nums text-muted-foreground">
 							{ fmt.Sprintf("%d/%d", p.Ready, p.Total) }
@@ -2091,7 +2125,7 @@ templ podTable(pods []orchestrator.PodInfo, showNamespace bool) {
 						// message is a sentence, and a table column sized for
 						// "Running" would truncate the half that says what to do.
 						<tr>
-							<td class="!pt-0 text-muted-foreground" colspan="6">
+							<td class="!pt-0 text-muted-foreground" colspan="7">
 								<span class="font-medium text-foreground">{ p.Reason }</span>
 								if p.Message != "" {
 									&mdash; { p.Message }
@@ -2169,6 +2203,9 @@ type VolumesData struct {
 	OK      bool
 	Error   string
 	Volumes []orchestrator.VolumeInfo
+
+	// Teams is as ClusterData's: nil when the list is one team's.
+	Teams map[orchestrator.OwnerID]string
 }
 
 templ Volumes(d VolumesData) {
@@ -2183,12 +2220,18 @@ templ Volumes(d VolumesData) {
 				<p>Apps with persistent storage will claim volumes here.</p>
 			</div>
 		} else {
+			<div class="panel-header">
+				<span class="panel-title">{ plural(len(d.Volumes), "claim") }</span>
+			</div>
 			<div class="overflow-x-auto">
 				<table class="dtable">
 					<thead>
 						<tr>
 							<th>Claim</th>
 							<th>Namespace</th>
+							if d.Teams != nil {
+								<th>Team</th>
+							}
 							<th>Size</th>
 							<th>Class</th>
 							<th>Access</th>
@@ -2200,6 +2243,9 @@ templ Volumes(d VolumesData) {
 							<tr>
 								<td class="mono max-w-[220px] truncate">{ v.Name }</td>
 								<td class="mono max-w-[180px] truncate text-muted-foreground">{ v.Namespace }</td>
+								if d.Teams != nil {
+									<td class="max-w-[160px] truncate text-muted-foreground">{ teamLabel(d.Teams, v.Owner) }</td>
+								}
 								<td class="tabular-nums text-muted-foreground">{ volumeSize(v) }</td>
 								<td class="text-muted-foreground">{ orDash(v.StorageClass) }</td>
 								<td class="text-muted-foreground">
@@ -2332,10 +2378,25 @@ type SettingsData struct {
 	AccountsOn    bool
 	MailTransport string
 	SessionTTL    string
+
+	// Operators are the addresses YACHT_OPERATORS names, for an install with
+	// accounts. None named means each team's owner is one; see IsOperator.
+	Operators []string
+}
+
+// settingsLead says what kind of install this is. Single-owner mode is one
+// without accounts: one owner, every resource theirs. With accounts on the
+// install hosts teams, and saying "single-owner" there was left over from
+// before it could.
+func settingsLead(d SettingsData) string {
+	if d.AccountsOn {
+		return "This install hosts teams, each signing in to its own workspace."
+	}
+	return "This install runs in single-owner mode: one owner, no accounts."
 }
 
 templ Settings(d SettingsData) {
-	@pageHead("Settings", "This install runs in single-owner mode.", nil)
+	@pageHead("Settings", settingsLead(d), nil)
 	if !d.Authenticated {
 		<div class="callout callout-warn mb-5">
 			<div>
@@ -2353,19 +2414,37 @@ templ Settings(d SettingsData) {
 		</div>
 		<div class="panel-body">
 			<dl class="kv">
-				<dt>Owner</dt>
-				<dd>
-					{ d.OwnerName }
-					<span class="mono ml-1 text-muted-foreground">{ d.OwnerID }</span>
-				</dd>
-				<dt>Authentication</dt>
-				<dd>
-					if d.Authenticated {
-						@statusDot("Bearer token", "status-ok")
-					} else {
-						@statusDot("None", "status-warn")
-					}
-				</dd>
+				// With accounts on, Operators rather than an owner: there is one
+				// owner per team, and the row showed whichever team the operator
+				// was signed in as. Authentication is single-owner mode's bearer
+				// token; with accounts, Sign-in below is how people get in.
+				if d.AccountsOn {
+					<dt>Operators</dt>
+					<dd>
+						if len(d.Operators) > 0 {
+							<span class="mono">{ strings.Join(d.Operators, ", ") }</span>
+						} else {
+							@statusDot("Each team's owner", "status-warn")
+							<span class="ml-1 text-muted-foreground">
+								set <code class="mono">YACHT_OPERATORS</code> before opening sign-up, or every customer is one.
+							</span>
+						}
+					</dd>
+				} else {
+					<dt>Owner</dt>
+					<dd>
+						{ d.OwnerName }
+						<span class="mono ml-1 text-muted-foreground">{ d.OwnerID }</span>
+					</dd>
+					<dt>Authentication</dt>
+					<dd>
+						if d.Authenticated {
+							@statusDot("Bearer token", "status-ok")
+						} else {
+							@statusDot("None", "status-warn")
+						}
+					</dd>
+				}
 				<dt>Cluster</dt>
 				<dd>
 					if d.ClusterOK {
@@ -2374,6 +2453,9 @@ templ Settings(d SettingsData) {
 						@statusDot("Unreachable", "status-err")
 					}
 				</dd>
+				// The generated names services get are under up.; names issued
+				// before those existed are directly under the domain. Both have
+				// to resolve here.
 				<dt>App domain</dt>
 				<dd>
 					if d.AppDomain == "" {
@@ -2382,8 +2464,10 @@ templ Settings(d SettingsData) {
 							<code class="mono">YACHT_APP_DOMAIN</code> to give each app a URL.
 						</span>
 					} else {
-						<span class="mono">*.{ d.AppDomain }</span>
-						<span class="ml-1 text-muted-foreground">must point at this cluster</span>
+						<span class="mono">*.{ domain.GeneratedDomain(d.AppDomain) }</span>
+						<span class="ml-1 text-muted-foreground">
+							where services are given domains. It and <span class="mono">*.{ d.AppDomain }</span> must point at this cluster.
+						</span>
 					}
 				</dd>
 				<dt>Platform TLS</dt>
@@ -2399,8 +2483,9 @@ templ Settings(d SettingsData) {
 				</dd>
 				<dt>Sign-in</dt>
 				<dd>
+					// Both are offered to everyone, always; see SignIn.
 					if d.AccountsOn {
-						@statusDot("Magic link", "status-ok")
+						@statusDot("Email link or password", "status-ok")
 						<span class="ml-1 text-muted-foreground">
 							sessions last { d.SessionTTL }, links delivered by <span class="mono">{ d.MailTransport }</span>
 						</span>

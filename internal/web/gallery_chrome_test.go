@@ -127,7 +127,7 @@ func chromeGalleryPages() []galleryPage {
 	}
 	partly := gettingStarted(checklistFacts{
 		Onboarding: galleryWorkspace().Onboarding,
-		Members:    1, Accounts: true, Domains: true, FirstApp: "api",
+		Members:    1, Accounts: true, Domains: true, DomainHref: "/apps/api/domains",
 	})
 
 	storefront := []Crumb{{Label: "Projects", Href: "/projects"}, {Label: "Storefront", Href: "/projects/storefront"}, {Label: "api"}}

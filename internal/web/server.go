@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1667,17 +1669,13 @@ func (s *Server) clusterVolumes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	data := VolumesData{OK: true}
 
-	// The owner comes from the resolved identity, never from the request. A
-	// cluster page that listed every namespace was correct while the engine had
-	// one owner and is a disclosure now that it has teams.
-	owner := identity.MustFromContext(ctx)
-
-	volumes, err := s.orch.Volumes(ctx, orchestrator.OwnerID(owner.ID))
+	volumes, err := s.orch.Volumes(ctx, s.clusterOwner(r))
 	if err != nil {
 		data.OK = false
 		data.Error = err.Error()
 	}
 	data.Volumes = volumes
+	data.Teams = s.clusterTeams(r)
 
 	s.render(w, r, Volumes(data))
 }
@@ -1753,13 +1751,28 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 		data.Error = err.Error()
 	}
 
+	owner := s.clusterOwner(r)
+	var pods []orchestrator.PodInfo
+	if tab == "pods" || owner != "" {
+		if list, err := s.orch.Pods(ctx, orchestrator.PodListOptions{Owner: owner}); err == nil {
+			pods = list
+		}
+	}
+	if owner != "" {
+		// The header counts what the rows list. A team's owner shown "Pods
+		// 54" above their own five reads as fifty pods they cannot find, and
+		// tells them how busy every other team is besides.
+		data.Summary.Pods = podsOnNodes(pods)
+		data.Summary.Volumes = 0
+		if vols, err := s.orch.Volumes(ctx, owner); err == nil {
+			data.Summary.Volumes = len(vols)
+		}
+	}
+
 	switch tab {
 	case "pods":
-		if pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
-			Owner: orchestrator.OwnerID(identity.MustFromContext(ctx).ID),
-		}); err == nil {
-			data.Pods = pods
-		}
+		data.Pods = pods
+		data.Teams = s.clusterTeams(r)
 	default:
 		if nodes, err := s.orch.Nodes(ctx); err == nil {
 			data.Nodes = nodes
@@ -1767,6 +1780,66 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 	}
 
 	s.render(w, r, Cluster(data))
+}
+
+// clusterOwner is whose pods and claims the cluster pages list: empty for
+// every owner's, the platform's own included.
+//
+// Everybody's for somebody who runs the install. The Admin console is where
+// its operator looks to see what the cluster is running, and one listing only
+// their own team's five pods under a header counting fifty-four hid the rest
+// of the machine from the person responsible for it. A named operator is that
+// person, and so is the one principal of an install without accounts.
+//
+// With accounts on and no operators named, the operator is whichever team's
+// owner is looking (see IsOperator). On an install hosting several teams that
+// is a customer, so they are listed their own team's and nobody else's —
+// which is what these pages did for everybody before operators existed.
+func (s *Server) clusterOwner(r *http.Request) orchestrator.OwnerID {
+	if s.IsOperator(r) && (s.accounts == nil || len(s.operators) > 0) {
+		return ""
+	}
+	return orchestrator.OwnerID(identity.MustFromContext(r.Context()).ID)
+}
+
+// clusterTeams names the teams a cluster-wide listing shows rows for, or nil
+// when the listing is one team's and a team column would say the same thing
+// on every row.
+func (s *Server) clusterTeams(r *http.Request) map[orchestrator.OwnerID]string {
+	if s.clusterOwner(r) != "" {
+		return nil
+	}
+	names := map[orchestrator.OwnerID]string{}
+	if s.quotas == nil {
+		return names
+	}
+	teams, err := s.quotas.TeamUsages(r.Context())
+	if err != nil {
+		// The rows still say which team by its id; a missing name is not
+		// worth failing the page over.
+		s.log.Error("name the teams for the cluster pages", slog.String("error", err.Error()))
+		return names
+	}
+	for _, t := range teams {
+		names[orchestrator.OwnerID(t.TeamID)] = t.TeamName
+	}
+	return names
+}
+
+// podsOnNodes is how many of pods hold a place on a node, which is what the
+// header's figure counts against capacity: not those finished, and not those
+// still waiting for a node with room.
+func podsOnNodes(pods []orchestrator.PodInfo) int {
+	n := 0
+	for _, p := range pods {
+		switch {
+		case p.Phase == "Succeeded" || p.Phase == "Failed":
+		case p.Phase == "Pending" && p.Node == "":
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
@@ -1782,6 +1855,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		AccountsOn:    s.accounts != nil,
 		MailTransport: s.mailTransport,
 		SessionTTL:    s.sessionTTL.String(),
+		Operators:     slices.Sorted(maps.Keys(s.operators)),
 	}))
 }
 
@@ -1865,6 +1939,10 @@ func (s *Server) renderWithSlotsStatus(
 	// wrapper's included, whatever its SlotProvider put in Banner.
 	slots.Banner = withCapacityBanner(s.capacityBannerFor(r), slots.Banner)
 
+	// Here, after every handler has added its crumbs, so the title names the
+	// app or team a handler appended, and a wrapper's pages get one too.
+	slots.Title = pageTitle(slots)
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := Layout(slots, page).Render(r.Context(), w); err != nil {
@@ -1875,6 +1953,40 @@ func (s *Server) renderWithSlotsStatus(
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+// pageTitle is the document title for a page: where it is, most specific
+// first, then the product — "web · Shop · datahuru", "Customers · Admin ·
+// datahuru".
+//
+// Every signed-in page was titled with the product alone, so tabs, history
+// and a screen reader announcing the page could not tell any two apart. The
+// breadcrumb already says where a page is, so the title is read from it; a
+// page with none is named by the sidebar's current item, and one with neither
+// (a signed-out page, which sets its own title) keeps the title it has.
+func pageTitle(slots Slots) string {
+	var parts []string
+	for i := len(slots.Breadcrumb) - 1; i >= 0; i-- {
+		if label := strings.TrimSpace(slots.Breadcrumb[i].Label); label != "" {
+			parts = append(parts, label)
+		}
+	}
+	if len(parts) == 0 {
+		for _, g := range slots.Nav {
+			for _, it := range g.Items {
+				if it.Active && len(parts) == 0 {
+					parts = append(parts, it.Label)
+				}
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return slots.Title
+	}
+	if slots.Title != "" {
+		parts = append(parts, slots.Title)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func displayName(o identity.Owner) string {

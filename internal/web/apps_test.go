@@ -875,7 +875,9 @@ func (f *fakeApps) Workspace(_ context.Context, ownerID string) (app.Workspace, 
 	if len(f.byOwner[ownerID]) > 0 {
 		p := app.WorkspaceProject{ID: fakeProject.ID, Slug: fakeProject.Slug, Name: fakeProject.Name}
 		for _, a := range f.byOwner[ownerID] {
-			p.Apps = append(p.Apps, app.WorkspaceApp{Name: a.Name, State: app.AppServing})
+			p.Apps = append(p.Apps, app.WorkspaceApp{
+				Name: a.Name, State: app.AppServing, Source: a.Source, Port: a.Port,
+			})
 		}
 		w.Projects = []app.WorkspaceProject{p}
 	}
