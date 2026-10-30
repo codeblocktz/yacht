@@ -416,6 +416,10 @@ type Service struct {
 	// why every use goes through Configured() rather than a nil check.
 	keeper *secret.Keeper
 
+	// lockSlots bounds the connections held by session locks; see
+	// withSessionLock. Nil, as in a Service with no pool, is no bound.
+	lockSlots chan struct{}
+
 	// room is the cluster's machines, read at most every roomTTL, for
 	// admission and for the pages that show the install's capacity.
 	room *roomSource
@@ -486,7 +490,8 @@ func NewService(
 		builder: opts.Builder, images: opts.Images, manifests: opts.Manifests, buckets: opts.Buckets,
 		gh:   opts.GitHub,
 		room: newRoomSource(orch, log), disk: newDiskSource(nil, log),
-		wakes: map[uuid.UUID]*wakeCall{},
+		wakes:     map[uuid.UUID]*wakeCall{},
+		lockSlots: lockSlots(pool),
 	}
 	// Only a store that is there: a nil Garage in the interface would be a
 	// store that is not nil.

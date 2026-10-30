@@ -491,6 +491,9 @@ type Engine struct {
 	Webhooks *webhook.Service
 
 	resolver domain.Resolver
+	// egress counts what apps sent to the internet: the metrics store, or
+	// nil on an install without one.
+	egress egressCounter
 	// registry is Settings › Registry's store, which SetRegistry writes too.
 	registry *registry.Store
 }
@@ -800,8 +803,14 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.RequestAccessURL = cfg.RequestAccessURL
 	}
 
-	if err := attachObserve(&opts, cfg, log); err != nil {
+	metrics, err := attachObserve(&opts, cfg, log)
+	if err != nil {
 		return err
+	}
+	// Set only with a store: a nil *observe.MetricStore in the interface
+	// would be a store that is there, and Egress could not say there is none.
+	if metrics != nil {
+		e.egress = metrics
 	}
 	opts.Usage = ov.Usage
 

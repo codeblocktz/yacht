@@ -595,6 +595,49 @@ func (q *Queries) IncrementGitAppConfigVersions(ctx context.Context) error {
 	return err
 }
 
+const listAppNamespaces = `-- name: ListAppNamespaces :many
+SELECT id, owner_id, project_id, name, namespace FROM apps
+ORDER BY owner_id, name
+`
+
+type ListAppNamespacesRow struct {
+	ID        uuid.UUID
+	OwnerID   string
+	ProjectID pgtype.UUID
+	Name      string
+	Namespace string
+}
+
+// Every app's namespace, for metering what each sent from a store that knows
+// an app only by the namespace its traffic was counted under. Install-scoped
+// like the reconciler's list: read for the operator's meter, never for a
+// request.
+func (q *Queries) ListAppNamespaces(ctx context.Context) ([]ListAppNamespacesRow, error) {
+	rows, err := q.db.Query(ctx, listAppNamespaces)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAppNamespacesRow{}
+	for rows.Next() {
+		var i ListAppNamespacesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Namespace,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApps = `-- name: ListApps :many
 SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE owner_id = $1
@@ -858,6 +901,41 @@ func (q *Queries) ListAppsWithLastDeploy(ctx context.Context, ownerID string) ([
 			&i.App.Environment,
 			&i.App.Service,
 			&i.LastDeployStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeletedAppNamespaces = `-- name: ListDeletedAppNamespaces :many
+SELECT id, owner_id, project_id, name, namespace, deleted_at FROM deleted_apps
+WHERE deleted_at >= $1
+ORDER BY owner_id, name, deleted_at DESC
+`
+
+// Apps deleted at or after a moment, as they were, for metering an hour that
+// ended after they went: the trigger on apps keeps them for a week.
+func (q *Queries) ListDeletedAppNamespaces(ctx context.Context, deletedAt time.Time) ([]DeletedApp, error) {
+	rows, err := q.db.Query(ctx, listDeletedAppNamespaces, deletedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletedApp{}
+	for rows.Next() {
+		var i DeletedApp
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Namespace,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}

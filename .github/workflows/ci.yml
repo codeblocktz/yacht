@@ -35,10 +35,18 @@ jobs:
         image: registry:2
         ports: ["5000:5000"]
 
+      # Egress is charged from what this store exports and answers, so it is
+      # tested against the store itself, at the version installs run
+      # (kilicore deploy/versions.env).
+      victoriametrics:
+        image: victoriametrics/victoria-metrics:v1.154.1
+        ports: ["8428:8428"]
+
     env:
       YACHT_TEST_DATABASE_URL: postgres://yacht:yacht@localhost:5432/yacht?sslmode=disable
       YACHT_TEST_REGISTRY: localhost:5000
       YACHT_TEST_REGISTRY_INSECURE: "1"
+      YACHT_TEST_VICTORIAMETRICS_URL: http://localhost:8428
 
     steps:
       - uses: actions/checkout@v4

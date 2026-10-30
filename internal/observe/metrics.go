@@ -30,6 +30,9 @@ import (
 type MetricStore struct {
 	base   *url.URL
 	client *http.Client
+
+	// now is the clock a window is judged closed by: time.Now, but for tests.
+	now func() time.Time
 }
 
 // NewMetricStore returns a store for the VictoriaMetrics at rawURL, or nil
@@ -42,7 +45,7 @@ func NewMetricStore(rawURL string, client *http.Client) (*MetricStore, error) {
 	if client == nil {
 		client = defaultClient()
 	}
-	return &MetricStore{base: u, client: client}, nil
+	return &MetricStore{base: u, client: client, now: time.Now}, nil
 }
 
 // Point is one sample: Unix milliseconds and a value, which is how the chart
@@ -297,25 +300,34 @@ type promResult struct {
 }
 
 func (m *MetricStore) query(ctx context.Context, path string, form url.Values) ([]promResult, error) {
+	result, _, err := m.queryPartial(ctx, path, form)
+	return result, err
+}
+
+// queryPartial is query, and whether the store said its answer is partial: a
+// clustered VictoriaMetrics with a storage node away answers from the rest
+// and says so. A chart may draw that; a meter must not count it.
+func (m *MetricStore) queryPartial(ctx context.Context, path string, form url.Values) ([]promResult, bool, error) {
 	body, err := post(ctx, m.client, m.base, path, form)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer body.Close()
 	var resp struct {
-		Status string `json:"status"`
-		Error  string `json:"error"`
-		Data   struct {
+		Status    string `json:"status"`
+		Error     string `json:"error"`
+		IsPartial bool   `json:"isPartial"`
+		Data      struct {
 			Result []promResult `json:"result"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("observe: read the metrics store's answer: %w", err)
+		return nil, false, fmt.Errorf("observe: read the metrics store's answer: %w", err)
 	}
 	if resp.Status != "success" {
-		return nil, fmt.Errorf("observe: the metrics store refused the query: %s", resp.Error)
+		return nil, false, fmt.Errorf("observe: the metrics store refused the query: %s", resp.Error)
 	}
-	return resp.Data.Result, nil
+	return resp.Data.Result, resp.IsPartial, nil
 }
 
 // name turns the store's series into the chart's, labelled by service or by

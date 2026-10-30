@@ -10,6 +10,11 @@
 // to widen it. What they type narrows a result inside the scope, escaped as
 // a literal, and never names one.
 //
+// One read is not scoped: MetricStore.Egress, the operator's meter reading
+// every team's traffic at once. It takes no Scope because it serves no
+// request, and it gives each app only what was counted under its own
+// namespace.
+//
 // Neither store is required. An install without them has the live pod logs
 // and metrics-server it always had, and the pages that read from here say
 // which store is missing rather than drawing empty charts.

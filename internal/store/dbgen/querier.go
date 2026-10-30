@@ -458,6 +458,11 @@ type Querier interface {
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
+	// Every app's namespace, for metering what each sent from a store that knows
+	// an app only by the namespace its traffic was counted under. Install-scoped
+	// like the reconciler's list: read for the operator's meter, never for a
+	// request.
+	ListAppNamespaces(ctx context.Context) ([]ListAppNamespacesRow, error)
 	ListAppReleases(ctx context.Context, arg ListAppReleasesParams) ([]AppRelease, error)
 	// An app's own history, newest first.
 	ListAppSleeps(ctx context.Context, arg ListAppSleepsParams) ([]AppSleep, error)
@@ -506,6 +511,9 @@ type Querier interface {
 	// routed is the only kind anybody needs to find, so it sorts to the top.
 	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
 	ListDatabaseBackups(ctx context.Context, arg ListDatabaseBackupsParams) ([]DatabaseBackup, error)
+	// Apps deleted at or after a moment, as they were, for metering an hour that
+	// ended after they went: the trigger on apps keeps them for a week.
+	ListDeletedAppNamespaces(ctx context.Context, deletedAt time.Time) ([]DeletedApp, error)
 	ListDeploymentOperations(ctx context.Context, arg ListDeploymentOperationsParams) ([]DeploymentOperation, error)
 	ListDeployments(ctx context.Context, arg ListDeploymentsParams) ([]Deployment, error)
 	ListDomainsByApp(ctx context.Context, appID uuid.UUID) ([]Domain, error)
