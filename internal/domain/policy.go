@@ -30,6 +30,36 @@ var domainRE = regexp.MustCompile(
 // maxHostname is the DNS limit on a fully qualified name.
 const maxHostname = 253
 
+// checkCustomHost reports whether host, already normalised, is a name somebody
+// could actually point at an app and get a certificate for.
+//
+// domainRE alone lets through two things that look like names but are not: a
+// label longer than DNS allows, which no resolver will ever answer, and an IP
+// address such as 10.0.0.1, which matches as four numeric labels. Neither can
+// be verified or certified, so both are refused here rather than left pending
+// forever. A top-level label that is all digits is how an IP literal shows
+// itself, and no real TLD is numeric, so that is the test.
+func checkCustomHost(host string) error {
+	switch {
+	case host == "":
+		return errors.New("a domain is required, for example shop.example.com")
+	case len(host) > maxHostname:
+		return fmt.Errorf("domain: hostname exceeds %d characters", maxHostname)
+	case !domainRE.MatchString(host):
+		return fmt.Errorf("domain: %q is not a valid hostname", host)
+	}
+	labels := strings.Split(host, ".")
+	for _, l := range labels {
+		if len(l) > MaxLabel {
+			return fmt.Errorf("domain: %q is not a valid hostname: a part between dots is at most %d characters", host, MaxLabel)
+		}
+	}
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return fmt.Errorf("domain: %q is not a valid hostname: an IP address cannot be a custom domain", host)
+	}
+	return nil
+}
+
 // Issue returns the platform hostname for an app: <app name>.<app domain>.
 //
 // It returns ErrNoAppDomain when no domain is configured, which is not a

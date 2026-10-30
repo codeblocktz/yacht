@@ -2,7 +2,10 @@ package web
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -476,6 +479,28 @@ func (s *Server) appSourceDisconnect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 }
 
+// runtimeVersionField carries runtimeVersion in the settings form.
+const runtimeVersionField = "settings_version"
+
+// runtimeVersion fingerprints the settings the runtime form edits, as the
+// page showing them read them. Their values rather than the app's updated
+// time, so that what the form does not touch — a scale, a domain, a deploy —
+// does not make a save from an open page look stale. Not a Git app's image:
+// a build sets that, and the form never edits it.
+func runtimeVersion(a app.App) string {
+	h := sha256.New()
+	if a.Source != app.SourceGit {
+		fmt.Fprintf(h, "image=%q\n", a.Image)
+	}
+	fmt.Fprintf(h, "port=%d internal=%t\n", a.Port, a.Internal)
+	fmt.Fprintf(h, "cpu=%q/%q mem=%q/%q\n", a.CPURequest, a.CPULimit, a.MemoryRequest, a.MemoryLimit)
+	fmt.Fprintf(h, "repo=%+v\n", a.Repo)
+	fmt.Fprintf(h, "start=%q pre=%q cron=%q\n", a.StartCommand, a.PreDeployCommand, a.CronSchedule)
+	fmt.Fprintf(h, "restart=%q/%d health=%d\n", a.RestartPolicy, a.RestartMaxRetries, a.HealthTimeoutSeconds)
+	fmt.Fprintf(h, "dockerfile=%q watch=%q\n", a.DockerfilePath, a.WatchPaths)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
 // appRuntime changes what an app runs and how much it may use.
 //
 // One endpoint for the whole runtime rather than one per field. The fields roll
@@ -530,6 +555,16 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 	before, err := s.apps.Get(ctx, owner.ID, name)
 	if err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	// The form posts every field, so a save from a page opened before
+	// somebody else's would put back what they changed, with nothing said.
+	// Refused instead, and the page reloaded to show what is there now. A
+	// form without the version, from a script, saves as it always did.
+	if v := r.FormValue(runtimeVersionField); v != "" && v != runtimeVersion(before) {
+		s.flashErr(w, r, "These settings changed since you opened them, so nothing was saved. "+
+			"This is what they are now: make your change again.")
+		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 		return
 	}
 	// The policy's picker fills its field from script. A form sent without

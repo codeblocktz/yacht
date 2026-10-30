@@ -121,7 +121,7 @@ func (s *Service) attachPublicNetworking(ctx context.Context, a App, out *Networ
 	}
 	pub := PublicDomain{
 		Domain:      domain.GeneratedDomain(s.opts.AppDomain),
-		Suggested:   domain.SuggestLabel(a.Name, a.Environment()),
+		Suggested:   suggestedLabel(a),
 		Port:        a.Port,
 		Suggestions: portSuggestions(a),
 		Unavailable: s.generateUnavailable(a),
@@ -237,12 +237,19 @@ func (s *Service) GenerateDomain(ctx context.Context, ownerID, name string, port
 	return host, nil
 }
 
+// suggestedLabel is <service>-<environment>. The service's name rather than
+// the app's: a copy in another environment is already named <service>-<env>,
+// and suggesting from that gave staging echo-a-staging-staging.
+func suggestedLabel(a App) string {
+	return domain.SuggestLabel(a.ServiceName(), a.Environment())
+}
+
 // issueSuggested issues the suggested label, or the label with a random
 // suffix while the name is taken. A handful of tries: four characters from 36
 // make a collision after the first vanishingly unlikely, so running out means
 // something other than bad luck is wrong.
 func (s *Service) issueSuggested(ctx context.Context, a App) (string, error) {
-	base := domain.SuggestLabel(a.Name, a.Environment())
+	base := suggestedLabel(a)
 	label := base
 	for range 5 {
 		host, err := domain.IssueGenerated(ctx, s.q, s.generateInput(a, label))

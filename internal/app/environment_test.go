@@ -188,3 +188,43 @@ func TestAPullRequestGetsAnEnvironment(t *testing.T) {
 		t.Error("the pull request's copy survived it closing")
 	}
 }
+
+// A copy's app is named <service>-<env>, but it is still the service: its
+// generated domain is <service>-<env>, not the env appended twice, and it is
+// told the service's name, the same in every environment (CONFIG-12).
+func TestACopyIsNamedForItsService(t *testing.T) {
+	ctx := context.Background()
+	s, orch, pool := testService(t, Options{AppDomain: "apps.copies.test"})
+	id := owner(t, s, pool, "svc-environments-copy-names")
+	p, err := s.CreateProject(ctx, id, "Echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
+		Name: "echo-a", Image: "nginx:alpine", Replicas: 1, Port: 8080, ProjectID: p.ID,
+	}); err != nil {
+		t.Fatalf("create echo-a: %v", err)
+	}
+	if prod := publicApp(t, s, id, "echo-a"); prod.Host != "echo-a-production.up.apps.copies.test" {
+		t.Fatalf("production's host = %q", prod.Host)
+	}
+
+	_, copies, err := s.CreateEnvironment(ctx, id, p.Slug, "Staging", DefaultEnvironment)
+	if err != nil || len(copies) != 1 || copies[0].Err != nil {
+		t.Fatalf("CreateEnvironment: %+v, %v", copies, err)
+	}
+	const want = "echo-a-staging.up.apps.copies.test"
+	if !strings.Contains(copies[0].Note, "reachable at "+want) {
+		t.Errorf("the copy's note = %q, want it reachable at %s", copies[0].Note, want)
+	}
+	if err := executeNamedOperation(s, ctx, id, "echo-a-staging"); err != nil {
+		t.Fatalf("deploy echo-a-staging: %v", err)
+	}
+	env := orch.lastAppSpec().Env
+	if got := env[DefaultPlatformVariablePrefix+PlatformServiceName]; got != "echo-a" {
+		t.Errorf("the copy's service name = %q, want echo-a", got)
+	}
+	if got := env[DefaultPlatformVariablePrefix+PlatformPublicDomain]; got != want {
+		t.Errorf("the copy's public domain = %q, want %s", got, want)
+	}
+}

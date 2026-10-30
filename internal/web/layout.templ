@@ -994,6 +994,48 @@ templ confirmationDialog() {
 		(function() {
 			var dialog, pendingForm, pendingSubmitter, trigger;
 			function closeDialog() { if (dialog && dialog.open) dialog.close(); }
+			/* A form inside something that polls can be swapped out while the
+			   dialog is open: the domains list re-renders every three seconds
+			   until each domain settles, and a form no longer in the page
+			   submits nothing. So the poll waits while a confirmation is
+			   pending (below), and a form replaced anyway is found again by
+			   where it posts, with the button that was pressed. */
+			function target(el) {
+				return el.getAttribute("action") || el.getAttribute("hx-post") ||
+					el.getAttribute("hx-put") || el.getAttribute("hx-delete");
+			}
+			function liveForm(form) {
+				if (form.isConnected) return form;
+				var key = target(form);
+				if (!key) return null;
+				for (var i = 0; i < document.forms.length; i++) {
+					var f = document.forms[i];
+					if (target(f) === key &&
+						(f.getAttribute("method") || "").toLowerCase() === (form.getAttribute("method") || "").toLowerCase()) {
+						return f;
+					}
+				}
+				return null;
+			}
+			function liveSubmitter(form, submitter) {
+				if (!submitter || form.contains(submitter)) return submitter;
+				var buttons = form.querySelectorAll("button, input[type=submit]");
+				for (var i = 0; i < buttons.length; i++) {
+					var b = buttons[i];
+					if (b.name === submitter.name && b.value === submitter.value &&
+						b.getAttribute("formaction") === submitter.getAttribute("formaction")) {
+						return b;
+					}
+				}
+				return null;
+			}
+			function setConfirm(title, description, label, canConfirm) {
+				dialog.querySelector("#confirm-title").textContent = title;
+				dialog.querySelector("#confirm-description").textContent = description;
+				var submit = dialog.querySelector("[data-confirm-submit]");
+				submit.textContent = label;
+				submit.hidden = !canConfirm;
+			}
 			document.addEventListener("DOMContentLoaded", function() {
 				dialog = document.querySelector("[data-confirm-dialog]");
 				if (!dialog) return;
@@ -1005,18 +1047,34 @@ templ confirmationDialog() {
 					pendingForm = form;
 					pendingSubmitter = event.submitter;
 					trigger = document.activeElement;
-					dialog.querySelector("#confirm-title").textContent = source.dataset.confirmTitle || "Confirm action";
-					dialog.querySelector("#confirm-description").textContent = source.dataset.confirm;
-					dialog.querySelector("[data-confirm-submit]").textContent = source.dataset.confirmLabel || "Confirm";
+					setConfirm(source.dataset.confirmTitle || "Confirm action", source.dataset.confirm,
+						source.dataset.confirmLabel || "Confirm", true);
 					dialog.showModal();
 					dialog.querySelector("[data-confirm-cancel]").focus();
+				});
+				document.addEventListener("htmx:beforeRequest", function(event) {
+					var elt = event.detail && event.detail.elt;
+					if (dialog.open && pendingForm && elt && elt !== pendingForm && elt.contains(pendingForm)) {
+						event.preventDefault();
+					}
 				});
 				dialog.querySelector("[data-confirm-cancel]").addEventListener("click", closeDialog);
 				dialog.querySelector("[data-confirm-submit]").addEventListener("click", function() {
 					if (!pendingForm) return;
-					pendingForm.dataset.confirmed = "true";
+					var form = liveForm(pendingForm);
+					var submitter = form && liveSubmitter(form, pendingSubmitter);
+					if (!form || (pendingSubmitter && !submitter)) {
+						/* What it acted on is gone: the domain was removed
+						   elsewhere, say. Said, rather than closing on nothing. */
+						setConfirm("This has changed", "It changed since you opened this, so nothing was done. Close this and look again.", "", false);
+						dialog.querySelector("[data-confirm-cancel]").focus();
+						return;
+					}
+					delete pendingForm.dataset.confirmed;
+					pendingForm = form;
+					form.dataset.confirmed = "true";
 					closeDialog();
-					pendingForm.requestSubmit(pendingSubmitter || undefined);
+					form.requestSubmit(submitter || undefined);
 				});
 				dialog.addEventListener("close", function() {
 					if (pendingForm) delete pendingForm.dataset.confirmed;

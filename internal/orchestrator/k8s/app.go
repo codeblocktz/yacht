@@ -173,6 +173,11 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		// to change when they do or the pods keep the old ones.
 		podAnnotations[orchestrator.AnnotationSecrets] = secretsHash(spec.Secrets)
 	}
+	podReleaseID, err := o.podReleaseID(ctx, spec, podAnnotations)
+	if err != nil {
+		return err
+	}
+	podAnnotations[orchestrator.AnnotationReleaseID] = podReleaseID
 	pendingAnnotations := map[string]string{
 		orchestrator.AnnotationRevision:      specHash(spec),
 		orchestrator.AnnotationReleaseID:     "",
@@ -279,6 +284,39 @@ func (o *Orchestrator) applyDeployment(ctx context.Context, spec orchestrator.Ap
 		return fmt.Errorf("k8s: apply deployment %s: %w", spec.Ref, err)
 	}
 	return nil
+}
+
+// podReleaseID is the release the pod template is stamped with: this one,
+// unless all this release changes is how many pods there are.
+//
+// Scaling is a release, because a release records its replica count and a
+// rollback restores it. Stamping the template with it, though, makes a new
+// ReplicaSet, and Kubernetes then replaces every running pod to add one: a
+// scale from five to six dropped five pods' connections. So a release whose
+// pods would be what is already running, at a different count, keeps the
+// stamp the running pods have, and only the count changes.
+//
+// The same count is not carried, on purpose. A release that changes nothing
+// at all is a Redeploy, and restarting the pods is what it is for.
+func (o *Orchestrator) podReleaseID(
+	ctx context.Context, spec orchestrator.AppSpec, podAnnotations map[string]string,
+) (string, error) {
+	cur, err := o.client.AppsV1().Deployments(spec.Namespace).
+		Get(ctx, spec.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return spec.ReleaseID, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("k8s: get deployment %s: %w", spec.Ref, err)
+	}
+	running := cur.Spec.Template.Annotations
+	stamp := running[orchestrator.AnnotationReleaseID]
+	if stamp == "" || cur.Spec.Replicas == nil || *cur.Spec.Replicas == spec.Replicas ||
+		running[orchestrator.AnnotationRevision] != podAnnotations[orchestrator.AnnotationRevision] ||
+		running[orchestrator.AnnotationSecrets] != podAnnotations[orchestrator.AnnotationSecrets] {
+		return spec.ReleaseID, nil
+	}
+	return stamp, nil
 }
 
 // placeInPool keeps a workload's pods on its pool's nodes: a node selector on
@@ -638,7 +676,7 @@ func (o *Orchestrator) AppStatus(
 			LabelSelector: labels.SelectorFromSet(orchestrator.ObjectLabels(ref)).String(),
 		})
 		if err == nil {
-			applyUnstartable(&status, pods.Items, crashLimit(dep.Annotations))
+			applyUnstartable(&status, pods.Items, podRelease(dep, status), crashLimit(dep.Annotations))
 		}
 	}
 	return finishStatus(status), nil
@@ -708,12 +746,21 @@ func needsPodCheck(status orchestrator.AppStatus) bool {
 }
 
 // applyUnstartable fails a status whose release's container cannot start,
-// from that workload's pods.
-func applyUnstartable(status *orchestrator.AppStatus, pods []corev1.Pod, limit int32) {
-	if reason, message, ok := unstartable(pods, status.ReleaseID, limit); ok {
+// from that workload's pods. podRelease is the release those pods are
+// stamped with: see podRelease.
+func applyUnstartable(status *orchestrator.AppStatus, pods []corev1.Pod, podRelease string, limit int32) {
+	if reason, message, ok := unstartable(pods, podRelease, limit); ok {
 		status.Terminal = true
 		status.Reason, status.Message = reason, message
 	}
+}
+
+// podRelease is the release a Deployment's pods are stamped with: its
+// template's, which a scale leaves as the release that made the pods rather
+// than the scale's own (see podReleaseID). The Deployment's release, for one
+// written before the template carried it.
+func podRelease(dep *appsv1.Deployment, status orchestrator.AppStatus) string {
+	return cmp.Or(dep.Spec.Template.Annotations[orchestrator.AnnotationReleaseID], status.ReleaseID)
 }
 
 // finishStatus settles the phase once everything is known: a rollout that
