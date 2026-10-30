@@ -1,15 +1,19 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
@@ -290,5 +294,193 @@ func TestAPreDeployCommandWithNowhereToRunFailsTheDeploy(t *testing.T) {
 	}
 	if row.PreDeployCommand != "bin/migrate" {
 		t.Errorf("command = %q, want it kept for the next deploy", row.PreDeployCommand)
+	}
+}
+
+// namespaceOrchestrator records each namespace it is asked to make among the
+// seam's other events, so a test can say it came before the command that
+// runs in it.
+type namespaceOrchestrator struct{ *recordingOrchestrator }
+
+func (o namespaceOrchestrator) EnsureNamespace(ctx context.Context, spec orchestrator.NamespaceSpec) error {
+	o.mu.Lock()
+	o.events = append(o.events, "namespace")
+	o.mu.Unlock()
+	return o.recordingOrchestrator.EnsureNamespace(ctx, spec)
+}
+
+// firstDeployService is a team with a database to reference, and a service
+// that builds from source with the database's URL and a secret of its own,
+// its pre-deploy command saved before it has ever been deployed — the order
+// somebody sets up an app with migrations in. The seam reports namespaces
+// too, and nothing has been deployed of the service when it returns.
+func firstDeployService(t *testing.T, team string) (*Service, *recordingOrchestrator, string) {
+	t.Helper()
+	ctx := context.Background()
+	keeper, err := secret.NewKeeper(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("p"), 32)))
+	if err != nil {
+		t.Fatalf("NewKeeper: %v", err)
+	}
+	base, orch, pool := testService(t, Options{})
+	s := NewService(pool, namespaceOrchestrator{orch},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Options{
+			Keeper: keeper, Manifests: staticManifests{}, Images: fakeImages{},
+			Builder: &uploadBuilder{}, SourceFetchURL: "https://yacht.example.test",
+		})
+	id := owner(t, base, pool, team)
+
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
+		Name: "postgres", Image: "postgres:16-alpine", Replicas: 1, Port: 5432,
+	}); err != nil {
+		t.Fatalf("Create postgres: %v", err)
+	}
+	if err := s.SetVariable(ctx, id, "postgres", VariableInput{
+		Key: "DATABASE_URL", Value: "postgres://app:hunter2@postgres/app", Secret: true,
+	}); err != nil {
+		t.Fatalf("set the database's URL: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "postgres"); err != nil &&
+		!errors.Is(err, ErrNotFound) {
+		t.Fatalf("deploy postgres: %v", err)
+	}
+
+	if _, err := s.Create(ctx, id, CreateInput{
+		Name: "web", Empty: true, Replicas: 1, Port: 4000,
+		Env: map[string]string{"MIX_ENV": "prod"},
+		Variables: []VariableInput{
+			{Key: "DATABASE_URL", Value: "${{postgres.DATABASE_URL}}"},
+			{Key: "SECRET_KEY_BASE", Value: "s3cr3t", Secret: true},
+		},
+	}); err != nil {
+		t.Fatalf("Create web: %v", err)
+	}
+	if _, err := s.Update(ctx, id, "web", UpdateInput{
+		Port: 4000, PreDeployCommand: "/app/bin/migrate",
+	}); err != nil {
+		t.Fatalf("save the pre-deploy command: %v", err)
+	}
+	orch.takeEvents()
+	return s, orch, id
+}
+
+// deployFirstUpload deploys the service's first source, as `up` does.
+func deployFirstUpload(t *testing.T, s *Service, id string) error {
+	t.Helper()
+	ctx := context.Background()
+	if _, _, err := s.DeployUpload(ctx, id, "web",
+		sourceArchive(t, map[string]string{"Dockerfile": "FROM busybox\n"})); err != nil {
+		t.Fatalf("DeployUpload: %v", err)
+	}
+	return executeNamedOperation(s, ctx, id, "web")
+}
+
+// The usual setup for an app with migrations: its pre-deploy command is
+// saved before it is first deployed, so the command runs on that very first
+// deploy — before anything else has made the app's namespace. The namespace
+// is made first, the command runs in it with everything the app will have,
+// and only then is the app itself applied.
+func TestAFirstDeployRunsItsPreDeployCommandInAReadyNamespace(t *testing.T) {
+	ctx := context.Background()
+	s, orch, id := firstDeployService(t, "predeploy-first")
+
+	if err := deployFirstUpload(t, s, id); err != nil {
+		t.Fatalf("first deploy: %v", err)
+	}
+
+	events, reqs := orch.takeEvents()
+	if !slices.Equal(events, []string{"namespace", "pre-deploy", "namespace", "apply"}) {
+		t.Fatalf("seam calls = %v, want the namespace, then the command, then the apply", events)
+	}
+	a, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	req := reqs[0]
+	if req.Command != "/app/bin/migrate" || req.App.Namespace != a.Namespace {
+		t.Errorf("ran %q in %q, want the saved command in %q", req.Command, req.App.Namespace, a.Namespace)
+	}
+	applied := orch.lastAppSpec()
+	if req.App.Image != applied.Image || len(req.App.RegistryAuth) == 0 {
+		t.Errorf("ran in %q with a pull credential %t, want the built %q with one",
+			req.App.Image, len(req.App.RegistryAuth) > 0, applied.Image)
+	}
+	// The command's environment is the app's: the reference resolved, the
+	// secret opened, both as secrets, and the platform's own variables.
+	for _, key := range []string{"DATABASE_URL", "SECRET_KEY_BASE"} {
+		if req.App.Secrets[key] == "" || req.App.Secrets[key] != applied.Secrets[key] {
+			t.Errorf("the command's %s is not the app's", key)
+		}
+	}
+	if req.App.Secrets["DATABASE_URL"] != "postgres://app:hunter2@postgres/app" {
+		t.Error("the command's DATABASE_URL is not the database's")
+	}
+	if !maps.Equal(req.App.Env, applied.Env) {
+		t.Errorf("command env = %v, want the app's %v", req.App.Env, applied.Env)
+	}
+	if req.App.Env["MIX_ENV"] != "prod" || req.App.Env[DefaultPlatformVariablePrefix+PlatformServiceName] != "web" {
+		t.Errorf("command env = %v, want the app's variables and the platform's", req.App.Env)
+	}
+	if a.ActiveReleaseID == nil {
+		t.Error("the first deploy left no active release")
+	}
+}
+
+// A first deploy whose command fails starts nothing, and leaves the app
+// where a Redeploy, once the command is fixed, deploys it as a first deploy
+// would have.
+func TestAFailedFirstPreDeployCanBeRedeployed(t *testing.T) {
+	ctx := context.Background()
+	s, orch, id := firstDeployService(t, "predeploy-first-fails")
+
+	orch.mu.Lock()
+	orch.preDeploy = func(orchestrator.PreDeployRequest) (orchestrator.PreDeployResult, error) {
+		return orchestrator.PreDeployResult{ExitCode: 1, Output: []string{"connection refused"}}, nil
+	}
+	orch.mu.Unlock()
+	var failure *PreDeployFailure
+	if err := deployFirstUpload(t, s, id); !errors.As(err, &failure) {
+		t.Fatalf("first deploy = %v, want the command's failure", err)
+	}
+	if events, _ := orch.takeEvents(); !slices.Equal(events, []string{"namespace", "pre-deploy"}) {
+		t.Fatalf("seam calls = %v, want the namespace and the command, and nothing applied", events)
+	}
+	failed, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if failed.ActiveReleaseID != nil {
+		t.Errorf("a failed first deploy made release %s active", *failed.ActiveReleaseID)
+	}
+
+	orch.mu.Lock()
+	orch.preDeploy = nil
+	orch.mu.Unlock()
+	if err := s.Redeploy(ctx, id, "web"); err != nil {
+		t.Fatalf("Redeploy: %v", err)
+	}
+	if err := executeNamedOperation(s, ctx, id, "web"); err != nil {
+		t.Fatalf("redeploy: %v", err)
+	}
+	events, reqs := orch.takeEvents()
+	if !slices.Equal(events, []string{"namespace", "pre-deploy", "namespace", "apply"}) {
+		t.Fatalf("seam calls = %v, want the command again before the apply", events)
+	}
+	if reqs[0].App.Secrets["DATABASE_URL"] != "postgres://app:hunter2@postgres/app" {
+		t.Error("the second run's DATABASE_URL is not the database's")
+	}
+	deployed, err := s.Get(ctx, id, "web")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if deployed.ActiveReleaseID == nil {
+		t.Fatal("the redeploy left no active release")
+	}
+	deps, err := s.Deployments(ctx, id, deployed.ID, 1)
+	if err != nil || len(deps) == 0 {
+		t.Fatalf("Deployments: %v", err)
+	}
+	if deps[0].Status == DeployFailed {
+		t.Errorf("redeploy failed: %s", deps[0].Message)
 	}
 }

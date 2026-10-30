@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -131,13 +130,11 @@ func (s *Service) PlatformVariables(ctx context.Context, ownerID, appName string
 	if err != nil {
 		return nil, err
 	}
-	var hosts []string
 	// The same address an apply hands the ingress: none for an app kept off
 	// the public internet, whatever hostnames it once had.
-	if !a.Internal && a.Port != 0 {
-		if hosts, err = domain.RoutableHosts(ctx, s.q, a.ID); err != nil {
-			return nil, fmt.Errorf("app: read hostnames: %w", err)
-		}
+	hosts, err := routedHosts(ctx, s.q, a)
+	if err != nil {
+		return nil, err
 	}
 	env := s.platformEnv(ctx, s.q, a, hosts)
 	out := make([]Variable, 0, len(env))

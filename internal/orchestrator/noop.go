@@ -114,9 +114,19 @@ var _ PreDeployer = (*Noop)(nil)
 // PreDeploy reports success without running anything. There is no image to
 // run the command in, and an engine booted without a cluster is one somebody
 // is clicking through rather than migrating a database with.
+//
+// It does refuse a namespace nobody ensured, as a cluster does: the command
+// runs before the apply, and a caller that forgot to make the namespace first
+// should find out here rather than on an app's first real deploy.
 func (n *Noop) PreDeploy(_ context.Context, req PreDeployRequest) (PreDeployResult, error) {
 	if err := req.App.Validate(); err != nil {
 		return PreDeployResult{}, err
+	}
+	n.mu.Lock()
+	_, ok := n.namespaces[req.App.Namespace]
+	n.mu.Unlock()
+	if !ok {
+		return PreDeployResult{}, fmt.Errorf("noop: namespace %q: %w", req.App.Namespace, ErrNotFound)
 	}
 	return PreDeployResult{Succeeded: true}, nil
 }
