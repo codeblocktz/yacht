@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -650,13 +651,34 @@ func nodeAt(n CanvasNode) string {
 		strconv.Itoa(cardW) + "px"
 }
 
+// ansiEscape matches the terminal escape sequences programs write into
+// their output: colour and cursor control (CSI, "ESC [ … letter"), window
+// titles and links (OSC, ended by BEL or "ESC \\"), and the two-byte rest.
+var ansiEscape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+
+// plainLog takes the terminal escapes out of a log line for the page.
+//
+// The buildpacks lifecycle colours its phases and errors, and an app's own
+// logger often does too. A browser shows the escape as "[36m" around every
+// heading. Stripped rather than turned into colour: the words carry what the
+// colour did ("ERROR:"), the page's own find marks what somebody is looking
+// for, and a match has to be on the text people read — "ERROR: No" is not in
+// "\x1b[31;1mERROR: \x1b[0mNo". What is stored is left alone, so the CLI,
+// which writes to a terminal, still shows the colours.
+func plainLog(s string) string {
+	if !strings.Contains(s, "\x1b") {
+		return s
+	}
+	return ansiEscape.ReplaceAllString(s, "")
+}
+
 // buildLines splits a stored build log for rendering.
 //
 // The log is appended to as it arrives, so the last chunk usually ends without
 // a newline and a naive split leaves a trailing empty row that grows and
 // shrinks as the build writes.
 func buildLines(log string) []string {
-	log = strings.TrimRight(log, "\n")
+	log = strings.TrimRight(plainLog(log), "\n")
 	if log == "" {
 		return nil
 	}
@@ -751,7 +773,7 @@ func filterLines(lines []orchestrator.LogLine, query string) []orchestrator.LogL
 	needle := strings.ToLower(query)
 	kept := make([]orchestrator.LogLine, 0, len(lines))
 	for _, l := range lines {
-		if strings.Contains(strings.ToLower(l.Text), needle) {
+		if strings.Contains(strings.ToLower(plainLog(l.Text)), needle) {
 			kept = append(kept, l)
 		}
 	}

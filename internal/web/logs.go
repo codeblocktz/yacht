@@ -329,10 +329,10 @@ func (s *Server) appLogsStream(w http.ResponseWriter, r *http.Request) {
 // The text is split across data fields rather than sent whole: a newline inside
 // a line would end the event early and the remainder would arrive as a field
 // name the client does not know, which drops it silently. A stack trace is
-// exactly such a line.
+// exactly such a line. Escapes go, as they do on the page the stream adds to.
 func writeLogEvent(w io.Writer, line orchestrator.LogLine) {
 	fmt.Fprintf(w, "id: %d\n", line.At.UnixNano())
-	for _, part := range strings.Split(line.Text, "\n") {
+	for _, part := range strings.Split(plainLog(line.Text), "\n") {
 		fmt.Fprintf(w, "data: %s\n", part)
 	}
 	fmt.Fprint(w, "\n")

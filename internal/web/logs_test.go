@@ -4,6 +4,7 @@ import (
 	"context"
 	"iter"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -445,5 +446,46 @@ func TestTheDeployLogShowsThePreDeployCommandFirst(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("a replaced deployment's log is missing %q", want)
 		}
+	}
+}
+
+// The buildpacks lifecycle colours its output. The page shows the words, not
+// the escapes, and finding a phrase works across where the colour changed.
+func TestTheBuildLogShowsNoTerminalEscapes(t *testing.T) {
+	h := testServer(t, Options{Logs: &recordingLogs{build: &app.Build{
+		Status: app.BuildFailed,
+		Log: "\x1b[36m===> ANALYZING\x1b[0m\n" +
+			"\x1b[31;1mERROR: \x1b[0mNo buildpack groups passed detection.\n",
+	}}})
+	path := "/apps/web/deployments/" + testDeployID.String() + "/logs?view=build"
+
+	body := get(t, h, path).Body.String()
+	if strings.Contains(body, "\x1b") || strings.Contains(body, "[36m") {
+		t.Errorf("the build log shows terminal escapes:\n%s", body)
+	}
+	for _, want := range []string{"===&gt; ANALYZING", "No buildpack groups passed detection."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the build log lost %q", want)
+		}
+	}
+
+	found := get(t, h, path+"&q="+url.QueryEscape("ERROR: No")).Body.String()
+	if !strings.Contains(found, "buildpack groups passed detection") {
+		t.Error("finding a phrase the colour split does not find it")
+	}
+}
+
+// The running app's log, on the page and as it streams.
+func TestTheAppLogShowsNoTerminalEscapes(t *testing.T) {
+	d := liveDeploy()
+	d.Deploy.Logs.Lines = []orchestrator.LogLine{{Text: "\x1b[32minfo\x1b[39m: listening on 8080"}}
+	if body := renderPanel(t, d); strings.Contains(body, "\x1b") || !strings.Contains(body, "info: listening on 8080") {
+		t.Errorf("the deploy log shows terminal escapes:\n%s", body)
+	}
+
+	var b strings.Builder
+	writeLogEvent(&b, orchestrator.LogLine{Text: "\x1b[1mbold\x1b[22m and \x1b]8;;https://x.test\x07link\x1b]8;;\x07"})
+	if got := b.String(); strings.Contains(got, "\x1b") || !strings.Contains(got, "data: bold and link\n") {
+		t.Errorf("the stream sends terminal escapes: %q", got)
 	}
 }
