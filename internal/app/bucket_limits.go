@@ -58,12 +58,6 @@ func bucketReserve(total int64) int64 {
 	return min(max(total*bucketReservePercent/100, bucketReserveMin), total/2)
 }
 
-// bucketFloor is the most of the store's free room a bucket that is not
-// being written to keeps, as room for its next upload; never more than a
-// part of half the free room, so the other half is always there for the
-// buckets being written to.
-const bucketFloor = 1 << 30
-
 // bucketWantWindow is how long a bucket that grew, or was about to be written
 // through the Files tab, counts as being written to: three measurings, so a
 // pause between two uploads does not hand its room back.
@@ -95,12 +89,12 @@ type bucketRoom struct {
 // keeps buckets growing at once, between two settings of their limits, from
 // filling the disk. Past that only by a byte for each empty bucket given
 // nothing, which the store would otherwise read as no limit; the reserve
-// covers that many times over. Every bucket is given a floor, a small part
+// covers that many times over. Every bucket is given a floor, an even part
 // of half the free room, so an idle bucket can always take its next upload;
 // what is left is shared between the buckets being written to, each taking
 // what its team's share leaves it room for and the rest going to the others.
-// So one bucket being written to can grow by most of the free room, and an
-// idle one holds little of it.
+// So a bucket being written to can grow by at least half the free room, and
+// an idle one holds no more than its part of the other half.
 //
 // With the room unknown, nothing is loosened: a bucket keeps its limit, or
 // its team's share when that is tighter, so a store that cannot be read is
@@ -117,7 +111,13 @@ func allocateBuckets(in []bucketDemand, room *bucketRoom) []int64 {
 		return out
 	}
 	free := max(room.Free, 0)
-	floor := mebibytes(min(bucketFloor, free/(2*int64(len(in)))))
+	// Every bucket's floor is an even part of half the free room, as room for
+	// its next upload, so the other half is always there for the buckets
+	// being written to. Not less: a single upload is refused without a trace
+	// — it is not growth, so it never makes a bucket want room — and an app
+	// putting one large object into a bucket that was idle could otherwise
+	// never put it, whatever its plan and the disk allowed.
+	floor := mebibytes(free / (2 * int64(len(in))))
 
 	// Each bucket's room under its team's share, and its floor within it.
 	team := make([]int64, len(in))
@@ -393,44 +393,77 @@ func (s *Service) RunBuckets(ctx context.Context, zone string) {
 			}
 			laidOut = true
 		}
-		rows, err := s.q.ListBuckets(ctx)
-		if err != nil {
-			s.log.Error("buckets: list", slog.String("error", err.Error()))
-		}
-		for _, row := range rows {
-			s.measureAndKeep(ctx, row)
-		}
-		s.limitBuckets(ctx, true)
+		s.bucketPass(ctx)
 		t.Reset(bucketMeasureInterval)
 	}
 }
 
-// measureAndKeep measures one bucket on a pass, keeps the lifecycle rule
-// that ends its unfinished uploads, and ends them at once when they have
-// taken it past the limit last set — which they can, because the store
-// checks the limit only when an upload is completed, and one that cannot be
-// completed within it is only filling the disk.
+// bucketPass measures every bucket, sets every limit from what it measured,
+// and only then ends the unfinished uploads those limits cannot hold.
+//
+// In that order because an unfinished upload is what makes a bucket want
+// room: measured before its limit is set, an app's large multipart upload
+// into a bucket that was idle would be ended for passing the small limit an
+// idle bucket keeps, when the pass was about to give it room for the upload.
+// What is ended is only what passes the bucket's team's share or the store's
+// free room.
+func (s *Service) bucketPass(ctx context.Context) {
+	rows, err := s.q.ListBuckets(ctx)
+	if err != nil {
+		s.log.Error("buckets: list", slog.String("error", err.Error()))
+		return
+	}
+	for _, row := range rows {
+		s.measureAndKeep(ctx, row)
+	}
+	s.limitBuckets(ctx, true)
+	if rows, err = s.q.ListBuckets(ctx); err != nil {
+		s.log.Error("buckets: list", slog.String("error", err.Error()))
+		return
+	}
+	for _, row := range rows {
+		s.endUploadsPastLimit(ctx, row)
+	}
+}
+
+// measureAndKeep measures one bucket on a pass and keeps the lifecycle rule
+// that ends its unfinished uploads after a day.
 func (s *Service) measureAndKeep(ctx context.Context, row dbgen.Bucket) {
 	warn := func(what string, err error) {
 		if ctx.Err() == nil {
 			s.log.Warn("buckets: "+what, slog.String("bucket", row.Name), slog.String("error", err.Error()))
 		}
 	}
-	u, err := s.measure(ctx, row)
-	if err != nil {
+	if _, err := s.measure(ctx, row); err != nil {
 		warn("measure", err)
 		return
 	}
-	secret, err := s.keeper.Open(row.SealedSecret)
+	files, err := s.bucketFiles(row)
 	if err != nil {
 		warn("open its key", err)
 		return
 	}
-	files := s.buckets.Files(bucket.Created{ID: row.GarageID, Name: row.Name, KeyID: row.KeyID, Secret: secret})
 	if err := files.KeepAbortRule(ctx); err != nil {
 		warn("the rule that ends unfinished uploads", err)
 	}
-	if u.Uploading == 0 || row.LimitBytes == 0 || u.Bytes <= row.LimitBytes {
+}
+
+// endUploadsPastLimit ends a bucket's unfinished uploads when, as measured,
+// they have taken it past its limit: the store checks the limit only when an
+// upload is completed, and one that cannot be completed within it is only
+// filling the disk.
+func (s *Service) endUploadsPastLimit(ctx context.Context, row dbgen.Bucket) {
+	if row.UploadingBytes == 0 || row.LimitBytes == 0 || row.SizeBytes <= row.LimitBytes {
+		return
+	}
+	warn := func(what string, err error) {
+		if ctx.Err() == nil {
+			s.log.Warn("buckets: "+what, slog.String("bucket", row.Name), slog.String("error", err.Error()))
+		}
+	}
+	files, err := s.bucketFiles(row)
+	if err != nil {
+		warn("open its key", err)
 		return
 	}
 	n, err := files.AbortUploads(ctx)
@@ -440,10 +473,19 @@ func (s *Service) measureAndKeep(ctx context.Context, row dbgen.Bucket) {
 	}
 	s.log.Warn("buckets: ended unfinished uploads past the bucket's limit",
 		slog.String("bucket", row.Name), slog.Int("uploads", n),
-		slog.Int64("limit", row.LimitBytes), slog.Int64("bytes", u.Bytes))
+		slog.Int64("limit", row.LimitBytes), slog.Int64("bytes", row.SizeBytes))
 	if _, err := s.measure(ctx, row); err != nil {
 		warn("measure", err)
 	}
+}
+
+// bucketFiles is a bucket's objects, through its own key.
+func (s *Service) bucketFiles(row dbgen.Bucket) (*bucket.Files, error) {
+	secret, err := s.keeper.Open(row.SealedSecret)
+	if err != nil {
+		return nil, err
+	}
+	return s.buckets.Files(bucket.Created{ID: row.GarageID, Name: row.Name, KeyID: row.KeyID, Secret: secret}), nil
 }
 
 // BucketCapacity is the install's room for buckets: the bucket store's disk,

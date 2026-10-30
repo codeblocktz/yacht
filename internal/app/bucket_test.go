@@ -353,7 +353,7 @@ func TestAPassEndsUploadsPastABucketsLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Delete(context.Background(), id, a.Name) })
-	row, c, err := s.storedBucket(ctx, a)
+	_, c, err := s.storedBucket(ctx, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,10 +395,7 @@ func TestAPassEndsUploadsPastABucketsLimit(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if row, err = s.q.GetBucket(ctx, dbgen.GetBucketParams{OwnerID: id, AppID: a.ID}); err != nil {
-		t.Fatal(err)
-	}
-	s.measureAndKeep(ctx, row)
+	s.bucketPass(ctx)
 	var left bucket.Usage
 	for range 50 {
 		if left, err = g.Usage(ctx, c.ID); err == nil && left.Uploading == 0 {
@@ -415,10 +412,85 @@ func TestAPassEndsUploadsPastABucketsLimit(t *testing.T) {
 	}
 }
 
+// An app's upload into a bucket left with an idle bucket's small limit, and
+// within its team's share, is what makes the bucket want room: the pass gives
+// it that room before it looks for uploads past a limit, and so does not end
+// the upload it is making room for.
+func TestAPassKeepsAnUploadItGivesRoomTo(t *testing.T) {
+	g := testGarage(t)
+	s, _, pool := testService(t, Options{Keeper: testKeeper(t), Buckets: g})
+	id := owner(t, s, pool, "svc-bucket-room")
+	ctx := context.Background()
+	p, err := s.CreateProject(ctx, id, "Media")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetQuota(ctx, id, Quota{BucketBytes: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.DeployBucket(ctx, id, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Delete(context.Background(), id, a.Name) })
+	row, c, err := s.storedBucket(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As a pass left it when the store's room was shared between many.
+	if err := g.SetLimit(ctx, c.ID, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.q.SetBucketLimit(ctx, dbgen.SetBucketLimitParams{AppID: row.AppID, LimitBytes: 30}); err != nil {
+		t.Fatal(err)
+	}
+
+	s3, err := backup.NewS3(g.S3URL, g.Region, c.Name, "", c.KeyID, c.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(method, u, body string) string {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, method, u, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %s %s", method, resp.Status, b)
+		}
+		return string(b)
+	}
+	u, _ := s3.PresignQuery(http.MethodPost, "big.bin", url.Values{"uploads": {""}}, time.Minute, time.Now())
+	started := send(http.MethodPost, u, "")
+	upload := started[strings.Index(started, "<UploadId>")+len("<UploadId>") : strings.Index(started, "</UploadId>")]
+	u, _ = s3.PresignQuery(http.MethodPut, "big.bin", url.Values{"partNumber": {"1"}, "uploadId": {upload}}, time.Minute, time.Now())
+	send(http.MethodPut, u, strings.Repeat("p", 100))
+	for range 50 {
+		if got, err := g.Usage(ctx, c.ID); err == nil && got.Uploading == 100 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	s.bucketPass(ctx)
+	if got, err := g.Usage(ctx, c.ID); err != nil || got.Uploading != 100 {
+		t.Fatalf("after a pass the upload holds %d bytes (%v); want its 100 kept", got.Uploading, err)
+	}
+	if l, err := g.Limit(ctx, c.ID); err != nil || l != 1000 {
+		t.Fatalf("after a pass the bucket's limit = %d, %v; want its team's 1000", l, err)
+	}
+}
+
 func TestAllocateBuckets(t *testing.T) {
 	const mib, gib = 1 << 20, 1 << 30
 	free := func(n int64) *bucketRoom { return &bucketRoom{Free: n} }
-	idle := func(size int64) bucketDemand { return bucketDemand{Size: size, Limit: size + gib} }
+	idle := func(size int64) bucketDemand { return bucketDemand{Size: size} }
 	wants := func(size int64) bucketDemand { return bucketDemand{Size: size, Wants: true} }
 	for _, c := range []struct {
 		name string
@@ -427,11 +499,13 @@ func TestAllocateBuckets(t *testing.T) {
 		want []int64
 	}{
 		{"an idle bucket keeps the floor; the one being written to takes the rest",
-			[]bucketDemand{idle(0), wants(5 * gib)}, free(10 * gib), []int64{gib, 5*gib + 9*gib}},
+			[]bucketDemand{idle(0), wants(5 * gib)}, free(10 * gib), []int64{5 * gib / 2, 5*gib + 15*gib/2}},
+		{"an idle bucket keeps its limit while it has room under it",
+			[]bucketDemand{{Size: gib, Limit: gib + 5*gib/2}, wants(0)}, free(10 * gib), []int64{gib + 5*gib/2, 15 * gib / 2}},
 		{"the floor is never more than half the free room shared",
 			[]bucketDemand{idle(0), idle(0), idle(0), idle(0)}, free(8 * mib), []int64{mib, mib, mib, mib}},
 		{"buckets being written to share the rest",
-			[]bucketDemand{wants(0), wants(0), idle(0)}, free(12 * gib), []int64{gib + 4*gib + gib/2, gib + 4*gib + gib/2, gib}},
+			[]bucketDemand{wants(0), wants(0), idle(0)}, free(12 * gib), []int64{5 * gib, 5 * gib, 2 * gib}},
 		{"what a team's share leaves no room for goes to the others",
 			[]bucketDemand{{Size: 20, TeamLimit: 30, Wants: true}, wants(0)}, free(10 * gib), []int64{30, 10*gib - mib}},
 		{"the team's share is tighter than the floor",
@@ -439,7 +513,7 @@ func TestAllocateBuckets(t *testing.T) {
 		{"a bucket past its team's share may take nothing",
 			[]bucketDemand{{Size: 50, TeamLimit: 30}}, free(10 * gib), []int64{30}},
 		{"one that used most of what it had wants more, grown or not",
-			[]bucketDemand{{Size: 100 * mib, Limit: 100*mib + mib}, idle(0)}, free(10 * gib), []int64{100*mib + 9*gib, gib}},
+			[]bucketDemand{{Size: 100 * mib, Limit: 100*mib + mib}, idle(0)}, free(10 * gib), []int64{100*mib + 15*gib/2, 5 * gib / 2}},
 		{"a full store", []bucketDemand{idle(5), wants(0)}, free(0), []int64{5, 1}},
 		{"no room to read keeps a limit, or the team's share when tighter",
 			[]bucketDemand{{Size: 5, Limit: 50}, {Size: 5, Limit: 50, TeamLimit: 30}, {Size: 5}, {Size: 5, TeamLimit: 30}},
