@@ -94,13 +94,7 @@ func WaitForDatabase(ctx context.Context, dsn string, wait time.Duration, log *s
 			}
 			return nil
 		}
-		// A server that answered is the answer, even beside an address that
-		// did not: pgx tries every address a host resolves to and keeps each
-		// one's error, so localhost refused on ::1 and then refusing the login
-		// on 127.0.0.1 carries both.
-		var netErr *net.OpError
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) || !errors.As(err, &netErr) || time.Now().After(deadline) {
+		if !worthWaitingFor(err) || time.Now().After(deadline) {
 			return fmt.Errorf("store: connect: %w", err)
 		}
 		if !logged {
@@ -114,6 +108,24 @@ func WaitForDatabase(ctx context.Context, dsn string, wait time.Duration, log *s
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// worthWaitingFor is whether a failed connection is to a database that is not
+// up yet, rather than one that answered no.
+//
+// A server that answered is the answer, even beside an address that did not:
+// pgx tries every address a host resolves to and keeps each one's error, so
+// localhost refused on ::1 and then refusing the login on 127.0.0.1 carries
+// both. Except two answers that mean "not yet": a server still starting up or
+// recovering (57P03, which a restarting or failing-over Postgres gives for
+// seconds), and one with every connection taken (53300).
+func worthWaitingFor(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "57P03" || pgErr.Code == "53300"
+	}
+	var netErr *net.OpError
+	return errors.As(err, &netErr)
 }
 
 // Migrate applies any pending migrations.
