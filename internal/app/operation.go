@@ -659,6 +659,14 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		// why.
 		repoToken, err = s.gitHubCloneToken(ctx, a)
 	}
+	// The app's variables, for the Dockerfile's ARGs. A variable that cannot
+	// be read fails the build here, said on the build, rather than building
+	// an image without it.
+	var vars map[string]string
+	var redact []string
+	if err == nil {
+		vars, redact, err = s.buildVariables(ctx, op.OwnerID, a)
+	}
 	if err != nil {
 		if finErr := s.finishFencedBuild(ctx, *op, row.ID, BuildFailed, err.Error(), "", ""); finErr != nil {
 			return a, finErr
@@ -671,7 +679,8 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		Dockerfile: a.DockerfilePath,
 		Insecure:   s.images.Insecure(ctx), RegistryAuth: auth,
 		RepoToken: repoToken,
-		Log:       s.buildLogger(ctx, row.ID),
+		Variables: vars, Redact: redact,
+		Log: s.buildLogger(ctx, row.ID),
 	}
 	if uploaded {
 		// The archive is the directory `up` was run in, which is the
@@ -694,6 +703,7 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 	if buildErr != nil {
 		return a, buildErr
 	}
+	s.recordBuildArgs(ctx, row.ID, result)
 	if result.RunAsUser > 0 {
 		if err := s.q.SetAppRunAsUser(ctx, dbgen.SetAppRunAsUserParams{
 			OwnerID: op.OwnerID, ID: a.ID, RunAsUser: result.RunAsUser,

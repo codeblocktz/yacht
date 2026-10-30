@@ -181,6 +181,10 @@ func (s *Service) runBuild(
 	if err != nil {
 		return "", err
 	}
+	vars, redact, err := s.buildVariables(ctx, ownerID, a)
+	if err != nil {
+		return "", err
+	}
 
 	req := orchestrator.BuildRequest{
 		Owner:   orchestrator.OwnerID(ownerID),
@@ -194,6 +198,8 @@ func (s *Service) runBuild(
 
 		Insecure:     s.images.Insecure(ctx),
 		RegistryAuth: auth,
+		Variables:    vars,
+		Redact:       redact,
 		Log:          s.buildLogger(ctx, row.ID),
 	}
 
@@ -224,6 +230,7 @@ func (s *Service) runBuild(
 	if buildErr != nil {
 		return "", buildErr
 	}
+	s.recordBuildArgs(ctx, row.ID, result)
 
 	// What the image runs as, when the build could work it out. Stored on the
 	// app because it is a fact about the image and the deploy needs it every

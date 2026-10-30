@@ -33,7 +33,7 @@ const createBuild = `-- name: CreateBuild :one
 
 INSERT INTO builds (owner_id, app_id, deployment_id, repo_url, repo_ref)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args
 `
 
 type CreateBuildParams struct {
@@ -71,6 +71,7 @@ func (q *Queries) CreateBuild(ctx context.Context, arg CreateBuildParams) (Build
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
@@ -83,7 +84,7 @@ SET status      = $1,
     commit_sha  = $4,
     finished_at = now()
 WHERE id = $5
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args
 `
 
 type FinishBuildParams struct {
@@ -118,12 +119,13 @@ func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
 
 const getBuild = `-- name: GetBuild :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -150,12 +152,13 @@ func (q *Queries) GetBuild(ctx context.Context, arg GetBuildParams) (Build, erro
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
 
 const getBuildForDeployment = `-- name: GetBuildForDeployment :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
 WHERE owner_id = $1 AND deployment_id = $2
 `
 
@@ -182,12 +185,13 @@ func (q *Queries) GetBuildForDeployment(ctx context.Context, arg GetBuildForDepl
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
 
 const getLatestSuccessfulBuildForApp = `-- name: GetLatestSuccessfulBuildForApp :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
 WHERE owner_id = $1 AND app_id = $2
   AND status = 'succeeded' AND commit_sha <> ''
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
@@ -217,12 +221,13 @@ func (q *Queries) GetLatestSuccessfulBuildForApp(ctx context.Context, arg GetLat
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
 
 const getSuccessfulBuildForImage = `-- name: GetSuccessfulBuildForImage :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
 WHERE owner_id = $1 AND app_id = $2
   AND status = 'succeeded' AND commit_sha <> '' AND image = $3
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
@@ -253,12 +258,13 @@ func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccess
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
+		&i.BuildArgs,
 	)
 	return i, err
 }
 
 const listRunningBuilds = `-- name: ListRunningBuilds :many
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name FROM builds WHERE status = 'running' ORDER BY started_at
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds WHERE status = 'running' ORDER BY started_at
 `
 
 // Every build still claiming to run, oldest first. Not owner-scoped: this
@@ -288,6 +294,7 @@ func (q *Queries) ListRunningBuilds(ctx context.Context) ([]Build, error) {
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.JobName,
+			&i.BuildArgs,
 		); err != nil {
 			return nil, err
 		}
@@ -297,6 +304,22 @@ func (q *Queries) ListRunningBuilds(ctx context.Context) ([]Build, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setBuildArgs = `-- name: SetBuildArgs :exec
+UPDATE builds SET build_args = $1::text[] WHERE id = $2
+`
+
+type SetBuildArgsParams struct {
+	BuildArgs []string
+	ID        uuid.UUID
+}
+
+// What the build's Dockerfile declared, recorded once it has pushed. See
+// migration 00074.
+func (q *Queries) SetBuildArgs(ctx context.Context, arg SetBuildArgsParams) error {
+	_, err := q.db.Exec(ctx, setBuildArgs, arg.BuildArgs, arg.ID)
+	return err
 }
 
 const setBuildJob = `-- name: SetBuildJob :exec

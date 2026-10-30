@@ -935,6 +935,19 @@ type BuildRequest struct {
 	SourceURL   string
 	SourceToken string
 
+	// Variables are the app's variables as its deploy will set them,
+	// references resolved and the platform's own included. A Dockerfile gets
+	// those it declares with ARG as build arguments, and a buildpacks build
+	// gets them all as its platform environment, as Railway does. Like
+	// RepoToken they must reach the build without appearing in the Job's
+	// spec, its arguments or the log.
+	Variables map[string]string
+
+	// Redact are values the build log and its error must not show: the
+	// secrets among Variables. A Dockerfile that echoes one would otherwise
+	// put it on the build's page.
+	Redact []string
+
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.
 	Log func(chunk string)
@@ -950,7 +963,16 @@ type BuildResult struct {
 	// build. Zero when it could not be worked out, which leaves the decision
 	// where it was before.
 	RunAsUser int64
+
+	// BuildArgs are the names the Dockerfile declares with ARG, in any stage,
+	// so a deploy can tell whether a changed variable needs a new build.
+	// BuildArgsAll means a buildpacks build, which is given every variable.
+	// Nil when the build did not say.
+	BuildArgs []string
 }
+
+// BuildArgsAll is the BuildArgs of a build given every variable.
+const BuildArgsAll = "*"
 
 // Builder turns a repository into an image.
 //

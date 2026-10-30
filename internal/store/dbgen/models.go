@@ -200,6 +200,7 @@ type Build struct {
 	StartedAt    time.Time
 	FinishedAt   pgtype.Timestamptz
 	JobName      string
+	BuildArgs    []string
 }
 
 type CapacityPolicy struct {

@@ -181,7 +181,7 @@ func TestTheRestartPolicyDecidesWhenACrashFails(t *testing.T) {
 // A Dockerfile path reaches the build as data, and a named Dockerfile that is
 // missing fails the build rather than falling back to buildpacks.
 func TestADockerfilePathReachesTheBuild(t *testing.T) {
-	step := dockerfileStep(orchestrator.BuildRequest{Image: "registry/x:1", Dockerfile: "docker/web.Dockerfile"})
+	step := dockerfileStep(orchestrator.BuildRequest{Image: "registry/x:1", Dockerfile: "docker/web.Dockerfile"}, false)
 	var found bool
 	for _, e := range step.Env {
 		if e.Name == "DOCKERFILE" && e.Value == "docker/web.Dockerfile" {

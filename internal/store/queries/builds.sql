@@ -54,3 +54,8 @@ UPDATE builds SET job_name = @job_name WHERE id = @id;
 -- feeds the reconciler, which is the platform settling its own records rather
 -- than a team reading theirs.
 SELECT * FROM builds WHERE status = 'running' ORDER BY started_at;
+
+-- name: SetBuildArgs :exec
+-- What the build's Dockerfile declared, recorded once it has pushed. See
+-- migration 00074.
+UPDATE builds SET build_args = @build_args::text[] WHERE id = @id;
