@@ -2,12 +2,16 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // freePort is a local port nothing listens on.
@@ -115,5 +119,30 @@ func TestWaitForDatabaseFailsAtOnceOnARefusal(t *testing.T) {
 	}
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("took %s to give up on a refusal, want at once", took)
+	}
+}
+
+// What a server answers decides whether to wait: a Postgres that is starting
+// up, recovering or full says so, and is waited for; one that refused the
+// login or the database has answered, and is not.
+func TestWorthWaitingFor(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nothing listening", refused, true},
+		{"starting up", &pgconn.PgError{Code: "57P03", Message: "the database system is starting up"}, true},
+		{"too many connections", &pgconn.PgError{Code: "53300"}, true},
+		{"a wrong password", &pgconn.PgError{Code: "28P01"}, false},
+		{"no such database", &pgconn.PgError{Code: "3D000"}, false},
+		{"a wrong password beside a refused address",
+			fmt.Errorf("%w; %w", refused, &pgconn.PgError{Code: "28P01"}), false},
+		{"something else", errors.New("tls: bad certificate"), false},
+	} {
+		if got := worthWaitingFor(c.err); got != c.want {
+			t.Errorf("%s: worthWaitingFor = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

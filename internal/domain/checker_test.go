@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -44,6 +45,23 @@ func checkerFor(t *testing.T, res Resolver, router Router, at time.Time) *Checke
 	return c
 }
 
+// dbNow is the database's clock, for a test's "now".
+//
+// A claim is due at the database's now() when it is made, and the checker
+// compares that with the time it is handed. Handed this process's clock, a
+// claim made a moment ago is still in the future wherever the database's clock
+// runs ahead of it — Postgres in Docker Desktop's VM runs tens of milliseconds
+// ahead of macOS — and nothing is due. CI's database shares the runner's
+// clock, so there the two agree and the tests passed.
+func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("database clock: %v", err)
+	}
+	return now
+}
+
 // The behaviour the whole phase exists for: a claim proves itself, with nobody
 // pressing anything.
 func TestAClaimProvesItselfWithoutBeingAsked(t *testing.T) {
@@ -60,7 +78,7 @@ func TestAClaimProvesItselfWithoutBeingAsked(t *testing.T) {
 
 	router := &fakeRouter{}
 	res := fakeResolver{cname: map[string]string{"shop.auto.test": "edge.domain.test."}}
-	checker := checkerFor(t, res, router, time.Now())
+	checker := checkerFor(t, res, router, dbNow(t, pool))
 
 	if err := checker.Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
@@ -100,7 +118,7 @@ func TestAClaimWithNoRecordSettlesIntoWaiting(t *testing.T) {
 
 	router := &fakeRouter{}
 	res := fakeResolver{addrs: map[string][]string{"edge.domain.test": {"198.51.100.1"}}}
-	if err := checkerFor(t, res, router, time.Now()).Pass(ctx); err != nil {
+	if err := checkerFor(t, res, router, dbNow(t, pool)).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
 	}
 
@@ -137,7 +155,7 @@ func TestAMisdirectedDomainRecordsWhereItPoints(t *testing.T) {
 			"edge.domain.test": {"198.51.100.1"},
 		},
 	}
-	if err := checkerFor(t, res, &fakeRouter{}, time.Now()).Pass(ctx); err != nil {
+	if err := checkerFor(t, res, &fakeRouter{}, dbNow(t, pool)).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
 	}
 
@@ -167,7 +185,7 @@ func TestADomainIsNotCalledRoutedUntilTheApplyTakes(t *testing.T) {
 
 	res := fakeResolver{cname: map[string]string{"shop.noapply.test": "edge.domain.test."}}
 	broken := &fakeRouter{fail: true}
-	if err := checkerFor(t, res, broken, time.Now()).Pass(ctx); err != nil {
+	if err := checkerFor(t, res, broken, dbNow(t, pool)).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
 	}
 
@@ -179,7 +197,7 @@ func TestADomainIsNotCalledRoutedUntilTheApplyTakes(t *testing.T) {
 	// The next pass can request convergence again, but only observed workload
 	// metadata may promote the domain to routed.
 	working := &fakeRouter{}
-	later := checkerFor(t, res, working, time.Now().Add(time.Hour))
+	later := checkerFor(t, res, working, dbNow(t, pool).Add(time.Hour))
 	if err := later.Pass(ctx); err != nil {
 		t.Fatalf("second Pass: %v", err)
 	}
@@ -213,7 +231,7 @@ func TestTheCheckerWithdrawsADomainThatDrifts(t *testing.T) {
 
 	working := fakeResolver{cname: map[string]string{"shop.checkdrift.test": "edge.domain.test."}}
 	router := &fakeRouter{}
-	if err := checkerFor(t, working, router, time.Now()).Pass(ctx); err != nil {
+	if err := checkerFor(t, working, router, dbNow(t, pool)).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
 	}
 	if _, err := q.MarkVerifiedDomainsRoutedForApp(ctx,
@@ -228,7 +246,7 @@ func TestTheCheckerWithdrawsADomainThatDrifts(t *testing.T) {
 	// resolves, which is what makes this their change rather than our outage.
 	deleted := fakeResolver{addrs: map[string][]string{"edge.domain.test": {"198.51.100.1"}}}
 	// Well past the settled re-check interval, so the row is due again.
-	future := time.Now().Add(settledRecheck + time.Hour)
+	future := dbNow(t, pool).Add(settledRecheck + time.Hour)
 	if err := checkerFor(t, deleted, router, future).Pass(ctx); err != nil {
 		t.Fatalf("drift Pass: %v", err)
 	}
@@ -260,7 +278,7 @@ func TestASettledDomainIsNotRecheckedImmediately(t *testing.T) {
 
 	res := fakeResolver{cname: map[string]string{"shop.settled.test": "edge.domain.test."}}
 	router := &fakeRouter{}
-	at := time.Now()
+	at := dbNow(t, pool)
 
 	if err := checkerFor(t, res, router, at).Pass(ctx); err != nil {
 		t.Fatalf("Pass: %v", err)
@@ -288,7 +306,7 @@ func TestClaimingLeasesARowAwayFromOtherCheckers(t *testing.T) {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
-	at := time.Now()
+	at := dbNow(t, pool)
 	first, err := q.ClaimDomainsDueForCheck(ctx, dbgen.ClaimDomainsDueForCheckParams{
 		DueBefore: at, LeaseUntil: at.Add(checkLease), Lim: checkBatch,
 	})
@@ -325,7 +343,7 @@ func TestTheCheckerIgnoresPlatformHostnames(t *testing.T) {
 		t.Fatalf("EnsureManaged: %v", err)
 	}
 
-	at := time.Now()
+	at := dbNow(t, pool)
 	claimed, err := q.ClaimDomainsDueForCheck(ctx, dbgen.ClaimDomainsDueForCheckParams{
 		DueBefore: at, LeaseUntil: at.Add(checkLease), Lim: checkBatch,
 	})
