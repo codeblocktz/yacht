@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -790,37 +792,133 @@ func (s *Service) rolloutBudget(release Release) time.Duration {
 
 // readiness is what a release's pods must pass to be ready: its health check
 // when it has one, and otherwise a connection to its port; neither for one
-// with no port, which is ready when it starts.
+// with no port, which is ready when it starts. portVar is the PORT the
+// release sets for itself, which then wins over the one datahuru would give
+// it ("secret" when it is a secret, whose value is not ours to read).
 type readiness struct {
 	healthPath string
 	port       int32
+	portVar    string
 }
 
 func readinessOf(r Release) readiness {
-	return readiness{healthPath: r.HealthPath, port: r.Port}
+	ready := readiness{healthPath: r.HealthPath, port: r.Port, portVar: r.Env["PORT"]}
+	if slices.Contains(r.SecretKeys, "PORT") {
+		ready.portVar = "secret"
+	}
+	return ready
 }
+
+// readinessLogTail is how many lines of the new version's output a failed
+// readiness check quotes: enough for the error a process died with, few
+// enough that the message stays a message.
+const readinessLogTail = 5
 
 // rolloutTimedOut is a rollout that ran out of budget, saying which budget
 // when it was the app's own: "not ready within 30s" points at the setting
-// somebody chose, where "timed out" leaves them to remember it. And saying
-// what was not passing, so there is something to go and look at: the health
-// check's path, or the port nothing was listening on.
-func (s *Service) rolloutTimedOut(budget time.Duration, ready readiness, reason string) error {
+// somebody chose, where "timed out" leaves them to remember it.
+//
+// A readiness check that never passed is said in plain words with what to
+// change, as Railway does, because the cluster's own reason ("0/1 replicas
+// ready") says only that it failed: the port the check knocked on and the
+// PORT the app was given, the health check's path, whether the old version
+// is still serving, and how the new one last exited and what it printed,
+// which is most often the answer.
+func (s *Service) rolloutTimedOut(
+	ctx context.Context, a App, budget time.Duration, ready readiness, status orchestrator.AppStatus,
+) error {
+	reason := rolloutReason(status)
 	within := budget.String()
 	if budget != s.opts.RolloutTimeout {
 		within = "the healthcheck timeout of " + within
 	}
-	switch {
-	case ready.healthPath != "":
-		return fmt.Errorf("app: rollout verification timed out: the health check at %s did not pass within %s: %s",
-			ready.healthPath, within, reason)
-	case ready.port > 0:
-		return fmt.Errorf("app: rollout verification timed out: nothing was listening on port %d within %s: %s",
-			ready.port, within, reason)
-	case budget != s.opts.RolloutTimeout:
-		return fmt.Errorf("app: rollout verification timed out: not ready within %s: %s", within, reason)
+	if ready.healthPath == "" && ready.port <= 0 {
+		if budget != s.opts.RolloutTimeout {
+			return fmt.Errorf("app: rollout verification timed out: not ready within %s: %s", within, reason)
+		}
+		return fmt.Errorf("app: rollout verification timed out: %s", reason)
 	}
-	return fmt.Errorf("app: rollout verification timed out: %s", reason)
+
+	serving := "so nothing is serving yet."
+	if a.ActiveReleaseID != nil {
+		serving = "so the previous version is still serving."
+	}
+	listen := fmt.Sprintf("Make your app listen on $PORT (%d)", ready.port)
+	switch ready.portVar {
+	case "", strconv.Itoa(int(ready.port)):
+	case "secret":
+		listen = fmt.Sprintf("Your PORT secret is used instead of %d: make it %d, or remove it, and make your app listen on $PORT",
+			ready.port, ready.port)
+	default:
+		listen = fmt.Sprintf("Your PORT variable is %s, but traffic and the check go to port %d: remove PORT, or set the port in Settings to %s",
+			ready.portVar, ready.port, ready.portVar)
+	}
+
+	var lines []string
+	if ready.healthPath != "" {
+		lines = append(lines,
+			fmt.Sprintf("app: The new version's health check at %s never passed within %s, %s", ready.healthPath, within, serving),
+			fmt.Sprintf("%s, and make %s answer with a 2xx once it is up, or change the health check path in Settings.",
+				listen, ready.healthPath))
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("app: The new version never answered on port %d within %s, %s", ready.port, within, serving),
+			fmt.Sprintf("%s, or set the port in Settings to the one it listens on.", listen))
+	}
+	if status.LastExit != "" {
+		lines = append(lines, "It last exited with "+status.LastExit+".")
+	}
+	lines = append(lines, "Rollout: "+reason)
+	if output := s.newVersionOutput(ctx, a); len(output) > 0 {
+		lines = append(lines, "Its last output:")
+		lines = append(lines, output...)
+	}
+	return errors.New(strings.Join(lines, "\n"))
+}
+
+// newVersionOutput is the last few lines a release's new pod printed, for a
+// deploy that failed because of it; nil when there is none, or it cannot be
+// read. Best effort: the deploy has failed either way, and a log the cluster
+// is slow to give is not worth holding the failure up for.
+//
+// The new pod is the newest of the app's pods that is not ready, which is
+// the one the rollout waited on: the old version's are ready, and serving.
+// A pod that has restarted is read from its last run, which is the one that
+// died and so the one with the reason in it.
+func (s *Service) newVersionOutput(ctx context.Context, a App) []string {
+	read, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pods, err := s.orch.Pods(read, orchestrator.PodListOptions{
+		Namespace: a.Namespace, ManagedOnly: true, Owner: orchestrator.OwnerID(a.OwnerID),
+	})
+	if err != nil {
+		return nil
+	}
+	var newest *orchestrator.PodInfo
+	for i, p := range pods {
+		if p.App != a.Name || (p.Total > 0 && p.Ready >= p.Total) {
+			continue
+		}
+		if newest == nil || p.CreatedAt.After(newest.CreatedAt) {
+			newest = &pods[i]
+		}
+	}
+	if newest == nil {
+		return nil
+	}
+	got, err := s.orch.Logs(read, orchestrator.LogOptions{
+		Namespace: newest.Namespace, Pod: newest.Name, Tail: readinessLogTail, Previous: newest.Restarts > 0,
+	})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, l := range got {
+		if text := strings.TrimRight(l.Text, " \r\n"); text != "" {
+			out = append(out, "  "+text)
+		}
+	}
+	return out
 }
 
 func (s *Service) verifyRollout(
@@ -855,7 +953,7 @@ func (s *Service) verifyRollout(
 			switch {
 			case healthy && healthySince.IsZero():
 				if time.Since(started) > budget {
-					return s.rolloutTimedOut(budget, ready, rolloutReason(status))
+					return s.rolloutTimedOut(ctx, a, budget, ready, status)
 				}
 				healthySince, restarts = time.Now(), status.Restarts
 			case !healthySince.IsZero() && status.Restarts > restarts:
@@ -881,7 +979,7 @@ func (s *Service) verifyRollout(
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return s.rolloutTimedOut(budget, ready, rolloutReason(last))
+			return s.rolloutTimedOut(ctx, a, budget, ready, last)
 		case <-ticker.C:
 		}
 	}
@@ -928,7 +1026,7 @@ func (s *Service) verifyRecoveredRollout(
 	if status.Terminal {
 		return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
 	}
-	return s.rolloutTimedOut(budget, ready, rolloutReason(status))
+	return s.rolloutTimedOut(ctx, a, budget, ready, status)
 }
 
 func (s *Service) executeOperation(ctx context.Context, op Operation) error {

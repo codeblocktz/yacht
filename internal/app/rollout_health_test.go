@@ -329,8 +329,11 @@ func TestADeployThatNeverListensFailsNamingThePort(t *testing.T) {
 		t.Fatal("a deploy that never became ready succeeded")
 	}
 	d := deploymentOf(t, s, ownerID, a.ID)
-	if d.Status != DeployFailed || !strings.Contains(d.Message, "nothing was listening on port 8080") {
+	if d.Status != DeployFailed || !strings.Contains(d.Message, "never answered on port 8080") {
 		t.Fatalf("deployment = %s %q, want failed naming port 8080", d.Status, d.Message)
+	}
+	if !strings.Contains(d.Message, "nothing is serving yet") || !strings.Contains(d.Message, "listen on $PORT (8080)") {
+		t.Fatalf("a first deploy's failure = %q, want it to say nothing serves yet and what to listen on", d.Message)
 	}
 	if got := events.kinds(); len(got) != 1 || got[0] != EventDeployFailed {
 		t.Fatalf("events = %v, want just %s", got, EventDeployFailed)
@@ -454,5 +457,110 @@ func TestAScaleOnlyReleaseVerifiesOnceTheReplicasAreUp(t *testing.T) {
 	}
 	if got := events.kinds(); len(got) != 1 || got[0] != EventDeploySucceeded {
 		t.Fatalf("events = %v, want just %s", got, EventDeploySucceeded)
+	}
+}
+
+// logsOrchestrator is a rollout script whose cluster has two of the app's
+// pods, the old version's, ready, and the new version's, which restarted, and
+// the output of the new one's last run.
+type logsOrchestrator struct {
+	*rolloutScriptOrchestrator
+	mu    sync.Mutex
+	asked []orchestrator.LogOptions
+}
+
+func (o *logsOrchestrator) Pods(context.Context, orchestrator.PodListOptions) ([]orchestrator.PodInfo, error) {
+	now := time.Now()
+	return []orchestrator.PodInfo{
+		{Name: "web-old", Namespace: "ns", App: "web", Ready: 1, Total: 1, CreatedAt: now.Add(-time.Hour)},
+		{Name: "web-new", Namespace: "ns", App: "web", Ready: 0, Total: 1, Restarts: 2, CreatedAt: now},
+		{Name: "db-new", Namespace: "ns", App: "db", Ready: 0, Total: 1, CreatedAt: now.Add(time.Minute)},
+	}, nil
+}
+
+func (o *logsOrchestrator) Logs(_ context.Context, opts orchestrator.LogOptions) ([]orchestrator.LogLine, error) {
+	o.mu.Lock()
+	o.asked = append(o.asked, opts)
+	o.mu.Unlock()
+	return []orchestrator.LogLine{
+		{Text: "starting server"},
+		{Text: "listening on 0.0.0.0:3000\n"},
+	}, nil
+}
+
+// A redeploy that never passes its readiness check says what to fix: the
+// port datahuru checked and a PORT that disagrees with it, or the health
+// check's path; that the previous version is still serving; and how the new
+// version last exited and what it printed.
+func TestAFailedReadinessCheckSaysWhatToFix(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, s *Service, ctx context.Context, ownerID string)
+		want []string
+	}{{
+		name: "a PORT that is not the port",
+		set: func(t *testing.T, s *Service, ctx context.Context, ownerID string) {
+			if err := s.SetVariable(ctx, ownerID, "web", VariableInput{Key: "PORT", Value: "3000"}); err != nil {
+				t.Fatalf("SetVariable: %v", err)
+			}
+		},
+		want: []string{
+			"The new version never answered on port 8080 within the healthcheck timeout of 1s, so the previous version is still serving.",
+			"Your PORT variable is 3000, but traffic and the check go to port 8080: remove PORT, or set the port in Settings to 3000",
+		},
+	}, {
+		name: "a health check",
+		set: func(t *testing.T, s *Service, ctx context.Context, ownerID string) {
+			if err := s.SetHealth(ctx, ownerID, "web", "/healthz", false); err != nil {
+				t.Fatalf("SetHealth: %v", err)
+			}
+		},
+		want: []string{
+			"The new version's health check at /healthz never passed within the healthcheck timeout of 1s, so the previous version is still serving.",
+			"Make your app listen on $PORT (8080), and make /healthz answer with a 2xx once it is up",
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, base, pool := testService(t, settleOptions(&recordedEvents{}))
+			ownerID := owner(t, s, pool, "rollout-what-to-fix")
+			prior, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+				Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+			})
+			if err != nil {
+				t.Fatalf("first deploy: %v", err)
+			}
+			if _, err := pool.Exec(ctx, `UPDATE apps SET health_timeout_seconds = 1 WHERE id = $1`, prior.ID); err != nil {
+				t.Fatalf("set the healthcheck timeout: %v", err)
+			}
+			orch := &logsOrchestrator{rolloutScriptOrchestrator: &rolloutScriptOrchestrator{
+				recordingOrchestrator: base, statuses: []orchestrator.AppStatus{
+					crashedStatus(2, "code 1 (Error)"),
+				},
+			}}
+			s.orch = orch
+			tc.set(t, s, ctx, ownerID)
+			if err := executeNamedOperation(s, ctx, ownerID, "web"); err == nil {
+				t.Fatal("a redeploy that never became ready succeeded")
+			}
+			d := deploymentOf(t, s, ownerID, prior.ID)
+			if d.Status != DeployFailed {
+				t.Fatalf("deployment = %s %q, want failed", d.Status, d.Message)
+			}
+			want := append(tc.want,
+				"It last exited with code 1 (Error).",
+				"Its last output:\n  starting server\n  listening on 0.0.0.0:3000")
+			for _, w := range want {
+				if !strings.Contains(d.Message, w) {
+					t.Errorf("message = %q\nwant it to contain %q", d.Message, w)
+				}
+			}
+			orch.mu.Lock()
+			defer orch.mu.Unlock()
+			if len(orch.asked) != 1 || orch.asked[0].Pod != "web-new" || !orch.asked[0].Previous ||
+				orch.asked[0].Tail != readinessLogTail {
+				t.Fatalf("logs read = %+v, want the new pod's last run, %d lines", orch.asked, readinessLogTail)
+			}
+		})
 	}
 }
