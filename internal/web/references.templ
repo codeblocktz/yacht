@@ -97,3 +97,27 @@ templ addReference(d AppDetailData) {
 		</div>
 	</div>
 }
+
+// referrersWarning lists, above a delete, the variables of other services
+// that refer to the one being deleted. Railway warns the same way; without
+// it the delete went through quietly and the other app's Variables went on
+// showing the reference as though it were good.
+templ referrersWarning(refs []app.Referrer) {
+	if len(refs) > 0 {
+		<div class="callout callout-warn mt-3" data-referrers>
+			<div class="min-w-0">
+				<div class="font-medium">Other services refer to this one</div>
+				<p class="mt-0.5 text-muted-foreground">
+					These variables stop resolving, and each service's next deploy fails until they are changed:
+				</p>
+				<ul class="mt-1.5 space-y-0.5">
+					for _, r := range refs {
+						<li>
+							<a class="mono hover:underline" href={ templ.URL("/apps/" + r.App + "/variables") }>{ r.App } · { r.Key }</a>
+						</li>
+					}
+				</ul>
+			</div>
+		</div>
+	}
+}

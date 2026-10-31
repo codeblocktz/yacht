@@ -219,7 +219,7 @@ templ appPanelBody(d AppDetailData) {
 				if d.App.Environment() != app.DefaultEnvironment {
 					<span class="tag">{ d.App.Environment() }</span>
 				}
-				@appStatus(d.App)
+				@servicePill(d.App)
 			</span>
 		}
 		if d.App.Host != "" {

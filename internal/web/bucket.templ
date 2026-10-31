@@ -265,6 +265,7 @@ templ bucketSettings(d AppDetailData) {
 				Deletes every file in it and its key. Apps that read it get errors from then on.
 				Not reversible.
 			</p>
+			@referrersWarning(d.Referrers)
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/delete") }
@@ -286,7 +287,7 @@ templ bucketSettings(d AppDetailData) {
 				<button
 					class="btn btn-danger"
 					type="submit"
-					data-confirm="This deletes the bucket, every file in it, and its key. This cannot be undone."
+					data-confirm={ deleteConfirm("This deletes the bucket, every file in it, and its key. This cannot be undone.", d.Referrers) }
 					data-confirm-title={ "Delete " + a.Name + "?" }
 					data-confirm-label="Delete bucket"
 				>Delete bucket</button>

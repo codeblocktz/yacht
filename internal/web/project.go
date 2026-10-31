@@ -228,6 +228,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachRegion(ctx, d)
 	s.attachProjects(ctx, d)
 	s.attachReferenceTargets(ctx, d)
+	s.attachReferrers(ctx, d)
 	s.attachBucket(ctx, d)
 	d.Stages = s.stages()
 	d.VersionCheck = s.databaseReleases() != nil && a.Source == app.SourcePostgres &&
@@ -378,13 +379,16 @@ func (s *Server) projectStatus(w http.ResponseWriter, r *http.Request) {
 	type card struct {
 		Label string `json:"label"`
 		Class string `json:"class"`
-		Host  string `json:"host"`
-		Href  string `json:"href"`
+		// Pill is Class for the open panel's heading: see serviceStatus.
+		Pill string `json:"pill"`
+		Host string `json:"host"`
+		Href string `json:"href"`
 	}
 	out := map[string]card{}
 	for _, a := range apps {
 		label, class := cardStatus(a)
-		out[a.Name] = card{Label: label, Class: class, Host: a.Host, Href: cardHref(a)}
+		_, pill := serviceStatus(a)
+		out[a.Name] = card{Label: label, Class: class, Pill: pill, Host: a.Host, Href: cardHref(a)}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
