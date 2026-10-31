@@ -220,6 +220,8 @@ func (s *Server) mailStranger(ctx context.Context, email string) {
 		Subject:  "Your " + s.wakerBrand + " sign-in",
 		TextBody: strangerBody(s.wakerBrand, s.baseHost(), s.requestAccess),
 		Reason:   signInReason(s.baseHost()),
+		// Somebody new, told how to get in: the product's introduction.
+		Introduces: true,
 	}); err != nil {
 		s.log.Error("send no-account notice",
 			slog.String("to", email), slog.String("error", err.Error()))
@@ -238,11 +240,12 @@ func (s *Server) mailSignupLink(ctx context.Context, email string) {
 	}
 	link := s.baseURL + "/sign-up/" + raw
 	if err := s.mailer.Send(ctx, notify.Message{
-		To:       email,
-		Subject:  "Create your " + s.wakerBrand + " account",
-		TextBody: signUpBody(s.wakerBrand, s.baseHost(), link, s.magicTTL),
-		Action:   &notify.Action{Label: "Create your " + s.wakerBrand + " account", URL: link},
-		Reason:   signInReason(s.baseHost()),
+		To:         email,
+		Subject:    "Create your " + s.wakerBrand + " account",
+		TextBody:   signUpBody(s.wakerBrand, s.baseHost(), link, s.magicTTL),
+		Action:     &notify.Action{Label: "Create your " + s.wakerBrand + " account", URL: link},
+		Reason:     signInReason(s.baseHost()),
+		Introduces: true,
 	}); err != nil {
 		s.log.Error("send sign-up link",
 			slog.String("to", email), slog.String("error", err.Error()))
@@ -769,8 +772,9 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 				link + "\n\n" +
 				"The link works once and expires in " + notify.Duration(s.magicTTL) + ".\n\n" +
 				"If you were not expecting this, you can ignore this mail: nothing has changed.\n",
-			Action: &notify.Action{Label: "Accept the invitation", URL: link},
-			Reason: "You're receiving this because an invitation to this address was opened at " + s.baseHost() + ".",
+			Action:     &notify.Action{Label: "Accept the invitation", URL: link},
+			Reason:     "You're receiving this because an invitation to this address was opened at " + s.baseHost() + ".",
+			Introduces: true,
 		}
 		if err := s.mailer.Send(ctx, msg); err != nil {
 			s.log.Error("send invitation sign-in link", slog.String("error", err.Error()))

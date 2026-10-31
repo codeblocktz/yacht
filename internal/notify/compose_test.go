@@ -92,3 +92,33 @@ func TestSMTPSendsTextAndHTMLWithAReplyTo(t *testing.T) {
 		}
 	}
 }
+
+// The install's introduction ends the mails that introduce the product, and
+// only those: a sign-in link or a bill goes out as it was written.
+func TestWithBrandingIntroducesTheProductToNewcomersOnly(t *testing.T) {
+	var got Message
+	m := WithBranding(MailerFunc(func(_ context.Context, msg Message) error { got = msg; return nil }),
+		Footer{Brand: "Acme (preview)", Intro: "Acme is new: tell us what you need."}, "")
+
+	_ = m.Send(context.Background(), Message{To: "a@b.test", Subject: "s", TextBody: "Welcome.\n", Introduces: true})
+	want := "Welcome.\n\nAcme is new: tell us what you need.\n\n-- \nAcme (preview)\n"
+	if got.Text() != want {
+		t.Errorf("an introduction = %q, want %q", got.Text(), want)
+	}
+	if !strings.Contains(got.HTML(), "Acme is new: tell us what you need.") {
+		t.Error("the HTML part leaves the introduction out")
+	}
+
+	_ = m.Send(context.Background(), Message{To: "a@b.test", Subject: "s", TextBody: "Your link."})
+	if strings.Contains(got.Text(), "Acme is new") {
+		t.Errorf("a transactional mail carries the introduction: %q", got.Text())
+	}
+
+	// No introduction set: an introducing mail is left as written.
+	m = WithBranding(MailerFunc(func(_ context.Context, msg Message) error { got = msg; return nil }),
+		Footer{Brand: "Acme"}, "")
+	_ = m.Send(context.Background(), Message{To: "a@b.test", Subject: "s", TextBody: "Welcome.", Introduces: true})
+	if got.TextBody != "Welcome." {
+		t.Errorf("with no introduction the body became %q", got.TextBody)
+	}
+}

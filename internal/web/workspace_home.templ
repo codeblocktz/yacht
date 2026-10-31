@@ -88,6 +88,7 @@ templ WorkspaceHome(d WorkspaceHomeData) {
 								<input class="control h-8 w-[200px]" name="name" placeholder="My project" aria-label="Project name" required/>
 								<button class="btn btn-primary btn-sm" type="submit">Create project</button>
 							</form>
+							@productNote(d.Note)
 						}
 					</div>
 				</div>

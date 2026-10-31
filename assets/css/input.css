@@ -1117,6 +1117,18 @@
            font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2
            focus-visible:ring-ring/50;
   }
+  /* Slots.BrandBadge beside the product's name: a small neutral outline,
+     the same in the sidebar and above the signed-out card. Never the brand
+     colour, which means "press me". */
+  .brand-badge {
+    @apply inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-px
+           text-[10.5px] font-medium leading-[14px] tracking-normal text-muted-foreground
+           whitespace-nowrap;
+  }
+  /* Slots.ProductNote, under the signed-out card and in an empty workspace. */
+  .product-note {
+    @apply mt-4 text-center text-[12px] leading-5 text-muted-foreground text-pretty;
+  }
   .auth-card {
     @apply rounded-xl border border-border bg-card p-6 shadow-sm;
   }

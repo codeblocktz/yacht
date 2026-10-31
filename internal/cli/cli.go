@@ -44,6 +44,18 @@ type Brand struct {
 	// token in CI, <PREFIX>_HOST for the install, <PREFIX>_APP for the app.
 	EnvPrefix string
 	Version   string
+	// Stage is the product's release stage, said after its name in the
+	// version and the help: "beta" prints "datahuru v1.2.3 (beta)". Empty
+	// says nothing.
+	Stage string
+}
+
+// stage is Brand.Stage as it follows the name: " (beta)", or nothing.
+func (b Brand) stage() string {
+	if s := strings.TrimSpace(b.Stage); s != "" {
+		return " (" + s + ")"
+	}
+	return ""
 }
 
 // withDefaults fills what a Brand left empty from its Name.
@@ -127,7 +139,7 @@ func Run(ctx context.Context, b Brand, args []string, env Env) int {
 	case "open":
 		err = r.open(ctx, rest)
 	case "version", "--version", "-v":
-		fmt.Fprintf(r.out, "%s %s\n", b.Name, b.Version)
+		fmt.Fprintf(r.out, "%s %s%s\n", b.Name, b.Version, b.stage())
 	case "help", "--help", "-h":
 		r.usage()
 	default:
@@ -194,7 +206,7 @@ func (r *runner) fill() {
 
 func (r *runner) usage() {
 	n := r.brand.Name
-	fmt.Fprintf(r.out, `%[1]s — deploy to %[2]s from your terminal
+	fmt.Fprintf(r.out, `%[1]s%[4]s — deploy to %[2]s from your terminal
 
 Usage:
   %[1]s login [--host URL] [--token TOKEN]   sign in, through the browser or with a token
@@ -214,7 +226,7 @@ Usage:
 
 In CI, set %[3]s_TOKEN to a token from Team › API tokens or a project's settings,
 and %[3]s_HOST to the dashboard's address.
-`, n, r.brand.Product, r.brand.EnvPrefix)
+`, n, r.brand.Product, r.brand.EnvPrefix, r.brand.stage())
 }
 
 // userConfig is what login keeps: the host and the token. The file is the

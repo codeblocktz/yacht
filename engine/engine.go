@@ -435,6 +435,17 @@ type Overrides struct {
 	// invitation links. Empty is the engine's own name.
 	WakerBrand string
 
+	// MailBrand is the name every mail's footer signs with, when it should
+	// say more than WakerBrand: "datahuru (beta)", say, while the subjects,
+	// the From name and the waking-up page keep the plain name. Empty is
+	// WakerBrand.
+	MailBrand string
+
+	// MailIntro is a paragraph for the end of the mails that introduce the
+	// product to somebody new — a sign-up link, an invitation, and a
+	// wrapper's own welcome when it marks it Introduces. Empty adds nothing.
+	MailIntro string
+
 	// PlatformVariablePrefix begins the variables every app is given at
 	// deploy — PUBLIC_DOMAIN, PRIVATE_DOMAIN, SERVICE_NAME, PROJECT_NAME — so
 	// a product names them after itself: "DATAHURU_" gives an app
@@ -587,9 +598,10 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		// composed it — the engine or the product wrapping it.
 		e.MailStatus = mailstatus.New(e.Pool, log)
 		e.Mailer = notify.WithBranding(e.MailStatus.Wrap(e.Mailer), notify.Footer{
-			Brand:   cmp.Or(ov.WakerBrand, web.DefaultBrandName),
+			Brand:   cmp.Or(ov.MailBrand, ov.WakerBrand, web.DefaultBrandName),
 			Company: cfg.MailCompany,
 			Website: cfg.MailWebsite,
+			Intro:   ov.MailIntro,
 		}, cmp.Or(cfg.MailReplyTo, cfg.CloudflareEmailReplyTo))
 	}
 

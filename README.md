@@ -533,7 +533,14 @@ Everything commercial belongs in the wrapper: `make verify` refuses a tenant,
 subscription, invoice or wallet declared in the engine.
 
 Two things in the chrome are worth knowing. `Slots.BrandMark` replaces Yacht's
-mark beside your `BrandName` (`templ.NopComponent` for a wordmark alone). And
+mark beside your `BrandName` (`templ.NopComponent` for a wordmark alone);
+`Slots.BrandBadge` draws a word beside the name as a small outlined chip, such
+as a release stage, and `Slots.ProductNote` is a line said where the dashboard
+introduces the product: under the signed-out card and on a new team's empty
+projects page. The mail has the same pair: `Overrides.MailBrand` is the name
+the footer signs with, and `Overrides.MailIntro` a paragraph at the end of the
+mails that introduce the product (`Message.Introduces`), and the CLI takes a
+`Stage` after its version (`-X main.stage=…`). And
 while an operator is acting as a team, the engine draws its acting notice above
 whatever `Slots.Banner` you set — it composes with your banner and cannot be
 replaced by it. `Surfaces.ActingAs` says whether a request is acting, for
