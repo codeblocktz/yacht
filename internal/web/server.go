@@ -420,6 +420,13 @@ type Options struct {
 	// linked from the sign-in page when sign-up is not open.
 	RequestAccessURL string
 
+	// SignUpLead is the line under the sign-up page's title, and SignUpNext
+	// the one under its button saying what happens after it is pressed — a
+	// product that verifies a phone next says so. Empty is the engine's own
+	// (DefaultSignUpLead, DefaultSignUpNext).
+	SignUpLead string
+	SignUpNext string
+
 	// Turnstile checks that the sign-in forms — the link form is also open
 	// sign-up's — were sent by a person. Nil, or one without keys, checks
 	// nothing.
@@ -548,6 +555,8 @@ type Server struct {
 	bootstrapEmail string
 	openSignup     bool
 	requestAccess  string
+	signUpLead     string
+	signUpNext     string
 	turnstile      *turnstile.Verifier
 
 	// mailTransport names how links are delivered, purely so the settings page
@@ -689,6 +698,8 @@ func New(opts Options) (*Server, error) {
 		openSignup:     opts.OpenSignup,
 		turnstile:      opts.Turnstile,
 		requestAccess:  opts.RequestAccessURL,
+		signUpLead:     opts.SignUpLead,
+		signUpNext:     opts.SignUpNext,
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		mailStatus:     opts.MailStatus,
 		signInLimit:    newAttemptLimiter(signInWindow),
@@ -775,6 +786,11 @@ func (s *Server) Handler() http.Handler {
 		// mailed with open sign-up, and refused like a spent link once sign-up
 		// is closed, so closing it also closes the links already in mailboxes.
 		r.Get("/sign-up/{token}", s.signUpCallback)
+		// The page somebody new starts on, open sign-up's. Its form posts
+		// here, not to /sign-in, so csrfProtect checks its origin in full:
+		// the origin-less exemption stays the CLI's alone.
+		r.Get("/sign-up", s.signUpPage)
+		r.Post("/sign-up", s.signUpRequest)
 
 		// Outside the authenticated group because the point of an invitation is
 		// that the person following it may not have an account yet. The handler

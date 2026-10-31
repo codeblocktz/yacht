@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -127,14 +128,28 @@ func (s *Server) signInPage(w http.ResponseWriter, r *http.Request) {
 // a registered and an unregistered address happens inside the floor and is
 // visible only in the mailbox of whoever owns the address.
 func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
+	s.requestLink(w, r, "/sign-in", func(status int, email, msg string) {
+		s.renderSignIn(w, r, status, s.signInForm(SignInData{Email: email, Error: msg}))
+	})
+}
+
+// requestLink is what both link forms do, the sign-in page's and the sign-up
+// page's: check the address, count the attempt, check the bot check, refuse a
+// throwaway mailbox, and mail inside the floor. One path, so the two pages
+// cannot drift apart on any of those — and so the sign-up page answers an
+// address that already has an account exactly as it answers a new one, the
+// sign-in link going to the first and the sign-up link to the second.
+//
+// refuse draws the page the form was on with its error; back is where Check
+// your mail offers to start again.
+func (s *Server) requestLink(
+	w http.ResponseWriter, r *http.Request, back string, refuse func(status int, email, msg string),
+) {
 	email, err := parseEmail(r.FormValue("email"))
 	if err != nil {
 		// Answered without the floor on purpose: malformed input is a mistake
 		// the visitor can already see, not a fact about who has an account.
-		s.renderSignIn(w, r, http.StatusUnprocessableEntity, s.signInForm(SignInData{
-			Email: r.FormValue("email"),
-			Error: err.Error(),
-		}))
+		refuse(http.StatusUnprocessableEntity, r.FormValue("email"), err.Error())
 		return
 	}
 
@@ -147,21 +162,15 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	if !addressOK || !clientOK {
 		// Refusal depends on the attempt count and never on whether the address
 		// exists, so saying so plainly leaks nothing.
-		s.renderSignIn(w, r, http.StatusTooManyRequests, s.signInForm(SignInData{
-			Email: email,
-			Error: "Too many sign-in attempts. Try again in a few minutes.",
-		}))
+		refuse(http.StatusTooManyRequests, email, "Too many attempts. Try again in a few minutes.")
 		return
 	}
 
 	// After the counters, so a bot spinning on the form spends its budget
 	// rather than one siteverify call per attempt.
 	if err := s.turnstile.VerifyRequest(r, clientIP(r)); err != nil {
-		s.log.Info("sign-in form refused by the bot check", slog.String("reason", err.Error()))
-		s.renderSignIn(w, r, http.StatusForbidden, s.signInForm(SignInData{
-			Email: email,
-			Error: turnstile.Message(err),
-		}))
+		s.log.Info("link form refused by the bot check", slog.String("reason", err.Error()))
+		refuse(http.StatusForbidden, email, turnstile.Message(err))
 		return
 	}
 
@@ -170,16 +179,63 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	// visitor only what anybody can look up: that the domain hands out
 	// throwaway addresses. Nothing about whether the address has an account.
 	if s.openSignup && disposable.Address(email) {
-		s.renderSignIn(w, r, http.StatusUnprocessableEntity, s.signInForm(SignInData{
-			Email: email,
-			Error: errDisposableAddress.Error(),
-		}))
+		refuse(http.StatusUnprocessableEntity, email, errDisposableAddress.Error())
 		return
 	}
 
 	withFloor(signInFloor, func() { s.mailSignInLink(r.Context(), email) })
 
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup))
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup, back))
+}
+
+// signUpPage is the page somebody new starts on, while sign-up is open: an
+// address and one button. ?email= is put back, as on the sign-in page, so the
+// website can hand an address over. Closed, it sends them where an install
+// says accounts are asked for — its request-access page, or the sign-in page
+// that says accounts are by invitation.
+func (s *Server) signUpPage(w http.ResponseWriter, r *http.Request) {
+	var d SignUpData
+	if email, err := parseEmail(r.URL.Query().Get("email")); err == nil {
+		d.Email = email
+	}
+	if !s.openSignup {
+		s.signUpClosed(w, r, d.Email)
+		return
+	}
+	s.renderAuth(w, r, http.StatusOK, "Sign up", s.signUpForm(d))
+}
+
+// signUpRequest mails the address a link: the sign-up link if nobody holds
+// it, the sign-in link if somebody does. The page says "Check your mail"
+// either way, so this form says no more about who has an account than the
+// sign-in page's does.
+func (s *Server) signUpRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.openSignup {
+		s.signUpClosed(w, r, "")
+		return
+	}
+	s.requestLink(w, r, "/sign-up", func(status int, email, msg string) {
+		s.renderAuth(w, r, status, "Sign up", s.signUpForm(SignUpData{Email: email, Error: msg}))
+	})
+}
+
+// signUpClosed answers /sign-up on an install whose accounts are by
+// invitation: to the request-access page with the address, when there is
+// one, and to the sign-in page otherwise.
+func (s *Server) signUpClosed(w http.ResponseWriter, r *http.Request, email string) {
+	to := "/sign-in"
+	if s.requestAccess != "" {
+		to = s.requestAccess
+	}
+	if email != "" {
+		if u, err := url.Parse(to); err == nil {
+			q := u.Query()
+			q.Set("email", email)
+			u.RawQuery = q.Encode()
+			to = u.String()
+		}
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 // mailSignInLink issues a link and delivers it, or does neither.
@@ -607,24 +663,37 @@ func (s *Server) signInForm(d SignInData) templ.Component {
 	return SignIn(d)
 }
 
+// signUpForm is the sign-up page with the install's words and bot check.
+func (s *Server) signUpForm(d SignUpData) templ.Component {
+	d.Lead = cmp.Or(s.signUpLead, DefaultSignUpLead)
+	d.Next = cmp.Or(s.signUpNext, DefaultSignUpNext)
+	d.TurnstileSiteKey = s.turnstile.Key()
+	return SignUp(d)
+}
+
+// What the sign-up page says under its title and under its button, unless
+// the install says otherwise (Options.SignUpLead and SignUpNext).
+const (
+	DefaultSignUpLead = "Deploy from Git, on your own cluster."
+	DefaultSignUpNext = "We'll email you a link. It creates your account and signs you in."
+)
+
 // turnstileScriptURL is Cloudflare's widget, for the template.
 const turnstileScriptURL = turnstile.ScriptURL
 
-// renderSignIn draws the sign-in page, letting Cloudflare's widget into this
-// response's policy when the install checks its forms with it. Only here:
-// every other page keeps a policy that lets no third party in.
+// renderSignIn draws the sign-in page.
 func (s *Server) renderSignIn(w http.ResponseWriter, r *http.Request, status int, page templ.Component) {
+	s.renderAuth(w, r, status, "Sign in", page)
+}
+
+// renderAuth draws a signed-out page with a form on it, letting Cloudflare's
+// widget into this response's policy when the install checks its forms with
+// it. Only here: every other page keeps a policy that lets no third party in.
+func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, status int, title string, page templ.Component) {
 	if s.turnstile.Enabled() {
 		turnstile.AllowWidget(w.Header())
 	}
-	s.renderSignedOut(w, r, status, "Sign in", page)
-}
-
-func signInLead(openSignup bool) string {
-	if openSignup {
-		return "Use your password, or have a link emailed to you. New here? The link creates your account."
-	}
-	return "Use your password, or have a link emailed to you."
+	s.renderSignedOut(w, r, status, title, page)
 }
 
 func checkMailLead(openSignup bool) string {
@@ -826,7 +895,7 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	// The address is not echoed back. Whoever is holding this link may not be
 	// the person it was sent to, and telling them which mailbox to watch would
 	// be the disclosure the binding exists to prevent.
-	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup))
+	s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup, "/sign-in"))
 }
 
 // invitationFailed answers a link that cannot be spent.

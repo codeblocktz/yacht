@@ -494,8 +494,8 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_AUTH_TOKEN` | — | Bearer token. Unset, and with no accounts, means **no authentication** |
 | `YACHT_OWNER_ID` | `owner-local` | The team every resource belongs to on a fresh install |
 | `YACHT_OWNER_EMAIL` | — | The one address that may sign in before anybody has an account |
-| `YACHT_OPEN_SIGNUP` | `false` | Anybody may make an account: a stranger is mailed a link that creates it, with a team of their own. Requires `YACHT_OPERATORS`, `YACHT_OWNER_EMAIL` and a mail transport. Addresses at disposable mail domains (an embedded list; `make disposable-domains` refreshes it) are refused |
-| `YACHT_TURNSTILE_SITE_KEY`, `YACHT_TURNSTILE_SECRET` | — | Cloudflare Turnstile on the sign-in forms, checked with siteverify; both or neither. Unset checks nothing |
+| `YACHT_OPEN_SIGNUP` | `false` | Anybody may make an account, on `/sign-up` (linked from the sign-in page): a stranger is mailed a link that creates it, with a team of their own. Closed, `/sign-up` redirects to `YACHT_REQUEST_ACCESS_URL`, or to `/sign-in`. Requires `YACHT_OPERATORS`, `YACHT_OWNER_EMAIL` and a mail transport. Addresses at disposable mail domains (an embedded list; `make disposable-domains` refreshes it) are refused |
+| `YACHT_TURNSTILE_SITE_KEY`, `YACHT_TURNSTILE_SECRET` | — | Cloudflare Turnstile on the sign-in and sign-up forms, one widget per page, checked with siteverify; both or neither. Unset checks nothing |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
 | `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |

@@ -685,7 +685,7 @@ func galleryPages() []galleryPage {
 						}),
 					)),
 				section("Check your mail", "the same page whether or not the address is registered",
-					CheckMail(false)),
+					CheckMail(false, "/sign-in")),
 			),
 		},
 		{

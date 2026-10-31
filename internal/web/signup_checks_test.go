@@ -54,7 +54,7 @@ func postForm(h http.Handler, path string, form url.Values) *httptest.ResponseRe
 	return rec
 }
 
-// The page draws a widget in each form, and only it lets Cloudflare in.
+// The page draws one widget for both forms, and only it lets Cloudflare in.
 func TestSignInPageDrawsTheBotCheck(t *testing.T) {
 	var calls int
 	h := checkedServer(t, turnstile.TestSecretPass, &calls, &fakeMailer{})
@@ -62,8 +62,8 @@ func TestSignInPageDrawsTheBotCheck(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sign-in", nil))
 	body := rec.Body.String()
-	if n := strings.Count(body, `data-sitekey="`+turnstile.TestSiteKeyPass+`"`); n != 2 {
-		t.Errorf("widgets drawn = %d, want one in each form", n)
+	if n := strings.Count(body, `data-sitekey="`+turnstile.TestSiteKeyPass+`"`); n != 1 {
+		t.Errorf("widgets drawn = %d, want one for both forms", n)
 	}
 	if !strings.Contains(body, turnstile.ScriptURL) {
 		t.Error("the widget's script is not on the page")
