@@ -894,6 +894,7 @@ templ deployLogsButton(appName string, dep app.Deployment) {
 			type="button"
 			hx-get={ "/apps/" + appName + "/deployments/" + dep.ID.String() + "/logs" }
 			hx-target="#deploy-log-panel"
+			hx-indicator="#deploy-log-loading"
 			hx-swap="innerHTML"
 		>View logs</button>
 	}

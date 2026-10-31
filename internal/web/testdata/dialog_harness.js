@@ -1,7 +1,7 @@
 // Runs templUI's dialog script, as the dashboard serves it, against the
 // dialogs a page rendered, and says what became of each.
 //
-//   node dialog_harness.js <dialog.min.js> <dialogs.json> load|swap
+//   node dialog_harness.js <dialog.min.js> <dialogs.json> load|swap [transition]
 //
 // dialogs.json is the page cut down to the elements the script looks at (any
 // with a data-tui-dialog* attribute), nested as they were. The DOM here is the
@@ -9,11 +9,13 @@
 // <dialog> whose showModal and close set `open` the way a browser's do. What it
 // prints is one line of JSON:
 //
-//   {"opened": {...}, "closed": {...}}
+//   {"opened": {...}, "closing": {...}, "closed": {...}, "closeDelays": [ms...]}
 //
-// each mapping a dialog root's id to whether its <dialog> is open, and the
-// data-tui-dialog-open it carries: once the script has run, and then once each
-// open dialog's Close button has been clicked.
+// each mapping a dialog root's id to whether its <dialog> is open, the
+// data-tui-dialog-open it carries, and the one it carried when it was shown:
+// once the script has run, as each open dialog's Close button is clicked, and
+// once the close animation's timers have run out. transition is what the
+// element's computed transition-duration says (default "0.2s").
 //
 // load puts the dialogs in the page before the script runs, as a page load or
 // a back/forward that reloads does. swap adds them after, as an htmx swap
@@ -23,7 +25,7 @@
 const fs = require("fs");
 const vm = require("vm");
 
-const [scriptFile, treeFile, mode] = process.argv.slice(2);
+const [scriptFile, treeFile, mode, transition = "0.2s"] = process.argv.slice(2);
 const script = fs.readFileSync(scriptFile, "utf8");
 const tree = fs.readFileSync(treeFile, "utf8");
 if (mode !== "load" && mode !== "swap") throw new Error("harness: mode is load or swap, not " + mode);
@@ -97,6 +99,7 @@ class Element {
   showModal() {
     if (this.open) throw new Error("InvalidStateError");
     this.open = true;
+    this.dataOpenAtShow = this.getAttribute("data-tui-dialog-open");
   }
   show() { this.open = true; }
   close() {
@@ -125,9 +128,11 @@ const document = {
 
 const observers = [];
 const timers = [];
+const delays = [];
 const window = {
-  setTimeout(fn) { timers.push(fn); return timers.length; },
+  setTimeout(fn, ms) { timers.push(fn); delays.push(ms || 0); return timers.length; },
   clearTimeout() {},
+  getComputedStyle: () => ({ transitionDuration: transition, transitionDelay: "0s" }),
 };
 class MutationObserver {
   constructor(fn) { this.fn = fn; observers.push(this); }
@@ -138,7 +143,12 @@ function state() {
   const out = {};
   body.querySelectorAll("[data-tui-dialog]").forEach((root) => {
     const dialog = root.querySelectorAll("[data-tui-dialog-content]").find((d) => d.closest("[data-tui-dialog]") === root);
-    out[root.id] = { open: !!(dialog && dialog.open), dataOpen: dialog ? dialog.getAttribute("data-tui-dialog-open") : null };
+    out[root.id] = {
+      open: !!(dialog && dialog.open),
+      dataOpen: dialog ? dialog.getAttribute("data-tui-dialog-open") : null,
+      dataOpenAtShow: dialog ? dialog.dataOpenAtShow || null : null,
+      closing: dialog ? dialog.getAttribute("data-tui-dialog-closing") : null,
+    };
   });
   return out;
 }
@@ -159,6 +169,8 @@ body.querySelectorAll("[data-tui-dialog]").forEach((root) => {
   const dialog = root.querySelectorAll("[data-tui-dialog-content]").find((d) => d.closest("[data-tui-dialog]") === root);
   if (button && dialog && dialog.open) button.dispatch("click");
 });
+result.closing = state();
+result.closeDelays = delays.slice();
 timers.splice(0).forEach((fn) => fn());
 result.closed = state();
 

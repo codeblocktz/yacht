@@ -182,6 +182,7 @@ templ deployLogTab(d DeployLogsData, view, label string) {
 		href="#"
 		hx-get={ deployViewHref(d, view) }
 		hx-target="#deploy-log-panel"
+		hx-indicator="#deploy-log-loading"
 		hx-swap="innerHTML"
 	>{ label }</a>
 }
@@ -234,6 +235,7 @@ templ deployLogView(d DeployLogsData) {
 				href="#"
 				hx-get={ deployLogsHref(d, false) }
 				hx-target="#deploy-log-panel"
+				hx-indicator="#deploy-log-loading"
 				hx-swap="innerHTML"
 			>This run</a>
 			<a
@@ -241,6 +243,7 @@ templ deployLogView(d DeployLogsData) {
 				href="#"
 				hx-get={ deployLogsHref(d, true) }
 				hx-target="#deploy-log-panel"
+				hx-indicator="#deploy-log-loading"
 				hx-swap="innerHTML"
 			>Previous run</a>
 			<span class="text-[12px] text-muted-foreground tabular-nums">

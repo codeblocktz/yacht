@@ -140,13 +140,15 @@ templ githubRepoPicker(selected app.GitHubRef, label string) {
 		hx-swap="outerHTML"
 	>
 		<input type="hidden" name="github_repo" value={ selected.String() }/>
-		<div class="control mono flex items-center text-muted-foreground">
-			if selected.Set() {
-				{ label }
-			} else {
-				Reading the team's repositories…
-			}
-		</div>
+		if selected.Set() {
+			<div class="control mono flex items-center text-muted-foreground">{ label }</div>
+		} else {
+			// The picker's own outline, the height of the control it becomes.
+			<div class="control flex items-center" aria-busy="true">
+				@loadingLabel("Reading the team's repositories…")
+				@Skeleton("h-3.5 w-48")
+			</div>
+		}
 	</div>
 }
 

@@ -1547,6 +1547,45 @@
   }
 }
 
+/* How a sheet comes and goes: shadcn's base sheet. The panel fades in as it
+   slides the last 2.5rem from its edge, 200ms ease-in-out, and goes out the
+   same way; the overlay behind it fades in 150ms. Here, beside the width, for
+   the same reason: templUI's classes are layered utilities with a leading
+   "!", and only a rule in the same layer, later and more specific, beats
+   them.
+
+   The dialog script reads the duration off the element to know when the exit
+   is over and the sheet can be closed — display: none again, out of the tab
+   order (#65) — so this is the one place it is set.
+
+   Under reduced motion the panel does not move; it only fades. */
+@layer utilities {
+  [data-tui-sheet-content] {
+    transition-property: opacity, translate !important;
+    transition-duration: 200ms !important;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+  [data-tui-sheet-content]::backdrop {
+    transition-duration: 150ms !important;
+  }
+  [data-tui-sheet-content][data-tui-dialog-open="false"] { opacity: 0 !important; }
+  [data-tui-sheet-content][data-tui-sheet-side="right"][data-tui-dialog-open="false"] { translate: 2.5rem 0 !important; }
+  [data-tui-sheet-content][data-tui-sheet-side="left"][data-tui-dialog-open="false"] { translate: -2.5rem 0 !important; }
+  [data-tui-sheet-content][data-tui-sheet-side="top"][data-tui-dialog-open="false"] { translate: 0 -2.5rem !important; }
+  [data-tui-sheet-content][data-tui-sheet-side="bottom"][data-tui-dialog-open="false"] { translate: 0 2.5rem !important; }
+  /* As specific as the slides above, and after them, or they win. */
+  @media (prefers-reduced-motion: reduce) {
+    [data-tui-sheet-content][data-tui-sheet-side][data-tui-dialog-open="false"] { translate: 0 0 !important; }
+  }
+}
+
+/* A deployment's logs, in outline, for as long as the request that fills the
+   sheet is out (hx-indicator puts .htmx-request on it). The panel it covers
+   is hidden meanwhile: what it holds is the last deployment's logs. */
+.sheet-loading { display: none; }
+.sheet-loading.htmx-request { display: flex; flex-direction: column; }
+.sheet-loading.htmx-request ~ #deploy-log-panel { display: none; }
+
 /* The collapsed rail.
 
    In the utilities layer rather than with the rest of the sidebar, because
