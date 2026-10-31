@@ -220,6 +220,24 @@ tidy: ## Tidy modules
 sqlc: ## Regenerate database code from SQL
 	$(GO) tool sqlc generate
 
+# The disposable mail domains open sign-up refuses: the community-kept
+# blocklist of github.com/disposable-email-domains/disposable-email-domains,
+# CC0 1.0. Fetched to a temporary file and only moved into place when it has
+# thousands of lines, so a failed download never empties the list.
+DISPOSABLE_URL ?= https://raw.githubusercontent.com/disposable-email-domains/disposable-email-domains/main/disposable_email_blocklist.conf
+DISPOSABLE_TXT := internal/disposable/domains.txt
+
+.PHONY: disposable-domains
+disposable-domains: ## Refresh the embedded disposable-email blocklist
+	@set -eu; \
+		tmp=$$(mktemp "$(DISPOSABLE_TXT).tmp.XXXXXX"); \
+		trap 'rm -f "$$tmp"' EXIT; \
+		curl -fsSL "$(DISPOSABLE_URL)" -o "$$tmp"; \
+		n=$$(wc -l < "$$tmp"); \
+		if [ "$$n" -lt 1000 ]; then echo "only $$n domains downloaded; keeping the list" >&2; exit 1; fi; \
+		mv "$$tmp" "$(DISPOSABLE_TXT)"; trap - EXIT; \
+		echo "$(DISPOSABLE_TXT): $$n domains"
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin dist

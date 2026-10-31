@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/turnstile"
 )
 
 // passwordFloor is the minimum time a password attempt takes.
@@ -98,6 +99,12 @@ func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.turnstile.VerifyRequest(r, clientIP(r)); err != nil {
+		s.log.Info("password sign-in refused by the bot check", slog.String("reason", err.Error()))
+		s.refusePassword(w, r, http.StatusForbidden, email, signInError(turnstile.Message(err)))
+		return
+	}
+
 	// An empty password is a failed credential and not a shortcut to the other
 	// form. A route that sometimes mailed a link would be a route whose name
 	// lies, and it would put the mail path under a different set of counters.
@@ -128,7 +135,7 @@ func (s *Server) signInWithPassword(w http.ResponseWriter, r *http.Request) {
 func (s *Server) refusePassword(
 	w http.ResponseWriter, r *http.Request, status int, email string, msg signInError,
 ) {
-	s.renderSignedOut(w, r, status, "Sign in", s.signInForm(SignInData{
+	s.renderSignIn(w, r, status, s.signInForm(SignInData{
 		Email:  email,
 		Error:  string(msg),
 		Method: SignInByPassword,

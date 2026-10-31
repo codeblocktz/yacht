@@ -64,6 +64,9 @@ func TestTemplatesOnlyUseClassesThatExist(t *testing.T) {
 		"tabular": true, "nums": true, "mono": true, "invisible": true, "visible": true,
 		"inline-flex": true, "inline-block": true, "inline-grid": true,
 		"sr-only": true,
+		// Not a style: the class Cloudflare's Turnstile script finds its
+		// widgets by.
+		"cf-turnstile": true,
 	}
 
 	files, err := filepath.Glob(filepath.Join(".", "*.templ"))

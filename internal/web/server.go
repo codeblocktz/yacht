@@ -26,6 +26,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/retire"
+	"github.com/codeblocktz/yacht/internal/turnstile"
 )
 
 // Apps is the workload lifecycle this server drives.
@@ -419,6 +420,11 @@ type Options struct {
 	// linked from the sign-in page when sign-up is not open.
 	RequestAccessURL string
 
+	// Turnstile checks that the sign-in forms — the link form is also open
+	// sign-up's — were sent by a person. Nil, or one without keys, checks
+	// nothing.
+	Turnstile *turnstile.Verifier
+
 	// FlashKey signs the message a redirect carries to the next page, at least
 	// 32 bytes. Every replica of an install must be given the same one, or the
 	// page after a redirect served by another replica drops the message; the
@@ -542,6 +548,7 @@ type Server struct {
 	bootstrapEmail string
 	openSignup     bool
 	requestAccess  string
+	turnstile      *turnstile.Verifier
 
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
@@ -680,6 +687,7 @@ func New(opts Options) (*Server, error) {
 		bootstrapName:  opts.BootstrapTeamName,
 		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
 		openSignup:     opts.OpenSignup,
+		turnstile:      opts.Turnstile,
 		requestAccess:  opts.RequestAccessURL,
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
 		mailStatus:     opts.MailStatus,

@@ -98,6 +98,14 @@ type Config struct {
 	// when sign-up is not open: the sign-in page links to it.
 	RequestAccessURL string
 
+	// TurnstileSiteKey and TurnstileSecret are a Cloudflare Turnstile site's
+	// keys. With both, the sign-in form — which is also open sign-up's —
+	// draws the widget and is refused without a token Cloudflare accepts.
+	// Without them the form is not checked, and the log says so when sign-up
+	// is open.
+	TurnstileSiteKey string
+	TurnstileSecret  string
+
 	// Operators are the people who run the install itself, as opposed to a
 	// team on it: nodes, the registry, DNS, every team's quota. Email
 	// addresses, matched case-insensitively against the signed-in person.
@@ -370,6 +378,8 @@ func Load() (Config, error) {
 		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
 		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
 		RequestAccessURL:         strings.TrimSpace(env("YACHT_REQUEST_ACCESS_URL", "")),
+		TurnstileSiteKey:         strings.TrimSpace(env("YACHT_TURNSTILE_SITE_KEY", "")),
+		TurnstileSecret:          strings.TrimSpace(env("YACHT_TURNSTILE_SECRET", "")),
 		SecretKey:                strings.TrimSpace(env("YACHT_SECRET_KEY", "")),
 		SecretKeyPrevious:        envList("YACHT_SECRET_KEY_PREVIOUS"),
 		AppDomain:                env("YACHT_APP_DOMAIN", ""),
@@ -695,6 +705,11 @@ func (c Config) signupFaults() []error {
 			return []error{errors.New("YACHT_REQUEST_ACCESS_URL must be a full http(s) address, such as https://example.com/request-access")}
 		}
 	}
+	// Half a Turnstile site draws a widget nothing checks, or checks a token
+	// no widget handed out — and the second refuses every sign-in.
+	if (c.TurnstileSiteKey == "") != (c.TurnstileSecret == "") {
+		return []error{errors.New("YACHT_TURNSTILE_SITE_KEY and YACHT_TURNSTILE_SECRET go together — set both, or neither")}
+	}
 	if !c.OpenSignup {
 		return nil
 	}
@@ -909,10 +924,10 @@ func (c Config) String() string {
 	}
 	return fmt.Sprintf(
 		"addr=%s db=%s kubeconfig=%s in_cluster=%t auth_token=%s owner=%s "+
-			"accounts=%t mail=%s waker=%s isolation=%s github_app=%s logs=%s metrics=%s debug=%t",
+			"accounts=%t open_signup=%t turnstile=%t mail=%s waker=%s isolation=%s github_app=%s logs=%s metrics=%s debug=%t",
 		c.Addr, redactDSN(c.DatabaseURL), orNone(c.Kubeconfig),
 		c.KubeInCluster, token, c.OwnerID,
-		c.AccountsEnabled(), c.MailTransport(), orOff(c.WakerAddr), isolation,
+		c.AccountsEnabled(), c.OpenSignup, c.TurnstileSiteKey != "", c.MailTransport(), orOff(c.WakerAddr), isolation,
 		orOff(c.GitHubAppSlug), orOff(c.LogsURL), orOff(c.MetricsURL), c.Debug,
 	)
 }

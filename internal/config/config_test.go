@@ -503,3 +503,29 @@ func TestNoBucketKeepsBackupsOnAVolume(t *testing.T) {
 		t.Errorf("store = %+v, %v; want none", s3, err)
 	}
 }
+
+// A Turnstile site is both keys or neither: half of one either draws a
+// widget nothing checks or refuses every sign-in.
+func TestTurnstileKeysGoTogether(t *testing.T) {
+	base := map[string]string{"YACHT_BASE_URL": "https://yacht.example.test"}
+	for _, tc := range []struct {
+		site, secret string
+		ok           bool
+	}{
+		{"", "", true},
+		{"1x00000000000000000000AA", "1x0000000000000000000000000000000AA", true},
+		{"1x00000000000000000000AA", "", false},
+		{"", "1x0000000000000000000000000000000AA", false},
+	} {
+		env := maps.Clone(base)
+		env["YACHT_TURNSTILE_SITE_KEY"], env["YACHT_TURNSTILE_SECRET"] = tc.site, tc.secret
+		setEnv(t, env)
+		c, err := Load()
+		if (err == nil) != tc.ok {
+			t.Errorf("site %q secret %q: Load = %v, want ok %v", tc.site, tc.secret, err, tc.ok)
+		}
+		if err == nil && c.TurnstileSiteKey != tc.site {
+			t.Errorf("site key = %q, want %q", c.TurnstileSiteKey, tc.site)
+		}
+	}
+}
