@@ -488,6 +488,12 @@
           return;
         }
         names.forEach(function (name) {
+          // The open panel's heading says what its card says.
+          var pill = document.querySelector('[data-service-status="' + CSS.escape(name) + '"]');
+          if (pill && data.apps[name].pill) {
+            pill.className = "status " + data.apps[name].pill;
+            pill.textContent = data.apps[name].label;
+          }
           var node = canvas.querySelector('[data-node="' + CSS.escape(name) + '"] .canvas-card-status');
           if (!node) return;
           var state = data.apps[name];

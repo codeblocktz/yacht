@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -154,6 +155,86 @@ func (s *Service) ReferenceTargets(ctx context.Context, ownerID, appName string)
 		}
 		out = append(out, t)
 	}
+	return out, nil
+}
+
+// Referrer is a variable of another app's that refers to this one: what
+// stops working, at its next deploy, if this one is deleted.
+type Referrer struct {
+	// App is the referring app as the referred-to one's people know it:
+	// by service name within its own project, by app name from another.
+	App string
+	Key string
+}
+
+// Referrers lists the variables of the owner's other apps that refer to
+// appName, deployed or staged, so deleting it can say what it breaks before
+// it does. Nothing else warns: the reference is only read at the referring
+// app's next deploy, which then fails on a name that no longer exists.
+//
+// A reference is matched the way referencedApp resolves it: a service of
+// the referring app's own environment by that name first, else the app by
+// that name. A secret's value is not read, so a reference inside one is
+// not found; references are stored in the clear (see desiredVariablesFor).
+func (s *Service) Referrers(ctx context.Context, ownerID, appName string) ([]Referrer, error) {
+	rows, err := s.q.ListApps(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("app: list apps for referrers: %w", err)
+	}
+	apps := make([]App, 0, len(rows))
+	var target App
+	for _, row := range rows {
+		a := toApp(row)
+		apps = append(apps, a)
+		if a.Name == appName {
+			target = a
+		}
+	}
+	if target.ID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	names := func(from App, name string) App {
+		if from.ProjectID != uuid.Nil {
+			for _, a := range apps {
+				if a.ProjectID == from.ProjectID && a.Environment() == from.Environment() && a.ServiceName() == name {
+					return a
+				}
+			}
+		}
+		for _, a := range apps {
+			if a.Name == name {
+				return a
+			}
+		}
+		return App{}
+	}
+	var out []Referrer
+	for _, a := range apps {
+		if a.ID == target.ID {
+			continue
+		}
+		vars, err := s.desiredVariablesFor(ctx, s.q, ownerID, a.ID)
+		if err != nil {
+			return nil, err
+		}
+		label := a.Name
+		if target.ProjectID != uuid.Nil && a.ProjectID == target.ProjectID {
+			label = a.ServiceName()
+		}
+		for _, v := range vars {
+			if !v.Reference {
+				continue
+			}
+			if slices.ContainsFunc(References(v.Value), func(r Reference) bool {
+				return r.App != SharedScope && names(a, r.App).ID == target.ID
+			}) {
+				out = append(out, Referrer{App: label, Key: v.Key})
+			}
+		}
+	}
+	slices.SortFunc(out, func(x, y Referrer) int {
+		return cmp.Or(cmp.Compare(x.App, y.App), cmp.Compare(x.Key, y.Key))
+	})
 	return out, nil
 }
 

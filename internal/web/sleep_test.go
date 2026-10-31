@@ -297,7 +297,8 @@ func TestASleepingAppSaysSoAndOffersWakeNow(t *testing.T) {
 	h := testServer(t, Options{Apps: newFakeApps(a), Sleep: f})
 
 	body := get(t, h, "/apps/shop").Body.String()
-	for _, want := range []string{`class="status status-sleep"`, ">sleeping<", "Wake now", "/apps/shop/wake",
+	// The heading says it in the card's word; see servicePill.
+	for _, want := range []string{`class="status status-sleep"`, ">Sleeping<", "Wake now", "/apps/shop/wake",
 		"Asleep since 40 minutes ago", "last request 1 hour ago"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sleeping app page missing %q", want)

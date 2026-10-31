@@ -143,3 +143,48 @@ func TestAReferenceToNothingIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// Deleting an app another one refers to breaks the other at its next
+// deploy, so the delete has to be able to say which variables those are:
+// a reference by service name, a staged one, and none from the app itself.
+func TestReferrersNameTheVariablesThatReferToAnApp(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := referenceService(t, "svc-referrers")
+
+	for _, in := range []CreateInput{
+		{Name: "db", Image: "postgres:16-alpine", Replicas: 1, Port: 5432},
+		{Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080},
+		{Name: "api", Image: "nginx:alpine", Replicas: 1, Port: 8080},
+	} {
+		if _, err := createAndDeploy(t, s, ctx, id, in); err != nil {
+			t.Fatalf("Create %s: %v", in.Name, err)
+		}
+	}
+	set := func(name, key, value string) {
+		t.Helper()
+		if err := s.SetVariable(ctx, id, name, VariableInput{Key: key, Value: value}); err != nil &&
+			!errors.Is(err, ErrSavedWhileDeploying) {
+			t.Fatalf("set %s on %s: %v", key, name, err)
+		}
+	}
+	set("db", "DATABASE_URL", "postgres://db/app")
+	set("web", "DATABASE_URL", "${{db.DATABASE_URL}}")
+	set("web", "DB_ADDR", "${{db.PRIVATE_HOST}}:${{db.PRIVATE_PORT}}")
+	set("web", "PLAIN", "postgres://db/app")
+	set("api", "WEB", "${{web.PRIVATE_HOST}}")
+
+	got, err := s.Referrers(ctx, id, "db")
+	if err != nil {
+		t.Fatalf("Referrers: %v", err)
+	}
+	want := []Referrer{{App: "web", Key: "DATABASE_URL"}, {App: "web", Key: "DB_ADDR"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Referrers(db) = %+v, want %+v", got, want)
+	}
+	if got, err := s.Referrers(ctx, id, "api"); err != nil || len(got) != 0 {
+		t.Errorf("Referrers(api) = %+v, %v; nothing refers to it", got, err)
+	}
+	if _, err := s.Referrers(ctx, id, "gone"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Referrers(gone) = %v, want ErrNotFound", err)
+	}
+}

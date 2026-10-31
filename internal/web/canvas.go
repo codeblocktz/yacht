@@ -354,11 +354,44 @@ func cardStatus(a app.App) (label, class string) {
 	case orchestrator.PhaseStopped:
 		return "Stopped", "card-status-idle"
 	case orchestrator.PhasePending:
+		// Nothing is ready, and the deploy that was to make it so has
+		// failed: its container is between crashes, not on its way up.
+		if a.LastDeploy == app.DeployFailed {
+			return "Crashed", "card-status-err"
+		}
 		return "Deploying", "card-status-busy"
 	case orchestrator.PhaseScheduled:
 		return cronStatus(a.Status), "card-status-idle"
 	}
 	return string(a.Status.Phase), "card-status-idle"
+}
+
+// serviceStatus is cardStatus for the open panel's heading, in the pill
+// style rather than the card's. The heading used to ask the workload alone,
+// which a first deploy has none of, so it read "unknown" while the card
+// beside it said Building, then Failed: the two must never disagree.
+func serviceStatus(a app.App) (label, class string) {
+	label, class = cardStatus(a)
+	if a.Source.Workload() && a.Sleep.Asleep() {
+		// The pills' own hollow dot for an app that is down on purpose.
+		return label, "status-sleep"
+	}
+	return label, pillClass(class)
+}
+
+// pillClass is the status pill's colour for a card's.
+func pillClass(cardClass string) string {
+	switch cardClass {
+	case "card-status-ok":
+		return "status-ok"
+	case "card-status-warn":
+		return "status-warn"
+	case "card-status-err":
+		return "status-err"
+	case "card-status-busy":
+		return "status-info"
+	}
+	return "status-neutral"
 }
 
 // stagedDocked reports whether the open panel carries the staged-changes

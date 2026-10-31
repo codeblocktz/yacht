@@ -641,6 +641,7 @@ func (s *Server) detailWith(
 	s.attachRegion(r.Context(), &d)
 	s.attachProjects(r.Context(), &d)
 	s.attachReferenceTargets(r.Context(), &d)
+	s.attachReferrers(r.Context(), &d)
 	d.Stages = s.stages()
 	return d
 }

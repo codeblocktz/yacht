@@ -104,3 +104,55 @@ func TestTheCanvasCarriesItsGraph(t *testing.T) {
 		t.Errorf("graph = %s (%v)", m[1], err)
 	}
 }
+
+// referrerApps is the fake service that knows what refers to what.
+type referrerApps struct {
+	*fakeApps
+	refs map[string][]app.Referrer
+}
+
+func (r referrerApps) Referrers(_ context.Context, _, name string) ([]app.Referrer, error) {
+	return r.refs[name], nil
+}
+
+// Deleting a bucket, or an app, that another service's variable refers to
+// went through without a word, and the other's next deploy failed on it.
+// The delete names those variables, in its warning and its confirmation.
+func TestADeleteNamesTheVariablesThatReferToIt(t *testing.T) {
+	bucket := sampleApp("owner-1", "bucket")
+	bucket.Source, bucket.Image, bucket.StatusKnown = app.SourceBucket, app.BucketImage, false
+	db := sampleApp("owner-1", "db")
+	quiet := sampleApp("owner-1", "quiet")
+	apps := referrerApps{fakeApps: newFakeApps(bucket, db, quiet), refs: map[string][]app.Referrer{
+		"bucket": {{App: "web", Key: "QA_BUCKET"}},
+		"db":     {{App: "api", Key: "DATABASE_URL"}, {App: "web", Key: "DATABASE_URL"}},
+	}}
+	h := testServer(t, Options{Apps: apps})
+
+	for _, tc := range []struct {
+		name    string
+		want    []string
+		confirm string
+	}{
+		{"bucket", []string{`href="/apps/web/variables"`, "web · QA_BUCKET"},
+			"web&#39;s QA_BUCKET refers to it and will fail at its next deploy."},
+		{"db", []string{`href="/apps/api/variables"`, "api · DATABASE_URL", "web · DATABASE_URL"},
+			"2 variables of other services refer to it"},
+	} {
+		body := get(t, h, "/apps/"+tc.name+"/settings").Body.String()
+		if !strings.Contains(body, "data-referrers") {
+			t.Errorf("%s: the delete does not warn about what refers to it", tc.name)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: the warning does not name %q", tc.name, want)
+			}
+		}
+		if !strings.Contains(body, tc.confirm) {
+			t.Errorf("%s: the confirmation does not say %q", tc.name, tc.confirm)
+		}
+	}
+	if body := get(t, h, "/apps/quiet/settings").Body.String(); strings.Contains(body, "data-referrers") {
+		t.Error("a delete warns about references when nothing refers to the app")
+	}
+}

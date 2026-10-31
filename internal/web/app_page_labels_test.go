@@ -92,7 +92,7 @@ func TestAFailedDeploySaysWhyOnTheAppPage(t *testing.T) {
 	}}
 	h := testServer(t, Options{Apps: apps})
 	body := get(t, h, "/apps/web").Body.String()
-	for _, want := range []string{"The last deploy failed", "RunContainerError: exec: &#34;/app/bin/server&#34;: permission denied", "failing"} {
+	for _, want := range []string{"The last deploy failed", "RunContainerError: exec: &#34;/app/bin/server&#34;: permission denied", ">Crashed<"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the app page does not say %q", want)
 		}

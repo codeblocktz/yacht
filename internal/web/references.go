@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/codeblocktz/yacht/internal/app"
@@ -29,6 +30,39 @@ func (s *Server) attachReferenceTargets(ctx context.Context, d *AppDetailData) {
 		return
 	}
 	d.RefTargets = targets
+}
+
+// attachReferrers gives the Settings tab's delete the variables of other
+// apps that refer to this one, which the delete would leave pointing at
+// nothing: the first anybody heard of it was the other app's next deploy
+// failing on "refers to db, which no longer exists".
+func (s *Server) attachReferrers(ctx context.Context, d *AppDetailData) {
+	if d.Tab != "settings" || s.apps == nil {
+		return
+	}
+	src, ok := s.apps.(interface {
+		Referrers(ctx context.Context, ownerID, appName string) ([]app.Referrer, error)
+	})
+	if !ok {
+		return
+	}
+	refs, err := src.Referrers(ctx, d.App.OwnerID, d.App.Name)
+	if err != nil {
+		s.log.Warn("list referrers", slog.String("error", err.Error()))
+		return
+	}
+	d.Referrers = refs
+}
+
+// deleteConfirm is a delete's confirmation, with what it breaks added.
+func deleteConfirm(text string, refs []app.Referrer) string {
+	switch len(refs) {
+	case 0:
+		return text
+	case 1:
+		return text + " " + refs[0].App + "'s " + refs[0].Key + " refers to it and will fail at its next deploy."
+	}
+	return text + " " + strconv.Itoa(len(refs)) + " variables of other services refer to it and will fail at their next deploy."
 }
 
 // referenceInput is the variable a reference form asks for: ${{app.KEY}},

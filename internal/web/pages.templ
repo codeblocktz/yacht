@@ -409,6 +409,14 @@ templ appStatus(a app.App) {
 	}
 }
 
+// servicePill is the open service's heading pill: the card's status (see
+// serviceStatus in canvas.go), marked for the canvas's poll to keep current,
+// since a heading drawn once read "pending" long after the deploy failed.
+templ servicePill(a app.App) {
+	{{ label, class := serviceStatus(a) }}
+	<span class={ "status", class } data-service-status={ a.Name }>{ label }</span>
+}
+
 // ---------------------------------------------------------------- app detail
 
 type AppDetailData struct {
@@ -421,6 +429,9 @@ type AppDetailData struct {
 	// RefTargets are the other apps a variable can refer to, for the
 	// variables tab's picker; empty leaves the picker out.
 	RefTargets []app.ReferenceTarget
+	// Referrers are the other services' variables that refer to this one,
+	// for the Settings tab's delete to warn about; see attachReferrers.
+	Referrers []app.Referrer
 	// Vars is the rest of the variables tab: what is staged, what the
 	// platform adds, and which of its controls the service supports.
 	Vars        VariablesView
@@ -587,7 +598,7 @@ templ appDetailHeader(d AppDetailData) {
 		<div class="min-w-0">
 			<div class="flex items-center gap-2.5">
 				<h1 class="page-title">{ a.Name }</h1>
-				@appStatus(a)
+				@servicePill(a)
 				@regionTag(d.Region)
 			</div>
 			// The URL sits above the image and in foreground colour: it is the
@@ -1519,6 +1530,7 @@ templ appLegacySettings(d AppDetailData) {
 				Removes the workload, its namespace, its domains and its storage. Not
 				reversible.
 			</p>
+			@referrersWarning(d.Referrers)
 			// The name is typed back, and the server checks it.
 			//
 			// The dialog alone is not a guard: it is JavaScript, and without it
@@ -1547,7 +1559,7 @@ templ appLegacySettings(d AppDetailData) {
 				<button
 					class="btn btn-danger"
 					type="submit"
-					data-confirm="This deletes the app, its namespace, its domains and its storage. This cannot be undone."
+					data-confirm={ deleteConfirm("This deletes the app, its namespace, its domains and its storage. This cannot be undone.", d.Referrers) }
 					data-confirm-title={ "Delete " + a.Name + "?" }
 					data-confirm-label="Delete app"
 				>Delete app</button>
