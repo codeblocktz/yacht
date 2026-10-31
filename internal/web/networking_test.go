@@ -455,7 +455,7 @@ func TestNetworkingOffersGenerateDomain(t *testing.T) {
 			Domain: "up.apps.test", Suggested: "web-production",
 			Port: 3000, Suggestions: []int32{3000, 8080},
 		},
-		Private:  app.PrivateEndpoint{Host: "web.yacht-abc.svc.cluster.local", Port: 80},
+		Private:  app.PrivateEndpoint{Name: "web.internal", Host: "web.yacht-abc.svc.cluster.local", Port: 80},
 		TCPProxy: app.TCPProxy{Available: true, Host: "proxy.apps.test", Target: 3000},
 	}})
 
@@ -467,6 +467,8 @@ func TestNetworkingOffersGenerateDomain(t *testing.T) {
 		`name="tab" value="domains"`,
 		// Private networking, copyable.
 		"web.yacht-abc.svc.cluster.local", `data-copy="web.yacht-abc.svc.cluster.local"`,
+		// Its short name, as Railway shows <service>.railway.internal.
+		`<span class="record-k">Private</span>`, `data-copy="web.internal"`,
 		"${{web.PRIVATE_HOST}}",
 		// The TCP proxy on offer.
 		`action="/apps/web/networking/tcp-proxy"`,

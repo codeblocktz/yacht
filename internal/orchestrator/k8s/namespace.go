@@ -37,11 +37,16 @@ func (o *Orchestrator) EnsureNamespace(ctx context.Context, spec orchestrator.Na
 	labels := psaLabels()
 	labels[orchestrator.LabelManagedBy] = orchestrator.ManagedByValue
 	labels[orchestrator.LabelOwner] = string(spec.Owner)
+	if spec.Project != "" {
+		labels[orchestrator.LabelProject] = spec.Project
+	}
 
 	nsAC := corev1ac.Namespace(spec.Name).WithLabels(labels)
 
-	if _, err := o.client.CoreV1().Namespaces().
-		Apply(ctx, nsAC, applyOpts()); err != nil {
+	// The namespace as the cluster has it after the apply, peers and all,
+	// which is what its isolation is made of.
+	ns, err := o.client.CoreV1().Namespaces().Apply(ctx, nsAC, applyOpts())
+	if err != nil {
 		return fmt.Errorf("k8s: apply namespace %q: %w", spec.Name, err)
 	}
 
@@ -49,7 +54,7 @@ func (o *Orchestrator) EnsureNamespace(ctx context.Context, spec orchestrator.Na
 		return err
 	}
 	if err := o.isolate(ctx, func(iso orchestrator.Isolation) *networkingv1ac.NetworkPolicyApplyConfiguration {
-		return teamIsolation(spec.Name, string(spec.Owner), iso)
+		return namespaceIsolation(ns, iso)
 	}); err != nil {
 		return err
 	}

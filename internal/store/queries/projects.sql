@@ -67,3 +67,10 @@ WHERE owner_id = $1 AND name = $2;
 UPDATE apps
 SET canvas_x = NULL, canvas_y = NULL, updated_at = now()
 WHERE owner_id = $1 AND project_id = $2;
+
+-- Each team's default project, for apps drawn on none: they are its, as the
+-- canvas shows them. Install-scoped, for the private networks' sync.
+-- name: ListDefaultProjects :many
+SELECT owner_id, id FROM projects
+WHERE slug = 'default'
+ORDER BY owner_id;

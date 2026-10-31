@@ -301,6 +301,39 @@ func (q *Queries) ListAppsWithoutProject(ctx context.Context, ownerID string) ([
 	return items, nil
 }
 
+const listDefaultProjects = `-- name: ListDefaultProjects :many
+SELECT owner_id, id FROM projects
+WHERE slug = 'default'
+ORDER BY owner_id
+`
+
+type ListDefaultProjectsRow struct {
+	OwnerID string
+	ID      uuid.UUID
+}
+
+// Each team's default project, for apps drawn on none: they are its, as the
+// canvas shows them. Install-scoped, for the private networks' sync.
+func (q *Queries) ListDefaultProjects(ctx context.Context) ([]ListDefaultProjectsRow, error) {
+	rows, err := q.db.Query(ctx, listDefaultProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDefaultProjectsRow{}
+	for rows.Next() {
+		var i ListDefaultProjectsRow
+		if err := rows.Scan(&i.OwnerID, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
 SELECT p.id, p.owner_id, p.slug, p.name, p.created_at, p.updated_at, p.pr_environments, count(a.id) AS app_count
 FROM projects p

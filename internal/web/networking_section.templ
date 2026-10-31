@@ -235,21 +235,30 @@ templ privateNetworking(d NetworkingData) {
 				</div>
 			} else {
 				<div class="record">
+					if priv.Name != "" {
+						@recordRow("Private", priv.Name)
+					}
 					@recordRow("Host", priv.Host)
 					if priv.Port > 0 {
 						@recordRow("Port", strconv.Itoa(int(priv.Port)))
 					}
 				</div>
 				<div class="mt-3 text-[12.5px] text-muted-foreground">
-					if priv.Port > 0 {
+					if priv.Port > 0 && priv.Name != "" {
+						This project's other services in this environment reach this one at
+						<code class="mono">{ priv.Name }</code>, as
+						<code class="mono">{ d.App + ".railway.internal" }</code> on Railway,
+						and nothing in another project connects to it, unless one of its
+						variables names this one. In a variable, write
+						<code class="mono">{ "${{" + d.App + "." + app.RefPrivateHost + "}}" }</code> and
+						<code class="mono">{ "${{" + d.App + "." + app.RefPrivatePort + "}}" }</code>
+						so it follows if this ever changes.
+					} else if priv.Port > 0 {
 						Your team's other apps reach this one here, inside the cluster, and
 						nothing outside it can. In a variable, write
 						<code class="mono">{ "${{" + d.App + "." + app.RefPrivateHost + "}}" }</code> and
 						<code class="mono">{ "${{" + d.App + "." + app.RefPrivatePort + "}}" }</code>
 						so it follows if this ever changes.
-						Coming from Railway, this host is the one
-						<code class="mono">{ d.App + ".railway.internal" }</code> was: each app here has a
-						namespace of its own, so a short name does not reach it.
 					} else {
 						This app has no port, so nothing can connect to it. Set one in its
 						settings and other apps reach it here.

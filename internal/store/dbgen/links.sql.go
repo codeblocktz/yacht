@@ -34,6 +34,40 @@ func (q *Queries) CreateAppLink(ctx context.Context, arg CreateAppLinkParams) er
 	return err
 }
 
+const listAllAppLinks = `-- name: ListAllAppLinks :many
+SELECT DISTINCT owner_id, from_app_id, to_app_id FROM app_links
+ORDER BY owner_id, from_app_id, to_app_id
+`
+
+type ListAllAppLinksRow struct {
+	OwnerID   string
+	FromAppID uuid.UUID
+	ToAppID   uuid.UUID
+}
+
+// Every recorded dependency on the install, for the private networks: an app
+// whose variables name another's address is let into its namespace, wherever
+// each is drawn. Install-scoped like ListAppsForPrivateNetwork.
+func (q *Queries) ListAllAppLinks(ctx context.Context) ([]ListAllAppLinksRow, error) {
+	rows, err := q.db.Query(ctx, listAllAppLinks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllAppLinksRow{}
+	for rows.Next() {
+		var i ListAllAppLinksRow
+		if err := rows.Scan(&i.OwnerID, &i.FromAppID, &i.ToAppID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAppLinks = `-- name: ListAppLinks :many
 SELECT l.from_app_id, l.to_app_id, l.via_key,
        f.name AS from_name, t.name AS to_name

@@ -19,6 +19,7 @@ type Noop struct {
 	mu         sync.Mutex
 	namespaces map[string]NamespaceSpec
 	apps       map[string]AppSpec
+	networks   map[string]PrivateNetwork
 }
 
 // Compile-time check that Noop satisfies the interface.
@@ -215,4 +216,40 @@ func (n *Noop) Apps() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return slices.Sorted(maps.Keys(n.apps))
+}
+
+var _ PrivateNetworker = (*Noop)(nil)
+
+// SyncPrivateNetwork records the network asked for, for a namespace that
+// exists: like the cluster, Noop never makes one for it.
+func (n *Noop) SyncPrivateNetwork(_ context.Context, p PrivateNetwork) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if _, ok := n.namespaces[p.Namespace]; !ok {
+		return ErrNotFound
+	}
+	if n.networks == nil {
+		n.networks = map[string]PrivateNetwork{}
+	}
+	n.networks[p.Namespace] = p
+	return nil
+}
+
+// PrivateNetwork is the network last synced for a namespace.
+func (n *Noop) PrivateNetwork(namespace string) (PrivateNetwork, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.networks[namespace]
+	return p, ok
+}
+
+// Namespace is the spec a namespace was last ensured with.
+func (n *Noop) Namespace(name string) (NamespaceSpec, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	spec, ok := n.namespaces[name]
+	return spec, ok
 }

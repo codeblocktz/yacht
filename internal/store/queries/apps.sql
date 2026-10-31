@@ -279,3 +279,10 @@ ORDER BY owner_id, name;
 SELECT id, owner_id, project_id, name, namespace, deleted_at FROM deleted_apps
 WHERE deleted_at >= $1
 ORDER BY owner_id, name, deleted_at DESC;
+
+-- Every app, for the private networks a sync keeps: which project and
+-- environment each is in, by name, and where its namespace is. Install-scoped
+-- like the reconciler's list, for the same reason.
+-- name: ListAppsForPrivateNetwork :many
+SELECT * FROM apps
+ORDER BY owner_id, name;

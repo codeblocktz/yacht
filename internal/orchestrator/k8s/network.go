@@ -58,18 +58,52 @@ func (o *Orchestrator) SetIsolation(ctx context.Context, i orchestrator.Isolatio
 
 // teamIsolation is the policy for a team's namespace.
 //
-// Into it: the team's own namespaces, and the platform's — every namespace
-// the engine did not make for a team, which is where the ingress controller
-// and the engine's waker run — except the one builds run in, where a
-// customer's Dockerfile executes. Isolating at the receiving end is what
-// keeps teams apart: whatever another team's workload may send, nothing here
-// accepts it.
+// Into it: the namespaces of the same project — of the team, until the
+// namespace is labelled with one — and the platform's: every namespace the
+// engine did not make for a team, which is where the ingress controller and
+// the engine's waker run, except the one builds run in, where a customer's
+// Dockerfile executes. Isolating at the receiving end is what keeps teams and
+// projects apart: whatever another's workload may send, nothing here accepts
+// it.
+//
+// A project's namespaces also let in the peers named: the team's apps in
+// other projects whose variables refer to this one. Such a reference is how
+// one project's app was told to use another's database, and it worked while
+// isolation stopped at the team; it must not stop working because isolation
+// moved to the project.
 //
 // Kubernetes' own health checks come from the node, not from a pod, and
 // NetworkPolicy does not hold them back.
-func teamIsolation(namespace, owner string, iso orchestrator.Isolation) *networkingv1ac.NetworkPolicyApplyConfiguration {
+func teamIsolation(namespace, owner, project string, peers []string, iso orchestrator.Isolation) *networkingv1ac.NetworkPolicyApplyConfiguration {
 	sameTeam := networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
 		metav1ac.LabelSelector().WithMatchLabels(map[string]string{orchestrator.LabelOwner: owner}))
+	from := []*networkingv1ac.NetworkPolicyPeerApplyConfiguration{sameTeam}
+	if project != "" {
+		// The owner as well as the project, though a project's id is the
+		// install's alone: a label is only as trustworthy as whoever wrote it.
+		from = []*networkingv1ac.NetworkPolicyPeerApplyConfiguration{
+			networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
+				metav1ac.LabelSelector().WithMatchLabels(map[string]string{
+					orchestrator.LabelOwner: owner, orchestrator.LabelProject: project,
+				})),
+		}
+		// A namespace of the team's not labelled with any project yet is
+		// one the first pass after an upgrade has not reached: let in until
+		// it has, so the pass, which labels one namespace at a time, never
+		// shuts a sibling out between the two. Every namespace a deploy or a
+		// pass has seen is labelled, so this then matches none.
+		from = append(from, networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
+			metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{orchestrator.LabelOwner: owner}).
+				WithMatchExpressions(metav1ac.LabelSelectorRequirement().
+					WithKey(orchestrator.LabelProject).WithOperator(metav1.LabelSelectorOpDoesNotExist))))
+		for _, peer := range peers {
+			from = append(from, networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
+				metav1ac.LabelSelector().WithMatchLabels(map[string]string{
+					orchestrator.LabelOwner: owner, nameLabel: peer,
+				})))
+		}
+	}
 	platform := networkingv1ac.NetworkPolicyPeer().WithNamespaceSelector(
 		metav1ac.LabelSelector().WithMatchExpressions(
 			metav1ac.LabelSelectorRequirement().
@@ -81,14 +115,14 @@ func teamIsolation(namespace, owner string, iso orchestrator.Isolation) *network
 	spec := networkingv1ac.NetworkPolicySpec().
 		WithPodSelector(metav1ac.LabelSelector()).
 		WithPolicyTypes(networkingv1.PolicyTypeIngress).
-		WithIngress(networkingv1ac.NetworkPolicyIngressRule().WithFrom(sameTeam, platform))
+		WithIngress(networkingv1ac.NetworkPolicyIngressRule().WithFrom(append(from, platform)...))
 
+	// The way out stays the team's: the project's line is drawn where a
+	// connection arrives, and a peer in another project must be let out.
 	if iso.Mode == orchestrator.IsolationStrict {
 		spec = spec.WithPolicyTypes(networkingv1.PolicyTypeEgress).
 			WithEgress(dnsEgress(),
-				networkingv1ac.NetworkPolicyEgressRule().WithTo(networkingv1ac.NetworkPolicyPeer().
-					WithNamespaceSelector(metav1ac.LabelSelector().
-						WithMatchLabels(map[string]string{orchestrator.LabelOwner: owner}))),
+				networkingv1ac.NetworkPolicyEgressRule().WithTo(sameTeam),
 				publicEgress(iso.EgressAllow), ingressEgress(), loadBalancerEgress())
 	}
 	return policy(namespace, spec)
@@ -230,7 +264,7 @@ func (o *Orchestrator) EnsureIsolation(ctx context.Context) error {
 		case ns.Name == BuildNamespace:
 			p = buildIsolation(iso)
 		case owner != "":
-			p = teamIsolation(ns.Name, owner, iso)
+			p = namespaceIsolation(&ns, iso)
 		default:
 			continue
 		}

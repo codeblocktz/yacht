@@ -325,6 +325,10 @@ func TestNetworkingShowsThePrivateAddress(t *testing.T) {
 	if n.Private.Host != "db."+db.Namespace+".svc.cluster.local" || n.Private.Port != db.Port {
 		t.Errorf("Private = %+v, want db.%s.svc.cluster.local:%d", n.Private, db.Namespace, db.Port)
 	}
+	// And the short name its siblings use, Railway's db.railway.internal.
+	if n.Private.Name != "db.internal" {
+		t.Errorf("Private.Name = %q, want db.internal", n.Private.Name)
+	}
 }
 
 // A template's website is public from the start, as Railway's are; its
