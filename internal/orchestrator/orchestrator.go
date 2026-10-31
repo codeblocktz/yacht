@@ -707,6 +707,12 @@ const (
 	PhaseScheduled Phase = "scheduled"
 )
 
+// ReasonProgressDeadlineExceeded is AppStatus.Reason for a rollout the
+// cluster gave up on because its new version never became ready in time:
+// a readiness failure, which a deploy reports in its own words (what port
+// was knocked on, what the app printed) rather than the cluster's.
+const ReasonProgressDeadlineExceeded = "ProgressDeadlineExceeded"
+
 // AppStatus is the observed state of a workload.
 type AppStatus struct {
 	Phase              Phase

@@ -948,6 +948,9 @@ func (s *Service) verifyRollout(
 			last = status
 			healthy := convergenceMatches(status, releaseID, configVersion) && rolloutHealthy(status)
 			if status.Terminal && !healthy {
+				if notReadyInTime(status) {
+					return s.rolloutTimedOut(ctx, a, budget, ready, status)
+				}
 				return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
 			}
 			switch {
@@ -1023,10 +1026,20 @@ func (s *Service) verifyRecoveredRollout(
 	if convergenceMatches(status, releaseID, configVersion) && rolloutHealthy(status) {
 		return nil
 	}
-	if status.Terminal {
+	if status.Terminal && !notReadyInTime(status) {
 		return fmt.Errorf("app: rollout failed: %s", rolloutReason(status))
 	}
 	return s.rolloutTimedOut(ctx, a, budget, ready, status)
+}
+
+// notReadyInTime is whether a rollout the cluster failed failed for want of
+// readiness: its progress deadline, which is the deploy's own budget, run
+// out. That is the same failure as the budget running out here, and is said
+// the same way. Both clocks start together, so the cluster's is often the
+// first to be seen, and its "ReplicaSet … has timed out progressing" left
+// out the port the app should listen on.
+func notReadyInTime(status orchestrator.AppStatus) bool {
+	return status.Reason == orchestrator.ReasonProgressDeadlineExceeded
 }
 
 func (s *Service) executeOperation(ctx context.Context, op Operation) error {
