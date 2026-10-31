@@ -3,6 +3,24 @@
 
   const CLOSE_DURATION_MS = 200;
 
+  // How long the exit takes, read off the element: the longest of its
+  // transitions, delay included. Yacht: a fixed 200ms closed a sheet whose
+  // slide out took 300ms two thirds of the way across, and under reduced
+  // motion, with nothing to wait for, it still waited. The constant is for a
+  // browser that cannot say.
+  function closeDuration(dialog) {
+    const style = window.getComputedStyle?.(dialog);
+    if (!style) return CLOSE_DURATION_MS;
+    const ms = (list) => String(list || "").split(",").map((v) => {
+      const n = parseFloat(v);
+      if (Number.isNaN(n)) return 0;
+      return /ms\s*$/.test(v) ? n : n * 1000;
+    });
+    const durations = ms(style.transitionDuration);
+    const delays = ms(style.transitionDelay);
+    return Math.max(0, ...durations.map((d, i) => d + (delays[i % delays.length] || 0)));
+  }
+
   function getRoot(target) {
     if (!target) return null;
 
@@ -132,6 +150,11 @@
     root?.removeAttribute("data-tui-dialog-closing");
 
     if (!dialog.open) {
+      // Start from closed, whatever the markup says. Yacht: the service panel
+      // is rendered with data-tui-dialog-open="true" already on it, so it had
+      // nothing to transition from and appeared at once instead of sliding in.
+      dialog.setAttribute("data-tui-dialog-open", "false");
+      root?.setAttribute("data-tui-dialog-open", "false");
       try {
         if (dialog.getAttribute("data-tui-dialog-show-modal") === "true") {
           dialog.showModal();
@@ -174,12 +197,17 @@
 
     dialog._tuiDialogCloseTimer = window.setTimeout(() => {
       if (dialog.open) {
+        // Yacht: unmarked first. The close event, which unmarks it too,
+        // comes a task later, and until it does a closed dialog still marked
+        // closing is drawn (invisible, but display: flex).
+        dialog.removeAttribute("data-tui-dialog-closing");
+        root?.removeAttribute("data-tui-dialog-closing");
         dialog.close();
       } else {
         dialog.removeAttribute("data-tui-dialog-closing");
         root?.removeAttribute("data-tui-dialog-closing");
       }
-    }, CLOSE_DURATION_MS);
+    }, closeDuration(dialog));
   }
 
   function isDialogOpen(target) {

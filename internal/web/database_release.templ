@@ -14,7 +14,13 @@ templ databaseReleaseSlot(name string) {
 		hx-get={ "/apps/" + name + "/database/release" }
 		hx-trigger="load"
 		hx-swap="outerHTML"
-	></div>
+		aria-busy="true"
+	>
+		// The quiet line most databases get, in outline, so the tab does not
+		// shift down by a line when it arrives.
+		@loadingLabel("Reading the database's version…")
+		@Skeleton("mb-3 h-4 w-72 max-w-full")
+	</div>
 }
 
 // databaseReleaseBlock is the version a database runs: a quiet line when

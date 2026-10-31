@@ -147,7 +147,8 @@ templ Content(props ...ContentProps) {
 			// Override Dialog styles
 			"!scale-100",    // Reset Dialog's scale animation
 			"!rounded-none", // Remove dialog rounded corners
-			"!opacity-100",  // Keep fully opaque - no fade, only slide
+			// Yacht: no "!opacity-100". A sheet fades as it slides, as
+			// shadcn's does; the motion itself is in assets/css/input.css.
 			// User-provided classes last
 			p.Class,
 		),
@@ -240,11 +241,16 @@ templ Close(props ...CloseProps) {
 }
 
 func getSideClasses(side Side) string {
-	// Base classes for all sheets - matching shadcn
-	// Duration varies: 300ms when closing, 500ms when opening
-	// Use !transition-transform to override Dialog's transition-all
-	baseClasses := "fixed z-50 flex flex-col bg-background shadow-lg !transition-transform ease-in-out " +
-		"data-[tui-dialog-open=false]:duration-300 data-[tui-dialog-open=true]:duration-500 "
+	// Base classes for all sheets.
+	//
+	// Yacht: the slide is not here. templUI slid the whole width over
+	// 500ms in and 300ms out, while the dialog script hid the sheet 200ms
+	// into closing, so every close was cut off two thirds of the way across.
+	// The motion is shadcn's base sheet (a 2.5rem slide and a fade, 200ms,
+	// ease-in-out, opacity only under reduced motion), written as CSS in
+	// assets/css/input.css, because tailwind-merge-go does not parse the
+	// leading "!" these classes need and could not replace them.
+	baseClasses := "fixed z-50 flex flex-col bg-background shadow-lg "
 
 	switch side {
 	case SideRight:
@@ -256,10 +262,7 @@ func getSideClasses(side Side) string {
 			// Border
 			"border-l border-t-0 border-r-0 border-b-0 " +
 			// Reset Dialog transforms
-			"!translate-x-0 !translate-y-0 " +
-			// Slide animation
-			"data-[tui-dialog-open=false]:!translate-x-full " +
-			"data-[tui-dialog-open=true]:!translate-x-0"
+			"!translate-x-0 !translate-y-0"
 	case SideLeft:
 		return baseClasses +
 			// Positioning
@@ -269,10 +272,7 @@ func getSideClasses(side Side) string {
 			// Border
 			"border-r border-t-0 border-l-0 border-b-0 " +
 			// Reset Dialog transforms
-			"!translate-x-0 !translate-y-0 " +
-			// Slide animation
-			"data-[tui-dialog-open=false]:!-translate-x-full " +
-			"data-[tui-dialog-open=true]:!translate-x-0"
+			"!translate-x-0 !translate-y-0"
 	case SideTop:
 		return baseClasses +
 			// Positioning - full width at top
@@ -282,10 +282,7 @@ func getSideClasses(side Side) string {
 			// Border
 			"border-b border-t-0 border-l-0 border-r-0 " +
 			// Reset Dialog transforms - IMPORTANT: reset the centering from Dialog
-			"!translate-x-0 !translate-y-0 " +
-			// Slide animation - top slides up when closing
-			"data-[tui-dialog-open=false]:!-translate-y-full " +
-			"data-[tui-dialog-open=true]:!translate-y-0"
+			"!translate-x-0 !translate-y-0"
 	case SideBottom:
 		return baseClasses +
 			// Positioning - full width at bottom
@@ -295,19 +292,14 @@ func getSideClasses(side Side) string {
 			// Border
 			"border-t border-b-0 border-l-0 border-r-0 " +
 			// Reset Dialog transforms - IMPORTANT: reset the centering from Dialog
-			"!translate-x-0 !translate-y-0 " +
-			// Slide animation
-			"data-[tui-dialog-open=false]:!translate-y-full " +
-			"data-[tui-dialog-open=true]:!translate-y-0"
+			"!translate-x-0 !translate-y-0"
 	default:
 		return baseClasses +
 			// Default to right side
 			"!top-0 !bottom-0 !right-0 !left-auto " +
 			"!h-dvh !max-h-dvh w-3/4 sm:!max-w-sm " +
 			"border-l border-t-0 border-r-0 border-b-0 " +
-			"!translate-x-0 !translate-y-0 " +
-			"data-[tui-dialog-open=false]:!translate-x-full " +
-			"data-[tui-dialog-open=true]:!translate-x-0"
+			"!translate-x-0 !translate-y-0"
 	}
 }
 

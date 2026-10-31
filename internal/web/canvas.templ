@@ -166,9 +166,11 @@ templ Canvas(d CanvasData) {
 		// the thing it covers cannot sit above it.
 		@sheet.Sheet(sheet.Props{ID: "deploy-logs-sheet", Side: sheet.SideRight}) {
 			@sheet.Content(sheet.ContentProps{Class: "canvas-sheet"}) {
+				@logSheetSkeleton()
 				<div id="deploy-log-panel" class="flex min-h-0 flex-1 flex-col"></div>
 			}
 		}
+		@canvasSheetSkeleton()
 		if d.Open != nil {
 			// Rendered open, with its content already in it. Fetching the panel
 			// after the page arrives would mean the app somebody navigated

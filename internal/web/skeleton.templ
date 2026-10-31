@@ -1,0 +1,169 @@
+package web
+
+import "github.com/codeblocktz/yacht/internal/web/ui/sheet"
+
+// Skeleton is a block the shape of something on its way: shadcn's, a pulsing
+// rounded-md in the accent surface, sized by the caller to what it stands in
+// for. A "Reading…" line or an empty box says something is happening; a
+// skeleton also says what will be there, so nothing jumps when it lands.
+//
+// Hidden from assistive technology: the container it sits in carries
+// aria-busy and says what is loading in words, which a column of grey blocks
+// cannot.
+templ Skeleton(class string) {
+	<div data-slot="skeleton" class={ "animate-pulse rounded-md bg-accent motion-reduce:animate-none", class } aria-hidden="true"></div>
+}
+
+// loadingLabel is what a screen reader hears in place of a skeleton.
+templ loadingLabel(text string) {
+	<span class="sr-only">{ text }</span>
+}
+
+// skeletonRows is a list's rows: a mark, two lines of text, something at the
+// end. The shape of a deployment, a variable or a file.
+templ skeletonRows(n int) {
+	<div class="panel divide-y divide-border">
+		for i := 0; i < n; i++ {
+			<div class="flex items-center gap-3 px-4 py-3.5">
+				@Skeleton("size-2.5 shrink-0 rounded-full")
+				<div class="flex min-w-0 flex-1 flex-col gap-2">
+					@Skeleton(skeletonWidth(i, "h-3.5 w-2/5", "h-3.5 w-1/2", "h-3.5 w-1/3"))
+					@Skeleton(skeletonWidth(i, "h-3 w-3/5", "h-3 w-2/5", "h-3 w-1/2"))
+				</div>
+				@Skeleton("h-7 w-16 shrink-0")
+			</div>
+		}
+	</div>
+}
+
+// skeletonWidth varies the rows a little, so a list loading reads as a list
+// rather than as a barcode.
+func skeletonWidth(i int, widths ...string) string {
+	return widths[i%len(widths)]
+}
+
+// panelBodySkeleton is a service tab while it loads: what the deployments
+// tab, the first one, looks like.
+templ panelBodySkeleton() {
+	<div class="flex flex-col gap-4" aria-busy="true">
+		@loadingLabel("Loading…")
+		<div class="panel flex flex-col gap-2 p-4">
+			@Skeleton("h-4 w-48")
+			@Skeleton("h-3 w-72 max-w-full")
+		</div>
+		@skeletonRows(4)
+	</div>
+}
+
+// canvasSheetSkeletonTitle names the skeleton panel. Its own id rather than
+// canvasSheetTitle: the template it is in is part of every canvas page, and
+// a second element with the panel's id is one too many on a page whose panel
+// is open.
+const canvasSheetSkeletonTitle = "canvas-sheet-skeleton-title"
+
+// canvasSheetSkeleton is the service panel before it has arrived: the sheet
+// itself, with its header, tab strip and rows in outline. canvas-panel.js
+// opens this the moment a card is clicked and puts the panel in it when the
+// request comes back, so the sheet is already sliding in while the server
+// answers — rather than nothing happening, then the panel appearing at once.
+//
+// A template, so it is inert until used: its dialog is not one templUI's
+// script sets up, and nothing in it is in the page.
+templ canvasSheetSkeleton() {
+	<template id="canvas-sheet-skeleton">
+		@sheet.Sheet(sheet.Props{Side: sheet.SideRight}) {
+			@sheet.Content(sheet.ContentProps{
+				Class:      "canvas-sheet",
+				Attributes: templ.Attributes{"aria-labelledby": canvasSheetSkeletonTitle, "aria-busy": "true"},
+			}) {
+				@sheet.Header(sheet.HeaderProps{Class: "canvas-sheet-head"}) {
+					@sheet.Title(sheet.TitleProps{ID: canvasSheetSkeletonTitle, Class: "sr-only"}) {
+						Loading the service
+					}
+					// Each line the height of the one it stands for (the title's
+					// 24px, the address's 20px), so the tabs below do not move
+					// when the panel replaces it.
+					<div class="flex h-6 min-w-0 items-center gap-2.5">
+						@Skeleton("size-5 shrink-0 rounded")
+						@Skeleton("h-5 w-40")
+						@Skeleton("h-5 w-16 rounded-full")
+					</div>
+					<div class="flex h-5 items-center">
+						@Skeleton("h-4 w-56 max-w-full")
+					</div>
+				}
+				<div class="tabs canvas-sheet-tabs" aria-hidden="true">
+					for _, w := range []string{"w-20", "w-16", "w-14", "w-14", "w-16"} {
+						<span class="tab">
+							@Skeleton("inline-block h-3.5 align-middle " + w)
+						</span>
+					}
+				</div>
+				<div class="canvas-sheet-body">
+					@panelBodySkeleton()
+				</div>
+			}
+		}
+	</template>
+}
+
+// logSheetSkeleton is a deployment's logs while they load: the header, the
+// view tabs and a column of lines. Shown by htmx while the request that fills
+// the deploy logs sheet is in flight (hx-indicator), and in place of whatever
+// that sheet showed last, which belongs to another deployment.
+templ logSheetSkeleton() {
+	<div id="deploy-log-loading" class="sheet-loading" aria-busy="true">
+		@loadingLabel("Loading the logs…")
+		<div class="canvas-sheet-head flex flex-col gap-2 border-b border-border">
+			@Skeleton("h-5 w-44")
+			@Skeleton("h-4 w-64 max-w-full")
+		</div>
+		<div class="flex flex-col gap-2 px-5 py-4">
+			for i := 0; i < 12; i++ {
+				@Skeleton(skeletonWidth(i, "h-3 w-11/12", "h-3 w-3/4", "h-3 w-5/6", "h-3 w-1/2"))
+			}
+		</div>
+	</div>
+}
+
+// chartsSkeleton is the Metrics tab's charts before the store has answered:
+// the range picker and two chart panels, each the height a chart draws at.
+templ chartsSkeleton() {
+	<div class="mb-3 flex items-center justify-between gap-2">
+		<span class="text-[13px] font-semibold">Over time</span>
+		@Skeleton("h-6 w-36")
+	</div>
+	<div class="flex flex-col gap-4">
+		for i := 0; i < 2; i++ {
+			<div class="panel min-w-0">
+				<div class="panel-header">
+					@Skeleton("h-4 w-24")
+					@Skeleton("h-4 w-12")
+				</div>
+				<div class="h-[150px] px-3 pb-2 pt-3">
+					@Skeleton("h-full w-full")
+				</div>
+			</div>
+		}
+	</div>
+}
+
+// fileListSkeleton is a bucket's files before the listing has come back.
+templ fileListSkeleton() {
+	<div class="panel">
+		<div class="panel-header">
+			@Skeleton("h-4 w-32")
+			@Skeleton("h-7 w-20")
+		</div>
+		<div class="divide-y divide-border">
+			for i := 0; i < 4; i++ {
+				<div class="flex items-center gap-3 px-5 py-3">
+					@Skeleton("size-4 shrink-0 rounded")
+					@Skeleton(skeletonWidth(i, "h-3.5 w-48", "h-3.5 w-36", "h-3.5 w-56", "h-3.5 w-28"))
+					<span class="flex-1"></span>
+					@Skeleton("h-3.5 w-14")
+				</div>
+			}
+		</div>
+	</div>
+}
