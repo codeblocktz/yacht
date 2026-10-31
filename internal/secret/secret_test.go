@@ -480,3 +480,49 @@ func mustSeal(t *testing.T, k *Keeper, plain string) []byte {
 	}
 	return sealed
 }
+
+// Two processes configured with the same secret key must derive the same key
+// for a purpose, or a cookie one replica signs fails on the next. Different
+// secrets and different purposes must not collide, and nothing derived may be
+// the secret key itself.
+func TestDeriveKeyIsSharedBySecretAndSeparatedByPurpose(t *testing.T) {
+	derive := func(k *Keeper, purpose string) []byte {
+		t.Helper()
+		key, err := k.DeriveKey(purpose)
+		if err != nil {
+			t.Fatalf("DeriveKey(%q): %v", purpose, err)
+		}
+		if len(key) != keyBytes {
+			t.Fatalf("derived %d bytes, want %d", len(key), keyBytes)
+		}
+		return key
+	}
+
+	one := derive(keeperFor(t, keyA), "flash")
+	if !bytes.Equal(one, derive(keeperFor(t, keyA), "flash")) {
+		t.Fatal("two keepers with the same secret derived different keys")
+	}
+	// Only the active key derives: a retired one held alongside changes nothing.
+	if !bytes.Equal(one, derive(keeperFor(t, keyA, keyB), "flash")) {
+		t.Fatal("holding a previous key changed the derived key")
+	}
+	if bytes.Equal(one, derive(keeperFor(t, keyB), "flash")) {
+		t.Fatal("different secrets derived the same key")
+	}
+	if bytes.Equal(one, derive(keeperFor(t, keyA), "csrf")) {
+		t.Fatal("different purposes derived the same key")
+	}
+	if bytes.Equal(one, keyA) {
+		t.Fatal("the derived key is the secret key")
+	}
+}
+
+func TestDeriveKeyNeedsAKeyAndAPurpose(t *testing.T) {
+	var none *Keeper
+	if _, err := none.DeriveKey("flash"); err == nil {
+		t.Fatal("a keeper with no key derived something")
+	}
+	if _, err := testKeeper(t).DeriveKey(""); err == nil {
+		t.Fatal("a key was derived for no purpose")
+	}
+}
