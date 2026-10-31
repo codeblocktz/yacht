@@ -1251,6 +1251,19 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 // "15m0s".
 func HumanDuration(d time.Duration) string { return notify.Duration(d) }
 
+// MailWhite is a white background as an inline style, colour and image,
+// for every surface of a mail's HTMLContent that must stay white in the
+// Gmail apps' dark mode. See notify.White.
+const MailWhite = notify.White
+
+// MailInk wraps a mail's text — no images, no buttons — so that it keeps its
+// colours in the Gmail apps' dark mode. See notify.Ink.
+func MailInk(html string) string { return notify.Ink(html) }
+
+// MailButton is a mail's button in background, with its address beneath,
+// drawn alike in every client's dark mode. See notify.Button.
+func MailButton(a MailAction, background string) string { return notify.Button(a, background) }
+
 func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 	switch {
 	case cfg.SMTPAddr != "":

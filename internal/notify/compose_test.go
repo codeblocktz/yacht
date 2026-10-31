@@ -40,7 +40,7 @@ func TestActionIsAButtonWithItsAddressBeneath(t *testing.T) {
 	for _, want := range []string{
 		"<title>Sign in</title>",
 		`style="display:inline-block;padding:12px 20px;`,
-		">Sign in to Acme</a>",
+		">Sign in to Acme</span></span></a>",
 		`>https://app.example.test/auth/x</a></p>`,
 	} {
 		if !strings.Contains(h, want) {
