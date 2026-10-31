@@ -26,14 +26,16 @@
     return target.closest?.("[data-tui-dialog]") || null;
   }
 
-  function getDialog(root) {
+  function findDialog(root) {
     if (!root) return null;
     // Skip content nodes owned by a nested dialog when one sits between this root's trigger and content.
-    return ensureDialog(
-      [...root.querySelectorAll("[data-tui-dialog-content]")].find(
-        (el) => el.closest("[data-tui-dialog]") === root,
-      ),
+    return [...root.querySelectorAll("[data-tui-dialog-content]")].find(
+      (el) => el.closest("[data-tui-dialog]") === root,
     );
+  }
+
+  function getDialog(root) {
+    return ensureDialog(findDialog(root));
   }
 
   function getOwnedTriggers(root) {
@@ -190,7 +192,12 @@
 
   function initDialogs(root = document) {
     root.querySelectorAll("[data-tui-dialog]").forEach((dialogRoot) => {
-      const dialog = getDialog(dialogRoot);
+      // findDialog, not getDialog: getDialog sets the dialog up, which marks
+      // it initialized, so the check below always returned and a dialog
+      // rendered Open never opened. Yacht: the service panel over the canvas
+      // (DEPLOY-15), which a display: flex in our stylesheet had kept drawn
+      // until #65 took it out.
+      const dialog = findDialog(dialogRoot);
       if (!dialog) return;
 
       // Already set up? Skip it. The MutationObserver re-runs this on every DOM
