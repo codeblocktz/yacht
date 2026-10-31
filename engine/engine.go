@@ -40,6 +40,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/cluster"
 	"github.com/codeblocktz/yacht/internal/config"
 	"github.com/codeblocktz/yacht/internal/dbrelease"
+	"github.com/codeblocktz/yacht/internal/disposable"
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -51,6 +52,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/retire"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/codeblocktz/yacht/internal/turnstile"
 	"github.com/codeblocktz/yacht/internal/web"
 	"github.com/codeblocktz/yacht/internal/webhook"
 )
@@ -145,6 +147,20 @@ type (
 
 	// Role is a team role, for a wrapper gating pages of its own.
 	Role = account.Role
+
+	// User is a person with an account, as Server.Person reads the one
+	// signed in.
+	User = account.User
+
+	// Turnstile checks a form was sent by a person: Cloudflare Turnstile,
+	// which the engine's sign-in forms use with YACHT_TURNSTILE_SITE_KEY and
+	// _SECRET, for a wrapper's own public forms. See NewTurnstile.
+	Turnstile = turnstile.Verifier
+
+	// AuditActor and AuditEvent are an entry in a team's audit log, for a
+	// wrapper recording a change of its own there with Engine.Audit.Record.
+	AuditActor = audit.Actor
+	AuditEvent = audit.Event
 
 	// Accounts is the engine's teams, people, invitations and sessions. A
 	// wrapper's organisations build on it rather than beside it.
@@ -255,6 +271,17 @@ const (
 	RoleOwner  = account.RoleOwner
 	RoleAdmin  = account.RoleAdmin
 	RoleMember = account.RoleMember
+
+	// AuditActorOperator is an audit entry made by the install's operator,
+	// rather than by one of the team's people.
+	AuditActorOperator = audit.ActorOperator
+
+	// TurnstileOrigin, TurnstileScriptURL and TurnstileResponseField are
+	// what a page drawing the widget needs: the origin its policy lets in,
+	// the script, and the field the token arrives in.
+	TurnstileOrigin        = turnstile.Origin
+	TurnstileScriptURL     = turnstile.ScriptURL
+	TurnstileResponseField = turnstile.ResponseField
 
 	// SessionCookie is the cookie the engine's sessions live in.
 	SessionCookie = web.SessionCookie
@@ -384,6 +411,19 @@ var (
 	// enforces none: the in-memory one an install falls back to when the
 	// cluster is unreachable, say.
 	ErrNoNetworkIsolation = errors.New("this orchestrator enforces no network isolation")
+
+	// NewTurnstile is a Turnstile for a site's keys, nil — checking
+	// nothing — when either is empty. AllowTurnstile widens a response's
+	// Content-Security-Policy to let the widget in, for the pages that draw
+	// it; TurnstileMessage is what a person is told when it refused them.
+	NewTurnstile     = turnstile.New
+	AllowTurnstile   = turnstile.AllowWidget
+	TurnstileMessage = turnstile.Message
+
+	// DisposableEmail reports whether an address is at a domain handing out
+	// throwaway mailboxes, or a subdomain of one: the embedded list open
+	// sign-up refuses, for a wrapper's own forms.
+	DisposableEmail = disposable.Address
 
 	// LoadConfig reads the engine's configuration from the environment.
 	LoadConfig = config.Load
@@ -857,6 +897,11 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.MailTransport = cfg.MailTransport()
 		opts.BootstrapEmail = cfg.OwnerEmail
 		opts.OpenSignup = cfg.OpenSignup
+		opts.Turnstile = turnstile.New(cfg.TurnstileSiteKey, cfg.TurnstileSecret)
+		if cfg.OpenSignup && !opts.Turnstile.Enabled() {
+			log.Warn("sign-up is open and its form has no bot check — " +
+				"set YACHT_TURNSTILE_SITE_KEY and YACHT_TURNSTILE_SECRET")
+		}
 		opts.RequestAccessURL = cfg.RequestAccessURL
 	}
 

@@ -183,6 +183,32 @@ func (s *Server) PersonEmail(r *http.Request) string {
 	return u.Email
 }
 
+// Person is the signed-in person — the person, not the team the request
+// acts as — with false when there is nobody: no session, a token, or sign-in
+// off. For a wrapping application that holds people to something of its own,
+// a verified phone number say, before letting them further in.
+func (s *Server) Person(r *http.Request) (account.User, bool) {
+	if s.accounts == nil {
+		return account.User{}, false
+	}
+	if p, ok := apiPrincipalFrom(r.Context()); ok && p.token != nil {
+		return account.User{}, false
+	}
+	raw := sessionToken(r)
+	if raw == "" {
+		return account.User{}, false
+	}
+	sess, err := s.accounts.ResolveSession(r.Context(), raw)
+	if err != nil {
+		return account.User{}, false
+	}
+	u, err := s.accounts.User(r.Context(), sess.UserID)
+	if err != nil {
+		return account.User{}, false
+	}
+	return u, true
+}
+
 func normaliseEmails(in []string) map[string]bool {
 	out := make(map[string]bool, len(in))
 	for _, e := range in {

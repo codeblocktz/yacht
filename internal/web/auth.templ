@@ -27,6 +27,10 @@ type SignInData struct {
 	// RequestAccess is where somebody without an account asks for one, when
 	// sign-up is not open. The install's too.
 	RequestAccess string
+
+	// TurnstileSiteKey draws Cloudflare's check that a person is filling in
+	// each form, when the install has one. Empty draws nothing.
+	TurnstileSiteKey string
 }
 
 // SignInMethod is which form a submission came from.
@@ -83,6 +87,7 @@ templ SignIn(d SignInData) {
 					required
 				/>
 			</div>
+			@turnstileWidget(d.TurnstileSiteKey)
 			<button class="btn btn-primary" type="submit">Sign in</button>
 		</form>
 		<div class="my-5 flex items-center gap-3">
@@ -111,8 +116,14 @@ templ SignIn(d SignInData) {
 					placeholder="you@example.com"
 				/>
 			</div>
+			@turnstileWidget(d.TurnstileSiteKey)
 			<button class="btn" type="submit">Email me a sign-in link</button>
 		</form>
+		if d.TurnstileSiteKey != "" {
+			// One script renders every widget on the page, each into its own
+			// form, so each form carries its own single-use token.
+			<script src={ turnstileScriptURL } async defer></script>
+		}
 		<p class="mt-5 text-[12.5px] text-muted-foreground">
 			if d.OpenSignup {
 				New here? Ask for a link with your address and it creates your
@@ -131,6 +142,15 @@ templ SignIn(d SignInData) {
 				}
 			</p>
 		}
+	}
+}
+
+// turnstileWidget is where Cloudflare's check is drawn inside a form: the
+// script fills the div and adds the token field the server checks. The
+// theme follows the visitor's, as the page does.
+templ turnstileWidget(siteKey string) {
+	if siteKey != "" {
+		<div class="cf-turnstile min-h-[65px]" data-sitekey={ siteKey } data-theme="auto" data-size="flexible"></div>
 	}
 }
 

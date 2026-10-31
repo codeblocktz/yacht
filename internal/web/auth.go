@@ -16,7 +16,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/codeblocktz/yacht/internal/account"
+	"github.com/codeblocktz/yacht/internal/disposable"
 	"github.com/codeblocktz/yacht/internal/notify"
+	"github.com/codeblocktz/yacht/internal/turnstile"
 )
 
 // SessionCookie is the name of the cookie carrying a session token.
@@ -115,7 +117,7 @@ func (s *Server) signInPage(w http.ResponseWriter, r *http.Request) {
 	if email, err := parseEmail(r.URL.Query().Get("email")); err == nil {
 		d.Email = email
 	}
-	s.renderSignedOut(w, r, http.StatusOK, "Sign in", s.signInForm(d))
+	s.renderSignIn(w, r, http.StatusOK, s.signInForm(d))
 }
 
 // signInRequest mails a link to the address, if it belongs to anyone.
@@ -129,7 +131,7 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Answered without the floor on purpose: malformed input is a mistake
 		// the visitor can already see, not a fact about who has an account.
-		s.renderSignedOut(w, r, http.StatusUnprocessableEntity, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusUnprocessableEntity, s.signInForm(SignInData{
 			Email: r.FormValue("email"),
 			Error: err.Error(),
 		}))
@@ -145,9 +147,32 @@ func (s *Server) signInRequest(w http.ResponseWriter, r *http.Request) {
 	if !addressOK || !clientOK {
 		// Refusal depends on the attempt count and never on whether the address
 		// exists, so saying so plainly leaks nothing.
-		s.renderSignedOut(w, r, http.StatusTooManyRequests, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusTooManyRequests, s.signInForm(SignInData{
 			Email: email,
 			Error: "Too many sign-in attempts. Try again in a few minutes.",
+		}))
+		return
+	}
+
+	// After the counters, so a bot spinning on the form spends its budget
+	// rather than one siteverify call per attempt.
+	if err := s.turnstile.VerifyRequest(r, clientIP(r)); err != nil {
+		s.log.Info("sign-in form refused by the bot check", slog.String("reason", err.Error()))
+		s.renderSignIn(w, r, http.StatusForbidden, s.signInForm(SignInData{
+			Email: email,
+			Error: turnstile.Message(err),
+		}))
+		return
+	}
+
+	// A throwaway mailbox is refused an account while sign-up is open. Said
+	// on the page rather than in a mail nobody will read, which tells the
+	// visitor only what anybody can look up: that the domain hands out
+	// throwaway addresses. Nothing about whether the address has an account.
+	if s.openSignup && disposable.Address(email) {
+		s.renderSignIn(w, r, http.StatusUnprocessableEntity, s.signInForm(SignInData{
+			Email: email,
+			Error: errDisposableAddress.Error(),
 		}))
 		return
 	}
@@ -267,7 +292,7 @@ func (s *Server) baseHost() string {
 func (s *Server) signUpCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !s.openSignup {
-		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusUnauthorized, s.signInForm(SignInData{
 			Error: "That sign-in link is no longer valid. Ask for a new one.",
 		}))
 		return
@@ -277,7 +302,7 @@ func (s *Server) signUpCallback(w http.ResponseWriter, r *http.Request) {
 		if !errors.Is(err, account.ErrTokenInvalid) {
 			s.log.Error("consume sign-up link", slog.String("error", err.Error()))
 		}
-		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusUnauthorized, s.signInForm(SignInData{
 			Error: "That sign-up link is no longer valid. Ask for a new one.",
 		}))
 		return
@@ -304,7 +329,7 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 		// Unknown, expired and already-spent links are answered alike, because
 		// "this link has already been used" tells whoever is holding a guessed
 		// token that they guessed a real one.
-		s.renderSignedOut(w, r, http.StatusUnauthorized, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusUnauthorized, s.signInForm(SignInData{
 			Error: "That sign-in link is no longer valid. Ask for a new one.",
 		}))
 		return
@@ -376,7 +401,7 @@ func (s *Server) startSessionIn(
 	failed := func(what string, err error) bool {
 		s.log.Error(what,
 			slog.String("user", user.ID.String()), slog.String("error", err.Error()))
-		s.renderSignedOut(w, r, http.StatusInternalServerError, "Sign in", s.signInForm(SignInData{
+		s.renderSignIn(w, r, http.StatusInternalServerError, s.signInForm(SignInData{
 			Error: "Something went wrong signing you in. Try again in a moment.",
 		}))
 		return false
@@ -578,7 +603,21 @@ func strangerBody(brand, host, requestAccess string) string {
 // handler can render it describing a different install from the one it is.
 func (s *Server) signInForm(d SignInData) templ.Component {
 	d.OpenSignup, d.RequestAccess = s.openSignup, s.requestAccess
+	d.TurnstileSiteKey = s.turnstile.Key()
 	return SignIn(d)
+}
+
+// turnstileScriptURL is Cloudflare's widget, for the template.
+const turnstileScriptURL = turnstile.ScriptURL
+
+// renderSignIn draws the sign-in page, letting Cloudflare's widget into this
+// response's policy when the install checks its forms with it. Only here:
+// every other page keeps a policy that lets no third party in.
+func (s *Server) renderSignIn(w http.ResponseWriter, r *http.Request, status int, page templ.Component) {
+	if s.turnstile.Enabled() {
+		turnstile.AllowWidget(w.Header())
+	}
+	s.renderSignedOut(w, r, status, "Sign in", page)
 }
 
 func signInLead(openSignup bool) string {
@@ -622,6 +661,9 @@ func parseEmail(raw string) (string, error) {
 var (
 	errEmailRequired  = signInError("Enter the email address you sign in with.")
 	errEmailMalformed = signInError("That does not look like an email address.")
+	// errDisposableAddress is open sign-up refusing a throwaway mailbox.
+	errDisposableAddress = signInError("Sorry, we can't make an account for a disposable email address. " +
+		"Use an address you'll keep: your sign-in links, receipts and alerts go there.")
 )
 
 // signInError is a message written for the person reading the page rather than
