@@ -20,8 +20,9 @@ type SignInData struct {
 	// chose — so it says nothing whatever about the account.
 	Method SignInMethod
 
-	// OpenSignup says the emailed link also creates an account. A fact about
-	// the install, the same for every visitor, so it discloses nothing.
+	// OpenSignup says somebody new can make an account, on the sign-up page
+	// this one links to. A fact about the install, the same for every
+	// visitor, so it discloses nothing.
 	OpenSignup bool
 
 	// RequestAccess is where somebody without an account asks for one, when
@@ -29,7 +30,7 @@ type SignInData struct {
 	RequestAccess string
 
 	// TurnstileSiteKey draws Cloudflare's check that a person is filling in
-	// each form, when the install has one. Empty draws nothing.
+	// the forms, when the install has one. Empty draws nothing.
 	TurnstileSiteKey string
 }
 
@@ -50,13 +51,14 @@ const (
 // does not matter whether such a probe is a round trip, a fetch or a status
 // code: the only safe design is one where the server is never asked.
 templ SignIn(d SignInData) {
-	@authCard("Sign in", signInLead(d.OpenSignup)) {
+	@authCard("Sign in", "Use your password, or have a link emailed to you.") {
 		if d.Error != "" {
 			<div class="callout callout-err mb-4">
 				<div>{ d.Error }</div>
 			</div>
 		}
-		<form method="post" action="/sign-in/password" class="flex flex-col gap-4">
+		<form method="post" action="/sign-in/password" class="flex flex-col gap-4" data-turnstile-share>
+			@turnstileToken(d.TurnstileSiteKey)
 			// autocomplete is username rather than email, deliberately: it is the
 			// pairing with current-password that lets a password manager save and
 			// offer the two together.
@@ -87,7 +89,6 @@ templ SignIn(d SignInData) {
 					required
 				/>
 			</div>
-			@turnstileWidget(d.TurnstileSiteKey)
 			<button class="btn btn-primary" type="submit">Sign in</button>
 		</form>
 		<div class="my-5 flex items-center gap-3">
@@ -99,7 +100,8 @@ templ SignIn(d SignInData) {
 		// form, Enter submits through whichever submit button comes first in the
 		// markup, so one of the two audiences always gets the wrong action from
 		// the keyboard.
-		<form method="post" action="/sign-in" class="flex flex-col gap-4">
+		<form method="post" action="/sign-in" class="flex flex-col gap-4" data-turnstile-share>
+			@turnstileToken(d.TurnstileSiteKey)
 			<div class="field">
 				<label class="label" for="email">Email</label>
 				<input
@@ -116,25 +118,28 @@ templ SignIn(d SignInData) {
 					placeholder="you@example.com"
 				/>
 			</div>
-			@turnstileWidget(d.TurnstileSiteKey)
 			<button class="btn" type="submit">Email me a sign-in link</button>
 		</form>
 		if d.TurnstileSiteKey != "" {
-			// One script renders every widget on the page, each into its own
-			// form, so each form carries its own single-use token.
+			// One widget for both forms, outside them: a widget in each was two
+			// checks for one visitor, one passed while the other still asked.
+			// turnstile-share.js copies its token into the form that is sent.
+			<div class="mt-5">
+				@turnstileWidget(d.TurnstileSiteKey)
+			</div>
+			<script src={ asset("/assets/js/turnstile-share.js") } defer></script>
 			<script src={ turnstileScriptURL } async defer></script>
 		}
 		<p class="mt-5 text-[12.5px] text-muted-foreground">
-			if d.OpenSignup {
-				New here? Ask for a link with your address and it creates your
-				account. No password yet, or forgotten it? Ask for a link, then
-				set one from your account page.
-			} else {
-				No password yet, or forgotten it? Ask for a link, then set one from
-				your account page.
-			}
+			No password yet, or forgotten it? Ask for a link, then set one from
+			your account page.
 		</p>
-		if !d.OpenSignup {
+		if d.OpenSignup {
+			<p class="mt-3 text-[12.5px] text-muted-foreground">
+				Don't have an account?
+				<a class="text-foreground underline" href="/sign-up">Sign up</a>
+			</p>
+		} else {
 			<p class="mt-3 text-[12.5px] text-muted-foreground">
 				No account? Accounts here are by invitation.
 				if d.RequestAccess != "" {
@@ -145,12 +150,80 @@ templ SignIn(d SignInData) {
 	}
 }
 
+// SignUpData is the state of the sign-up form. Like SignInData it carries
+// nothing about whether an address has an account: the page is the same for
+// one that has and one that has not.
+type SignUpData struct {
+	Email string
+	Error string
+
+	// Lead is the line under the title, and Next what happens after the
+	// button: the install's words, or the engine's.
+	Lead string
+	Next string
+
+	// TurnstileSiteKey draws the bot check; empty draws none.
+	TurnstileSiteKey string
+}
+
+// SignUp is where somebody new starts, while sign-up is open: an address and
+// one button. The link it mails creates the account; an address that already
+// has one is mailed a sign-in link instead, and the page that follows is the
+// same either way.
+templ SignUp(d SignUpData) {
+	@authCard("Create your account", d.Lead) {
+		if d.Error != "" {
+			<div class="callout callout-err mb-4">
+				<div>{ d.Error }</div>
+			</div>
+		}
+		<form method="post" action="/sign-up" class="flex flex-col gap-4">
+			<div class="field">
+				<label class="label" for="email">Email</label>
+				<input
+					class="control"
+					id="email"
+					name="email"
+					type="email"
+					autocomplete="email"
+					required
+					autofocus
+					value={ d.Email }
+					placeholder="you@example.com"
+				/>
+			</div>
+			// Inside the form, the one form on the page: the widget's own token
+			// field goes with it, and no script is needed to carry it.
+			@turnstileWidget(d.TurnstileSiteKey)
+			<button class="btn btn-primary" type="submit">Sign up with email</button>
+		</form>
+		if d.Next != "" {
+			<p class="mt-4 text-[12.5px] text-muted-foreground">{ d.Next }</p>
+		}
+		if d.TurnstileSiteKey != "" {
+			<script src={ turnstileScriptURL } async defer></script>
+		}
+		<p class="mt-5 text-[12.5px] text-muted-foreground">
+			Already have an account?
+			<a class="text-foreground underline" href="/sign-in">Sign in</a>
+		</p>
+	}
+}
+
+// turnstileToken is the field a form on the sign-in page carries the shared
+// widget's token in, filled at submit by turnstile-share.js.
+templ turnstileToken(siteKey string) {
+	if siteKey != "" {
+		<input type="hidden" name="cf-turnstile-response" value="" data-turnstile-token/>
+	}
+}
+
 // turnstileWidget is where Cloudflare's check is drawn inside a form: the
 // script fills the div and adds the token field the server checks. The
 // theme follows the visitor's, as the page does.
 templ turnstileWidget(siteKey string) {
 	if siteKey != "" {
-		<div class="cf-turnstile min-h-[65px]" data-sitekey={ siteKey } data-theme="auto" data-size="flexible"></div>
+		<div class="cf-turnstile min-h-[65px]" data-turnstile-widget data-sitekey={ siteKey } data-theme="auto" data-size="flexible"></div>
 	}
 }
 
@@ -162,13 +235,15 @@ templ turnstileWidget(siteKey string) {
 // once, for an address that exists, to become the disclosure this whole flow
 // avoids. openSignup is the install's, the same for everybody: with it every
 // address is mailed a link, so the page can say so plainly.
-templ CheckMail(openSignup bool) {
+//
+// back is the page the form was on, where "Use a different address" goes.
+templ CheckMail(openSignup bool, back string) {
 	@authCard("Check your mail", checkMailLead(openSignup)) {
 		<p class="text-[12.5px] text-muted-foreground">
 			The link works once and expires shortly. You can close this page.
 		</p>
 		<p class="mt-4 text-[12.5px]">
-			<a class="text-muted-foreground hover:text-foreground" href="/sign-in">
+			<a class="text-muted-foreground hover:text-foreground" href={ templ.SafeURL(back) }>
 				Use a different address
 			</a>
 		</p>

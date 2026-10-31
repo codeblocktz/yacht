@@ -499,6 +499,12 @@ type Overrides struct {
 	// wrapper's own welcome when it marks it Introduces. Empty adds nothing.
 	MailIntro string
 
+	// SignUpLead and SignUpNext are the sign-up page's words: the line under
+	// its title, and what happens after its button is pressed. Empty is the
+	// engine's own. See web.Options.
+	SignUpLead string
+	SignUpNext string
+
 	// PlatformVariablePrefix begins the variables every app is given at
 	// deploy — PUBLIC_DOMAIN, PRIVATE_DOMAIN, SERVICE_NAME, PROJECT_NAME — so
 	// a product names them after itself: "DATAHURU_" gives an app
@@ -903,6 +909,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 				"set YACHT_TURNSTILE_SITE_KEY and YACHT_TURNSTILE_SECRET")
 		}
 		opts.RequestAccessURL = cfg.RequestAccessURL
+		opts.SignUpLead, opts.SignUpNext = ov.SignUpLead, ov.SignUpNext
 	}
 
 	logs, metrics, err := attachObserve(&opts, cfg, log)
