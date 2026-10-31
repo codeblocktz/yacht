@@ -113,6 +113,8 @@ type (
 	// Mailer delivers the engine's messages — seam 4.
 	Mailer  = notify.Mailer
 	Message = notify.Message
+	// MailAction is a message's button: see Message.Action.
+	MailAction = notify.Action
 
 	// Orchestrator runs workloads — seam 1.
 	Orchestrator = orchestrator.Orchestrator
@@ -1174,6 +1176,10 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 		slog.String("owner", cfg.OwnerID))
 	return identity.NewStaticToken(owner, cfg.AuthToken)
 }
+
+// HumanDuration is d as a mail should say it, "15 minutes" rather than Go's
+// "15m0s".
+func HumanDuration(d time.Duration) string { return notify.Duration(d) }
 
 func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 	switch {
