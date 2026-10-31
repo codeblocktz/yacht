@@ -388,7 +388,7 @@ func (s *Server) projectStatus(w http.ResponseWriter, r *http.Request) {
 	for _, a := range apps {
 		label, class := cardStatus(a)
 		_, pill := serviceStatus(a)
-		out[a.Name] = card{Label: label, Class: class, Pill: pill, Host: a.Host, Href: cardHref(a)}
+		out[a.Name] = card{Label: label, Class: class, Pill: pill, Host: a.DisplayHost(), Href: cardHref(a)}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

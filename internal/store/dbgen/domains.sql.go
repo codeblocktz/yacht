@@ -238,6 +238,25 @@ func (q *Queries) GetManagedDomain(ctx context.Context, appID uuid.UUID) (Domain
 	return i, err
 }
 
+const getPrimaryCustomDomain = `-- name: GetPrimaryCustomDomain :one
+SELECT host FROM domains
+WHERE app_id = $1 AND NOT managed AND state = 'routed'
+ORDER BY created_at, host
+LIMIT 1
+`
+
+// The custom domain an app is shown at: the first one claimed that is live.
+//
+// Routed only. A domain still pending, verifying or failed does not answer
+// yet, and a card pointing somebody at it would send them to nothing — or
+// to whoever the name points at today.
+func (q *Queries) GetPrimaryCustomDomain(ctx context.Context, appID uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getPrimaryCustomDomain, appID)
+	var host string
+	err := row.Scan(&host)
+	return host, err
+}
+
 const hasVerifiedDomainsForApp = `-- name: HasVerifiedDomainsForApp :one
 SELECT EXISTS (
     SELECT 1 FROM domains

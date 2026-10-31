@@ -159,6 +159,11 @@ type App struct {
 	// configured. Read from the domains table rather than stored on the app,
 	// so there is one place a hostname lives.
 	Host string
+	// CustomHost is the first custom domain claimed for the app that is
+	// routed, empty with none. Somebody who brought their own name wants to
+	// be shown it; one still pending or failed answers nothing, and is never
+	// here.
+	CustomHost string
 
 	// Volumes is the storage attached to this app, read alongside it.
 	Volumes []Volume
@@ -249,6 +254,24 @@ func (a App) URLScheme() string {
 		return "https"
 	}
 	return "http"
+}
+
+// DisplayHost is where the app answers, as a card or heading shows it: its
+// live custom domain where it has one, the platform hostname otherwise.
+func (a App) DisplayHost() string {
+	if a.CustomHost != "" {
+		return a.CustomHost
+	}
+	return a.Host
+}
+
+// DisplayURL is DisplayHost as a link. A custom domain is always https: it is
+// routed only once proven, and every one is claimed with TLS on.
+func (a App) DisplayURL() string {
+	if a.CustomHost != "" {
+		return "https://" + a.CustomHost
+	}
+	return a.URLScheme() + "://" + a.Host
 }
 
 // UntrustedCert reports that this app is served over https with a certificate
@@ -1763,6 +1786,19 @@ func (s *Service) attachHost(ctx context.Context, a *App) {
 	} else if ok && servesHTTP(*a) && s.opts.AppDomain != "" {
 		a.Host = held.Host
 		a.TLS = s.opts.WildcardTLS && domain.CoveredByPlatformWildcard(held.Host, s.opts.AppDomain)
+	}
+	// Gated as reconcileHosts gates routing — an app with no HTTP port is
+	// routed none of its names — but not on the app domain, which a custom
+	// domain is routed without.
+	if servesHTTP(*a) {
+		host, err := s.q.GetPrimaryCustomDomain(ctx, a.ID)
+		switch {
+		case err == nil:
+			a.CustomHost = host
+		case !errors.Is(err, pgx.ErrNoRows):
+			s.log.Debug("custom domain unavailable",
+				slog.String("app", a.Name), slog.String("error", err.Error()))
+		}
 	}
 
 	// Read on the same pass. Storage changes what the app page can offer —

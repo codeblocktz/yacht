@@ -107,8 +107,8 @@ templ Canvas(d CanvasData) {
 								</span>
 								<span class="min-w-0 flex-1">
 									<span class="block truncate font-semibold">{ n.App.ServiceName() }</span>
-									if n.App.Host != "" {
-										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.Host }</span>
+									if n.App.DisplayHost() != "" {
+										<span class="block truncate text-[12px] text-muted-foreground">{ n.App.DisplayHost() }</span>
 									}
 								</span>
 								@stagedMarker(d.Staged.For(n.App.Name))
@@ -222,15 +222,15 @@ templ appPanelBody(d AppDetailData) {
 				@servicePill(d.App)
 			</span>
 		}
-		if d.App.Host != "" {
+		if d.App.DisplayHost() != "" {
 			@sheet.Description() {
 				<a
 					class="mono inline-flex max-w-full items-center gap-1.5 hover:underline"
-					href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) }
+					href={ templ.URL(d.App.DisplayURL()) }
 					target="_blank"
 					rel="noreferrer"
 				>
-					<span class="truncate">{ d.App.Host }</span>
+					<span class="truncate">{ d.App.DisplayHost() }</span>
 					<span class="[&>svg]:size-3.5">
 						@icon("external")
 					</span>
