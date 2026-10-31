@@ -66,6 +66,7 @@ var auditRoutes = map[string]auditSpec{
 	"POST /apps/new/bucket":                     {action: "app.create", targetKind: "app", detail: map[string]string{"kind": "=bucket", "project": "project"}},
 	"POST /templates":                           {action: "app.create", targetKind: "template", target: "template", detail: map[string]string{"project": "project"}},
 	"POST /apps/{name}/redeploy":                {action: "deploy.redeploy", targetKind: "app", target: ":name"},
+	"POST /apps/{name}/database/update":         {action: "deploy.update", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/changes/deploy":          {action: "deploy.staged", targetKind: "app", target: ":name"},
 	"POST /projects/{slug}/changes/deploy":      {action: "deploy.staged", targetKind: "project", target: ":slug"},
 	"POST /apps/{name}/rollback":                {action: "deploy.rollback", targetKind: "app", target: ":name", detail: map[string]string{"release": "release"}},

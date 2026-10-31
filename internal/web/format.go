@@ -940,6 +940,8 @@ func deploymentTitle(dep app.Deployment) string {
 		return "Redeploy"
 	case rev == app.RollbackTrigger:
 		return "Rollback"
+	case strings.HasPrefix(rev, app.DatabaseUpdateTriggerPrefix):
+		return "Update to " + strings.TrimPrefix(rev, app.DatabaseUpdateTriggerPrefix)
 	case strings.HasPrefix(rev, app.PushTriggerPrefix):
 		sha := strings.TrimPrefix(rev, app.PushTriggerPrefix)
 		if len(sha) > 7 {

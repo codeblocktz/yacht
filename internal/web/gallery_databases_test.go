@@ -152,23 +152,39 @@ func databaseVersionStates(db app.App) templ.Component {
 	data := func(image string, r app.DatabaseRelease) DatabaseReleaseData {
 		return DatabaseReleaseData{Name: db.Name, Image: image, R: r}
 	}
+	update := func(image string, backup bool) *app.DatabaseUpdate {
+		return &app.DatabaseUpdate{Version: "16.15", Label: "PostgreSQL 16.15", Image: image, Backup: backup}
+	}
 	newer, pinned, waiting, medium := rel(fixes), rel(fixes[2:]), rel(fixes), rel(fixes[2:])
-	newer.NewerImage = true
-	pinned.Pinned, pinned.Suggested = true, "postgres:16.15-alpine"
+	newer.Update = update(db.Image, true)
+	pinned.Update = update("postgres:16.15-alpine", true)
 	current := app.DatabaseRelease{Engine: "PostgreSQL", Version: "16.15", Known: true,
 		Report: dbrelease.Report{Running: v(15), Latest: v(15), Supported: true}}
 	ended := app.DatabaseRelease{Engine: "PostgreSQL", Version: "12.22", Known: true, Report: dbrelease.Report{
 		Running: dbrelease.Version{Major: "12", Minor: 22}, Latest: dbrelease.Version{Major: "12", Minor: 22},
 		EOL: time.Date(2024, 11, 21, 0, 0, 0, 0, time.UTC)}}
-	medium.NewerImage = true
+	medium.Update = update(db.Image, true)
+	nextMajor := current
+	nextMajor.NextMajor = "17"
+	quietUpdate := app.DatabaseRelease{Engine: "PostgreSQL", Version: "16.15", Known: true, NextMajor: "17",
+		Report: dbrelease.Report{Running: v(15), Latest: dbrelease.Version{Major: "16", Minor: 16}, Supported: true},
+		Update: &app.DatabaseUpdate{Version: "16.16", Label: "PostgreSQL 16.16", Image: db.Image, Backup: true}}
+	redis := app.DatabaseRelease{Engine: "Redis", Version: "7.4.1", Series: "7", Newest: "7.4.2", NextMajor: "8",
+		Update: &app.DatabaseUpdate{Version: "7.4.2", Label: "Redis 7.4.2", Image: "redis:7.4.2-alpine"}}
 	return stack(
 		section("Up to date", "the newest release of its major version",
 			panelWrap(databaseReleaseBlock(data(db.Image, current)))),
-		section("Missing fixes, image updated", "a redeploy takes the newer image",
+		section("A new major version", "said, never offered in place",
+			panelWrap(databaseReleaseBlock(data(db.Image, nextMajor)))),
+		section("An update with nothing to fix", "the Update button, a backup first",
+			panelWrap(databaseReleaseBlock(data(db.Image, quietUpdate)))),
+		section("Another engine", "Redis, pinned to its newer tag, without backups",
+			panelWrap(databaseReleaseBlock(data("redis:7.4.1-alpine", redis)))),
+		section("Missing fixes, image updated", "Update takes the newer image",
 			panelWrap(databaseReleaseBlock(data(db.Image, newer)))),
 		section("Missing a medium fix", "amber rather than red",
 			panelWrap(databaseReleaseBlock(data(db.Image, medium)))),
-		section("Pinned to a release", "the tag to change to",
+		section("Pinned to a release", "Update moves the tag",
 			panelWrap(databaseReleaseBlock(data("postgres:16.4-alpine", pinned)))),
 		section("Image not yet updated", "nothing to press yet",
 			panelWrap(databaseReleaseBlock(data(db.Image, waiting)))),

@@ -53,6 +53,7 @@ nothing you build here is locked in.
 | App logs, and per-request HTTP logs you can search and page | ✅ |
 | Live logs, streamed as the container writes them | ✅ |
 | Persistent volumes, mounted and expandable | ✅ |
+| [Database updates](#updating-a-database): a newer release of the same version in one click, backed up first | ✅ |
 | Secrets sealed at rest, kept out of the app record | ✅ |
 | Deploy a wired stack from a template in one action | ✅ |
 | Apps that sleep when idle and wake on the next request | ✅ |
@@ -119,6 +120,38 @@ certificates browsers do not trust. Re-run it with
 
 Utilisation percentages need `metrics-server` in the cluster. Without it
 everything else still works and those figures read `—` rather than zero.
+
+## Updating a database
+
+A database's Deployments tab says which release it runs and whether a newer
+one of the same version is out. PostgreSQL, MySQL, Redis and MongoDB are read
+the same way: the version from the database itself where it can be asked, and
+what has been published from its image repository's tags, listed at most every
+twelve hours and only when somebody opens the tab. PostgreSQL's security
+advisories come from postgresql.org on top.
+
+**Update** moves the database to the newest release of the version it runs:
+PostgreSQL 16.4 to 16.16, MySQL 8.0.40 to 8.0.44. A tag that follows the
+version, such as `postgres:16-alpine`, is pulled again once it names a newer
+image; one pinned to a release, such as `postgres:16.4-alpine`, is changed to
+the newer release's tag. A database with backups is backed up first, and the
+update deploys when the backup has finished; a backup that fails deploys
+nothing. The update is a deployment like a redeploy, recorded as
+"Update to PostgreSQL 16.16": it passes the same readiness check, keeps the
+volume, and is rolled back if the new version does not become ready.
+
+A new major version is never taken in place. PostgreSQL will not start on a
+data directory an older major version wrote, and MySQL and MongoDB upgrade one
+way only, so the tab only says that one is out. To move to it:
+
+1. Take a backup on the old database's Backups tab, to have one to go back to.
+2. Add a new database of the new version beside it.
+3. Copy the data across with the engine's own tools: `pg_dump` from the old
+   one and `pg_restore` into the new one for PostgreSQL, `mysqldump`,
+   `mongodump` and `mongorestore`, or a Redis replica, for the others. A backup
+   on the Backups tab restores only into the database it was taken from.
+4. Point the apps' variables at the new database, and delete the old one once
+   they run.
 
 ## Install on a VPS
 
