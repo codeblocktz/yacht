@@ -22,6 +22,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/mailstatus"
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/retire"
@@ -388,6 +389,10 @@ type Options struct {
 	// being sent.
 	MailTransport string
 
+	// MailStatus reads the record of what was sent and what failed, for the
+	// settings page. Nil leaves the section out.
+	MailStatus func(context.Context) (mailstatus.Status, error)
+
 	// BootstrapEmail is the address allowed to create itself on first sign-in.
 	//
 	// A link is only ever issued to an address that already has an account,
@@ -541,7 +546,11 @@ type Server struct {
 	// mailTransport names how links are delivered, purely so the settings page
 	// can say. "log" means nothing is actually sent.
 	mailTransport string
+	mailStatus    func(context.Context) (mailstatus.Status, error)
 	signInLimit   *attemptLimiter
+	// strangerLimit spaces the mail an unknown address is sent while sign-up
+	// is closed: one per address per strangerMailEvery.
+	strangerLimit *attemptLimiter
 
 	// flashKey authenticates the one-shot message a redirect carries.
 	// Options.FlashKey, or a key of this process's own; see newFlashKey.
@@ -673,7 +682,9 @@ func New(opts Options) (*Server, error) {
 		openSignup:     opts.OpenSignup,
 		requestAccess:  opts.RequestAccessURL,
 		mailTransport:  cmp.Or(opts.MailTransport, "log"),
+		mailStatus:     opts.MailStatus,
 		signInLimit:    newAttemptLimiter(signInWindow),
+		strangerLimit:  newAttemptLimiter(strangerMailEvery),
 		flashKey:       flashKey,
 		tokens:         opts.Tokens,
 		audit:          opts.Audit,
@@ -1877,7 +1888,7 @@ func podsOnNodes(pods []orchestrator.PodInfo) int {
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(r.Context())
-	s.render(w, r, Settings(SettingsData{
+	d := SettingsData{
 		OwnerID:       owner.ID,
 		OwnerName:     displayName(owner),
 		Authenticated: s.authn,
@@ -1889,7 +1900,16 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		MailTransport: s.mailTransport,
 		SessionTTL:    s.sessionTTL.String(),
 		Operators:     slices.Sorted(maps.Keys(s.operators)),
-	}))
+	}
+	if s.mailStatus != nil {
+		if st, err := s.mailStatus(r.Context()); err != nil {
+			s.log.Error("read mail status", slog.String("error", err.Error()))
+			d.MailError = "the database did not answer"
+		} else {
+			d.Mail = &st
+		}
+	}
+	s.render(w, r, Settings(d))
 }
 
 // renderWithCrumb renders a page and appends a final breadcrumb segment.

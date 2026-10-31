@@ -312,13 +312,18 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 
 	// Mailed after the row is written, so a delivery failure leaves an
 	// invitation the page can offer to revoke rather than a token nobody holds.
+	link := s.baseURL + "/invitations/" + raw
+	team := displayName(owner)
 	msg := notify.Message{
 		To:      email,
-		Subject: "You have been invited to " + displayName(owner) + " on " + s.wakerBrand,
-		TextBody: "You have been invited to join " + displayName(owner) +
-			" as " + string(role) + ".\n\n" +
-			s.baseURL + "/invitations/" + raw + "\n\n" +
-			"The link expires. If you were not expecting this, ignore it.",
+		Subject: "You have been invited to " + team + " on " + s.wakerBrand,
+		TextBody: "You have been invited to join the team " + team + " on " + s.wakerBrand +
+			" at " + s.baseHost() + ", as " + string(role) + ".\n\n" +
+			link + "\n\n" +
+			"The invitation expires in " + notify.Duration(s.inviteTTL()) + ".\n\n" +
+			"If you were not expecting this, you can ignore this mail: nothing happens unless you accept.\n",
+		Action: &notify.Action{Label: "Accept the invitation", URL: link},
+		Reason: "You're receiving this because a member of " + team + " invited this address.",
 	}
 	if err := s.mailer.Send(ctx, msg); err != nil {
 		// Logged, not surfaced: the invitation is real and revocable either

@@ -43,6 +43,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/mailstatus"
 	"github.com/codeblocktz/yacht/internal/notify"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/orchestrator/k8s"
@@ -481,7 +482,10 @@ type Engine struct {
 	// Accounts is nil when accounts are off (no YACHT_BASE_URL).
 	Accounts *Accounts
 	Mailer   Mailer
-	Identity IdentityProvider
+	// MailStatus is the record of what Mailer sent and what failed, nil with
+	// accounts off.
+	MailStatus *mailstatus.Store
+	Identity   IdentityProvider
 	// Keeper is non-nil only with YACHT_SECRET_KEY set; Keeper.Configured
 	// reports which, and is safe on nil.
 	Keeper *Keeper
@@ -576,6 +580,15 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 			}
 			e.Mailer = m
 		}
+		// Every mail is recorded, so Settings can say whether mail is getting
+		// out, and signed with the install's footer and Reply-To, whoever
+		// composed it — the engine or the product wrapping it.
+		e.MailStatus = mailstatus.New(e.Pool, log)
+		e.Mailer = notify.WithBranding(e.MailStatus.Wrap(e.Mailer), notify.Footer{
+			Brand:   cmp.Or(ov.WakerBrand, web.DefaultBrandName),
+			Company: cfg.MailCompany,
+			Website: cfg.MailWebsite,
+		}, cmp.Or(cfg.MailReplyTo, cfg.CloudflareEmailReplyTo))
 	}
 
 	if ov.Identity != nil {
@@ -805,6 +818,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.Tokens = e.Tokens
 		opts.Accounts = e.Accounts
 		opts.Mailer = e.Mailer
+		opts.MailStatus = e.MailStatus.Status
 		opts.BaseURL = cfg.BaseURL
 		opts.MagicLinkTTL = cfg.MagicLinkTTL
 		opts.SessionTTL = cfg.SessionTTL

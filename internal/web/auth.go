@@ -178,6 +178,8 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 	if !existed {
 		if s.openSignup {
 			s.mailSignupLink(ctx, email)
+		} else {
+			s.mailStranger(ctx, email)
 		}
 		return
 	}
@@ -190,10 +192,37 @@ func (s *Server) mailSignInLink(ctx context.Context, email string) {
 	if err := s.mailer.Send(ctx, notify.Message{
 		To:       user.Email,
 		Subject:  "Your " + s.wakerBrand + " sign-in link",
-		TextBody: signInBody(s.wakerBrand, link, s.magicTTL),
+		TextBody: signInBody(s.wakerBrand, s.baseHost(), link, s.magicTTL),
+		Action:   &notify.Action{Label: "Sign in to " + s.wakerBrand, URL: link},
+		Reason:   signInReason(s.baseHost()),
 	}); err != nil {
 		s.log.Error("send sign-in link",
 			slog.String("to", user.Email), slog.String("error", err.Error()))
+	}
+}
+
+// strangerMailEvery is how often an address with no account is told how to
+// get one while sign-up is closed. The form is open to anybody, so without it
+// the form is a way to have this install mail a stranger without end.
+const strangerMailEvery = 10 * time.Minute
+
+// mailStranger tells an address nobody holds, while sign-up is closed, that
+// it has no account and how to get one: otherwise a new customer who asks for
+// a link is told to check their mail and nothing ever comes. Inside the same
+// floor as a sign-in link, and at most once per strangerMailEvery, so neither
+// the page nor its timing says which mail was sent; only the mailbox does.
+func (s *Server) mailStranger(ctx context.Context, email string) {
+	if !s.strangerLimit.allow(strings.ToLower(email), 1) {
+		return
+	}
+	if err := s.mailer.Send(ctx, notify.Message{
+		To:       email,
+		Subject:  "Your " + s.wakerBrand + " sign-in",
+		TextBody: strangerBody(s.wakerBrand, s.baseHost(), s.requestAccess),
+		Reason:   signInReason(s.baseHost()),
+	}); err != nil {
+		s.log.Error("send no-account notice",
+			slog.String("to", email), slog.String("error", err.Error()))
 	}
 }
 
@@ -211,11 +240,22 @@ func (s *Server) mailSignupLink(ctx context.Context, email string) {
 	if err := s.mailer.Send(ctx, notify.Message{
 		To:       email,
 		Subject:  "Create your " + s.wakerBrand + " account",
-		TextBody: signUpBody(s.wakerBrand, link, s.magicTTL),
+		TextBody: signUpBody(s.wakerBrand, s.baseHost(), link, s.magicTTL),
+		Action:   &notify.Action{Label: "Create your " + s.wakerBrand + " account", URL: link},
+		Reason:   signInReason(s.baseHost()),
 	}); err != nil {
 		s.log.Error("send sign-up link",
 			slog.String("to", email), slog.String("error", err.Error()))
 	}
+}
+
+// baseHost is the dashboard's host as a person would recognise it,
+// "app.example.com", for mail that says where it was asked for.
+func (s *Server) baseHost() string {
+	if u, err := url.Parse(s.baseURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return s.baseURL
 }
 
 // signUpCallback spends a sign-up link: the account is created, and signed in
@@ -504,12 +544,31 @@ func (s *Server) activeTeam(ctx context.Context, user account.User) (string, err
 	return teams[0].TeamID, nil
 }
 
-func signInBody(brand, link string, ttl time.Duration) string {
-	return "Someone asked to sign in to " + brand + " with this address.\n\n" +
-		"Follow this link to sign in:\n\n" +
+// The mail bodies say who they are from and why, before anything else: a
+// mail that opens "Someone asked…" and holds a link reads as phishing, to
+// filters and to people. Each link is a paragraph of its own, the message's
+// Action, which the HTML part draws as a button.
+
+func signInBody(brand, host, link string, ttl time.Duration) string {
+	return "You (or someone using this address) asked to sign in to " + brand + " at " + host + ".\n\n" +
 		link + "\n\n" +
-		"The link works once and expires in " + ttl.String() + ".\n" +
-		"If it was not you, nothing has happened and you can ignore this message.\n"
+		"The link works once and expires in " + notify.Duration(ttl) + ".\n\n" +
+		"If it wasn't you, you can ignore this mail: nobody can sign in without the link, and nothing has changed.\n"
+}
+
+func signInReason(host string) string {
+	return "You're receiving this because a sign-in was requested for this address at " + host + "."
+}
+
+func strangerBody(brand, host, requestAccess string) string {
+	how := "ask your team's owner to invite you."
+	if requestAccess != "" {
+		how = "ask your team's owner to invite you, or request access here:\n\n" + requestAccess
+	}
+	return "You (or someone using this address) asked to sign in to " + brand + " at " + host + ".\n\n" +
+		"No " + brand + " account uses this address yet. " + brand + " is invite-only for now: " + how + "\n\n" +
+		"If you already have an account under another address, sign in with that one.\n\n" +
+		"If it wasn't you, you can ignore this mail: nothing has changed.\n"
 }
 
 // signInForm is the sign-in page with the install's own facts filled in, so no
@@ -533,14 +592,12 @@ func checkMailLead(openSignup bool) string {
 	return "If that address has an account, a sign-in link is on its way."
 }
 
-func signUpBody(brand, link string, ttl time.Duration) string {
-	return "Someone asked to sign in to " + brand + " with this address, " +
-		"which has no account yet.\n\n" +
-		"Follow this link to create your account and sign in:\n\n" +
+func signUpBody(brand, host, link string, ttl time.Duration) string {
+	return "You (or someone using this address) asked to sign in to " + brand + " at " + host +
+		". No account uses this address yet: the link below creates one and signs you in.\n\n" +
 		link + "\n\n" +
-		"The link works once and expires in " + ttl.String() + ".\n" +
-		"If it was not you, nothing has happened and you can ignore this message: " +
-		"no account is made unless the link is followed.\n"
+		"The link works once and expires in " + notify.Duration(ttl) + ".\n\n" +
+		"If it wasn't you, you can ignore this mail: no account is made unless the link is followed.\n"
 }
 
 // parseEmail accepts what a person types into the form and returns the address.
@@ -703,13 +760,17 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		// The link carries the invitation, and following it both signs the
 		// person in and accepts it: one link, not a sign-in and then the
 		// invitation opened a second time.
+		link := s.baseURL + "/auth/" + raw + "?invitation=" + url.QueryEscape(token)
 		msg := notify.Message{
 			To:      inv.Email,
 			Subject: "Sign in to " + s.wakerBrand + " to accept your invitation",
-			TextBody: "Follow this link to sign in and join the team you were invited to:\n\n" +
-				s.baseURL + "/auth/" + raw + "?invitation=" + url.QueryEscape(token) + "\n\n" +
-				"The link works once and expires in " + s.magicTTL.String() + ".\n" +
-				"If you were not expecting this, ignore it.",
+			TextBody: "You (or someone holding your invitation) opened an invitation to join a team on " +
+				s.wakerBrand + " at " + s.baseHost() + ". Sign in to accept it.\n\n" +
+				link + "\n\n" +
+				"The link works once and expires in " + notify.Duration(s.magicTTL) + ".\n\n" +
+				"If you were not expecting this, you can ignore this mail: nothing has changed.\n",
+			Action: &notify.Action{Label: "Accept the invitation", URL: link},
+			Reason: "You're receiving this because an invitation to this address was opened at " + s.baseHost() + ".",
 		}
 		if err := s.mailer.Send(ctx, msg); err != nil {
 			s.log.Error("send invitation sign-in link", slog.String("error", err.Error()))

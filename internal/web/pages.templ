@@ -9,6 +9,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/app"
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/mailstatus"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -2417,6 +2418,11 @@ type SettingsData struct {
 	// Operators are the addresses YACHT_OPERATORS names, for an install with
 	// accounts. None named means each team's owner is one; see IsOperator.
 	Operators []string
+
+	// Mail is the record of what was sent and what failed, nil without one;
+	// MailError says why it could not be read.
+	Mail      *mailstatus.Status
+	MailError string
 }
 
 // settingsLead says what kind of install this is. Single-owner mode is one
@@ -2546,6 +2552,48 @@ templ Settings(d SettingsData) {
 				<dt>Version</dt>
 				<dd class="mono">{ d.Version }</dd>
 			</dl>
+		</div>
+	</div>
+	if d.Mail != nil || d.MailError != "" {
+		@mailStatusPanel(d)
+	}
+}
+
+// mailStatusPanel says whether the install's mail is getting out. A send
+// error otherwise reaches only the log, which does not outlive the pod.
+templ mailStatusPanel(d SettingsData) {
+	<div class="panel mt-5" id="mail-status">
+		<div class="panel-header">
+			<span class="panel-title">Mail</span>
+		</div>
+		<div class="panel-body">
+			if d.MailError != "" {
+				<p class="text-muted-foreground">Could not read the mail record: { d.MailError }</p>
+			} else {
+				<dl class="kv">
+					<dt>Last sent</dt>
+					<dd>
+						if d.Mail.LastSent.IsZero() {
+							<span class="text-muted-foreground">Nothing sent in the last week</span>
+						} else {
+							@statusDot(relativeTime(d.Mail.LastSent), "status-ok")
+							<span class="ml-1 text-muted-foreground">{ absoluteTime(d.Mail.LastSent) }</span>
+						}
+					</dd>
+					<dt>Last failure</dt>
+					<dd>
+						if d.Mail.LastFailure.IsZero() {
+							<span class="text-muted-foreground">None in the last week</span>
+						} else {
+							@statusDot(relativeTime(d.Mail.LastFailure), mailFailureTone(d.Mail))
+							<span class="ml-1 text-muted-foreground">{ absoluteTime(d.Mail.LastFailure) }</span>
+							<div class="mono mt-1 text-xs break-all">{ d.Mail.LastError }</div>
+						}
+					</dd>
+					<dt>Failures, 24h</dt>
+					<dd>{ strconv.Itoa(d.Mail.Failures24h) }</dd>
+				</dl>
+			}
 		</div>
 	</div>
 }

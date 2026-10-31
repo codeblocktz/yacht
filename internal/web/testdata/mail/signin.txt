@@ -1,0 +1,15 @@
+Subject: Your datahuru sign-in link
+
+You (or someone using this address) asked to sign in to datahuru at app.datahuru.test.
+
+Sign in to datahuru:
+https://app.datahuru.test/auth/raw-token-for-known@example.test
+
+The link works once and expires in 15 minutes.
+
+If it wasn't you, you can ignore this mail: nobody can sign in without the link, and nothing has changed.
+
+-- 
+datahuru — hosting by Codeblock Limited, Dar es Salaam, Tanzania
+You're receiving this because a sign-in was requested for this address at app.datahuru.test.
+https://datahuru.com

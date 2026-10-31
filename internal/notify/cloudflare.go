@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,11 +68,13 @@ func (m *cloudflareMailer) Send(ctx context.Context, msg Message) error {
 		"from":    m.from,
 		"to":      []string{msg.To},
 		"subject": msg.Subject,
-		"text":    msg.TextBody,
-		"html":    textToHTML(msg.TextBody),
+		"text":    msg.Text(),
+		"html":    msg.HTML(),
 	}
-	if m.replyTo != "" {
-		body["reply_to"] = m.replyTo
+	// The install-wide Reply-To, from WithBranding, wins over the one this
+	// transport was configured with before there was one.
+	if rt := cmp.Or(msg.ReplyTo, m.replyTo); rt != "" {
+		body["reply_to"] = rt
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

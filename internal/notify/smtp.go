@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"mime"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -149,19 +151,43 @@ func (m *smtpMailer) sendImplicitTLS(host string, auth smtp.Auth, msg Message) e
 // in a subject cannot inject one: header injection through a display name is
 // the classic mail bug. Date and Message-ID are there because mail without
 // them is mail many providers file as spam, and a sign-in link in spam is a
-// sign-in that does not work.
+// sign-in that does not work. The body is multipart/alternative, text then
+// HTML, for the same reason the HTTP transports send both.
 func (m *smtpMailer) wire(msg Message) []byte {
+	boundary := "yacht-" + randomHex()
 	var b strings.Builder
 	b.WriteString("From: " + sanitizeHeader(m.from.String()) + "\r\n")
 	b.WriteString("To: " + sanitizeHeader(msg.To) + "\r\n")
-	b.WriteString("Subject: " + sanitizeHeader(msg.Subject) + "\r\n")
+	if msg.ReplyTo != "" {
+		b.WriteString("Reply-To: " + sanitizeHeader(msg.ReplyTo) + "\r\n")
+	}
+	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", sanitizeHeader(msg.Subject)) + "\r\n")
 	b.WriteString("Date: " + m.now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("Message-ID: " + messageID(m.from.Address) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	b.WriteString(`Content-Type: multipart/alternative; boundary="` + boundary + `"` + "\r\n")
 	b.WriteString("\r\n")
-	b.WriteString(msg.TextBody)
+	for _, part := range []struct{ kind, body string }{
+		{"text/plain", msg.Text()},
+		{"text/html", msg.HTML()},
+	} {
+		b.WriteString("--" + boundary + "\r\n")
+		b.WriteString("Content-Type: " + part.kind + "; charset=utf-8\r\n")
+		b.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+		var qp strings.Builder
+		w := quotedprintable.NewWriter(&qp)
+		_, _ = w.Write([]byte(part.body))
+		_ = w.Close()
+		b.WriteString(qp.String() + "\r\n")
+	}
+	b.WriteString("--" + boundary + "--\r\n")
 	return []byte(b.String())
+}
+
+func randomHex() string {
+	var buf [12]byte
+	_, _ = rand.Read(buf[:])
+	return hex.EncodeToString(buf[:])
 }
 
 func sanitizeHeader(s string) string {
