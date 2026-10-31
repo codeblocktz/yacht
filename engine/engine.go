@@ -126,6 +126,8 @@ type (
 	Message = notify.Message
 	// MailAction is a message's button: see Message.Action.
 	MailAction = notify.Action
+	// MailAttachment is a file a message carries: see Message.Attachments.
+	MailAttachment = notify.Attachment
 
 	// Orchestrator runs workloads — seam 1.
 	Orchestrator = orchestrator.Orchestrator
