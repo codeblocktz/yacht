@@ -467,11 +467,13 @@ type Service struct {
 	requestLog          RequestLog
 	requestLogRetention time.Duration
 
-	// dbVersions is the version each database release runs, and tagDigests
-	// what an image tag named when last asked. See database_release.go.
+	// dbVersions is the version each database release runs, tagDigests
+	// what an image tag named when last asked, and tagLists the tags each
+	// image repository had. See database_release.go.
 	dbVersionsMu sync.Mutex
 	dbVersions   map[uuid.UUID]string
 	tagDigests   map[string]tagDigest
+	tagLists     map[string]tagList
 }
 
 // NewService wires the store and the orchestrator together.

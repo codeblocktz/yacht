@@ -51,6 +51,9 @@ const (
 
 	BackupManual    = "manual"
 	BackupScheduled = "scheduled"
+	// BackupBeforeUpdate is taken because somebody pressed Update on the
+	// database: the update deploys once it succeeds. See database_update.go.
+	BackupBeforeUpdate = "update"
 )
 
 // ErrBackupRunning is a backup or restore asked for while another runs
@@ -234,10 +237,12 @@ func (s *Service) StartBackup(ctx context.Context, ownerID, name, actor string) 
 	if err != nil {
 		return Backup{}, err
 	}
-	return s.startBackup(ctx, a, BackupManual, actor)
+	return s.startBackup(ctx, a, BackupManual, actor, nil)
 }
 
-func (s *Service) startBackup(ctx context.Context, a App, trigger, actor string) (Backup, error) {
+// startBackup starts one. then is the update to deploy once it succeeds,
+// nil for a backup taken for its own sake.
+func (s *Service) startBackup(ctx context.Context, a App, trigger, actor string, then *DatabaseUpdate) (Backup, error) {
 	recipe, runner, err := s.backupsFor(a)
 	if err != nil {
 		return Backup{}, err
@@ -251,10 +256,14 @@ func (s *Service) startBackup(ctx context.Context, a App, trigger, actor string)
 	if s.opts.BackupS3 != nil {
 		location = BackupInS3
 	}
-	row, err := s.q.CreateDatabaseBackup(ctx, dbgen.CreateDatabaseBackupParams{
+	params := dbgen.CreateDatabaseBackupParams{
 		OwnerID: a.OwnerID, AppID: a.ID, Kind: BackupKindBackup, Trigger: trigger,
 		Location: location, CreatedBy: actor,
-	})
+	}
+	if then != nil {
+		params.UpdateImage, params.UpdateLabel = then.Image, then.Label
+	}
+	row, err := s.q.CreateDatabaseBackup(ctx, params)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Backup{}, ErrBackupRunning
@@ -612,6 +621,13 @@ func (s *Service) settleBackups(ctx context.Context, appID uuid.UUID) {
 		if status == BackupSucceeded && row.Kind == BackupKindBackup && row.Trigger == BackupScheduled {
 			s.pruneScheduled(ctx, row.OwnerID, row.AppName)
 		}
+		// Only the process whose FinishDatabaseBackup changed the row is
+		// here, so an update waiting on a backup deploys once.
+		if row.Trigger == BackupBeforeUpdate && row.UpdateImage != "" {
+			s.afterUpdateBackup(ctx, row.OwnerID, row.AppName, DatabaseUpdate{
+				Image: row.UpdateImage, Label: row.UpdateLabel,
+			}, status, reason)
+		}
 	}
 }
 
@@ -675,7 +691,7 @@ func (s *Service) startDueBackups(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if _, err := s.startBackup(ctx, a, BackupScheduled, ""); err != nil && !errors.Is(err, ErrBackupRunning) {
+		if _, err := s.startBackup(ctx, a, BackupScheduled, "", nil); err != nil && !errors.Is(err, ErrBackupRunning) {
 			s.log.Warn("start a scheduled backup", slog.String("app", d.Name), slog.String("error", err.Error()))
 		}
 	}

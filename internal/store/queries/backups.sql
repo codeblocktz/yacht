@@ -7,10 +7,12 @@
 -- against this database, which is the point: the caller reports the unique
 -- violation as "one at a time" rather than racing a second dump.
 INSERT INTO database_backups (
-    owner_id, app_id, kind, trigger, location, object_key, backup_id, created_by
+    owner_id, app_id, kind, trigger, location, object_key, backup_id, created_by,
+    update_image, update_label
 )
 VALUES (
-    @owner_id, @app_id, @kind, @trigger, @location, @object_key, @backup_id, @created_by
+    @owner_id, @app_id, @kind, @trigger, @location, @object_key, @backup_id, @created_by,
+    @update_image, @update_label
 )
 RETURNING *;
 

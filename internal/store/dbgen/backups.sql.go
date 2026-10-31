@@ -16,23 +16,27 @@ import (
 const createDatabaseBackup = `-- name: CreateDatabaseBackup :one
 
 INSERT INTO database_backups (
-    owner_id, app_id, kind, trigger, location, object_key, backup_id, created_by
+    owner_id, app_id, kind, trigger, location, object_key, backup_id, created_by,
+    update_image, update_label
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6, $7, $8,
+    $9, $10
 )
-RETURNING id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at
+RETURNING id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at, update_image, update_label
 `
 
 type CreateDatabaseBackupParams struct {
-	OwnerID   string
-	AppID     uuid.UUID
-	Kind      string
-	Trigger   string
-	Location  string
-	ObjectKey string
-	BackupID  pgtype.UUID
-	CreatedBy string
+	OwnerID     string
+	AppID       uuid.UUID
+	Kind        string
+	Trigger     string
+	Location    string
+	ObjectKey   string
+	BackupID    pgtype.UUID
+	CreatedBy   string
+	UpdateImage string
+	UpdateLabel string
 }
 
 // Backups of a database, and restores into it. Scoped by owner_id wherever a
@@ -51,6 +55,8 @@ func (q *Queries) CreateDatabaseBackup(ctx context.Context, arg CreateDatabaseBa
 		arg.ObjectKey,
 		arg.BackupID,
 		arg.CreatedBy,
+		arg.UpdateImage,
+		arg.UpdateLabel,
 	)
 	var i DatabaseBackup
 	err := row.Scan(
@@ -69,6 +75,8 @@ func (q *Queries) CreateDatabaseBackup(ctx context.Context, arg CreateDatabaseBa
 		&i.CreatedBy,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.UpdateImage,
+		&i.UpdateLabel,
 	)
 	return i, err
 }
@@ -123,7 +131,7 @@ func (q *Queries) FinishDatabaseBackup(ctx context.Context, arg FinishDatabaseBa
 }
 
 const getDatabaseBackup = `-- name: GetDatabaseBackup :one
-SELECT id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at FROM database_backups
+SELECT id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at, update_image, update_label FROM database_backups
 WHERE owner_id = $1 AND app_id = $2 AND id = $3
 `
 
@@ -152,6 +160,8 @@ func (q *Queries) GetDatabaseBackup(ctx context.Context, arg GetDatabaseBackupPa
 		&i.CreatedBy,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.UpdateImage,
+		&i.UpdateLabel,
 	)
 	return i, err
 }
@@ -180,7 +190,7 @@ func (q *Queries) GetDatabaseBackupSchedule(ctx context.Context, arg GetDatabase
 }
 
 const listDatabaseBackups = `-- name: ListDatabaseBackups :many
-SELECT id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at FROM database_backups
+SELECT id, owner_id, app_id, kind, trigger, status, location, object_key, backup_id, job_name, size_bytes, error, created_by, started_at, finished_at, update_image, update_label FROM database_backups
 WHERE owner_id = $1 AND app_id = $2
 ORDER BY started_at DESC, id DESC
 LIMIT $3
@@ -217,6 +227,8 @@ func (q *Queries) ListDatabaseBackups(ctx context.Context, arg ListDatabaseBacku
 			&i.CreatedBy,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.UpdateImage,
+			&i.UpdateLabel,
 		); err != nil {
 			return nil, err
 		}
@@ -272,7 +284,7 @@ func (q *Queries) ListDueDatabaseBackups(ctx context.Context) ([]ListDueDatabase
 }
 
 const listExpiredScheduledBackups = `-- name: ListExpiredScheduledBackups :many
-SELECT b.id, b.owner_id, b.app_id, b.kind, b.trigger, b.status, b.location, b.object_key, b.backup_id, b.job_name, b.size_bytes, b.error, b.created_by, b.started_at, b.finished_at FROM database_backups b
+SELECT b.id, b.owner_id, b.app_id, b.kind, b.trigger, b.status, b.location, b.object_key, b.backup_id, b.job_name, b.size_bytes, b.error, b.created_by, b.started_at, b.finished_at, b.update_image, b.update_label FROM database_backups b
 WHERE b.owner_id = $1 AND b.app_id = $2
   AND b.kind = 'backup' AND b.trigger = 'scheduled' AND b.status = 'succeeded'
 ORDER BY b.started_at DESC
@@ -313,6 +325,8 @@ func (q *Queries) ListExpiredScheduledBackups(ctx context.Context, arg ListExpir
 			&i.CreatedBy,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.UpdateImage,
+			&i.UpdateLabel,
 		); err != nil {
 			return nil, err
 		}
@@ -325,7 +339,7 @@ func (q *Queries) ListExpiredScheduledBackups(ctx context.Context, arg ListExpir
 }
 
 const listRunningDatabaseBackups = `-- name: ListRunningDatabaseBackups :many
-SELECT b.id, b.owner_id, b.app_id, b.kind, b.trigger, b.status, b.location, b.object_key, b.backup_id, b.job_name, b.size_bytes, b.error, b.created_by, b.started_at, b.finished_at, a.name AS app_name, a.namespace AS app_namespace
+SELECT b.id, b.owner_id, b.app_id, b.kind, b.trigger, b.status, b.location, b.object_key, b.backup_id, b.job_name, b.size_bytes, b.error, b.created_by, b.started_at, b.finished_at, b.update_image, b.update_label, a.name AS app_name, a.namespace AS app_namespace
 FROM database_backups b
 JOIN apps a ON a.id = b.app_id
 WHERE b.status = 'running'
@@ -348,6 +362,8 @@ type ListRunningDatabaseBackupsRow struct {
 	CreatedBy    string
 	StartedAt    time.Time
 	FinishedAt   pgtype.Timestamptz
+	UpdateImage  string
+	UpdateLabel  string
 	AppName      string
 	AppNamespace string
 }
@@ -377,6 +393,8 @@ func (q *Queries) ListRunningDatabaseBackups(ctx context.Context) ([]ListRunning
 			&i.CreatedBy,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.UpdateImage,
+			&i.UpdateLabel,
 			&i.AppName,
 			&i.AppNamespace,
 		); err != nil {

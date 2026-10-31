@@ -250,21 +250,23 @@ type ClusterJoin struct {
 }
 
 type DatabaseBackup struct {
-	ID         uuid.UUID
-	OwnerID    string
-	AppID      uuid.UUID
-	Kind       string
-	Trigger    string
-	Status     string
-	Location   string
-	ObjectKey  string
-	BackupID   pgtype.UUID
-	JobName    string
-	SizeBytes  int64
-	Error      string
-	CreatedBy  string
-	StartedAt  time.Time
-	FinishedAt pgtype.Timestamptz
+	ID          uuid.UUID
+	OwnerID     string
+	AppID       uuid.UUID
+	Kind        string
+	Trigger     string
+	Status      string
+	Location    string
+	ObjectKey   string
+	BackupID    pgtype.UUID
+	JobName     string
+	SizeBytes   int64
+	Error       string
+	CreatedBy   string
+	StartedAt   time.Time
+	FinishedAt  pgtype.Timestamptz
+	UpdateImage string
+	UpdateLabel string
 }
 
 type DatabaseBackupSchedule struct {

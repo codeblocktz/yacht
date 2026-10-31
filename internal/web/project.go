@@ -231,7 +231,7 @@ func (s *Server) appPanel(ctx context.Context, a app.App, tab string) *AppDetail
 	s.attachReferrers(ctx, d)
 	s.attachBucket(ctx, d)
 	d.Stages = s.stages()
-	d.VersionCheck = s.databaseReleases() != nil && a.Source == app.SourcePostgres &&
+	d.VersionCheck = s.databaseReleases() != nil && a.Source.Database() &&
 		a.ActiveReleaseID != nil
 	return d
 }

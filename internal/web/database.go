@@ -62,6 +62,11 @@ func (s *Server) mountDatabases(r chi.Router) {
 	if s.databaseReleases() != nil {
 		r.Get("/apps/{name}/database/release", s.databaseRelease)
 	}
+	// A member's, like Redeploy, which it is: a newer image of the same
+	// version, undone by rolling back.
+	if s.databaseUpdates() != nil {
+		r.Post("/apps/{name}/database/update", s.databaseUpdate)
+	}
 	if s.backupsService() != nil {
 		r.Get("/apps/{name}/backups", s.backupsTab)
 		r.Get("/apps/{name}/backups/fragment", s.backupsFragment)
@@ -589,6 +594,10 @@ func backupWhat(b app.Backup) string {
 	switch {
 	case b.Trigger == app.BackupScheduled:
 		what += ", daily"
+	case b.Trigger == app.BackupBeforeUpdate && b.CreatedBy != "":
+		what += " before an update, by " + b.CreatedBy
+	case b.Trigger == app.BackupBeforeUpdate:
+		what += " before an update"
 	case b.CreatedBy != "":
 		what += " by " + b.CreatedBy
 	}

@@ -19,7 +19,9 @@ templ databaseReleaseSlot(name string) {
 
 // databaseReleaseBlock is the version a database runs: a quiet line when
 // there is nothing to do, a warning when it is without security fixes or its
-// major version no longer gets them.
+// major version no longer gets them, then the update that takes it to the
+// newest release of its series, and a word on the next major version, which
+// nothing here moves to.
 templ databaseReleaseBlock(d DatabaseReleaseData) {
 	{{ r := d.R }}
 	<div id="database-release">
@@ -47,15 +49,8 @@ templ databaseReleaseBlock(d DatabaseReleaseData) {
 					</div>
 					<p class="mt-0.5 text-muted-foreground">
 						{ r.Report.Latest.String() + fixesThem(len(r.Report.Fixes)) }
-						if r.NewerImage {
-							The <code class="mono">{ d.Tag() }</code> image has been updated since this was
-							deployed: Redeploy to take it. The database restarts, so it is unavailable for a
-							few seconds.
-						} else if r.Pinned {
-							<code class="mono">{ d.Image }</code> names this exact release, so a redeploy
-							keeps it. Change the image to <code class="mono">{ r.Suggested }</code> in
-							<a class="underline hover:text-foreground" href={ templ.URL("/apps/" + d.Name + "/settings#source") }>Settings</a>
-							and deploy.
+						if r.Update != nil {
+							Update takes it: { updateEffect(d) }
 						} else {
 							The <code class="mono">{ d.Tag() }</code> image does not carry it yet; its maintainers
 							usually publish within a few days, and this will say when it does.
@@ -70,12 +65,42 @@ templ databaseReleaseBlock(d DatabaseReleaseData) {
 						</ul>
 					</details>
 				</div>
-				if r.NewerImage {
-					@redeployButton(d.Name)
+				if r.Update != nil {
+					@databaseUpdateButton(d)
 				}
 			</div>
 		}
+		if r.Update != nil && !(r.Attention() && r.Report.Supported) {
+			<div class="panel mb-3 flex items-center justify-between gap-3 px-3 py-2.5" data-database-update>
+				<div class="min-w-0 text-[13px]">
+					<div class="font-medium text-foreground">{ updateHeadline(r.Update) }</div>
+					<p class="mt-0.5 text-[12.5px] text-muted-foreground">{ updateEffect(d) }</p>
+				</div>
+				@databaseUpdateButton(d)
+			</div>
+		}
+		if r.NextMajor != "" {
+			<p class="mb-3 text-[12.5px] text-muted-foreground" data-database-next-major>
+				<span class="font-medium text-foreground">{ r.Engine } { r.NextMajor } is out.</span>
+				Moving to a new major version needs a data migration, so it is never done in place:
+				{ majorMigration(r) }
+			</p>
+		}
 	</div>
+}
+
+// databaseUpdateButton is Update, confirmed first: it restarts the database.
+templ databaseUpdateButton(d DatabaseReleaseData) {
+	<form
+		class="shrink-0"
+		method="post"
+		action={ templ.URL("/apps/" + d.Name + "/database/update") }
+		data-confirm={ updateConfirm(d) }
+		data-confirm-title={ "Update to " + d.R.Update.Label + "?" }
+		data-confirm-label="Update"
+	>
+		<button class="btn btn-sm btn-primary" type="submit">Update</button>
+	</form>
 }
 
 templ databaseAdvisory(a dbrelease.Advisory) {
