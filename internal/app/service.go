@@ -448,6 +448,10 @@ type Service struct {
 	wakes   map[uuid.UUID]*wakeCall
 	wakeWG  sync.WaitGroup
 
+	// privateNet is what the last private network pass wrote, so the next
+	// writes only what changed. See privatenet.go.
+	privateNet privateNetworkState
+
 	// requestsUnknown is whether the last attempt to count requests failed,
 	// so that a cluster that cannot be counted is logged once and not every
 	// minute.
@@ -1426,11 +1430,20 @@ func (s *Service) applyRelease(
 // Its own step, ahead of the apply, because the apply is not the first thing
 // to run in it: a release with a pre-deploy command runs that first, and on a
 // first deploy nothing else has made the namespace yet.
+//
+// Labelled with its project from the start, so the app's siblings, labelled
+// the same way, reach it from its first deploy. Its siblings' names follow
+// with the next private network pass, which the deploy brings forward.
 func (s *Service) ensureNamespace(ctx context.Context, a App) error {
-	return s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
-		Owner: orchestrator.OwnerID(a.OwnerID),
-		Name:  a.Namespace,
-	})
+	if err := s.orch.EnsureNamespace(ctx, orchestrator.NamespaceSpec{
+		Owner:   orchestrator.OwnerID(a.OwnerID),
+		Name:    a.Namespace,
+		Project: s.networkProject(ctx, s.q, a),
+	}); err != nil {
+		return err
+	}
+	s.forgetPrivateNetwork(a.Namespace)
+	return nil
 }
 
 // asReleased is the app as a release will run it: with the release's port,

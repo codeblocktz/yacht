@@ -939,6 +939,11 @@ func (e *Engine) Start(ctx context.Context) {
 	// name resolves to is a fact any replica can look up.
 	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
 
+	// Gives each app its siblings' private names, and isolates its namespace
+	// to its project. Every replica may run it: what it writes is the same
+	// from any of them.
+	go apps.RunPrivateNetworks(ctx)
+
 	// Every namespace made before isolation existed, or before its mode
 	// changed, is brought into line now rather than at its next deploy. In a
 	// goroutine for the same reason as the request log below.

@@ -88,6 +88,11 @@ type PublicDomain struct {
 // Service's name in cluster DNS, on the port that Service listens on. The same
 // answer ${{app.PRIVATE_HOST}} and ${{app.PRIVATE_PORT}} resolve to.
 type PrivateEndpoint struct {
+	// Name is the short name its project's other services in the same
+	// environment reach it by, Railway's `<service>.railway.internal`: empty
+	// where the cluster gives no such names.
+	Name string
+
 	Host string
 	Port int32
 }
@@ -134,6 +139,7 @@ func (s *Service) attachPublicNetworking(ctx context.Context, a App, out *Networ
 	out.Managed = pub.Host
 
 	out.Private = PrivateEndpoint{
+		Name: s.privateName(a),
 		Host: privateHost(a),
 		Port: orchestrator.ServicePort(a.Internal, a.Port),
 	}
@@ -154,6 +160,15 @@ func (s *Service) attachPublicNetworking(ctx context.Context, a App, out *Networ
 		return fmt.Errorf("app: read tcp proxy: %w", err)
 	}
 	return nil
+}
+
+// privateName is the app's short private name, where the orchestrator keeps
+// private networks and so the name resolves.
+func (s *Service) privateName(a App) string {
+	if _, ok := s.orch.(orchestrator.PrivateNetworker); !ok {
+		return ""
+	}
+	return a.PrivateName()
 }
 
 // privateHost is the app's Service in cluster DNS.

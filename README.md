@@ -464,7 +464,7 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_OPEN_SIGNUP` | `false` | Anybody may make an account: a stranger is mailed a link that creates it, with a team of their own. Requires `YACHT_OPERATORS`, `YACHT_OWNER_EMAIL` and a mail transport |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_NETWORK_ISOLATION` | `team` | Keep teams apart on the network: `team` refuses connections between teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
+| `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
 | `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
@@ -565,10 +565,25 @@ the intended behaviour. Most official images already ship a non-root user.
 ### Network isolation
 
 Every app's namespace also gets a `NetworkPolicy`. It accepts connections
-from the same team's apps and from the platform — the ingress controller, the
-engine's waker, anything in a namespace Yacht did not make for a team — and
-refuses them from every other team's apps and from builds, which run
-customers' Dockerfiles. Nothing connects to a build at all.
+from the same project's apps and from the platform — the ingress controller,
+the engine's waker, anything in a namespace Yacht did not make for a team —
+and refuses them from other projects' apps, every other team's, and builds,
+which run customers' Dockerfiles. Nothing connects to a build at all. One
+exception keeps references working: an app in another of the team's projects
+whose variables name this one (`${{db.DATABASE_URL}}`, or its full host) is
+let in too.
+
+### Private networking
+
+Inside a project and environment, a service reaches another by its name, as
+on Railway: `db`, or `db.internal`. Each app's namespace is given an alias for
+every other service of its project and environment, a Service of type
+`ExternalName` answering with the sibling's full name, so the name resolves
+nowhere else. Plain `db` needs nothing more. `db.internal` needs one rule in
+the cluster's CoreDNS, `orchestrator.PrivateDNSRewrite`; on K3s, put it in the
+`coredns-custom` ConfigMap in `kube-system` under a key ending `.override`,
+and CoreDNS loads it within about a minute and a half. The engine keeps the
+aliases in line every ten seconds. Settings › Networking shows the name.
 
 `YACHT_NETWORK_ISOLATION=strict` limits the way out as well: apps and builds
 reach DNS, their own team's apps and public addresses, and no private

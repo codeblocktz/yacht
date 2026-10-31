@@ -96,6 +96,11 @@ type NamespaceSpec struct {
 	Owner OwnerID
 	Name  string
 
+	// Project is the project its app is drawn on, which private networking
+	// and isolation group namespaces by. Empty leaves the namespace as it
+	// is: grouped at the team until a sync of the private network says.
+	Project string
+
 	// Limits become a default LimitRange in the namespace, so a workload that
 	// specifies no resources of its own still cannot run unbounded. Zero value
 	// means DefaultLimits is used; it is deliberately not possible to create a
@@ -107,6 +112,9 @@ type NamespaceSpec struct {
 func (s NamespaceSpec) Validate() error {
 	if s.Owner == "" {
 		return errors.New("namespace spec: owner is required")
+	}
+	if err := ValidateLabelValue("project", s.Project); err != nil {
+		return err
 	}
 	return ValidateDNSLabel("namespace", s.Name)
 }

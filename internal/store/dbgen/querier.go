@@ -468,6 +468,10 @@ type Querier interface {
 	// way the cluster's pod list is. One query rather than one per team, because
 	// an install hosting many teams is exactly the install this page is for.
 	ListAllAppFootprints(ctx context.Context) ([]ListAllAppFootprintsRow, error)
+	// Every recorded dependency on the install, for the private networks: an app
+	// whose variables name another's address is let into its namespace, wherever
+	// each is drawn. Install-scoped like ListAppsForPrivateNetwork.
+	ListAllAppLinks(ctx context.Context) ([]ListAllAppLinksRow, error)
 	// Every team's, newest first, with the team's name: Admin › Impersonations,
 	// the operators' own record of where they went.
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
@@ -486,6 +490,10 @@ type Querier interface {
 	// — but only teams still connected to it, so an app left behind by a team
 	// that disconnected deploys nothing on a push.
 	ListAppsForGitHubPush(ctx context.Context, arg ListAppsForGitHubPushParams) ([]App, error)
+	// Every app, for the private networks a sync keeps: which project and
+	// environment each is in, by name, and where its namespace is. Install-scoped
+	// like the reconciler's list, for the same reason.
+	ListAppsForPrivateNetwork(ctx context.Context) ([]App, error)
 	// Apps whose database pointer names the workload the cluster must converge to.
 	// This is intentionally install-scoped: the reconciler acts from stored
 	// ownership rather than from an authenticated request.
@@ -526,6 +534,9 @@ type Querier interface {
 	// routed is the only kind anybody needs to find, so it sorts to the top.
 	ListCustomDomainsForOwner(ctx context.Context, ownerID string) ([]ListCustomDomainsForOwnerRow, error)
 	ListDatabaseBackups(ctx context.Context, arg ListDatabaseBackupsParams) ([]DatabaseBackup, error)
+	// Each team's default project, for apps drawn on none: they are its, as the
+	// canvas shows them. Install-scoped, for the private networks' sync.
+	ListDefaultProjects(ctx context.Context) ([]ListDefaultProjectsRow, error)
 	// Apps deleted at or after a moment, as they were, for metering an hour that
 	// ended after they went: the trigger on apps keeps them for a week.
 	ListDeletedAppNamespaces(ctx context.Context, deletedAt time.Time) ([]DeletedApp, error)

@@ -745,6 +745,88 @@ func (q *Queries) ListApps(ctx context.Context, ownerID string) ([]App, error) {
 	return items, nil
 }
 
+const listAppsForPrivateNetwork = `-- name: ListAppsForPrivateNetwork :many
+SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
+ORDER BY owner_id, name
+`
+
+// Every app, for the private networks a sync keeps: which project and
+// environment each is in, by name, and where its namespace is. Install-scoped
+// like the reconciler's list, for the same reason.
+func (q *Queries) ListAppsForPrivateNetwork(ctx context.Context) ([]App, error) {
+	rows, err := q.db.Query(ctx, listAppsForPrivateNetwork)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []App{}
+	for rows.Next() {
+		var i App
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Name,
+			&i.Namespace,
+			&i.Image,
+			&i.Replicas,
+			&i.Port,
+			&i.CpuRequest,
+			&i.CpuLimit,
+			&i.MemoryRequest,
+			&i.MemoryLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HealthPath,
+			&i.HealthLiveness,
+			&i.Source,
+			&i.Internal,
+			&i.ProjectID,
+			&i.CanvasX,
+			&i.CanvasY,
+			&i.HttpsOnly,
+			&i.CnameOnly,
+			&i.RepoUrl,
+			&i.RepoBranch,
+			&i.RepoSubdir,
+			&i.RunAsUser,
+			&i.ConfigVersion,
+			&i.ActiveReleaseID,
+			&i.SleepMode,
+			&i.SleepAfterMinutes,
+			&i.SleepState,
+			&i.SleepingSince,
+			&i.WakingSince,
+			&i.AwakeSince,
+			&i.LastRequestAt,
+			&i.RequestCount,
+			&i.RequestsSeenSince,
+			&i.WakeFailedAt,
+			&i.WakeFailure,
+			&i.Region,
+			&i.GithubInstallationID,
+			&i.GithubRepoID,
+			&i.GithubPaused,
+			&i.StartCommand,
+			&i.PreDeployCommand,
+			&i.CronSchedule,
+			&i.RestartPolicy,
+			&i.RestartMaxRetries,
+			&i.HealthTimeoutSeconds,
+			&i.DockerfilePath,
+			&i.WatchPaths,
+			&i.Environment,
+			&i.Service,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAppsForReconciliation = `-- name: ListAppsForReconciliation :many
 SELECT id, owner_id, name, namespace, image, replicas, port, cpu_request, cpu_limit, memory_request, memory_limit, created_at, updated_at, health_path, health_liveness, source, internal, project_id, canvas_x, canvas_y, https_only, cname_only, repo_url, repo_branch, repo_subdir, run_as_user, config_version, active_release_id, sleep_mode, sleep_after_minutes, sleep_state, sleeping_since, waking_since, awake_since, last_request_at, request_count, requests_seen_since, wake_failed_at, wake_failure, region, github_installation_id, github_repo_id, github_paused, start_command, pre_deploy_command, cron_schedule, restart_policy, restart_max_retries, health_timeout_seconds, dockerfile_path, watch_paths, environment, service FROM apps
 WHERE active_release_id IS NOT NULL
