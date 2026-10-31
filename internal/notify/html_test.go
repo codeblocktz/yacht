@@ -25,3 +25,26 @@ func TestTextToHTMLCannotBeBrokenOutOf(t *testing.T) {
 		t.Errorf("html escapes nothing:\n%s", got)
 	}
 }
+
+// HTMLContent stands in for the paragraphs drawn from the text, and the
+// install's footer still follows it; the text part is untouched.
+func TestHTMLContentReplacesTheParagraphsNotTheFooter(t *testing.T) {
+	m := Message{
+		TextBody:    "Invoice CB-2026-000001 for TZS 10,000.",
+		HTMLContent: `<table><tr><td>Invoice CB-2026-000001</td></tr></table>`,
+		Footer:      Footer{Brand: "datahuru", Company: "hosting by Codeblock Limited"},
+	}
+	got := m.HTML()
+	if !strings.Contains(got, m.HTMLContent) {
+		t.Errorf("html lacks the content:\n%s", got)
+	}
+	if strings.Contains(got, "<p>Invoice CB-2026-000001 for TZS 10,000.</p>") {
+		t.Errorf("html draws the text as well as the content:\n%s", got)
+	}
+	if !strings.Contains(got, "hosting by Codeblock Limited") {
+		t.Errorf("html lost the footer:\n%s", got)
+	}
+	if !strings.Contains(m.Text(), "Invoice CB-2026-000001 for TZS 10,000.") {
+		t.Errorf("text lost the body:\n%s", m.Text())
+	}
+}

@@ -106,6 +106,8 @@ templ Layout(s Slots, page templ.Component) {
 				</main>
 				@confirmationDialog()
 				@toastHost(s.Flash)
+			} else if s.Focused {
+				@focusedShell(s, page)
 			} else if s.FullBleed && s.Project != nil {
 				@projectShell(s, page)
 			} else {
@@ -163,6 +165,42 @@ templ appShell(s Slots, page templ.Component) {
 	// phone drawer is open, and a dialog inside an inert subtree cannot take
 	// focus even as a modal.
 	@palette(s.SearchIndex, s.Nav)
+	@confirmationDialog()
+	@toastHost(s.Flash)
+}
+
+// focusedShell is a page with one thing to do: the brand, a way back, and the
+// page in a centred column. Flash and the banner still arrive — a low
+// balance is worth knowing about mid-checkout — but nothing else competes.
+templ focusedShell(s Slots, page templ.Component) {
+	<a class="skip-link" href="#main-content">Skip to content</a>
+	<div class="flex min-h-dvh flex-col bg-canvas">
+		<header class="focus-bar">
+			<a href={ templ.URL(s.BrandHref) } class="focus-bar-brand" aria-label={ s.BrandName }>
+				@brandLockup(s, "h-5 w-auto shrink-0", "h-3.5 w-auto")
+			</a>
+			<div class="flex-1"></div>
+			if s.Exit.Href != "" {
+				<a href={ templ.URL(s.Exit.Href) } class="btn btn-ghost btn-sm">
+					@icon("arrow-left")
+					{ s.Exit.Label }
+				</a>
+			}
+		</header>
+		{{ banner := withActingBanner(ctx, s.Banner) }}
+		if isActingBanner(banner) {
+			@banner
+		} else if banner != nil {
+			<div class="border-b border-border px-4 py-3 sm:px-6">
+				@slot(banner)
+			</div>
+		}
+		<main id="main-content" tabindex="-1" class="flex-1">
+			<div class="focus-main">
+				@page
+			</div>
+		</main>
+	</div>
 	@confirmationDialog()
 	@toastHost(s.Flash)
 }
@@ -1316,6 +1354,8 @@ templ icon(name string) {
 				<path d="m7 9 5-5 5 5"></path>
 			case "chevron-right":
 				<path d="m9 18 6-6-6-6"></path>
+			case "chevron-left":
+				<path d="m15 18-6-6 6-6"></path>
 			case "check":
 				<path d="M20 6 9 17l-5-5"></path>
 			case "sun":

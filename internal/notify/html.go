@@ -23,7 +23,10 @@ func (m Message) HTML() string {
 		`font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;` +
 		`font-size:15px;line-height:1.5;color:#111111">` +
 		`<div style="max-width:560px;margin:0 auto">`)
-	for _, para := range strings.Split(strings.ReplaceAll(m.TextBody, "\r\n", "\n"), "\n\n") {
+	if m.HTMLContent != "" {
+		b.WriteString(m.HTMLContent)
+	}
+	for _, para := range m.paragraphs() {
 		para = strings.Trim(para, "\n")
 		if para == "" {
 			continue
@@ -48,6 +51,15 @@ func (m Message) HTML() string {
 	}
 	b.WriteString("</div></body></html>")
 	return b.String()
+}
+
+// paragraphs is TextBody split for the HTML part — none when HTMLContent
+// stands in for them.
+func (m Message) paragraphs() []string {
+	if m.HTMLContent != "" {
+		return nil
+	}
+	return strings.Split(strings.ReplaceAll(m.TextBody, "\r\n", "\n"), "\n\n")
 }
 
 // textToHTML is kept for callers that have only text: a message with nothing

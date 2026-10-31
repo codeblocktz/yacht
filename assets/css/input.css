@@ -1133,6 +1133,79 @@
   .onboard-note {
     @apply m-0 border-t border-border px-4 py-2.5 text-left;
   }
+  /* The workspace's Usage page: Railway's shape — a summary card with the
+     month's two numbers as tiles, the breakdown behind a disclosure, the
+     plan line, then the projects — in the dashboard's own surfaces. */
+  .usage-period {
+    @apply flex items-center gap-1;
+  }
+  .usage-section {
+    @apply mb-8 border-t border-border pt-6 first-of-type:border-t-0 first-of-type:pt-0;
+  }
+  .usage-section .section-title {
+    @apply mb-4;
+  }
+  .usage-card {
+    @apply grid gap-6 rounded-xl border border-border bg-card p-5 sm:grid-cols-2 sm:p-6;
+  }
+  .usage-rows {
+    @apply flex flex-col justify-end text-[13px];
+  }
+  .usage-row {
+    @apply flex items-baseline justify-between gap-4 border-b border-border py-2.5 last:border-b-0;
+  }
+  .usage-row dt {
+    @apply text-muted-foreground;
+  }
+  .usage-row dd {
+    @apply tabular-nums;
+  }
+  .usage-tile {
+    @apply flex flex-col items-center gap-1 rounded-lg bg-muted px-3 py-4 text-center;
+  }
+  .usage-tile-k {
+    @apply text-[12.5px] text-muted-foreground;
+  }
+  .usage-tile-v {
+    @apply text-[22px] font-semibold tracking-tight tabular-nums sm:text-[26px];
+  }
+  .usage-tile-quiet .usage-tile-v {
+    @apply text-muted-foreground;
+  }
+  .usage-breakdown {
+    @apply mt-3 rounded-xl border border-border bg-card;
+  }
+  .usage-breakdown > summary {
+    @apply flex cursor-pointer list-none items-center gap-2 px-5 py-3 text-[13px] font-medium
+           text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden;
+  }
+  .usage-breakdown[open] > summary {
+    @apply border-b border-border text-foreground;
+  }
+  .usage-breakdown tfoot td {
+    @apply border-t border-border text-muted-foreground;
+  }
+  .usage-breakdown .usage-total-strong td {
+    @apply font-semibold text-foreground;
+  }
+  .usage-plan {
+    @apply mt-3 flex flex-col gap-2 rounded-xl border border-border bg-card px-5 py-4
+           sm:flex-row sm:items-center sm:justify-between;
+  }
+
+  /* A focused page's bar: the brand and the way back, as tall as the
+     dashboard's top bar so moving between them does not jump. */
+  .focus-bar {
+    @apply sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-border
+           bg-background px-4 sm:px-6;
+  }
+  .focus-bar-brand {
+    @apply flex h-8 items-center gap-2 rounded-lg px-1 text-[15px] font-semibold tracking-tight
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50;
+  }
+  .focus-main {
+    @apply mx-auto w-full max-w-[1040px] px-4 py-8 sm:px-6 sm:py-12;
+  }
   .auth-card {
     @apply rounded-xl border border-border bg-card p-6 shadow-sm;
   }

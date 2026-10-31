@@ -42,6 +42,13 @@ type Message struct {
 	// Footer.Intro, when it has one. A sign-in link or a bill does not.
 	Introduces bool
 
+	// HTMLContent, when set, is the HTML part's content in place of the
+	// paragraphs drawn from TextBody: a receipt's table, say, or a sender's
+	// logo. The frame and the footer stay the engine's. Whoever sets it owns
+	// keeping it saying what TextBody says, and escaping what goes in it;
+	// TextBody is still required and is still the plain-text part.
+	HTMLContent string
+
 	// Footer and ReplyTo are the install's, filled in by WithBranding rather
 	// than by whoever composes the message.
 	Footer  Footer
