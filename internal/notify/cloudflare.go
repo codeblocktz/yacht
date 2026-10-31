@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +71,20 @@ func (m *cloudflareMailer) Send(ctx context.Context, msg Message) error {
 		"subject": msg.Subject,
 		"text":    msg.Text(),
 		"html":    msg.HTML(),
+	}
+	if len(msg.Attachments) > 0 {
+		// The send API's shape: base64 content, its type, and attachment
+		// (not inline) as how it is shown.
+		var atts []map[string]string
+		for _, a := range msg.Attachments {
+			atts = append(atts, map[string]string{
+				"filename":    a.Filename,
+				"type":        a.contentType(),
+				"disposition": "attachment",
+				"content":     base64.StdEncoding.EncodeToString(a.Data),
+			})
+		}
+		body["attachments"] = atts
 	}
 	// The install-wide Reply-To, from WithBranding, wins over the one this
 	// transport was configured with before there was one.

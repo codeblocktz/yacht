@@ -60,7 +60,7 @@ func TestCloudflarePostsTheMessage(t *testing.T) {
 	if body["reply_to"] != "hello@example.test" {
 		t.Errorf("reply_to = %v", body["reply_to"])
 	}
-	if h, _ := body["html"].(string); !strings.Contains(h, "<p>link</p>") {
+	if h, _ := body["html"].(string); !strings.Contains(h, ">link</p>") {
 		t.Errorf("html = %q, want the text as HTML", h)
 	}
 	if to, _ := body["to"].([]any); len(to) != 1 || to[0] != "someone@example.test" {

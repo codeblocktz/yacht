@@ -3,6 +3,7 @@ package notify
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,6 +60,19 @@ func (m *resendMailer) Send(ctx context.Context, msg Message) error {
 	}
 	if msg.ReplyTo != "" {
 		body["reply_to"] = msg.ReplyTo
+	}
+	if len(msg.Attachments) > 0 {
+		// Resend's shape: base64 content and an explicit content_type, which
+		// it would otherwise guess from the name.
+		var atts []map[string]string
+		for _, a := range msg.Attachments {
+			atts = append(atts, map[string]string{
+				"filename":     a.Filename,
+				"content_type": a.contentType(),
+				"content":      base64.StdEncoding.EncodeToString(a.Data),
+			})
+		}
+		body["attachments"] = atts
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

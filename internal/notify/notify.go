@@ -9,6 +9,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -49,11 +50,31 @@ type Message struct {
 	// TextBody is still required and is still the plain-text part.
 	HTMLContent string
 
+	// Attachments go with the mail as files: an invoice's PDF, say. Every
+	// transport here sends them; whoever attaches one should still say in
+	// the body where the same thing can be read, for the reader whose client
+	// strips attachments.
+	Attachments []Attachment
+
 	// Footer and ReplyTo are the install's, filled in by WithBranding rather
 	// than by whoever composes the message.
 	Footer  Footer
 	ReplyTo string
 }
+
+// Attachment is a file sent with a message.
+type Attachment struct {
+	// Filename is the name it is saved as: "CB-2026-000001.pdf".
+	Filename string
+	// ContentType is its MIME type, "application/pdf".
+	ContentType string
+	Data        []byte
+}
+
+// MaxAttachmentBytes bounds what a message may carry in attachments, before
+// encoding. Cloudflare takes 25 MiB a message, base64 included, and Resend
+// 40 MB: 18 MiB is what is left of the smaller once base64 has had its third.
+const MaxAttachmentBytes = 18 << 20
 
 // Action is a mail's button: what it says, and where it goes.
 type Action struct {
@@ -186,6 +207,19 @@ func (m Message) Validate() error {
 	case m.TextBody == "":
 		return errors.New("notify: message has no body")
 	}
+	total := 0
+	for _, a := range m.Attachments {
+		switch {
+		case a.Filename == "" || strings.ContainsAny(a.Filename, "\r\n\"/\\"):
+			return fmt.Errorf("notify: attachment name %q is not a file name", a.Filename)
+		case len(a.Data) == 0:
+			return fmt.Errorf("notify: attachment %s is empty", a.Filename)
+		}
+		total += len(a.Data)
+	}
+	if total > MaxAttachmentBytes {
+		return fmt.Errorf("notify: attachments are %d bytes, more than the %d a message may carry", total, MaxAttachmentBytes)
+	}
 	return nil
 }
 
@@ -218,8 +252,28 @@ func (m *logMailer) Send(_ context.Context, msg Message) error {
 		slog.String("to", msg.To),
 		slog.String("subject", msg.Subject),
 		slog.String("body", msg.Text()),
+		slog.Any("attachments", attachmentNames(msg.Attachments)),
 	)
 	return nil
+}
+
+// attachmentNames is what the log says of a message's files: their names
+// and sizes, not their bytes.
+func attachmentNames(as []Attachment) []string {
+	out := make([]string, 0, len(as))
+	for _, a := range as {
+		out = append(out, fmt.Sprintf("%s (%s, %d bytes)", a.Filename, a.contentType(), len(a.Data)))
+	}
+	return out
+}
+
+// contentType is the attachment's type, or the one a file of no stated type
+// is sent as.
+func (a Attachment) contentType() string {
+	if a.ContentType != "" {
+		return a.ContentType
+	}
+	return "application/octet-stream"
 }
 
 // MailerFunc is a function as a Mailer.

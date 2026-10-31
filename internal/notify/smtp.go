@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -152,9 +153,10 @@ func (m *smtpMailer) sendImplicitTLS(host string, auth smtp.Auth, msg Message) e
 // the classic mail bug. Date and Message-ID are there because mail without
 // them is mail many providers file as spam, and a sign-in link in spam is a
 // sign-in that does not work. The body is multipart/alternative, text then
-// HTML, for the same reason the HTTP transports send both.
+// HTML, for the same reason the HTTP transports send both; with attachments,
+// that is the first part of a multipart/mixed, and each file a part after
+// it, in base64.
 func (m *smtpMailer) wire(msg Message) []byte {
-	boundary := "yacht-" + randomHex()
 	var b strings.Builder
 	b.WriteString("From: " + sanitizeHeader(m.from.String()) + "\r\n")
 	b.WriteString("To: " + sanitizeHeader(msg.To) + "\r\n")
@@ -165,6 +167,36 @@ func (m *smtpMailer) wire(msg Message) []byte {
 	b.WriteString("Date: " + m.now().Format(time.RFC1123Z) + "\r\n")
 	b.WriteString("Message-ID: " + messageID(m.from.Address) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
+	if len(msg.Attachments) == 0 {
+		writeAlternative(&b, msg)
+		return []byte(b.String())
+	}
+	mixed := "yacht-" + randomHex()
+	b.WriteString(`Content-Type: multipart/mixed; boundary="` + mixed + `"` + "\r\n\r\n")
+	b.WriteString("--" + mixed + "\r\n")
+	writeAlternative(&b, msg)
+	for _, a := range msg.Attachments {
+		name := mime.QEncoding.Encode("utf-8", sanitizeHeader(a.Filename))
+		b.WriteString("--" + mixed + "\r\n")
+		b.WriteString("Content-Type: " + sanitizeHeader(a.contentType()) + `; name="` + name + `"` + "\r\n")
+		b.WriteString(`Content-Disposition: attachment; filename="` + name + `"` + "\r\n")
+		b.WriteString("Content-Transfer-Encoding: base64\r\n\r\n")
+		// RFC 2045 keeps a base64 line to 76 characters.
+		enc := base64.StdEncoding.EncodeToString(a.Data)
+		for len(enc) > 76 {
+			b.WriteString(enc[:76] + "\r\n")
+			enc = enc[76:]
+		}
+		b.WriteString(enc + "\r\n")
+	}
+	b.WriteString("--" + mixed + "--\r\n")
+	return []byte(b.String())
+}
+
+// writeAlternative writes the Content-Type header and body of the message's
+// text and HTML as one multipart/alternative.
+func writeAlternative(b *strings.Builder, msg Message) {
+	boundary := "yacht-" + randomHex()
 	b.WriteString(`Content-Type: multipart/alternative; boundary="` + boundary + `"` + "\r\n")
 	b.WriteString("\r\n")
 	for _, part := range []struct{ kind, body string }{
@@ -181,7 +213,6 @@ func (m *smtpMailer) wire(msg Message) []byte {
 		b.WriteString(qp.String() + "\r\n")
 	}
 	b.WriteString("--" + boundary + "--\r\n")
-	return []byte(b.String())
 }
 
 func randomHex() string {
