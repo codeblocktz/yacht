@@ -27,9 +27,14 @@ func TestTheBrandBadgeAndNoteFollowTheSlots(t *testing.T) {
 
 	with := base
 	with.BrandBadge, with.ProductNote = "Preview", "Acme is new: tell us what you need."
-	sidebar := regexp.MustCompile(`(?s)<a[^>]*class="brand".*?</a>`).FindString(render(with, page))
+	signedIn := render(with, page)
+	sidebar := regexp.MustCompile(`(?s)<a[^>]*class="brand".*?</a>`).FindString(signedIn)
 	if !chip.MatchString(sidebar) {
 		t.Errorf("the sidebar's brand has no badge: %s", sidebar)
+	}
+	// Said where the product is introduced, not under every page.
+	if strings.Contains(signedIn, "product-note") {
+		t.Error("an ordinary page carries the product's note")
 	}
 	bare := with
 	bare.Bare = true
