@@ -1,10 +1,16 @@
 package web
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/identity"
+	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/secret"
 )
 
 // flashServer is a server with only what a flash needs.
@@ -110,21 +116,96 @@ func TestATamperedFlashIsRefused(t *testing.T) {
 	}
 }
 
-// A key is minted per process, so a message signed by one server is not
-// readable by another. This is the property that makes the per-process key safe
-// rather than merely convenient.
-func TestAFlashFromAnotherServerIsRefused(t *testing.T) {
-	first, second := flashServer(t), flashServer(t)
-
+// redirectFlash sets a message on one server and takes it on another, the way
+// a POST and the GET after its redirect land on different replicas.
+func redirectFlash(t *testing.T, from, to *Server) *Flash {
+	t.Helper()
 	post := httptest.NewRecorder()
-	first.setFlash(post, httptest.NewRequest(http.MethodPost, "/apps", nil), FlashOK, "Deployed.")
+	from.setFlash(post, httptest.NewRequest(http.MethodPost, "/apps", nil), FlashOK, "Deployed.")
 
 	req := httptest.NewRequest(http.MethodGet, "/apps", nil)
 	for _, c := range post.Result().Cookies() {
 		req.AddCookie(c)
 	}
-	if got := second.takeFlash(httptest.NewRecorder(), req); got != nil {
+	return to.takeFlash(httptest.NewRecorder(), req)
+}
+
+// A server minting its own key does not believe another's message.
+func TestAFlashFromAnotherServerIsRefused(t *testing.T) {
+	if got := redirectFlash(t, flashServer(t), flashServer(t)); got != nil {
 		t.Fatalf("another server's flash was believed: %+v", got)
+	}
+}
+
+// replicaFor is one dashboard replica built as the engine builds it, its flash
+// key derived from the install's YACHT_SECRET_KEY.
+func replicaFor(t *testing.T, secretKey string) *Server {
+	t.Helper()
+	keeper, err := secret.NewKeeper(secretKey)
+	if err != nil {
+		t.Fatalf("NewKeeper: %v", err)
+	}
+	key, err := keeper.DeriveKey(FlashKeyPurpose)
+	if err != nil {
+		t.Fatalf("DeriveKey: %v", err)
+	}
+	s, err := New(Options{
+		Orchestrator: orchestrator.NewNoop(),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: "owner-1"}),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FlashKey:     key,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return s
+}
+
+// Two replicas of one install share the secret key, so the replica serving the
+// redirect shows the message the other set (CONFIG-14: with a key per process,
+// one redirect in two replicas' worth showed its toast). Another install's
+// replica, with its own secret, must still refuse it.
+func TestReplicasWithTheSameSecretKeyShareFlashes(t *testing.T) {
+	const install = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
+	const other = "ampqampqampqampqampqampqampqampqampqampqams="
+
+	first, second := replicaFor(t, install), replicaFor(t, install)
+	got := redirectFlash(t, first, second)
+	if got == nil || got.Text != "Deployed." {
+		t.Fatalf("a replica of the same install refused the flash: %+v", got)
+	}
+	if got := redirectFlash(t, first, replicaFor(t, other)); got != nil {
+		t.Fatalf("a server with another secret key believed the flash: %+v", got)
+	}
+}
+
+// A configured key too short to be one is a wiring mistake, refused at start.
+func TestAShortFlashKeyIsRefused(t *testing.T) {
+	_, err := New(Options{
+		Orchestrator: orchestrator.NewNoop(),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: "owner-1"}),
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FlashKey:     []byte("short"),
+	})
+	if err == nil {
+		t.Fatal("a 5-byte flash key was accepted")
+	}
+}
+
+// With no key configured the process mints one, and says in the log that more
+// than one replica will lose messages; the log must not carry key material.
+func TestNoFlashKeyWarns(t *testing.T) {
+	var buf strings.Builder
+	_, err := New(Options{
+		Orchestrator: orchestrator.NewNoop(),
+		Identity:     identity.NewSingleOwner(identity.Owner{ID: "owner-1"}),
+		Logger:       slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "YACHT_SECRET_KEY") {
+		t.Fatalf("no warning about the unshared flash key:\n%s", buf.String())
 	}
 }
 

@@ -414,6 +414,13 @@ type Options struct {
 	// linked from the sign-in page when sign-up is not open.
 	RequestAccessURL string
 
+	// FlashKey signs the message a redirect carries to the next page, at least
+	// 32 bytes. Every replica of an install must be given the same one, or the
+	// page after a redirect served by another replica drops the message; the
+	// engine derives it from YACHT_SECRET_KEY with FlashKeyPurpose. Empty
+	// mints a key for this process alone, which is right only for one process.
+	FlashKey []byte
+
 	// Tokens, when set with Accounts, puts the API under /api/v1, API tokens
 	// on the Team page and on Project Settings, and signing a CLI in through
 	// the browser. Without accounts the API is on regardless, authenticated
@@ -536,8 +543,8 @@ type Server struct {
 	mailTransport string
 	signInLimit   *attemptLimiter
 
-	// flashKey authenticates the one-shot message a redirect carries. See
-	// newFlashKey for why it is minted here rather than configured.
+	// flashKey authenticates the one-shot message a redirect carries.
+	// Options.FlashKey, or a key of this process's own; see newFlashKey.
 	flashKey []byte
 
 	// tokens, audit and webhooks are the API's credentials, the team's
@@ -604,9 +611,21 @@ func New(opts Options) (*Server, error) {
 			opts.SessionTTL = defaultSessionTTL
 		}
 	}
-	flashKey, err := newFlashKey()
-	if err != nil {
-		return nil, fmt.Errorf("web: flash key: %w", err)
+	flashKey := opts.FlashKey
+	switch {
+	case len(flashKey) == 0:
+		var err error
+		if flashKey, err = newFlashKey(); err != nil {
+			return nil, fmt.Errorf("web: flash key: %w", err)
+		}
+		opts.Logger.Warn("no YACHT_SECRET_KEY set, so messages after a redirect are signed " +
+			"with a key only this process holds; with more than one replica most of " +
+			"them will not be shown")
+	case len(flashKey) < minFlashKey:
+		return nil, fmt.Errorf("web: a FlashKey is %d bytes, want at least %d", len(flashKey), minFlashKey)
+	default:
+		// Copied so a caller reusing its slice cannot change what signs.
+		flashKey = slices.Clone(flashKey)
 	}
 	// Built here rather than passed in: a Retirer holds nothing but the
 	// orchestrator, and the one advancing retirements in the background reads

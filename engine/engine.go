@@ -777,6 +777,16 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		opts.GitHub = e.Apps
 	}
 
+	// Every replica derives the same flash key from the secret key, so the page
+	// after a redirect shows its message whichever replica serves it.
+	if e.Keeper.Configured() {
+		key, err := e.Keeper.DeriveKey(web.FlashKeyPurpose)
+		if err != nil {
+			return fmt.Errorf("flash key: %w", err)
+		}
+		opts.FlashKey = key
+	}
+
 	// The add-node surface only exists where a token could actually be sealed.
 	// Without a key the page could store nothing and hand out nothing, so it is
 	// left off the router entirely rather than shown and refused. Stacks and

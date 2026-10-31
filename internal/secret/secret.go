@@ -18,6 +18,7 @@ package secret
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -83,6 +84,10 @@ var ErrFutureVersion = errors.New("secret: the stored value uses a newer envelop
 type sealingKey struct {
 	id   [keyIDBytes]byte
 	aead cipher.AEAD
+
+	// prk is the key run through HKDF-Extract, kept so DeriveKey can expand
+	// purpose keys from it without the raw key being held twice.
+	prk []byte
 }
 
 // name is the key's ID as it appears in errors and in a retirement check.
@@ -166,7 +171,12 @@ func newSealingKey(encodedKey string) (sealingKey, error) {
 		return sealingKey{}, fmt.Errorf("gcm: %w", err)
 	}
 
-	return sealingKey{id: deriveKeyID(key), aead: aead}, nil
+	prk, err := hkdf.Extract(sha256.New, key, []byte(deriveSalt))
+	if err != nil {
+		return sealingKey{}, fmt.Errorf("hkdf: %w", err)
+	}
+
+	return sealingKey{id: deriveKeyID(key), aead: aead, prk: prk}, nil
 }
 
 // deriveKeyID names a key from the key itself.
@@ -188,6 +198,33 @@ func deriveKeyID(key []byte) [keyIDBytes]byte {
 	var id [keyIDBytes]byte
 	copy(id[:], h.Sum(nil))
 	return id
+}
+
+// deriveSalt separates keys derived for other purposes from anything else
+// computed over the same secret.
+const deriveSalt = "yacht/secret/derive\x00"
+
+// DeriveKey returns a 32-byte key for one purpose, derived from the active key.
+//
+// Something that has to verify on every replica of an install, such as the
+// signature on a cookie, needs a key every replica holds. A key each process
+// mints for itself only verifies on the process that made it, which behind a
+// load balancer is the minority of requests. The secret key is already the one
+// value every replica is configured with, so purpose keys come from it, through
+// HKDF with the purpose as the info: a key derived for one use is no help with
+// any other, and none of them reveal the secret key.
+//
+// Derived from the active key only. Replacing the key changes every derived
+// key, which is acceptable for the things derived here because none of them is
+// meant to outlive a restart by much.
+func (k *Keeper) DeriveKey(purpose string) ([]byte, error) {
+	if !k.Configured() {
+		return nil, errors.New("secret: no key configured to derive from")
+	}
+	if purpose == "" {
+		return nil, errors.New("secret: a derived key needs a purpose")
+	}
+	return hkdf.Expand(sha256.New, k.active.prk, purpose, keyBytes)
 }
 
 // Configured reports whether values can be sealed.

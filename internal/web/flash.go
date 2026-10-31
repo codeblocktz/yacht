@@ -77,12 +77,21 @@ func (f Flash) Class() string {
 // says the thing they asked for did not happen.
 func (f Flash) Assertive() bool { return f.Kind == FlashErr }
 
-// newFlashKey mints the key that signs pending messages.
+// minFlashKey is the shortest configured flash key accepted.
+const minFlashKey = 32
+
+// FlashKeyPurpose is what a flash key is derived for, from the secret key.
+const FlashKeyPurpose = "yacht/web/flash v1"
+
+// newFlashKey mints a key for an install that configured none.
 //
-// Random per process, deliberately. The alternative is deriving it from
-// YACHT_SECRET_KEY, which would tie a purely cosmetic feature to a setting an
-// install may not have — and the cost of a fresh key is that a redirect crossing
-// a restart loses its toast. That is the correct thing to lose.
+// A minted key only verifies on the process that minted it. That used to be the
+// default and was the wrong one: with two dashboard replicas behind a balancer,
+// the redirect after a POST mostly lands on the other replica, which cannot
+// verify the cookie, drops it, and the message is never seen. Options.FlashKey,
+// derived from YACHT_SECRET_KEY, is what every replica shares. This stays only
+// for an install with no secret key, which is a single process in development,
+// and New says so in the log.
 func newFlashKey() ([]byte, error) {
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
