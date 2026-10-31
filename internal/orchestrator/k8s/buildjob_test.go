@@ -194,6 +194,7 @@ for f in "$ROOT"/workspace/platform/env/BP_*; do
   [ -f "$f" ] && line="$line ${f##*/}=$(cat "$f")"
 done
 echo "$line" >> "$ROOT/runs"
+echo "platform NODE_ENV=$(cat "$ROOT"/workspace/platform/env/NODE_ENV 2>/dev/null)"
 set -- ` + strings.Join(exits, " ") + `
 shift $(( n - 1 ))
 exit "${1:-0}"
@@ -204,8 +205,6 @@ exit "${1:-0}"
 
 	c := buildpackStep(orchestrator.BuildRequest{Image: "r/x:1"}, true)
 	script := c.Args[0]
-	// The UID probe runs BuildKit, which is not here and not under test.
-	script = strings.Replace(script, resolveUIDScript, "", 1)
 	script = strings.ReplaceAll(script, "/workspace", ws)
 	script = strings.ReplaceAll(script, "/cnb/lifecycle", lifecycle)
 
@@ -308,5 +307,44 @@ func TestABuildThatFailsIsNotRetriedAsAStaticSite(t *testing.T) {
 	}
 	if len(runs) != 1 {
 		t.Errorf("runs = %q, want one", runs)
+	}
+}
+
+// A buildpacks build runs with NODE_ENV=production, as Next.js needs to
+// prerender, unless the app set NODE_ENV to something else.
+func TestABuildpacksBuildIsAProductionBuild(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"by default", nil, "production"},
+		{"unless the app says otherwise", map[string]string{"NODE_ENV": "staging"}, "staging"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, err := runBuildpackStep(t, map[string]string{"package.json": "{}"}, tc.env, "0")
+			if err != nil {
+				t.Fatalf("the step failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(out, "platform NODE_ENV="+tc.want+"\n") {
+				t.Errorf("the lifecycle was not given NODE_ENV=%s:\n%s", tc.want, out)
+			}
+		})
+	}
+}
+
+// A buildpacks build that pushed ends there. The uid probe needs BuildKit,
+// which the builder image does not have, so running it only ever added an
+// error to a build that had none.
+func TestABuildpacksBuildEndsWithItsPush(t *testing.T) {
+	out, _, err := runBuildpackStep(t, map[string]string{"package.json": "{}"}, nil, "0")
+	if err != nil {
+		t.Fatalf("the step failed: %v\n%s", err, out)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(out), "Pushed r/x:1") {
+		t.Errorf("the log does not end with the push:\n%s", out)
+	}
+	if strings.Contains(out, "Could not work out") || strings.Contains(out, "buildctl") {
+		t.Errorf("a good build reports a failure:\n%s", out)
 	}
 }
