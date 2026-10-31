@@ -564,7 +564,34 @@ if [ "$code" -eq ` + itoa(cnbFailedDetect) + ` ] || [ "$code" -eq ` + itoa(cnbFa
   echo "Nothing in this repository was recognised. Add a Dockerfile, or a Procfile naming the command that starts the app; a static site needs an index.html at the top or in public/."
 fi`
 
+// nodeEnvScript builds with NODE_ENV=production unless the app sets
+// NODE_ENV itself.
+//
+// Paketo's npm-install sets NODE_ENV=development in the build environment of
+// every buildpack after it, so "npm run build" runs in development. Next.js
+// then fails its prerender with "<Html> should not be imported outside of
+// pages/_document", and a repository that builds everywhere else, Railway
+// included, fails here unless somebody thinks to add a variable. A platform
+// variable outranks a buildpack's, so setting it here is what turns that
+// around.
+//
+// It does not cost the build its devDependencies, which is what NODE_ENV=
+// production would mean to a plain "npm ci": npm-install and yarn-install
+// both install the build's modules with development dependencies whatever
+// NODE_ENV says, and the app's runtime gets production from the Node.js
+// buildpacks anyway. Other languages never read it.
+const nodeEnvScript = `if [ ! -f /workspace/platform/env/NODE_ENV ]; then
+  printf production > /workspace/platform/env/NODE_ENV
+fi`
+
 // buildpackStep builds a repository that has no Dockerfile.
+//
+// No uid probe at the end, unlike the Dockerfile step. The probe is a
+// BuildKit build, and the builder image has no BuildKit, so all it ever did
+// here was end a good build with "Could not work out which user this image
+// runs as". Nor is it needed: the lifecycle gives the image the run image's
+// user, which Paketo's sets as numbers (1002:1000), and Kubernetes can tell
+// those are not root without asking the image.
 //
 // The lifecycle runs inside the builder image rather than on its own, because
 // the buildpacks that detect what the code is live in that image — a lifecycle
@@ -620,6 +647,7 @@ for f in "$BUILD_ARGS"/*; do
     cat "$f" > "/workspace/platform/env/${f##*/}"
   fi
 done
+` + nodeEnvScript + `
 echo "` + buildArgsMarker + orchestrator.BuildArgsAll + `"
 create() {
   /cnb/lifecycle/creator \
@@ -638,7 +666,6 @@ if [ "$code" -ne 0 ]; then
   exit "$code"
 fi
 echo "Pushed $IMAGE"
-` + resolveUIDScript + `
 `},
 		SecurityContext: hardenedAs(cnbUID, cnbGID),
 		VolumeMounts:    mounts,
