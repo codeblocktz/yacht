@@ -53,6 +53,17 @@ func TestTheBrandBadgeAndNoteFollowTheSlots(t *testing.T) {
 	if !strings.Contains(home.String(), "Acme is new: tell us what you need.") {
 		t.Error("a new team's empty projects page does not say the product's note")
 	}
+	// With the getting-started checklist, said in it, once.
+	home.Reset()
+	if err := WorkspaceHome(WorkspaceHomeData{Sort: sortRecent, View: viewGrid, Note: with.ProductNote,
+		Checklist: &Checklist{Steps: []ChecklistStep{{Title: "Deploy", Href: "/new"}}}}).
+		Render(context.Background(), &home); err != nil {
+		t.Fatalf("render the workspace home: %v", err)
+	}
+	if n := strings.Count(home.String(), "Acme is new: tell us what you need."); n != 1 ||
+		!strings.Contains(home.String(), `class="product-note onboard-note"`) {
+		t.Errorf("a new team's checklist says the note %d times", n)
+	}
 
 	without := base
 	without.Bare = true

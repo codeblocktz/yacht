@@ -1125,9 +1125,13 @@
            text-[10.5px] font-medium leading-[14px] tracking-normal text-muted-foreground
            whitespace-nowrap;
   }
-  /* Slots.ProductNote, under the signed-out card and in an empty workspace. */
+  /* Slots.ProductNote, under the signed-out card, in a new team's getting
+     started checklist and in an empty workspace. */
   .product-note {
     @apply mt-4 text-center text-[12px] leading-5 text-muted-foreground text-pretty;
+  }
+  .onboard-note {
+    @apply m-0 border-t border-border px-4 py-2.5 text-left;
   }
   .auth-card {
     @apply rounded-xl border border-border bg-card p-6 shadow-sm;
