@@ -75,6 +75,11 @@ type DeployLogs struct {
 	// Live is true when this deployment is the one currently running, which is
 	// the only case where there are containers left to read.
 	Live bool
+
+	// Kept is true when Logs is not read from the cluster but is the output
+	// a failed rollout's new version printed, kept with the deployment
+	// before the rollback removed its pod.
+	Kept bool
 }
 
 // DeploymentLogs reads the output of one deployment.
@@ -88,6 +93,12 @@ type DeployLogs struct {
 // an old deployment's revision would look like history and be the live log,
 // which is worse than an empty pane: somebody would draw conclusions about a
 // deploy from output that postdates it.
+//
+// For the same reason a deployment's logs are its own pods', those started
+// for its release, and never another's: a redeploy that failed was rolled
+// back, and the app's pods were then only the old version's, shown as the
+// failed one's (QA DEPLOY-17). Its own output is kept as it fails, and shown
+// instead.
 func (s *Service) DeploymentLogs(
 	ctx context.Context, ownerID, appName string, deployID uuid.UUID, req LogRequest,
 ) (DeployLogs, error) {
@@ -102,8 +113,10 @@ func (s *Service) DeploymentLogs(
 	}
 	// The latest deploy's containers are the ones there, failed or not: one
 	// that could not start is still being retried, and what it printed
-	// before dying is the reason somebody opened this.
-	out.Live = d.IsActive || (d.Status == DeployFailed && s.isLatestDeployment(ctx, ownerID, d))
+	// before dying is the reason somebody opened this. One still deploying
+	// has not been replaced either; it is on its way.
+	latest := (d.Status == DeployFailed || d.Status == DeployRunning) && s.isLatestDeployment(ctx, ownerID, d)
+	out.Live = d.IsActive || latest
 	if !out.Live {
 		out.Logs.Note = "This deployment has been replaced. Its containers are gone, and " +
 			"their output went with them — nothing here stores logs off the cluster."
@@ -113,8 +126,66 @@ func (s *Service) DeploymentLogs(
 		return out, nil
 	}
 
-	if out.Logs, err = s.Logs(ctx, ownerID, appName, req); err != nil {
+	a, err := s.Get(ctx, ownerID, appName)
+	if err != nil {
 		return DeployLogs{}, err
+	}
+	pods, err := s.logPods(ctx, a)
+	if err != nil {
+		return DeployLogs{}, err
+	}
+	// A deploy still building has no release, and so no pods yet.
+	var own []orchestrator.PodInfo
+	if d.ReleaseID != nil {
+		own = releasePods(pods, *d.ReleaseID)
+	}
+	if len(own) == 0 {
+		switch {
+		case d.Status == DeployFailed && latest:
+			kept, ok, err := s.keptRolloutLog(ctx, ownerID, d.ID)
+			if err != nil {
+				return DeployLogs{}, err
+			}
+			if ok {
+				out.Logs, out.Kept = kept, true
+				return out, nil
+			}
+			out.Logs.Note = "This deploy's containers were removed when it failed, and " +
+				"nothing they printed was kept."
+			return out, nil
+		case d.Status == DeployRunning && latest:
+			out.Logs.Note = "This deploy's new version has not started yet, so it has written " +
+				"nothing. Its output appears here once it does."
+			return out, nil
+		case d.IsActive:
+			// The serving deployment, whose pods carry another release's
+			// stamp: started before pods carried one, or by a release that
+			// only scaled them, which leaves them the release that made them.
+			// Nothing else is running, so they are its own.
+			own = pods
+		}
+	}
+	target, err := logTarget(own, req)
+	if err != nil {
+		return DeployLogs{}, err
+	}
+	if out.Logs, err = s.readLogs(ctx, a.Namespace, target, req); err != nil {
+		return DeployLogs{}, err
+	}
+	// A crash-looping container's current run, waiting to be restarted, has
+	// printed nothing; the run before it died, saying why. Shown instead,
+	// marked as the previous run, rather than an empty pane over a pod
+	// whose reason is a button away.
+	if !req.Previous && len(out.Logs.Lines) == 0 && restarted(own, target.Pod) {
+		req.Previous = true
+		target.Previous = true
+		prev, err := s.readLogs(ctx, a.Namespace, target, req)
+		if err != nil {
+			return DeployLogs{}, err
+		}
+		if len(prev.Lines) > 0 {
+			out.Logs = prev
+		}
 	}
 	return out, nil
 }
@@ -159,6 +230,12 @@ func (s *Service) Logs(ctx context.Context, ownerID, appName string, req LogRequ
 	if err != nil {
 		return Logs{}, err
 	}
+	return s.readLogs(ctx, namespace, out, req)
+}
+
+// readLogs reads the pod a log target settled on, or returns the target as
+// it is when it settled on none.
+func (s *Service) readLogs(ctx context.Context, namespace string, out Logs, req LogRequest) (Logs, error) {
 	if out.Pod == "" {
 		return out, nil
 	}
@@ -206,21 +283,38 @@ func (s *Service) resolveLogTarget(
 	if err != nil {
 		return "", Logs{}, err
 	}
+	pods, err := s.logPods(ctx, a)
+	if err != nil {
+		return "", Logs{}, err
+	}
+	out, err = logTarget(pods, req)
+	if err != nil {
+		return "", Logs{}, err
+	}
+	return a.Namespace, out, nil
+}
 
+// logPods is every pod of an app, which a log read may choose from.
+func (s *Service) logPods(ctx context.Context, a App) ([]orchestrator.PodInfo, error) {
 	pods, err := s.orch.Pods(ctx, orchestrator.PodListOptions{
-		Namespace: a.Namespace, ManagedOnly: true, Owner: orchestrator.OwnerID(ownerID),
+		Namespace: a.Namespace, ManagedOnly: true, Owner: orchestrator.OwnerID(a.OwnerID),
 	})
 	if err != nil {
-		return "", Logs{}, fmt.Errorf("app: list pods for logs: %w", err)
+		return nil, fmt.Errorf("app: list pods for logs: %w", err)
 	}
+	return pods, nil
+}
 
-	out = Logs{Previous: req.Previous}
+// logTarget settles which of pods a log read touches: the one the request
+// names, which must be among them, or the first.
+func logTarget(pods []orchestrator.PodInfo, req LogRequest) (Logs, error) {
+	out := Logs{Previous: req.Previous}
 	for _, p := range pods {
 		out.Pods = append(out.Pods, p.Name)
 	}
 	if len(out.Pods) == 0 {
 		out.Note = "This app has no running pods, so there is no output to read."
-		return a.Namespace, out, nil
+		return out, nil
 	}
 
 	// A pod named by the request is honoured only if it is one of this app's.
@@ -235,10 +329,10 @@ func (s *Service) resolveLogTarget(
 			}
 		}
 		if !ok {
-			return "", Logs{}, ErrNotFound
+			return Logs{}, ErrNotFound
 		}
 	}
-	return a.Namespace, out, nil
+	return out, nil
 }
 
 // LogStream follows an app's container output until ctx is done.

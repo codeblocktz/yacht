@@ -564,3 +564,28 @@ func TestAFailedReadinessCheckSaysWhatToFix(t *testing.T) {
 		})
 	}
 }
+
+// A version that never listens, where the cluster's progress deadline, which
+// is the deploy's own budget, is the first to say so. Its "ReplicaSet … has
+// timed out progressing" won over the message that names the port.
+func TestAProgressDeadlineSaysWhatToFix(t *testing.T) {
+	events := &recordedEvents{}
+	s, base, pool := testService(t, settleOptions(events))
+	ownerID := owner(t, s, pool, "rollout-progress-deadline")
+	a, err := firstDeploy(t, s, base, ownerID, orchestrator.AppStatus{
+		Phase: orchestrator.PhaseFailing, Generation: 2, ObservedGeneration: 2, Desired: 1, Updated: 1,
+		Terminal: true, Reason: orchestrator.ReasonProgressDeadlineExceeded,
+		Message: `ReplicaSet "web-767d9b44c8" has timed out progressing.`,
+	})
+	if err == nil {
+		t.Fatal("a deploy past its progress deadline succeeded")
+	}
+	d := deploymentOf(t, s, ownerID, a.ID)
+	if d.Status != DeployFailed || strings.Contains(d.Message, "rollout failed") || !strings.Contains(d.Message, "The new version never answered on port 8080") ||
+		!strings.Contains(d.Message, "listen on $PORT (8080)") {
+		t.Fatalf("deployment = %s %q, want failed naming port 8080, not the cluster's timeout", d.Status, d.Message)
+	}
+	if got := events.kinds(); len(got) != 1 || got[0] != EventDeployFailed {
+		t.Fatalf("events = %v, want just %s", got, EventDeployFailed)
+	}
+}

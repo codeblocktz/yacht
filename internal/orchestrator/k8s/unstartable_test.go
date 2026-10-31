@@ -235,3 +235,62 @@ func TestAScaleOnlyReleaseReadsTheRunningPods(t *testing.T) {
 		})
 	}
 }
+
+// A crash loop that outlasts a short healthcheck timeout, so the progress
+// deadline is passed too: it is still a crash, not a version that was slow
+// to listen.
+func TestACrashLoopPastTheProgressDeadlineIsStillACrash(t *testing.T) {
+	o, client := testOrchestrator(t)
+	spec := testSpec()
+	one := int32(1)
+	ctx := context.Background()
+	if _, err := client.AppsV1().Deployments(spec.Namespace).Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name, Namespace: spec.Namespace,
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r2"}},
+		Spec: appsv1.DeploymentSpec{Replicas: &one},
+		Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{
+			Type: appsv1.DeploymentProgressing, Status: corev1.ConditionFalse,
+			Reason: orchestrator.ReasonProgressDeadlineExceeded, Message: "ReplicaSet timed out",
+		}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	cs := waiting("CrashLoopBackOff", 4, &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"})
+	if _, err := client.CoreV1().Pods(spec.Namespace).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name + "-abc", Namespace: spec.Namespace,
+			Labels:      orchestrator.ObjectLabels(spec.Ref),
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r2"}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{cs}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := o.AppStatus(ctx, spec.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Terminal || st.Reason != "CrashLoopBackOff" {
+		t.Fatalf("status = %v (%s: %s), want the crash loop", st.Terminal, st.Reason, st.Message)
+	}
+}
+
+// A pod says which release it was started for, which is how a deployment's
+// logs tell its own pods from the old version's still serving beside them.
+func TestPodsSayWhichReleaseTheyRun(t *testing.T) {
+	o, client := testOrchestrator(t)
+	spec := testSpec()
+	ctx := context.Background()
+	if _, err := client.CoreV1().Pods(spec.Namespace).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name + "-abc", Namespace: spec.Namespace,
+			Labels:      orchestrator.ObjectLabels(spec.Ref),
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r2"}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pods, err := o.Pods(ctx, orchestrator.PodListOptions{Namespace: spec.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 1 || pods[0].ReleaseID != "r2" {
+		t.Fatalf("pods = %+v, want one of release r2", pods)
+	}
+}

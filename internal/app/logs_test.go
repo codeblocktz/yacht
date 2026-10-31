@@ -251,6 +251,11 @@ func TestASupersededDeploymentDoesNotShowTheLiveLog(t *testing.T) {
 	if err := s.Redeploy(ctx, ownerID, "web"); err != nil {
 		t.Fatalf("Redeploy: %v", err)
 	}
+	// Run, so the first deployment is replaced: one still deploying is the
+	// latest, on its way, and its logs are read.
+	if err := executeNamedOperation(s, ctx, ownerID, "web"); err != nil {
+		t.Fatalf("run the redeploy: %v", err)
+	}
 
 	deps, err := s.Deployments(ctx, ownerID, a.ID, 10)
 	if err != nil {

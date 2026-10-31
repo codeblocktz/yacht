@@ -736,7 +736,7 @@ func deploymentStatus(dep *appsv1.Deployment) orchestrator.AppStatus {
 		}
 		if (cond.Type == appsv1.DeploymentProgressing &&
 			cond.Status == corev1.ConditionFalse &&
-			cond.Reason == "ProgressDeadlineExceeded") ||
+			cond.Reason == orchestrator.ReasonProgressDeadlineExceeded) ||
 			(cond.Type == appsv1.DeploymentReplicaFailure && cond.Status == corev1.ConditionTrue) {
 			status.Terminal = true
 			status.Reason = cond.Reason
@@ -769,9 +769,13 @@ func needsPodCheck(status orchestrator.AppStatus) bool {
 // the progress deadline ten minutes on: its start script not executable,
 // its config missing, a crash on every start. An old revision's pods are
 // not looked at; their trouble is not this deploy's.
+//
+// A container that cannot start wins over the progress deadline: a crash
+// loop that outlasts a short healthcheck timeout is still a crash, and the
+// deadline says only that the rollout made no progress, not why.
 func applyPods(status *orchestrator.AppStatus, pods []corev1.Pod, podRelease string, limit int32) {
 	status.Restarts, status.LastExit = restarts(releasePods(pods, podRelease))
-	if status.Terminal {
+	if status.Terminal && status.Reason != orchestrator.ReasonProgressDeadlineExceeded {
 		return
 	}
 	if reason, message, ok := unstartable(pods, podRelease, limit); ok {

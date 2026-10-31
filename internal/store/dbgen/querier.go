@@ -361,6 +361,7 @@ type Querier interface {
 	// release was first made.
 	//
 	GetReleaseLiveSince(ctx context.Context, arg GetReleaseLiveSinceParams) (time.Time, error)
+	GetRolloutLog(ctx context.Context, arg GetRolloutLogParams) (GetRolloutLogRow, error)
 	// Expiry is filtered here for the reason GetSessionByHash gives: so that an
 	// expired row can never be treated as valid by a caller that forgets to check.
 	// This one used to be the caller that forgot. It was not reachable with a dead
@@ -452,6 +453,11 @@ type Querier interface {
 	// its limit is set.
 	InsertBucket(ctx context.Context, arg InsertBucketParams) error
 	InsertImpersonationEvent(ctx context.Context, arg InsertImpersonationEventParams) error
+	// A failed rollout's last output, owner-scoped like the deployment.
+	// Replaced rather than appended: a rollout verified again after its worker
+	// went away fails with the same pod, read again later, which is the fuller
+	// copy.
+	KeepRolloutLog(ctx context.Context, arg KeepRolloutLogParams) error
 	// The same latest deployment for one app, with its id, for the canvas: a
 	// card with no workload yet says whether its first deploy is under way or
 	// failed, and links to that deployment's logs.
