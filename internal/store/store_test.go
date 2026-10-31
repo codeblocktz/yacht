@@ -2,12 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -571,5 +573,62 @@ func TestConcurrentMigrationsAllSucceed(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Errorf("concurrent migration failed: %v", err)
 		}
+	}
+}
+
+// An app is shown at its custom domain only once that domain is routed. One
+// still pending, being verified, or found pointing elsewhere answers nothing
+// yet; the platform hostname is not a custom domain at all.
+func TestPrimaryCustomDomainIsTheFirstRoutedOne(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := dbgen.New(pool)
+
+	const ownerID = "test-primary-custom"
+	seedOwners(t, pool, ownerID)
+
+	appRow, err := q.CreateApp(ctx, dbgen.CreateAppParams{
+		OwnerID: ownerID, Name: "web", Namespace: "ns-test-primary-custom",
+		Image: "nginx:alpine", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	// The platform hostname is routed from the moment it is issued.
+	if _, err := q.UpsertManagedDomain(ctx, dbgen.UpsertManagedDomainParams{
+		OwnerID: ownerID, AppID: appRow.ID, Host: "web-production.up.example.com", Tls: true,
+	}); err != nil {
+		t.Fatalf("managed domain: %v", err)
+	}
+
+	claim := func(host, state string) {
+		t.Helper()
+		row, err := q.CreateCustomDomain(ctx, dbgen.CreateCustomDomainParams{
+			OwnerID: ownerID, AppID: appRow.ID, Host: host, VerifyTarget: "edge.example.com",
+		})
+		if err != nil {
+			t.Fatalf("claim %s: %v", host, err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE domains SET state = $1 WHERE id = $2`, state, row.ID); err != nil {
+			t.Fatalf("set %s %s: %v", host, state, err)
+		}
+	}
+
+	claim("pending.customer.test", "pending")
+	claim("waiting.customer.test", "awaiting_dns")
+	claim("wrong.customer.test", "misdirected")
+	claim("proven.customer.test", "verified")
+	if host, err := q.GetPrimaryCustomDomain(ctx, appRow.ID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("with no custom domain routed, got %q, %v; want no rows", host, err)
+	}
+
+	claim("www.customer.test", "routed")
+	claim("shop.customer.test", "routed")
+	host, err := q.GetPrimaryCustomDomain(ctx, appRow.ID)
+	if err != nil {
+		t.Fatalf("primary custom domain: %v", err)
+	}
+	if host != "www.customer.test" {
+		t.Fatalf("primary custom domain = %q, want the first routed, www.customer.test", host)
 	}
 }

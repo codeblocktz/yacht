@@ -361,9 +361,9 @@ templ appRows(apps []app.App) {
 				// Plain text rather than an anchor: the whole row is already a
 				// link, and an anchor inside an anchor is markup a browser is
 				// free to rearrange. The clickable URL lives on the detail page.
-				if a.Host != "" {
+				if a.DisplayHost() != "" {
 					<span class="mono hidden max-w-[260px] shrink-0 truncate text-[12px] text-muted-foreground lg:block">
-						{ a.Host }
+						{ a.DisplayHost() }
 					</span>
 				}
 				// The region an app lives in, where the install has them. An
@@ -608,14 +608,14 @@ templ appDetailHeader(d AppDetailData) {
 			// The URL sits above the image and in foreground colour: it is the
 			// one line on this page a user wants to click, and muted mono next
 			// to the image would read as another piece of metadata.
-			if a.Host != "" {
+			if a.DisplayHost() != "" {
 				<a
 					class="mono mt-1 flex max-w-full items-center gap-1.5 hover:underline"
-					href={ templ.URL(a.URLScheme() + "://" + a.Host) }
+					href={ templ.URL(a.DisplayURL()) }
 					target="_blank"
 					rel="noreferrer"
 				>
-					<span class="truncate">{ a.Host }</span>
+					<span class="truncate">{ a.DisplayHost() }</span>
 					<span class="text-muted-foreground [&>svg]:size-3.5">
 						@icon("external")
 					</span>
@@ -2707,10 +2707,10 @@ templ backToSources() {
 // where it answers, where it runs, and how many of it there are.
 templ deploymentsHeader(d AppDetailData) {
 	<div class="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
-		if d.App.Host != "" {
-			<a class="inline-flex min-w-0 items-center gap-1.5 text-foreground hover:underline" href={ templ.URL(d.App.URLScheme() + "://" + d.App.Host) } target="_blank" rel="noreferrer">
+		if d.App.DisplayHost() != "" {
+			<a class="inline-flex min-w-0 items-center gap-1.5 text-foreground hover:underline" href={ templ.URL(d.App.DisplayURL()) } target="_blank" rel="noreferrer">
 				@icon("globe")
-				<span class="truncate">{ d.App.Host }</span>
+				<span class="truncate">{ d.App.DisplayHost() }</span>
 			</a>
 		}
 		<span class="flex-1"></span>

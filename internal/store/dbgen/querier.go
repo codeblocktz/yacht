@@ -350,6 +350,12 @@ type Querier interface {
 	// none: one registry serves every team's builds.
 	GetPlatformRegistry(ctx context.Context) (PlatformRegistry, error)
 	GetPreDeployLog(ctx context.Context, arg GetPreDeployLogParams) (string, error)
+	// The custom domain an app is shown at: the first one claimed that is live.
+	//
+	// Routed only. A domain still pending, verifying or failed does not answer
+	// yet, and a card pointing somebody at it would send them to nothing — or
+	// to whoever the name points at today.
+	GetPrimaryCustomDomain(ctx context.Context, appID uuid.UUID) (string, error)
 	GetProjectByID(ctx context.Context, arg GetProjectByIDParams) (Project, error)
 	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
 	GetProjectVariable(ctx context.Context, arg GetProjectVariableParams) (ProjectVariable, error)

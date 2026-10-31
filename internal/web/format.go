@@ -1011,7 +1011,7 @@ func envDot(slug string) string {
 // so a panel left open costs a request, not a re-render.
 func deploymentsToken(d AppDetailData) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%v|%s\n", d.App.Status.Phase, d.App.StatusKnown, d.App.Host)
+	fmt.Fprintf(h, "%s|%v|%s\n", d.App.Status.Phase, d.App.StatusKnown, d.App.DisplayHost())
 	for _, dep := range d.Deployments {
 		fmt.Fprintf(h, "%s|%s|%s|%v|%s\n", dep.ID, dep.Status, dep.Image, dep.IsActive, dep.Message)
 	}

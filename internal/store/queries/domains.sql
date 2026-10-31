@@ -65,6 +65,17 @@ SELECT * FROM domains
 WHERE owner_id = @owner_id AND app_id = @app_id AND NOT managed
 ORDER BY host;
 
+-- The custom domain an app is shown at: the first one claimed that is live.
+--
+-- Routed only. A domain still pending, verifying or failed does not answer
+-- yet, and a card pointing somebody at it would send them to nothing — or
+-- to whoever the name points at today.
+-- name: GetPrimaryCustomDomain :one
+SELECT host FROM domains
+WHERE app_id = @app_id AND NOT managed AND state = 'routed'
+ORDER BY created_at, host
+LIMIT 1;
+
 -- Records what a check saw.
 --
 -- Not scoped by owner, and deliberately: the background checker works through
