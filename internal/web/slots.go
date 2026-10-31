@@ -223,6 +223,20 @@ type Slots struct {
 	// for itself what its signed-out pages look like.
 	Bare bool
 
+	// Focused drops the sidebar and the top bar for a task to finish before
+	// going on: a checkout, say. The brand stays at the top left and Exit at
+	// the top right, the only way out the page offers besides finishing, and
+	// the page sits in a wide centred column rather than Bare's card.
+	//
+	// For a signed-in person, unlike Bare: the navigation is gone because it
+	// is a distraction here, not because it needs a session. Set by
+	// Server.RenderFocused.
+	Focused bool
+
+	// Exit is a focused page's way back — "Back to billing". Ignored unless
+	// Focused is set.
+	Exit Crumb
+
 	// Flash is the outcome of whatever the last request did, shown once.
 	//
 	// Filled by the server immediately before rendering rather than by a

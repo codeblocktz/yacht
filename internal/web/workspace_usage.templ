@@ -1,42 +1,175 @@
 package web
 
-// WorkspaceUsage is what each of the workspace's projects costs this month.
+// WorkspaceUsage is the workspace's month: its total, where the meter gives
+// one, and what each of its projects costs.
 templ WorkspaceUsage(d WorkspaceUsageData) {
-	@pageHead("Usage", "What each project has used this month, and what the month comes to at the rate it runs now.", nil)
-	<div class="panel">
-		if len(d.Projects) == 0 {
-			<div class="empty">
-				<p class="font-medium text-foreground">Nothing to show yet</p>
-				<p>Usage appears once a project runs something.</p>
+	@pageHead("Usage", "", usagePeriodSwitch(d))
+	if s := d.Summary; s != nil {
+		<section class="usage-section">
+			<h2 class="section-title">{ s.Period } usage</h2>
+			<div class="usage-card">
+				<dl class="usage-rows">
+					<div class="usage-row"><dt>Current usage</dt><dd>{ s.Current }</dd></div>
+					<div class="usage-row"><dt>Included usage</dt><dd>{ s.Included }</dd></div>
+				</dl>
+				<div class="flex flex-col gap-4">
+					<div class="grid grid-cols-2 gap-3">
+						<div class="usage-tile">
+							<span class="usage-tile-k">Current usage</span>
+							<span class="usage-tile-v">{ s.Current }</span>
+						</div>
+						<div class="usage-tile usage-tile-quiet">
+							<span class="usage-tile-k">{ s.BillLabel }</span>
+							<span class="usage-tile-v">{ s.Bill }</span>
+						</div>
+					</div>
+					if l := s.Limit; l != nil {
+						<div>
+							<div class="mb-1.5 flex items-baseline justify-between gap-3 text-[12.5px]">
+								<span class="font-medium">{ l.Label }</span>
+								<span class="tabular-nums text-muted-foreground">{ l.Used } / { l.Of }</span>
+							</div>
+							@meter(l.Percent, usageMeterClass(l.Percent))
+							if l.Href != "" {
+								<a class="btn mt-3 w-full justify-center" href={ templ.SafeURL(l.Href) }>{ l.ActionLabel }</a>
+							}
+						</div>
+					}
+				</div>
 			</div>
-		} else {
-			<div class="overflow-x-auto">
-				<table class="dtable">
-					<thead>
-						<tr>
-							<th>Project</th>
-							<th>Period</th>
-							<th class="text-right">So far</th>
-							<th class="text-right">Estimated</th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, p := range d.Projects {
-							<tr>
-								<td>
-									<a class="font-medium hover:underline" href={ templ.SafeURL("/projects/" + p.Project.Slug + "/settings#usage") }>{ p.Project.Name }</a>
-								</td>
-								<td class="text-muted-foreground">{ p.Usage.Period }</td>
-								<td class="text-right tabular-nums">{ p.Usage.Current }</td>
-								<td class="text-right tabular-nums">{ p.Usage.Estimated }</td>
-							</tr>
+			if len(s.Breakdown) > 0 {
+				<details class="usage-breakdown">
+					<summary>
+						@icon("list")
+						Show breakdown
+					</summary>
+					<div class="overflow-x-auto">
+						<table class="dtable">
+							<thead>
+								<tr>
+									<th>Resource</th>
+									<th class="text-right">Quantity</th>
+									<th class="text-right">Price</th>
+									<th class="text-right">Cost</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, c := range s.Breakdown {
+									<tr>
+										<td>{ c.Name }</td>
+										<td class="text-right tabular-nums text-muted-foreground">{ c.Quantity }</td>
+										<td class="text-right tabular-nums text-muted-foreground">{ c.UnitPrice }</td>
+										<td class="text-right tabular-nums">{ c.Cost }</td>
+									</tr>
+								}
+							</tbody>
+							<tfoot>
+								for _, t := range s.Totals {
+									<tr class={ templ.KV("usage-total-strong", t.Strong) }>
+										<td colspan="3" class="text-right">{ t.Label }</td>
+										<td class="text-right tabular-nums">{ t.Amount }</td>
+									</tr>
+								}
+							</tfoot>
+						</table>
+					</div>
+				</details>
+			}
+			if p := s.Plan; p != nil {
+				<div class="usage-plan">
+					<div class="min-w-0">
+						<p class="text-[14px] font-medium">{ p.Name }</p>
+						<p class="text-[12px] text-muted-foreground">{ p.Detail }</p>
+					</div>
+					<p class="text-[13px] text-muted-foreground sm:max-w-[60%] sm:text-right">
+						{ p.Includes }
+						if p.Href != "" {
+							<a class="font-medium text-foreground underline" href={ templ.SafeURL(p.Href) }>{ p.HrefLabel }</a>
 						}
-					</tbody>
-				</table>
-			</div>
-		}
-	</div>
-	if d.Note != "" {
-		<p class="mt-3 text-[12px] text-muted-foreground">{ d.Note }</p>
+					</p>
+				</div>
+			}
+			if s.Note != "" {
+				<p class="mt-3 text-[12px] text-muted-foreground">{ s.Note }</p>
+			}
+		</section>
 	}
+	if d.Next == "" {
+		<section class="usage-section">
+			<h2 class="section-title">Usage by project</h2>
+			<div class="panel">
+				if len(d.Projects) == 0 {
+					<div class="empty">
+						<p class="font-medium text-foreground">Nothing to show yet</p>
+						<p>Usage appears once a project runs something.</p>
+					</div>
+				} else {
+					<div class="overflow-x-auto">
+						<table class="dtable">
+							<thead>
+								<tr>
+									<th>Project</th>
+									<th>Period</th>
+									<th class="text-right">So far</th>
+									<th class="text-right">Estimated</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, p := range d.Projects {
+									<tr>
+										<td>
+											<a class="font-medium hover:underline" href={ templ.SafeURL("/projects/" + p.Project.Slug + "/settings#usage") }>{ p.Project.Name }</a>
+										</td>
+										<td class="text-muted-foreground">{ p.Usage.Period }</td>
+										<td class="text-right tabular-nums">{ p.Usage.Current }</td>
+										<td class="text-right tabular-nums">{ p.Usage.Estimated }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				}
+			</div>
+			if d.Note != "" {
+				<p class="mt-3 text-[12px] text-muted-foreground">{ d.Note }</p>
+			}
+		</section>
+	} else if d.Summary == nil {
+		<div class="panel">
+			<div class="empty">
+				<p class="font-medium text-foreground">No record of this month</p>
+				<p>Only this month's usage is priced here.</p>
+			</div>
+		</div>
+	}
+}
+
+// usagePeriodSwitch steps a month back or forward; forward stops at this one.
+templ usagePeriodSwitch(d WorkspaceUsageData) {
+	<nav class="usage-period" aria-label="Month">
+		<a class="btn btn-ghost btn-icon btn-sm" href={ templ.SafeURL("/usage?month=" + d.Prev) } aria-label="Previous month">
+			@icon("chevron-left")
+		</a>
+		<span class="min-w-[7.5rem] text-center text-[13px] font-medium tabular-nums">{ d.Month.Format("January 2006") }</span>
+		if d.Next != "" {
+			<a class="btn btn-ghost btn-icon btn-sm" href={ templ.SafeURL("/usage?month=" + d.Next) } aria-label="Next month">
+				@icon("chevron-right")
+			</a>
+		} else {
+			<span class="btn btn-ghost btn-icon btn-sm opacity-40" aria-hidden="true">
+				@icon("chevron-right")
+			</span>
+		}
+	</nav>
+}
+
+// usageMeterClass colours a limit's bar by how much of it is used.
+func usageMeterClass(percent int) string {
+	switch {
+	case percent >= 90:
+		return "meter-err"
+	case percent >= 75:
+		return "meter-warn"
+	}
+	return "meter-ok"
 }

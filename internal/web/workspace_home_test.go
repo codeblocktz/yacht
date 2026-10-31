@@ -169,3 +169,56 @@ func TestTheConsolesCrumbsLeadToItsOverview(t *testing.T) {
 		}
 	}
 }
+
+// summaryMeter is a meter that also totals the month.
+type summaryMeter struct {
+	stubMeter
+	asked *WorkspaceUsageRequest
+}
+
+func (m summaryMeter) WorkspaceUsage(_ context.Context, req WorkspaceUsageRequest) (UsageSummary, error) {
+	*m.asked = req
+	return UsageSummary{
+		Period: "1 – 31 Oct", Current: "TZS 2,280", Included: "TZS 12,000", Bill: "TZS 14,160", BillLabel: "Estimated bill",
+		Limit:     &UsageLimit{Label: "Spending limit", Used: "TZS 14,160", Of: "TZS 50,000", Percent: 28, Href: "/billing#limit", ActionLabel: "Set limit"},
+		Breakdown: []UsageCharge{{Name: "Memory", Quantity: "120 GiB-h", UnitPrice: "TZS 36 / GiB-h", Cost: "TZS 4,320"}},
+		Totals:    []UsageTotal{{Label: "Subtotal", Amount: "TZS 4,320"}, {Label: "Bill", Amount: "TZS 14,160", Strong: true}},
+		Plan:      &UsagePlan{Name: "Hobby plan", Detail: "Prepaid", Includes: "Includes TZS 12,000 of usage.", Href: "/billing/plans", HrefLabel: "Change plan"},
+		Past:      req.Month.Before(monthStart(time.Now())),
+	}, nil
+}
+
+// A meter that totals the month gets Railway's summary card: the two
+// numbers, the limit, the breakdown and the plan, above the projects. An
+// earlier month is the summary alone, and the switch goes no further than
+// this month.
+func TestTheWorkspaceUsageSummary(t *testing.T) {
+	apps := newFakeApps(sampleApp("owner-1", "web"))
+	var asked WorkspaceUsageRequest
+	h := testServer(t, Options{Apps: apps, Usage: summaryMeter{asked: &asked}})
+	body := get(t, h, "/usage").Body.String()
+	for _, want := range []string{
+		"1 – 31 Oct usage", "TZS 2,280", "Estimated bill", "TZS 14,160", "TZS 14,160 / TZS 50,000",
+		`href="/billing#limit"`, "Show breakdown", "TZS 36 / GiB-h", "Change plan", "Usage by project", "TZS 3,000",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the usage page is missing %q", want)
+		}
+	}
+	if strings.Contains(body, `aria-label="Next month"`) {
+		t.Error("this month offers a next month")
+	}
+	prev := monthStart(time.Now()).AddDate(0, -1, 0)
+	body = get(t, h, "/usage?month="+prev.Format("2006-01")).Body.String()
+	if !asked.Month.Equal(prev) {
+		t.Errorf("the meter was asked for %v, want %v", asked.Month, prev)
+	}
+	if strings.Contains(body, "Usage by project") || !strings.Contains(body, `aria-label="Next month"`) {
+		t.Error("an earlier month lists projects, or offers no way forward")
+	}
+	future := monthStart(time.Now()).AddDate(0, 2, 0)
+	get(t, h, "/usage?month="+future.Format("2006-01"))
+	if !asked.Month.Equal(monthStart(time.Now())) {
+		t.Errorf("a month to come was asked for: %v", asked.Month)
+	}
+}

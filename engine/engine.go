@@ -70,6 +70,17 @@ type (
 	UsageApp     = web.UsageApp
 	ProjectUsage = web.ProjectUsage
 	UsageLine    = web.UsageLine
+	// UsageSummarizer is a UsageMeter that also totals the workspace's
+	// month for /usage: a UsageSummary of what it used and what the plan
+	// includes, the bill, a limit, the breakdown and the plan line, for the
+	// month a WorkspaceUsageRequest asks.
+	UsageSummarizer       = web.UsageSummarizer
+	WorkspaceUsageRequest = web.WorkspaceUsageRequest
+	UsageSummary          = web.UsageSummary
+	UsageLimit            = web.UsageLimit
+	UsageCharge           = web.UsageCharge
+	UsageTotal            = web.UsageTotal
+	UsagePlan             = web.UsagePlan
 
 	// Owner is the principal a request acts as. The engine treats ID as
 	// opaque; a wrapper may make it an organisation's.

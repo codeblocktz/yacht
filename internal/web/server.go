@@ -1312,6 +1312,20 @@ func (s *Server) RenderSignedOut(w http.ResponseWriter, r *http.Request, status 
 	s.renderSignedOut(w, r, status, title, page)
 }
 
+// RenderFocused draws a page with one task on it — a checkout — without the
+// sidebar and the top bar: the brand, exit as the way back, and the page in a
+// centred column. For a signed-in person; the slots are the request's own, so
+// the brand, the banner and the flash still arrive.
+func (s *Server) RenderFocused(w http.ResponseWriter, r *http.Request, status int, title string, exit Crumb, page templ.Component) {
+	slots := s.slots.Slots(r.Context(), r)
+	slots.Focused = true
+	slots.Exit = exit
+	// The title from the crumbs is the one the layout would otherwise draw;
+	// a focused page has none, so it is named outright.
+	slots.Breadcrumb = []Crumb{{Label: title}}
+	s.renderWithSlotsStatus(w, r, slots, status, page)
+}
+
 // FlashOK, FlashErr and FlashWarn leave a message for the next full page
 // render, across a redirect. Same mechanism as the engine's own actions use.
 func (s *Server) FlashOK(w http.ResponseWriter, r *http.Request, text string) { s.flashOK(w, r, text) }
