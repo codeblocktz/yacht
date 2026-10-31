@@ -28,6 +28,17 @@ else
 endif
 TAILWIND_URL := https://github.com/tailwindlabs/tailwindcss/releases/download/$(TAILWIND_VERSION)/tailwindcss-$(TW_OS)-$(TW_ARCH)
 
+# What each platform's TAILWIND_VERSION binary hashes to, from the release's
+# sha256sums.txt. The download is an executable `make verify` runs, so it is
+# checked before it lands in ./bin, and a mismatch fails rather than runs.
+# Bumping TAILWIND_VERSION means replacing all four; overriding it alone
+# fails the check until TAILWIND_SHA256 is given too.
+TAILWIND_SHA256_linux-x64   := dc61b3ac6b8c9ca874c0cc4c57b2409791a64c5540404ca5f5367360babc313a
+TAILWIND_SHA256_linux-arm64 := 55fd0b241214eff3de1e8ee4f22796662f2d2e7a49bcfca7477cfd0bac398195
+TAILWIND_SHA256_macos-x64   := 7922e0953f2110c05976e3bf58f14e643d90427575e766b7d433f5f80cbee7e1
+TAILWIND_SHA256_macos-arm64 := cdf646702987a743464dff4d9c60fd4480d1c1e73dd819a9a67f1078815dce9d
+TAILWIND_SHA256 ?= $(TAILWIND_SHA256_$(TW_OS)-$(TW_ARCH))
+
 CSS_IN  := assets/css/input.css
 CSS_OUT := internal/web/assets/css/app.css
 
@@ -48,7 +59,19 @@ $(TAILWIND):
 	@set -eu; \
 		tmp=$$(mktemp "$(TAILWIND).tmp.XXXXXX"); \
 		trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+		want="$(TAILWIND_SHA256)"; \
+		if [ -z "$$want" ]; then \
+			echo "no checksum for tailwindcss-$(TW_OS)-$(TW_ARCH): set TAILWIND_SHA256" >&2; exit 1; \
+		fi; \
 		curl --fail --silent --show-error --location -o "$$tmp" "$(TAILWIND_URL)"; \
+		if command -v sha256sum >/dev/null 2>&1; then \
+			got=$$(sha256sum "$$tmp" | cut -d' ' -f1); \
+		else \
+			got=$$(shasum -a 256 "$$tmp" | cut -d' ' -f1); \
+		fi; \
+		if [ "$$got" != "$$want" ]; then \
+			echo "tailwindcss-$(TW_OS)-$(TW_ARCH) $(TAILWIND_VERSION): sha256 $$got, want $$want" >&2; exit 1; \
+		fi; \
 		chmod +x "$$tmp"; \
 		mv "$$tmp" "$(TAILWIND)"
 
