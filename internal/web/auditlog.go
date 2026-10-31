@@ -63,6 +63,7 @@ var auditRoutes = map[string]auditSpec{
 	"POST /apps":                                {action: "app.create", targetKind: "app", target: "name", detail: map[string]string{"source": "source", "project": "project"}},
 	"POST /apps/github":                         {action: "app.create", targetKind: "app", detail: map[string]string{"source": "=github", "kind": "=github", "project": "project"}},
 	"POST /apps/new/database":                   {action: "app.create", targetKind: "app", detail: map[string]string{"engine": "engine", "kind": "=database", "project": "project"}},
+	"POST /apps/new/bucket":                     {action: "app.create", targetKind: "app", detail: map[string]string{"kind": "=bucket", "project": "project"}},
 	"POST /templates":                           {action: "app.create", targetKind: "template", target: "template", detail: map[string]string{"project": "project"}},
 	"POST /apps/{name}/redeploy":                {action: "deploy.redeploy", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/changes/deploy":          {action: "deploy.staged", targetKind: "app", target: ":name"},
@@ -99,6 +100,7 @@ var auditRoutes = map[string]auditSpec{
 
 	// Domains.
 	"POST /apps/{name}/domains":                       {action: "domain.add", targetKind: "app", target: ":name", detail: map[string]string{"host": "host"}},
+	"POST /apps/{name}/domains/{id}/verify":           {action: "domain.verify", targetKind: "app", target: ":name", detail: map[string]string{"domain": ":id"}},
 	"POST /apps/{name}/domains/{id}/delete":           {action: "domain.remove", targetKind: "app", target: ":name", detail: map[string]string{"domain": ":id"}},
 	"POST /apps/{name}/networking":                    {action: "domain.routing", targetKind: "app", target: ":name"},
 	"POST /apps/{name}/networking/domain/generate":    {action: "domain.generate", targetKind: "app", target: ":name"},
@@ -112,10 +114,21 @@ var auditRoutes = map[string]auditSpec{
 	"POST /apps/{name}/storage/{volume}/resize":   {action: "storage.resize", targetKind: "app", target: ":name", detail: map[string]string{"volume": ":volume", "size_gb": "size_gb"}},
 	"POST /apps/{name}/storage/{volume}/delete":   {action: "storage.delete", targetKind: "app", target: ":name", detail: map[string]string{"volume": ":volume"}},
 
+	// A bucket's files, by name: an upload's are set by the handler, which
+	// alone has read the multipart body.
+	"POST /apps/{name}/files":        {action: "bucket.file.upload", targetKind: "app", target: ":name"},
+	"POST /apps/{name}/files/delete": {action: "bucket.file.delete", targetKind: "app", target: ":name", detail: map[string]string{"key": "key"}},
+
 	// Projects.
 	"POST /projects":                {action: "project.create", targetKind: "project", target: "name"},
 	"POST /projects/{slug}/rename":  {action: "project.rename", targetKind: "project", target: ":slug", detail: map[string]string{"name": "name"}},
 	"POST /projects/{slug}/delete":  {action: "project.delete", targetKind: "project", target: ":slug"},
+
+	// Environments. Deleting one deletes every service in it, so who did is
+	// as much the log's as a project's deletion.
+	"POST /projects/{slug}/environments":                {action: "environment.create", targetKind: "project", target: ":slug", detail: map[string]string{"name": "name"}, detailFn: environmentFrom},
+	"POST /projects/{slug}/environments/{env}/delete":   {action: "environment.delete", targetKind: "project", target: ":slug", detail: map[string]string{"name": ":env"}},
+	"POST /projects/{slug}/pr-environments":             {action: "environment.pr", targetKind: "project", target: ":slug", detailFn: prEnvironmentsState},
 
 	// People.
 	"POST /team/invite":                    {action: "invitation.create", targetKind: "member", target: "email", detail: map[string]string{"role": "role"}},
@@ -159,6 +172,9 @@ type auditState struct {
 	// and form cannot say: a database's name is chosen by the server, and a
 	// revoked token is gone from the list by the time anyone reads its id.
 	target string
+	// detail is facts the handler adds, for the same reason: the names of
+	// the files an upload stored are in a multipart body only it has read.
+	detail map[string]string
 }
 
 type auditStateKey struct{}
@@ -176,6 +192,18 @@ func markAuditFailed(ctx context.Context) {
 func auditTarget(ctx context.Context, target string) {
 	if st, ok := ctx.Value(auditStateKey{}).(*auditState); ok {
 		st.target = target
+	}
+}
+
+// auditDetail adds a fact to what a request is recorded with, when the
+// table's URL parameters and form fields cannot read it. It wins over the
+// table's.
+func auditDetail(ctx context.Context, key, value string) {
+	if st, ok := ctx.Value(auditStateKey{}).(*auditState); ok {
+		if st.detail == nil {
+			st.detail = map[string]string{}
+		}
+		st.detail[key] = value
 	}
 }
 
@@ -244,6 +272,11 @@ func (s *Server) auditEvent(r *http.Request, spec auditSpec) audit.Event {
 	}
 	if spec.detailFn != nil {
 		for k, v := range spec.detailFn(r) {
+			ev.Detail[k] = v
+		}
+	}
+	if st, ok := r.Context().Value(auditStateKey{}).(*auditState); ok {
+		for k, v := range st.detail {
 			ev.Detail[k] = v
 		}
 	}
@@ -316,6 +349,27 @@ func rawKeys(r *http.Request) map[string]string {
 		keys = append(keys[:20], "…")
 	}
 	return map[string]string{"keys": strings.Join(keys, ", "), "count": strconv.Itoa(len(lines))}
+}
+
+// environmentFrom is the environment a new one copied, as environmentCreate
+// reads the field: none for "-", production for nothing.
+func environmentFrom(r *http.Request) map[string]string {
+	switch from := strings.TrimSpace(r.FormValue("from")); from {
+	case "-":
+		return map[string]string{"from": "empty"}
+	case "":
+		return map[string]string{"from": app.DefaultEnvironment}
+	default:
+		return map[string]string{"from": from}
+	}
+}
+
+// prEnvironmentsState is whether PR Environments were turned on or off.
+func prEnvironmentsState(r *http.Request) map[string]string {
+	if formChecked(r, "enabled") {
+		return map[string]string{"state": "on"}
+	}
+	return map[string]string{"state": "off"}
 }
 
 // webhookHost records where a webhook sends, by host alone: Discord's and

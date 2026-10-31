@@ -255,6 +255,11 @@ templ bucketSettings(d AppDetailData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
+	// A bucket's settings are its deletion alone, so a refusal of any of its
+	// forms is said here.
+	if d.Refused.Reason != "" {
+		@variableRefusal(d.Refused.Reason)
+	}
 	<div class="panel border-l-2 border-l-destructive">
 		<div class="panel-header">
 			<span class="panel-title">Danger zone</span>

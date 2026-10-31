@@ -435,6 +435,9 @@ type AppDetailData struct {
 	// Vars is the rest of the variables tab: what is staged, what the
 	// platform adds, and which of its controls the service supports.
 	Vars        VariablesView
+	// Refused is a Settings form the service refused, drawn again with the
+	// reason beside it and what was typed.
+	Refused     FormRefusal
 	// CLI is what the product's CLI is called, for an empty service's
 	// directions.
 	CLI         string
@@ -1236,11 +1239,18 @@ templ appDomains(d AppDetailData) {
 }
 
 // ---- settings tab
+//
+// Drawn inside #settings-tab, which a refused form's answer from htmx
+// replaces (settingsRefused).
 templ appSettings(d AppDetailData) {
+	<div id="settings-tab">
 	if d.Error != "" {
 		<div class="callout callout-err mb-5">
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
+	}
+	if d.Refused.On("") {
+		@variableRefusal(d.Refused.Reason)
 	}
 	if d.Notice != "" {
 		<div class="callout mb-5">
@@ -1307,6 +1317,7 @@ templ appSettings(d AppDetailData) {
 			@appRegionSection(d)
 			@appProjectSection(d)
 		</div>
+	</div>
 	</div>
 }
 
@@ -1475,9 +1486,13 @@ templ appLegacySettings(d AppDetailData) {
 			<span class="panel-title">Scale</span>
 		</div>
 		<div class="panel-body">
+			if d.Refused.On(settingsFormReplicas) {
+				@variableRefusal(d.Refused.Reason)
+			}
 			<form
 				method="post"
 				action={ templ.URL("/apps/" + a.Name + "/scale") }
+				{ swapRefusal("/apps/" + a.Name + "/scale")... }
 				class="flex flex-wrap items-end gap-3"
 			>
 				<div class="field w-32">
@@ -1489,7 +1504,11 @@ templ appLegacySettings(d AppDetailData) {
 						name="replicas"
 						min="0"
 						max="50"
-						value={ strconv.Itoa(int(a.Replicas)) }
+						value={ d.Refused.Typed(settingsFormReplicas, "replicas", strconv.Itoa(int(a.Replicas))) }
+						if d.Refused.On(settingsFormReplicas) {
+							aria-invalid="true"
+							autofocus
+						}
 					/>
 				</div>
 				<button class="btn" type="submit">Apply</button>
@@ -2543,6 +2562,9 @@ templ appStorage(d AppDetailData) {
 			<div class="min-w-0">{ d.Error }</div>
 		</div>
 	}
+	if d.Refused.On(settingsFormVolumes) {
+		@variableRefusal(d.Refused.Reason)
+	}
 	<div class="callout mb-5">
 		<div class="min-w-0">
 			<div class="font-medium">Storage changes how this app deploys</div>
@@ -2574,11 +2596,11 @@ templ appStorage(d AppDetailData) {
 							<td class="tabular-nums">{ gigabytes(v.SizeBytes) } GB</td>
 							<td class="text-right">
 								<div class="flex justify-end gap-2">
-									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/resize") } class="flex items-center gap-1.5">
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/resize") } { swapRefusal("/apps/" + d.App.Name + "/storage/" + v.Name + "/resize")... } class="flex items-center gap-1.5">
 										<input class="control w-20 !py-1 !text-[12px]" name="size_gb" type="number" min="1" max="1024" value={ gigabytes(v.SizeBytes) }/>
 										<button class="btn btn-sm" type="submit">Grow</button>
 									</form>
-									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/delete") } class="flex items-center gap-1.5">
+									<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage/" + v.Name + "/delete") } { swapRefusal("/apps/" + d.App.Name + "/storage/" + v.Name + "/delete")... } class="flex items-center gap-1.5">
 										<input class="control w-28 !py-1 !text-[12px]" name="confirm" placeholder={ v.Name } aria-label="Type the volume name to confirm"/>
 										<button class="btn btn-sm btn-danger" type="submit">Delete</button>
 									</form>
@@ -2601,18 +2623,27 @@ templ appStorage(d AppDetailData) {
 	<div class="panel">
 		<div class="panel-header"><span class="panel-title">Add a volume</span></div>
 		<div class="panel-body">
-			<form method="post" action={ templ.SafeURL("/apps/" + d.App.Name + "/storage") } class="flex flex-wrap items-end gap-4">
+			{{ volRefused := d.Refused.On(settingsFormVolume) }}
+			if volRefused {
+				@variableRefusal(d.Refused.Reason)
+			}
+			<form
+				method="post"
+				action={ templ.SafeURL("/apps/" + d.App.Name + "/storage") }
+				{ swapRefusal("/apps/" + d.App.Name + "/storage")... }
+				class="flex flex-wrap items-end gap-4"
+			>
 				<div class="field">
 					<label class="label" for="vol-name">Name</label>
-					<input class="control" id="vol-name" name="name" required placeholder="data"/>
+					<input class="control" id="vol-name" name="name" required placeholder="data" value={ d.Refused.Typed(settingsFormVolume, "name", "") } autofocus?={ volRefused }/>
 				</div>
 				<div class="field grow">
 					<label class="label" for="vol-mount">Mount path</label>
-					<input class="control mono" id="vol-mount" name="mount_path" required placeholder="/var/lib/data"/>
+					<input class="control mono" id="vol-mount" name="mount_path" required placeholder="/var/lib/data" value={ d.Refused.Typed(settingsFormVolume, "mount_path", "") }/>
 				</div>
 				<div class="field">
 					<label class="label" for="vol-size">Size (GB)</label>
-					<input class="control w-24" id="vol-size" name="size_gb" type="number" min="1" max="1024" value="1"/>
+					<input class="control w-24" id="vol-size" name="size_gb" type="number" min="1" max="1024" value={ d.Refused.Typed(settingsFormVolume, "size_gb", "1") }/>
 				</div>
 				<button class="btn btn-primary" type="submit">Attach</button>
 			</form>

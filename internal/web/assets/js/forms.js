@@ -43,14 +43,16 @@
 
 	// A form marked data-swap-refusal answers a refusal with 422 and the part
 	// of the page it belongs to, drawn again with the reason and with what was
-	// typed. htmx leaves a 4xx unswapped unless told otherwise; this tells it,
-	// for those forms only. (An hx-on attribute would say it inline, and needs
-	// the eval the page's CSP refuses.)
+	// typed; a volume's are 404 (no such volume) and 409 (still mounted),
+	// drawn the same way. htmx leaves a 4xx unswapped unless told otherwise;
+	// this tells it, for those forms only. (An hx-on attribute would say it
+	// inline, and needs the eval the page's CSP refuses.)
 	var refused = false;
+	var refusals = [404, 409, 422];
 
 	function onBeforeSwap(event) {
 		var d = event.detail;
-		if (!d || !d.xhr || d.xhr.status !== 422) return;
+		if (!d || !d.xhr || refusals.indexOf(d.xhr.status) < 0) return;
 		var from = d.requestConfig && d.requestConfig.elt;
 		if (!from || !from.closest || !from.closest("[data-swap-refusal]")) return;
 		d.shouldSwap = true;

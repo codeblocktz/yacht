@@ -108,14 +108,14 @@ func (s *Server) domainAdd(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	if err := s.nets.AddDomain(ctx, owner.ID, name, r.FormValue("host")); err != nil {
-		s.appActionFailed(w, r, name, "domains", err)
+		s.settingsRefused(w, r, name, "domains", settingsFormDomain, http.StatusUnprocessableEntity, err)
 		return
 	}
 	// The next step is theirs, so it is said. What is no longer said is "then
 	// verify it" — nothing has to be pressed now, and telling somebody to come
 	// back and click is how the old flow wasted their time.
 	s.flashOK(w, r, "Domain added. Create the record shown; it is checked for on its own.")
-	http.Redirect(w, r, "/apps/"+name+"/domains", http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/domains")
 }
 
 // domainVerify proves a claim.
@@ -281,10 +281,10 @@ func (s *Server) publicDomainGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		s.appActionFailed(w, r, name, tab, err)
+		s.settingsRefused(w, r, name, tab, settingsFormGenerate, http.StatusUnprocessableEntity, err)
 		return
 	}
-	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/"+tab)
 }
 
 // publicDomainSet is "Update your domain or target port".
@@ -298,11 +298,11 @@ func (s *Server) publicDomainSet(w http.ResponseWriter, r *http.Request) {
 		err = s.nets.SetPublicDomain(ctx, owner.ID, name, r.FormValue("label"), port)
 	}
 	if err != nil {
-		s.appActionFailed(w, r, name, tab, err)
+		s.settingsRefused(w, r, name, tab, settingsFormPublic, http.StatusUnprocessableEntity, err)
 		return
 	}
 	s.flashOK(w, r, "Saved. A new name answers once the route is rewritten; a new port once the app has rolled out.")
-	http.Redirect(w, r, "/apps/"+name+"/"+tab, http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/"+tab)
 }
 
 // publicDomainRemove takes the platform hostname away.
@@ -362,6 +362,7 @@ func netOf(d AppDetailData) NetworkingData {
 	return NetworkingData{
 		App:           d.App.Name,
 		Tab:           tab,
+		Refused:       d.Refused,
 		Net:           d.Net,
 		UntrustedCert: d.App.UntrustedCert(),
 		ResolverName:  d.ResolverName,
