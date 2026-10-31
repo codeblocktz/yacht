@@ -279,7 +279,21 @@
   // the part of the canvas the panel leaves showing, as Railway does. A
   // panel that hid the card it was about would leave nothing on screen
   // saying which app this is, or what it is connected to.
+  //
+  // Only for a panel opened by its address. One opened from its card on this
+  // canvas keeps the view it was opened at: the card was on screen when it
+  // was clicked, and a canvas that moves under the click is the jump
+  // canvas-panel.js is there to prevent. It says so for a card it leaves to
+  // a full page load.
   function revealOpenCard() {
+    var keep = null;
+    try {
+      keep = sessionStorage.getItem("yacht.keepView");
+      sessionStorage.removeItem("yacht.keepView");
+    } catch (e) {
+      // No storage: the slide is the worst of it.
+    }
+    if (keep) return;
     var open = canvas.querySelector(".canvas-card-open");
     var sheet = document.querySelector("#canvas-sheet .canvas-sheet");
     if (!open || !sheet) return;
