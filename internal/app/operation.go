@@ -1100,6 +1100,7 @@ func (s *Service) applyAndVerifyOperation(
 	}
 	if err == nil {
 		err = s.verifyRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt, s.rolloutBudget(release), readinessOf(release))
+		s.keepFailedRolloutLog(ctx, op, a, release.ID, err)
 	}
 	if errors.Is(err, ErrClusterObservation) {
 		// An API outage says nothing about the rollout. Preserve the verifying
@@ -1222,6 +1223,7 @@ func (s *Service) executeRecoveredAppOperation(ctx context.Context, op Operation
 	}
 	err = s.verifyRecoveredRollout(ctx, a, release.ID, a.ConfigVersion, op.StageStartedAt,
 		s.rolloutBudget(release), readinessOf(release))
+	s.keepFailedRolloutLog(ctx, op, a, release.ID, err)
 	if errors.Is(err, ErrClusterObservation) {
 		if releaseErr := s.releaseRecoverableOperation(ctx, op); releaseErr != nil {
 			return releaseErr

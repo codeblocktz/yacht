@@ -179,6 +179,9 @@ func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
 		d.Error = "Could not read the logs."
 	default:
 		d.Deploy = dl
+		// The run shown, which for a crashed container is its previous one
+		// even when this run was asked for: this one has printed nothing.
+		d.Previous = dl.Logs.Previous
 	}
 	// The container log is searched in place rather than paged: it is already
 	// capped at what the API returns, and a page control over it would break

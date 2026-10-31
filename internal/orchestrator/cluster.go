@@ -108,6 +108,12 @@ type PodInfo struct {
 	App   string
 	Owner OwnerID
 
+	// ReleaseID is the release the pod was started for, from its
+	// AnnotationReleaseID: what tells one deployment's pods from another's
+	// while both are up, an old version's still serving beside a new one's.
+	// Empty for a pod started before pods carried it.
+	ReleaseID string
+
 	// Reason and Message are why a container is not running, taken from the
 	// container's own waiting state.
 	//

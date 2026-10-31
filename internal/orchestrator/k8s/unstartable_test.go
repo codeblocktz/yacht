@@ -272,3 +272,25 @@ func TestACrashLoopPastTheProgressDeadlineIsStillACrash(t *testing.T) {
 		t.Fatalf("status = %v (%s: %s), want the crash loop", st.Terminal, st.Reason, st.Message)
 	}
 }
+
+// A pod says which release it was started for, which is how a deployment's
+// logs tell its own pods from the old version's still serving beside them.
+func TestPodsSayWhichReleaseTheyRun(t *testing.T) {
+	o, client := testOrchestrator(t)
+	spec := testSpec()
+	ctx := context.Background()
+	if _, err := client.CoreV1().Pods(spec.Namespace).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: spec.Name + "-abc", Namespace: spec.Namespace,
+			Labels:      orchestrator.ObjectLabels(spec.Ref),
+			Annotations: map[string]string{orchestrator.AnnotationReleaseID: "r2"}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pods, err := o.Pods(ctx, orchestrator.PodListOptions{Namespace: spec.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods) != 1 || pods[0].ReleaseID != "r2" {
+		t.Fatalf("pods = %+v, want one of release r2", pods)
+	}
+}

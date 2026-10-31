@@ -169,6 +169,7 @@ func (o *Orchestrator) Pods(
 			CreatedAt:  p.CreationTimestamp.Time,
 			App:        p.Labels[orchestrator.LabelApp],
 			Owner:      orchestrator.OwnerID(p.Labels[orchestrator.LabelOwner]),
+			ReleaseID:  p.Annotations[orchestrator.AnnotationReleaseID],
 		}
 		for _, cs := range p.Status.ContainerStatuses {
 			if cs.Ready {

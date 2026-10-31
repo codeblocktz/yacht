@@ -326,6 +326,15 @@ type DeploymentPreDeployLog struct {
 	UpdatedAt    time.Time
 }
 
+type DeploymentRolloutLog struct {
+	DeploymentID uuid.UUID
+	OwnerID      string
+	Pod          string
+	Previous     bool
+	Output       string
+	CreatedAt    time.Time
+}
+
 type Domain struct {
 	ID            uuid.UUID
 	OwnerID       string

@@ -208,6 +208,25 @@ templ deployLogView(d DeployLogsData) {
 				</div>
 			</div>
 		}
+	} else if d.Deploy.Kept {
+		// The pod that printed this is gone, rolled back with the deploy, so
+		// there is no run to choose between: this is what was kept of it.
+		<div class="canvas-sheet-actions">
+			<span class="text-[12px] text-muted-foreground">
+				Kept from { d.Deploy.Logs.Pod }
+				if d.Deploy.Logs.Previous {
+					{ "(its last run)" }
+				}
+				when the deploy failed and its container was removed.
+			</span>
+			<span class="text-[12px] text-muted-foreground tabular-nums">
+				{ plural(len(d.Deploy.Logs.Lines), "line") }
+			</span>
+		</div>
+		<div class="canvas-sheet-actions">
+			@findBox(d, viewDeploy)
+		</div>
+		@deployLogLines(d)
 	} else {
 		<div class="canvas-sheet-actions">
 			<a
@@ -231,45 +250,51 @@ templ deployLogView(d DeployLogsData) {
 		<div class="canvas-sheet-actions">
 			@findBox(d, viewDeploy)
 		</div>
-		if len(d.Deploy.Logs.Lines) == 0 && len(d.Deploy.PreDeploy) == 0 {
-			<div class="canvas-sheet-body">
-				<div class="empty">
-					<p class="font-medium text-foreground">Nothing to show</p>
-					if d.Deploy.Logs.Note != "" {
-						<p>{ d.Deploy.Logs.Note }</p>
-					}
-				</div>
+		@deployLogLines(d)
+	}
+}
+
+// deployLogLines is the deploy log itself, after whatever pre-deploy output
+// came first, or what explains there being none.
+templ deployLogLines(d DeployLogsData) {
+	if len(d.Deploy.Logs.Lines) == 0 && len(d.Deploy.PreDeploy) == 0 {
+		<div class="canvas-sheet-body">
+			<div class="empty">
+				<p class="font-medium text-foreground">Nothing to show</p>
+				if d.Deploy.Logs.Note != "" {
+					<p>{ d.Deploy.Logs.Note }</p>
+				}
 			</div>
-		} else {
-			// Its own scrolling region, filling what the header and tabs leave.
-			// The .logs cap that suits a panel on a page would put a short block
-			// with its own scrollbar inside a sheet that scrolls as well.
-			<div class="canvas-sheet-log">
-				<div class="logs">
-					// The pre-deploy command first, as it ran: before any
-					// container of this release started.
-					if len(d.Deploy.PreDeploy) > 0 {
-						@preDeployLines(d)
-						<div class="log-section">Containers</div>
-						if len(d.Deploy.Logs.Lines) == 0 {
-							<div class="log-line text-muted-foreground">
-								{ cmp.Or(d.Deploy.Logs.Note, "Nothing yet.") }
-							</div>
-						}
-					}
-					for _, l := range d.Deploy.Logs.Lines {
-						<div class="log-line">
-							if !l.At.IsZero() {
-								<span class="log-time">{ l.At.Format("15:04:05") }</span>
-							}
-							<span class="log-text">
-								@highlight(plainLog(l.Text), d.Find)
-							</span>
+		</div>
+	} else {
+		// Its own scrolling region, filling what the header and tabs leave.
+		// The .logs cap that suits a panel on a page would put a short block
+		// with its own scrollbar inside a sheet that scrolls as well.
+		<div class="canvas-sheet-log">
+			<div class="logs">
+				// The pre-deploy command first, as it ran: before any
+				// container of this release started.
+				if len(d.Deploy.PreDeploy) > 0 {
+					@preDeployLines(d)
+					<div class="log-section">Containers</div>
+					if len(d.Deploy.Logs.Lines) == 0 {
+						<div class="log-line text-muted-foreground">
+							{ cmp.Or(d.Deploy.Logs.Note, "Nothing yet.") }
 						</div>
 					}
-				</div>
+				}
+				for _, l := range d.Deploy.Logs.Lines {
+					<div class="log-line">
+						if !l.At.IsZero() {
+							<span class="log-time">{ l.At.Format("15:04:05") }</span>
+						}
+						<span class="log-text">
+							@highlight(plainLog(l.Text), d.Find)
+						</span>
+					</div>
+				}
 			</div>
-		}
+		</div>
 	}
 }
 
