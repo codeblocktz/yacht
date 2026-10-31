@@ -1523,17 +1523,23 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 	owner := identity.MustFromContext(r.Context())
 	name := chi.URLParam(r, "name")
 
-	replicas, err := parseIntField(r.FormValue("replicas"), 1)
-	if err != nil || s.apps == nil {
+	if s.apps == nil {
 		http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 		return
 	}
-	if _, err := s.apps.Scale(r.Context(), owner.ID, name, int32(replicas)); err != nil {
+	replicas, err := parseIntField(r.FormValue("replicas"), 1)
+	if err != nil {
+		// Said rather than redirected past: a redirect looked like the
+		// change had been made.
+		err = errors.New("replicas must be a whole number between 0 and 50")
+	} else if _, err = s.apps.Scale(r.Context(), owner.ID, name, int32(replicas)); err != nil {
 		s.log.Error("scale", slog.String("app", name), slog.String("error", err.Error()))
-		s.appActionFailed(w, r, name, "settings", err)
+	}
+	if err != nil {
+		s.settingsRefused(w, r, name, "settings", settingsFormReplicas, http.StatusUnprocessableEntity, err)
 		return
 	}
-	http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name)
 }
 
 func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {

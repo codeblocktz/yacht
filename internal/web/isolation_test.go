@@ -232,7 +232,7 @@ func TestFailedActionsDoNotReportSuccess(t *testing.T) {
 		{"delete", "/apps/web/delete", "confirm=web"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := testServer(t, Options{Apps: &failingApps{}})
+			srv := testServer(t, Options{Apps: &failingApps{newFakeApps(sampleApp("owner-1", "web"))}})
 
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.form))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -269,8 +269,9 @@ func TestFailedActionsDoNotReportSuccess(t *testing.T) {
 }
 
 // failingApps refuses everything, so a handler that swallows an error is
-// visible as a success the caller should not have been given.
-type failingApps struct{ fakeApps }
+// visible as a success the caller should not have been given. The app itself
+// is there, on its canvas: a refusal is drawn in its panel, over it.
+type failingApps struct{ *fakeApps }
 
 func (f *failingApps) Scale(context.Context, string, string, int32) (app.App, error) {
 	return app.App{}, errors.New("nope")
@@ -280,7 +281,4 @@ func (f *failingApps) Redeploy(context.Context, string, string) error {
 }
 func (f *failingApps) Delete(context.Context, string, string) error {
 	return errors.New("nope")
-}
-func (f *failingApps) Get(context.Context, string, string) (app.App, error) {
-	return app.App{Name: "web"}, nil
 }

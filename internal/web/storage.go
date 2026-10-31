@@ -33,7 +33,7 @@ func (s *Server) storageAttach(w http.ResponseWriter, r *http.Request) {
 
 	size, err := sizeFromForm(r.FormValue("size_gb"))
 	if err != nil {
-		s.storageFailed(w, r, name, err)
+		s.storageFailed(w, r, name, settingsFormVolume, err)
 		return
 	}
 
@@ -42,11 +42,11 @@ func (s *Server) storageAttach(w http.ResponseWriter, r *http.Request) {
 		MountPath: strings.TrimSpace(r.FormValue("mount_path")),
 		SizeBytes: size,
 	}); err != nil {
-		s.storageFailed(w, r, name, err)
+		s.storageFailed(w, r, name, settingsFormVolume, err)
 		return
 	}
 
-	http.Redirect(w, r, "/apps/"+name+"/storage", http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/storage")
 }
 
 // storageResize grows a volume. It cannot shrink one.
@@ -57,18 +57,18 @@ func (s *Server) storageResize(w http.ResponseWriter, r *http.Request) {
 
 	size, err := sizeFromForm(r.FormValue("size_gb"))
 	if err != nil {
-		s.storageFailed(w, r, name, err)
+		s.storageFailed(w, r, name, settingsFormVolumes, err)
 		return
 	}
 
 	if err := s.apps.ResizeVolume(
 		ctx, owner.ID, name, chi.URLParam(r, "volume"), size,
 	); err != nil {
-		s.storageFailed(w, r, name, err)
+		s.storageFailed(w, r, name, settingsFormVolumes, err)
 		return
 	}
 
-	http.Redirect(w, r, "/apps/"+name+"/storage", http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/storage")
 }
 
 // storageDelete removes a volume, once its name has been typed back.
@@ -83,7 +83,7 @@ func (s *Server) storageDelete(w http.ResponseWriter, r *http.Request) {
 	volume := chi.URLParam(r, "volume")
 
 	if strings.TrimSpace(r.FormValue("confirm")) != volume {
-		s.storageFailed(w, r, name, errors.New(
+		s.storageFailed(w, r, name, settingsFormVolumes, errors.New(
 			"type the volume's name to confirm — deleting it destroys what it holds"))
 		return
 	}
@@ -92,11 +92,11 @@ func (s *Server) storageDelete(w http.ResponseWriter, r *http.Request) {
 	// before the row goes, so the pod has let go by the time the claim is
 	// unreferenced.
 	if err := s.apps.DeleteVolume(ctx, owner.ID, name, volume, true); err != nil {
-		s.storageFailed(w, r, name, err)
+		s.storageFailed(w, r, name, settingsFormVolumes, err)
 		return
 	}
 
-	http.Redirect(w, r, "/apps/"+name+"/storage", http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+name+"/storage")
 }
 
 // sizeFromForm reads a size in gigabytes.
@@ -111,12 +111,12 @@ func sizeFromForm(raw string) (int64, error) {
 	return gb * gib, nil
 }
 
-// storageFailed re-renders the tab with the reason.
+// storageFailed re-renders the tab with the reason, beside form.
 //
 // Rendered rather than redirected, so the message arrives with the form that
 // produced it and the person can see what they typed.
 func (s *Server) storageFailed(
-	w http.ResponseWriter, r *http.Request, appName string, cause error,
+	w http.ResponseWriter, r *http.Request, appName, form string, cause error,
 ) {
 	status := http.StatusUnprocessableEntity
 	switch {
@@ -129,15 +129,7 @@ func (s *Server) storageFailed(
 			slog.String("app", appName), slog.String("reason", cause.Error()))
 	}
 
-	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
-	if err != nil {
-		http.Error(w, cause.Error(), status)
-		return
-	}
-
-	s.renderStatus(w, r, status, AppDetail(AppDetailData{
-		App: a, Tab: "storage", Error: cause.Error(),
-	}))
+	s.settingsRefused(w, r, appName, "storage", form, status, cause)
 }
 
 // variableSet stores an environment variable.
@@ -265,13 +257,7 @@ const (
 // save from htmx is told to load the page, rather than have the redirect's
 // page swapped into the tab, so the canvas's changes bar counts it too.
 func variableSaved(w http.ResponseWriter, r *http.Request, appName string) {
-	to := "/apps/" + appName + "/variables"
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("HX-Redirect", to)
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	http.Redirect(w, r, to, http.StatusSeeOther)
+	savedTo(w, r, "/apps/"+appName+"/variables")
 }
 
 // nthLine is line n of text, counted from 1, or "" past its end.
@@ -298,22 +284,13 @@ func (s *Server) healthSet(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 }
 
-// appActionFailed re-renders a tab with the reason it refused.
+// appActionFailed re-renders a tab with the reason it refused, at the top of
+// the tab: for a form with no place of its own for it. A form that has one
+// calls settingsRefused with its name.
 func (s *Server) appActionFailed(
 	w http.ResponseWriter, r *http.Request, appName, tab string, cause error,
 ) {
-	status := http.StatusUnprocessableEntity
-	if errors.Is(cause, app.ErrNotFound) {
-		status = http.StatusNotFound
-	}
-
-	a, err := s.apps.Get(r.Context(), identity.MustFromContext(r.Context()).ID, appName)
-	if err != nil {
-		http.Error(w, cause.Error(), status)
-		return
-	}
-
-	s.renderStatus(w, r, status, AppDetail(s.detailWith(r, a, tab, "", cause.Error())))
+	s.settingsRefused(w, r, appName, tab, "", http.StatusUnprocessableEntity, cause)
 }
 
 // formChecked reads a checkbox without caring what it is worth.

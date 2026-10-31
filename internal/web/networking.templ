@@ -31,6 +31,10 @@ type NetworkingData struct {
 
 	Notice string
 	Error  string
+
+	// Refused is a form of the section's the service refused, as the
+	// Settings tab it is drawn on was given it.
+	Refused FormRefusal
 }
 
 // customDomainURL is where the hostname links to.
@@ -64,7 +68,17 @@ templ customDomains(d NetworkingData) {
 				</div>
 			} else {
 				@CustomDomainList(d)
-				<form method="post" action={ templ.URL("/apps/" + d.App + "/domains") } class="mt-4 flex flex-wrap items-end gap-3">
+				if d.Refused.On(settingsFormDomain) {
+					<div class="mt-4">
+						@variableRefusal(d.Refused.Reason)
+					</div>
+				}
+				<form
+					method="post"
+					action={ templ.URL("/apps/" + d.App + "/domains") }
+					{ swapRefusal("/apps/" + d.App + "/domains")... }
+					class="mt-4 flex flex-wrap items-end gap-3"
+				>
 					<div class="field min-w-[260px] flex-1">
 						<label class="label" for="host">Add custom domain</label>
 						<input
@@ -72,7 +86,12 @@ templ customDomains(d NetworkingData) {
 							id="host"
 							name="host"
 							placeholder="shop.example.com"
+							value={ d.Refused.Typed(settingsFormDomain, "host", "") }
 							required
+							if d.Refused.On(settingsFormDomain) {
+								aria-invalid="true"
+								autofocus
+							}
 						/>
 					</div>
 					<button class="btn btn-primary" type="submit">Add</button>
