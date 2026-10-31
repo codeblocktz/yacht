@@ -72,6 +72,7 @@ func (s *Server) bucketDeploy(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		var a app.App
 		if a, err = s.buckets().DeployBucket(ctx, owner.ID, projectID); err == nil {
+			auditTarget(ctx, a.Name)
 			http.Redirect(w, r, "/apps/"+a.Name, http.StatusSeeOther)
 			return
 		}
@@ -168,6 +169,7 @@ func (s *Server) bucketUpload(w http.ResponseWriter, r *http.Request) {
 	// Files above 32 MiB are spooled to the disk rather than held in
 	// memory, and removed when the request is done.
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		markAuditFailed(ctx)
 		s.renderBucketListing(w, r, r.FormValue("prefix"), "", "",
 			"The upload did not arrive whole. Uploads here are up to 1 GiB together; a larger file goes through an S3 client.")
 		return
@@ -194,14 +196,37 @@ func (s *Server) bucketUpload(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, objstore.ErrFull) && !s.overPlan(ctx, owner.ID, name, written+fh.Size) {
 				msg = installFullSentence
 			}
+			// The listing answers 200 either way. The files stored before
+			// this one were uploaded, and are recorded; none at all is a
+			// failure.
+			s.auditUploaded(ctx, prefix, put)
 			s.renderBucketListing(w, r, prefix, "", uploaded(put), "Could not store "+fh.Filename+": "+msg)
 			return
 		}
 		put = append(put, fh.Filename)
 		written += fh.Size
 	}
+	s.auditUploaded(ctx, prefix, put)
 	_ = s.buckets().MeasureBucket(ctx, owner.ID, name)
 	s.renderBucketListing(w, r, prefix, "", uploaded(put), "")
+}
+
+// auditUploaded records an upload by the names of the files it stored, and
+// an upload that stored none as not having happened.
+func (s *Server) auditUploaded(ctx context.Context, prefix string, put []string) {
+	if len(put) == 0 {
+		markAuditFailed(ctx)
+		return
+	}
+	names := put
+	if len(names) > 20 {
+		names = append(names[:20:20], "…")
+	}
+	auditDetail(ctx, "files", strings.Join(names, ", "))
+	auditDetail(ctx, "count", itoa(len(put)))
+	if prefix != "" {
+		auditDetail(ctx, "folder", prefix)
+	}
 }
 
 func (s *Server) putFile(ctx context.Context, files *objstore.Files, key string, fh *multipart.FileHeader) error {
@@ -234,10 +259,12 @@ func (s *Server) bucketDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := objstore.ValidKey(key); err != nil {
+		markAuditFailed(ctx)
 		s.renderBucketListing(w, r, prefix, "", "", err.Error())
 		return
 	}
 	if err := files.Delete(ctx, key); err != nil {
+		markAuditFailed(ctx)
 		s.renderBucketListing(w, r, prefix, "", "", "Could not delete "+path.Base(key)+": "+bucketSentence(err))
 		return
 	}
@@ -271,6 +298,7 @@ func (s *Server) bucketDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) bucketNotFound(w http.ResponseWriter, r *http.Request, err error) {
+	markAuditFailed(r.Context())
 	if errors.Is(err, app.ErrNotFound) || errors.Is(err, app.ErrNotABucket) {
 		http.NotFound(w, r)
 		return

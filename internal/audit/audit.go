@@ -259,6 +259,6 @@ func (l *Log) Actors(ctx context.Context, ownerID string) ([]string, error) {
 // Categories are the first parts of the actions the log records, in the
 // order the filter offers them.
 var Categories = []string{
-	"deploy", "app", "variable", "domain", "storage", "project",
+	"deploy", "app", "variable", "domain", "storage", "bucket", "project", "environment",
 	"member", "invitation", "team", "token", "webhook", "console", "secret", "github", "acting",
 }
