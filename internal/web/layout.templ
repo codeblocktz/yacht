@@ -101,6 +101,7 @@ templ Layout(s Slots, page templ.Component) {
 							@brandLockup(s, "h-6 w-auto shrink-0", "h-4 w-auto")
 						</a>
 						@page
+						@productNote(s.ProductNote)
 					</div>
 				</main>
 				@confirmationDialog()
@@ -247,6 +248,9 @@ templ sidebar(s Slots) {
 						{ s.BrandName }
 					}
 				</span>
+				if s.BrandBadge != "" {
+					@brandBadge(s.BrandBadge, "rail-hide")
+				}
 				<span class="nav-tip" aria-hidden="true">{ s.BrandName }</span>
 			</a>
 			if s.SidebarTop != nil {
@@ -299,6 +303,24 @@ templ brandLockup(s Slots, markClass, wordClass string) {
 		@brandWordmark(wordClass)
 	} else if s.BrandName != "" {
 		<span class="truncate">{ s.BrandName }</span>
+	}
+	if s.BrandBadge != "" {
+		@brandBadge(s.BrandBadge, "")
+	}
+}
+
+// brandBadge is Slots.BrandBadge: the same small outlined chip wherever the
+// name is drawn. Neutral, never the brand colour, which is kept for what can
+// be pressed.
+templ brandBadge(label, class string) {
+	<span class={ "brand-badge", class }>{ label }</span>
+}
+
+// productNote is Slots.ProductNote, where the dashboard introduces the
+// product.
+templ productNote(note string) {
+	if note != "" {
+		<p class="product-note">{ note }</p>
 	}
 }
 

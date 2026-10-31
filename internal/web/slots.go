@@ -139,6 +139,17 @@ type Slots struct {
 	// this engine's mark is presenting somebody else's logo as its own.
 	BrandMark templ.Component
 
+	// BrandBadge is a word drawn beside BrandName as a small outlined chip —
+	// a product's release stage, say — in the sidebar and above the
+	// signed-out pages' card. Empty draws none.
+	BrandBadge string
+
+	// ProductNote is one line the dashboard says where it introduces the
+	// product: under the signed-out pages' card, and in a new team's empty
+	// projects page. Quiet, and nowhere else, so it is read by somebody new
+	// rather than nagging everybody. Empty says nothing.
+	ProductNote string
+
 	// Stylesheets are a wrapping application's own, linked after the
 	// engine's so they can restate its colour tokens: a product's own
 	// primary colour, say. Paths on the dashboard's own origin; the content

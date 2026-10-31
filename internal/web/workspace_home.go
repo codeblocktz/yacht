@@ -34,6 +34,10 @@ type WorkspaceHomeData struct {
 
 	// Templates offers starting from one, where the install has them.
 	Templates bool
+
+	// Note is the chrome's ProductNote, said in the empty page a new team
+	// first lands on.
+	Note string
 }
 
 // ProjectCard is one project on the home page.
@@ -71,7 +75,10 @@ func (s *Server) renderWorkspaceHome(w http.ResponseWriter, r *http.Request, sta
 	ctx := r.Context()
 	owner := identity.MustFromContext(ctx)
 	q := r.URL.Query()
+	// Asked once, for the page's note and for the chrome around it.
+	slots := s.slots.Slots(ctx, r)
 	d := WorkspaceHomeData{
+		Note:  slots.ProductNote,
 		Query: strings.TrimSpace(q.Get("q")),
 		Sort:  sortRecent,
 		View:  viewGrid,
@@ -100,7 +107,7 @@ func (s *Server) renderWorkspaceHome(w http.ResponseWriter, r *http.Request, sta
 	// An install with no app service has no projects: the empty page, not
 	// a nil dereference.
 	if s.apps == nil {
-		s.renderStatus(w, r, status, WorkspaceHome(d))
+		s.renderWithSlotsStatus(w, r, slots, status, WorkspaceHome(d))
 		return
 	}
 	projects, err := s.apps.Projects(ctx, owner.ID)
@@ -116,7 +123,7 @@ func (s *Server) renderWorkspaceHome(w http.ResponseWriter, r *http.Request, sta
 	}
 	d.Total = len(projects)
 	d.Cards = projectCards(projects, apps, d.Query, d.Sort)
-	s.renderStatus(w, r, status, WorkspaceHome(d))
+	s.renderWithSlotsStatus(w, r, slots, status, WorkspaceHome(d))
 }
 
 // projectCards draws each project from its production services, filtered

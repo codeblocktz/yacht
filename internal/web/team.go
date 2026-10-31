@@ -322,8 +322,9 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 			link + "\n\n" +
 			"The invitation expires in " + notify.Duration(s.inviteTTL()) + ".\n\n" +
 			"If you were not expecting this, you can ignore this mail: nothing happens unless you accept.\n",
-		Action: &notify.Action{Label: "Accept the invitation", URL: link},
-		Reason: "You're receiving this because a member of " + team + " invited this address.",
+		Action:     &notify.Action{Label: "Accept the invitation", URL: link},
+		Reason:     "You're receiving this because a member of " + team + " invited this address.",
+		Introduces: true,
 	}
 	if err := s.mailer.Send(ctx, msg); err != nil {
 		// Logged, not surfaced: the invitation is real and revocable either

@@ -5,7 +5,8 @@
 // the same program under its own name without a line of its own:
 //
 //	go build -ldflags "-X main.name=datahuru -X main.product=Datahuru \
-//	  -X main.host=https://app.datahuru.com -X main.version=v1.2.3" \
+//	  -X main.host=https://app.datahuru.com -X main.version=v1.2.3 \
+//	  -X main.stage=beta" \
 //	  -o datahuru github.com/codeblocktz/yacht/cmd/yacht-cli
 package main
 
@@ -13,7 +14,8 @@ import "github.com/codeblocktz/yacht/internal/cli"
 
 // Set at build time; see the package comment. Empty takes the defaults in
 // cli.Brand: name "yacht", product from the name, no default host, the link
-// directory ".<name>" and variables <NAME>_TOKEN, <NAME>_HOST and <NAME>_APP.
+// directory ".<name>" and variables <NAME>_TOKEN, <NAME>_HOST and <NAME>_APP,
+// and no release stage after the version.
 var (
 	name      = "yacht"
 	product   = ""
@@ -21,11 +23,12 @@ var (
 	linkDir   = ""
 	envPrefix = ""
 	version   = "dev"
+	stage     = ""
 )
 
 func main() {
 	cli.Main(cli.Brand{
 		Name: name, Product: product, DefaultHost: host,
-		LinkDir: linkDir, EnvPrefix: envPrefix, Version: version,
+		LinkDir: linkDir, EnvPrefix: envPrefix, Version: version, Stage: stage,
 	})
 }

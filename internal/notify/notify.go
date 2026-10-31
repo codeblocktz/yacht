@@ -37,6 +37,11 @@ type Message struct {
 	// one nobody asked for.
 	Reason string
 
+	// Introduces marks a mail that introduces the product to somebody new —
+	// a sign-up link, an invitation, a welcome — and so carries the install's
+	// Footer.Intro, when it has one. A sign-in link or a bill does not.
+	Introduces bool
+
 	// Footer and ReplyTo are the install's, filled in by WithBranding rather
 	// than by whoever composes the message.
 	Footer  Footer
@@ -58,6 +63,10 @@ type Footer struct {
 	Company string
 	// Website is the product's public site, linked at the very end.
 	Website string
+	// Intro is a paragraph for the end of the mails that introduce the
+	// product (Message.Introduces): what a newcomer should know about it
+	// that a regular already does. Empty adds nothing.
+	Intro string
 }
 
 // Text is the message's plain-text part: TextBody, with the action labelled
@@ -120,6 +129,11 @@ func (m *brandingMailer) Send(ctx context.Context, msg Message) error {
 	}
 	if msg.ReplyTo == "" {
 		msg.ReplyTo = m.replyTo
+	}
+	// Into the body rather than the footer: it is said to the reader, and a
+	// footer is folded away by the mail clients that know the separator.
+	if intro := strings.TrimSpace(msg.Footer.Intro); msg.Introduces && intro != "" {
+		msg.TextBody = strings.TrimRight(msg.TextBody, "\r\n") + "\n\n" + intro + "\n"
 	}
 	return m.next.Send(ctx, msg)
 }
