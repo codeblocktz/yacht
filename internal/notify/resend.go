@@ -50,12 +50,17 @@ func (m *resendMailer) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 
-	payload, err := json.Marshal(map[string]any{
+	body := map[string]any{
 		"from":    m.from,
 		"to":      []string{msg.To},
 		"subject": msg.Subject,
-		"text":    msg.TextBody,
-	})
+		"text":    msg.Text(),
+		"html":    msg.HTML(),
+	}
+	if msg.ReplyTo != "" {
+		body["reply_to"] = msg.ReplyTo
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("notify: resend encode: %w", err)
 	}

@@ -269,3 +269,83 @@ func TestPublicExtraRoutesNeedNoSession(t *testing.T) {
 		t.Fatalf("a cross-site post to a public page = %d, want 403", cross.Code)
 	}
 }
+
+// ------------------------------------------------- closed, an unknown address
+
+func closedSignupServer(t *testing.T, mailer *fakeMailer, requestAccess string) http.Handler {
+	t.Helper()
+	return testServer(t, Options{
+		Accounts: &fakeAccounts{}, Mailer: mailer, BaseURL: "https://yacht.test",
+		BootstrapTeamID: "web-signin", WakerBrand: "Harbour", RequestAccessURL: requestAccess,
+		Identity: identity.ProviderFunc(func(context.Context, *http.Request) (identity.Owner, error) {
+			return identity.Owner{}, identity.ErrUnauthenticated
+		}),
+	})
+}
+
+// With sign-up closed, an address nobody holds is told it has no account and
+// where to ask for one — once, and not again for a while — and the page it
+// was asked from is the same page a registered address gets, byte for byte.
+func TestClosedSignupTellsAStrangerHowToGetIn(t *testing.T) {
+	mailer := &fakeMailer{}
+	h := closedSignupServer(t, mailer, "https://yacht.test/request-access")
+
+	registered := postSignIn(h, "known@example.test", "198.51.100.7:3000")
+	stranger := postSignIn(h, "nobody@example.test", "198.51.100.8:3000")
+	if registered.Code != http.StatusOK || stranger.Code != http.StatusOK {
+		t.Fatalf("status: registered = %d, stranger = %d, want 200 both", registered.Code, stranger.Code)
+	}
+	if registered.Body.String() != stranger.Body.String() {
+		t.Fatal("the page differs between a registered address and a stranger")
+	}
+	if !maps.EqualFunc(registered.Result().Header, stranger.Result().Header, slices.Equal) {
+		t.Fatal("the headers differ between a registered address and a stranger")
+	}
+
+	sent := mailer.messages()
+	if len(sent) != 2 {
+		t.Fatalf("mail sent = %d, want a sign-in link and one notice", len(sent))
+	}
+	notice := sent[1]
+	if notice.To != "nobody@example.test" || notice.Subject != "Your Harbour sign-in" {
+		t.Fatalf("notice = %q to %q", notice.Subject, notice.To)
+	}
+	for _, want := range []string{
+		"No Harbour account uses this address yet.",
+		"Harbour is invite-only for now: ask your team's owner to invite you, or request access here:",
+		"https://yacht.test/request-access",
+		"If you already have an account under another address, sign in with that one.",
+	} {
+		if !strings.Contains(notice.TextBody, want) {
+			t.Errorf("notice lacks %q:\n%s", want, notice.TextBody)
+		}
+	}
+	if strings.Contains(notice.TextBody, "/auth/") || strings.Contains(notice.TextBody, "/sign-up/") {
+		t.Errorf("the notice carries a link that signs in:\n%s", notice.TextBody)
+	}
+
+	// Asked again inside the cooldown, in another capitalisation: no second
+	// mail, and still the same page.
+	again := postSignIn(h, "Nobody@Example.test", "198.51.100.9:3000")
+	if again.Code != http.StatusOK || again.Body.String() != registered.Body.String() {
+		t.Fatalf("a repeat ask = %d, or a different page", again.Code)
+	}
+	if n := len(mailer.messages()); n != 2 {
+		t.Fatalf("mail sent = %d after a repeat inside the cooldown, want still 2", n)
+	}
+}
+
+// With nowhere to ask, the notice says to ask for an invitation and links
+// nowhere.
+func TestClosedSignupNoticeWithoutARequestAccessPage(t *testing.T) {
+	mailer := &fakeMailer{}
+	postSignIn(closedSignupServer(t, mailer, ""), "nobody@example.test", "198.51.100.8:3000")
+	sent := mailer.messages()
+	if len(sent) != 1 {
+		t.Fatalf("mail sent = %d, want 1", len(sent))
+	}
+	if body := sent[0].TextBody; !strings.Contains(body, "ask your team's owner to invite you.") ||
+		strings.Contains(body, "https://") {
+		t.Errorf("notice without a request-access page:\n%s", body)
+	}
+}

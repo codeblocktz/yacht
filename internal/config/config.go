@@ -231,6 +231,15 @@ type Config struct {
 	CloudflareEmailFrom      string
 	CloudflareEmailReplyTo   string
 
+	// MailCompany, MailWebsite and MailReplyTo sign every mail: who runs the
+	// install and where ("hosting by Example Ltd, Nairobi, Kenya"), its public
+	// site, and an address a person reads replies at. A mail that says who it
+	// is from and why reads less like phishing, to filters and to people.
+	// Empty leaves each out; MailReplyTo falls back to the Cloudflare one.
+	MailCompany string
+	MailWebsite string
+	MailReplyTo string
+
 	// SessionTTL is how long a signed-in browser stays signed in.
 	SessionTTL time.Duration
 
@@ -385,6 +394,9 @@ func Load() (Config, error) {
 		CloudflareEmailAccountID: env("YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID", ""),
 		CloudflareEmailFrom:      env("YACHT_CLOUDFLARE_EMAIL_FROM", ""),
 		CloudflareEmailReplyTo:   env("YACHT_CLOUDFLARE_EMAIL_REPLY_TO", ""),
+		MailCompany:              strings.TrimSpace(env("YACHT_MAIL_COMPANY", "")),
+		MailWebsite:              strings.TrimSpace(env("YACHT_MAIL_WEBSITE", "")),
+		MailReplyTo:              strings.TrimSpace(env("YACHT_MAIL_REPLY_TO", "")),
 		SessionTTL:               envDuration("YACHT_SESSION_TTL", 720*time.Hour),
 		MagicLinkTTL:             envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout:          envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),

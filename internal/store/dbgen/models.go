@@ -415,6 +415,12 @@ type MagicLink struct {
 	CreatedAt  time.Time
 }
 
+type MailDelivery struct {
+	ID     int64
+	SentAt time.Time
+	Error  *string
+}
+
 type Membership struct {
 	UserID    uuid.UUID
 	OwnerID   string

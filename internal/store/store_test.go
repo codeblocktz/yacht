@@ -208,6 +208,8 @@ func TestEveryTableIsOwnerScoped(t *testing.T) {
 			"team_github_installations, which is owner-scoped",
 		"github_deliveries": "a delivery to the GitHub App's one webhook is about " +
 			"whichever teams' apps the repository reaches, and only its id is kept",
+		"mail_deliveries": "whether the install's mail is getting out is a fact about " +
+			"the install's one transport, and a row keeps no recipient or team",
 	}
 
 	rows, err := pool.Query(ctx, `

@@ -90,6 +90,7 @@ type Querier interface {
 	// is the apps not placed in any region yet.
 	CountAppsByRegion(ctx context.Context) ([]CountAppsByRegionRow, error)
 	CountCapacityRefusalsSince(ctx context.Context, since time.Time) (int64, error)
+	CountMailFailuresSince(ctx context.Context, since time.Time) (int64, error)
 	CountOwnersOfTeam(ctx context.Context, ownerID string) (int64, error)
 	CountPendingReleaseBackfills(ctx context.Context) (int64, error)
 	// API tokens are a team's, like everything else scoped by owner_id. What a
@@ -463,6 +464,8 @@ type Querier interface {
 	// failed, and links to that deployment's logs.
 	//
 	LastDeployOfApp(ctx context.Context, arg LastDeployOfAppParams) (LastDeployOfAppRow, error)
+	LastMailFailure(ctx context.Context) ([]LastMailFailureRow, error)
+	LastMailSent(ctx context.Context) (time.Time, error)
 	ListAPITokens(ctx context.Context, ownerID string) ([]ListAPITokensRow, error)
 	// Pushes waiting behind a deploy that has since ended. An app whose deploy is
 	// still live is left out, rather than tried and refused every half second.
@@ -701,6 +704,7 @@ type Querier interface {
 	// environment for its pull requests: one row a project, whichever team.
 	ProjectsForPullRequest(ctx context.Context, arg ProjectsForPullRequestParams) ([]ProjectsForPullRequestRow, error)
 	PruneGitHubDeliveries(ctx context.Context) (int64, error)
+	PruneMailDeliveries(ctx context.Context, before time.Time) error
 	PruneWebhookDeliveries(ctx context.Context, before pgtype.Timestamptz) error
 	PurgeSourceUpload(ctx context.Context, arg PurgeSourceUploadParams) error
 	// Archives nobody will build any more: never attached to a deploy, or kept
@@ -728,6 +732,7 @@ type Querier interface {
 	// An upsert, because a push through the GitHub App reaches apps that have no
 	// webhook of their own; the row it makes has no secret.
 	RecordHookDelivery(ctx context.Context, arg RecordHookDeliveryParams) error
+	RecordMailDelivery(ctx context.Context, arg RecordMailDeliveryParams) error
 	// Records the ingress controller's counter for an app. A counter that moved
 	// in either direction is a request: up is traffic, and down is the controller
 	// having restarted, which is not a reason to believe nobody came.

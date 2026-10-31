@@ -458,10 +458,12 @@ func TestSignInDoesNotRevealWhetherAnAddressExists(t *testing.T) {
 	}
 
 	// ...and the difference that does exist is invisible from outside: a link
-	// goes to the registered address and nothing at all to the other.
+	// goes to the registered address, and to the other only a notice that it
+	// has no account, which signs nobody in.
 	sent := mailer.messages()
-	if len(sent) != 1 || sent[0].To != "known@example.test" {
-		t.Fatalf("mail sent = %v, want exactly one to the registered address", sent)
+	if len(sent) != 2 || sent[0].To != "known@example.test" || sent[1].To != "nobody@example.test" ||
+		strings.Contains(sent[1].TextBody, "/auth/") {
+		t.Fatalf("mail sent = %v, want a link to the registered address and a notice to the other", sent)
 	}
 }
 
@@ -1455,7 +1457,11 @@ func TestFreshInstallDoesNotAdmitAnyoneElse(t *testing.T) {
 	if code := postSignIn(h.handler, "stranger-fresh2@web.test", "198.51.100.6:2000").Code; code != http.StatusOK {
 		t.Fatalf("POST /sign-in = %d, want 200", code)
 	}
-	if len(h.mailer.messages()) != before {
+	// Told it has no account, as any stranger is while sign-up is closed, but
+	// sent no link: nothing in the mail signs anybody in.
+	sent := h.mailer.messages()
+	if len(sent) != before+1 || strings.Contains(sent[len(sent)-1].TextBody, "/auth/") ||
+		strings.Contains(sent[len(sent)-1].TextBody, "/sign-up/") {
 		t.Fatal("a stranger was mailed a link on a fresh install")
 	}
 
