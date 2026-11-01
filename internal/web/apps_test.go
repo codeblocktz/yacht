@@ -828,6 +828,9 @@ func (f *fakeApps) Project(_ context.Context, ownerID, slug string) (app.Project
 	return p, nil
 }
 
+// The fake team always has its default project, as Projects draws it.
+func (f *fakeApps) DefaultProjectExists(context.Context, string) (bool, error) { return true, nil }
+
 func (f *fakeApps) ProjectByID(_ context.Context, ownerID string, id uuid.UUID) (app.Project, error) {
 	if id != fakeProject.ID {
 		return app.Project{}, app.ErrProjectNotFound

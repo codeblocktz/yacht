@@ -73,6 +73,41 @@ func TestTheDefaultProjectAdoptsAppsThatHaveNone(t *testing.T) {
 	}
 }
 
+// A new team starts with no project: listing them, or asking whether the
+// default one is there, makes nothing. The first app put in no particular
+// project is what makes it.
+func TestANewTeamStartsWithNoProject(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{})
+	ownerID := owner(t, s, pool, "owner-project-none")
+
+	for range 2 {
+		projects, err := s.Projects(ctx, ownerID)
+		if err != nil {
+			t.Fatalf("list projects: %v", err)
+		}
+		if len(projects) != 0 {
+			t.Fatalf("projects = %+v, want none for a new team", projects)
+		}
+	}
+	if ok, err := s.DefaultProjectExists(ctx, ownerID); err != nil || ok {
+		t.Fatalf("DefaultProjectExists = %v, %v; want false", ok, err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM projects WHERE owner_id = $1`, ownerID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("projects rows = %d (%v), want 0 after only looking", n, err)
+	}
+
+	if _, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "first", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	if ok, err := s.DefaultProjectExists(ctx, ownerID); err != nil || !ok {
+		t.Fatalf("DefaultProjectExists after an app = %v, %v; want true", ok, err)
+	}
+}
+
 // A position survives the round trip, and clearing gives it back to the layout.
 //
 // The distinction that matters is nil versus zero: (0,0) is a corner somebody

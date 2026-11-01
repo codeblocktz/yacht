@@ -128,6 +128,15 @@ func (s *Server) renderCanvasStatus(
 		}
 	}
 
+	// The default project's canvas, for a team that has none (a new team
+	// makes its own): the projects page, rather than an empty one made by
+	// looking.
+	if open == nil && (slug == "" || slug == app.DefaultProjectSlug) {
+		if ok, err := s.apps.DefaultProjectExists(ctx, owner.ID); err == nil && !ok {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+	}
 	project, err := s.apps.Project(ctx, owner.ID, slug)
 	if err != nil {
 		if errors.Is(err, app.ErrProjectNotFound) {
