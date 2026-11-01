@@ -98,16 +98,23 @@ func (s *Service) CreateProject(ctx context.Context, ownerID, name string) (Proj
 
 // Projects lists a team's projects.
 //
-// The default project is created here when the team has none, so the page that
-// lists projects is never empty for a team that has apps. Doing it on read is
-// what lets a team that predates projects open the page and see their work,
-// rather than an empty list and no way to explain it.
+// A new team has none: it makes its own from the empty page. The default
+// project is created here only for a team with apps in no project — one that
+// predates projects, or whose project was deleted — so it opens the page and
+// sees its work rather than an empty list and no way to explain it.
 func (s *Service) Projects(ctx context.Context, ownerID string) ([]Project, error) {
 	rows, err := s.q.ListProjects(ctx, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("app: list projects: %w", err)
 	}
 	if len(rows) == 0 {
+		loose, err := s.q.ListAppsWithoutProject(ctx, ownerID)
+		if err != nil {
+			return nil, fmt.Errorf("app: list apps without a project: %w", err)
+		}
+		if len(loose) == 0 {
+			return []Project{}, nil
+		}
 		if _, err := s.DefaultProject(ctx, ownerID); err != nil {
 			return nil, err
 		}
@@ -166,6 +173,25 @@ func (s *Service) DefaultProject(ctx context.Context, ownerID string) (Project, 
 		return Project{}, fmt.Errorf("app: adopt unassigned apps: %w", err)
 	}
 	return toProject(row), nil
+}
+
+// DefaultProjectExists reports whether the team has its default project,
+// without making it: a page that only looks must not leave one behind.
+func (s *Service) DefaultProjectExists(ctx context.Context, ownerID string) (bool, error) {
+	_, err := s.q.GetProjectBySlug(ctx, dbgen.GetProjectBySlugParams{OwnerID: ownerID, Slug: DefaultProjectSlug})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		loose, err := s.q.ListAppsWithoutProject(ctx, ownerID)
+		if err != nil {
+			return false, fmt.Errorf("app: list apps without a project: %w", err)
+		}
+		// Apps waiting for it: it is as good as there, and opening it adopts them.
+		return len(loose) > 0, nil
+	default:
+		return false, fmt.Errorf("app: get default project: %w", err)
+	}
 }
 
 // Project returns one project by slug.

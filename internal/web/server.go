@@ -88,10 +88,12 @@ type Apps interface {
 	Links(ctx context.Context, ownerID string) ([]app.Link, error)
 	RecentActivity(ctx context.Context, ownerID string, limit int32) ([]app.Activity, error)
 
-	// Projects are the canvases apps are drawn on. Project and Projects both
-	// create the default one when a team has none, so no caller has to decide
-	// whether a team has been set up yet.
+	// Projects are the canvases apps are drawn on. A new team has none and
+	// makes its own; Projects creates the default one only to adopt apps in no
+	// project, and Project("default") when something is put in it.
+	// DefaultProjectExists asks without making it.
 	Projects(ctx context.Context, ownerID string) ([]app.Project, error)
+	DefaultProjectExists(ctx context.Context, ownerID string) (bool, error)
 	Project(ctx context.Context, ownerID, slug string) (app.Project, error)
 	ProjectByID(ctx context.Context, ownerID string, id uuid.UUID) (app.Project, error)
 	CreateProject(ctx context.Context, ownerID, name string) (app.Project, error)
