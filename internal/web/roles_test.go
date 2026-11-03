@@ -104,6 +104,9 @@ func TestEveryMutatingRouteHasARoleGate(t *testing.T) {
 			"be able to clear its cookie; a gate here would deny it exactly that",
 		"/sign-out-everywhere": "the same, and it acts only on the cookie " +
 			"presented, so it grants nothing a role could withhold",
+		"/invitations/{token}/switch": "sign-out for somebody who opened an " +
+			"invitation as another address: it ends only the session presented " +
+			"and redirects to the invitation, so it grants nothing a role could withhold",
 	}
 
 	// A signed-in browser holding no role in the team it is acting as. Whatever
