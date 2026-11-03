@@ -749,6 +749,67 @@ func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
 	}
 }
 
+// Opening an invitation signed in as another address is not "no longer
+// valid": the page says the invitation is for another address, without
+// naming it, and offers to sign out and carry on. Signing out leaves the
+// invitation live, and opening it again signed out mails the invited
+// address its sign-in link.
+func TestOpeningSomebodyElsesInvitationOffersToSwitch(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-switch")
+	owner := h.user(t, "owner-inv-sw@web.test")
+	h.team(t, "web-inv-switch", "Team", owner, "")
+	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-sw@web.test"))
+
+	before := len(h.mailer.messages())
+	h.invite(t, ownerCookie, "invited-sw@web.test", "member")
+	token := invitationToken(t, h.lastMail(t, before))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil)
+	req.AddCookie(ownerCookie)
+	h.handler.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "This invitation is for another address") ||
+		!strings.Contains(body, `action="/invitations/`+token+`/switch"`) {
+		t.Fatalf("signed in as another address = %d:\n%s", rec.Code, body)
+	}
+	if strings.Contains(body, "invited-sw@web.test") {
+		t.Error("the page names the invited address")
+	}
+
+	before = len(h.mailer.messages())
+	sw := h.postFormAs(t, "/invitations/"+token+"/switch", ownerCookie, nil)
+	if sw.Code != http.StatusSeeOther || sw.Header().Get("Location") != "/invitations/"+token {
+		t.Fatalf("switch = %d → %q", sw.Code, sw.Header().Get("Location"))
+	}
+	if _, err := h.accounts.ResolveSession(context.Background(), ownerCookie.Value); err == nil {
+		t.Error("switching left the session signed in")
+	}
+	if len(h.mailer.messages()) != before {
+		t.Error("switching mailed somebody")
+	}
+
+	rec = httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/invitations/"+token, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(h.lastMail(t, before), "/auth/") {
+		t.Fatalf("opening it again signed out = %d", rec.Code)
+	}
+	if got := h.mailer.messages()[len(h.mailer.messages())-1].To; got != "invited-sw@web.test" {
+		t.Errorf("the sign-in link went to %q", got)
+	}
+}
+
+// An invitation that cannot be used gets a page that says what to do, not a
+// bare line of text.
+func TestAnUnusableInvitationSaysWhatToDo(t *testing.T) {
+	h := newLiveHarness(t, "web-inv-unusable")
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/invitations/not-a-real-token", nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "Ask whoever invited you to send it again") {
+		t.Fatalf("an unusable invitation = %d:\n%s", rec.Code, rec.Body.String())
+	}
+}
+
 // A spent invitation is spent. Otherwise the link in a mailbox stays a way in
 // long after it was used.
 func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {

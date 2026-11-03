@@ -120,6 +120,14 @@ func (s *Service) Invite(
 	return raw, nil
 }
 
+// ErrInvitationForAnother is a live invitation opened by somebody signed in
+// as another address. It is ErrTokenInvalid to every caller that only asks
+// whether the invitation was accepted; the page that asks this one tells the
+// person to sign out rather than that the invitation is gone, which it is
+// not. Only someone holding both the token and a session learns that much,
+// and never the address it names.
+var ErrInvitationForAnother = fmt.Errorf("%w: the invitation names another address", ErrTokenInvalid)
+
 // AcceptInvitation spends an invitation and returns the team and role it grants.
 //
 // The invitation is spent and the membership written in one transaction, so an
@@ -166,7 +174,7 @@ func (s *Service) AcceptInvitation(
 	// and how the person will type it. Rolling the transaction back leaves the
 	// invitation unconsumed, so the intended recipient can still use it.
 	if !strings.EqualFold(strings.TrimSpace(row.Email), strings.TrimSpace(accepter.Email)) {
-		return "", "", ErrTokenInvalid
+		return "", "", ErrInvitationForAnother
 	}
 
 	granted := Role(row.Role)
