@@ -1,5 +1,7 @@
 package web
 
+import "net/url"
+
 // SignInData is the state of the sign-in form.
 //
 // Error is what the visitor did wrong or what the server refused, never
@@ -246,6 +248,30 @@ templ CheckMail(openSignup bool, back string) {
 			<a class="text-muted-foreground hover:text-foreground" href={ templ.SafeURL(back) }>
 				Use a different address
 			</a>
+		</p>
+	}
+}
+
+// InvitationForAnother answers an invitation opened by somebody signed in as
+// an address it does not name. It does not say which address: whoever holds
+// the link may not be the person it was sent to.
+templ InvitationForAnother(token string) {
+	@authCard("This invitation is for another address", "You're signed in with a different account than the one this invitation was sent to. Sign out here, then sign in with the invited address to join the team.") {
+		<form method="post" action={ templ.SafeURL("/invitations/" + url.PathEscape(token) + "/switch") }>
+			<button class="btn btn-primary" type="submit">Sign out and continue</button>
+		</form>
+		<p class="mt-4 text-[12.5px]">
+			<a class="text-muted-foreground hover:text-foreground" href="/">Stay signed in</a>
+		</p>
+	}
+}
+
+// InvitationInvalid answers an invitation that cannot be used. Expired,
+// accepted, revoked, replaced and never-existed read the same on purpose.
+templ InvitationInvalid() {
+	@authCard("This invitation can't be used", "It may have expired, been used already, or been replaced by a newer one. Ask whoever invited you to send it again.") {
+		<p class="text-[12.5px]">
+			<a class="text-muted-foreground hover:text-foreground" href="/sign-in">Go to sign in</a>
 		</p>
 	}
 }

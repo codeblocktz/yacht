@@ -799,6 +799,9 @@ func (s *Server) Handler() http.Handler {
 		// establishes who they are before spending anything — the token is not
 		// treated as proof of identity.
 		r.Get("/invitations/{token}", s.acceptInvitation)
+		// Signed in as another address: end this browser's session and open
+		// the invitation again, signed out. POST for the reason sign-out is.
+		r.Post("/invitations/{token}/switch", s.switchForInvitation)
 
 		// Sign-out is POST only. A GET that ends a session is one a prefetching
 		// browser, a crawler or an <img> tag on another site can fire, and being

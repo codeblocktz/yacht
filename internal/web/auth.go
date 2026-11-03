@@ -835,6 +835,10 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	// so a signed-in stranger is refused here rather than trusted.
 	if sess, err := s.accounts.ResolveSession(ctx, sessionToken(r)); err == nil {
 		team, role, err := s.accounts.AcceptInvitation(ctx, token, sess.UserID)
+		if errors.Is(err, account.ErrInvitationForAnother) {
+			s.renderSignedOut(w, r, http.StatusOK, "Signed in as someone else", InvitationForAnother(token))
+			return
+		}
 		if err != nil {
 			s.invitationFailed(w, r, err)
 			return
@@ -909,7 +913,23 @@ func (s *Server) invitationFailed(w http.ResponseWriter, r *http.Request, err er
 		http.Error(w, "could not accept the invitation", http.StatusInternalServerError)
 		return
 	}
-	http.Error(w, "this invitation is no longer valid", http.StatusNotFound)
+	s.renderSignedOut(w, r, http.StatusNotFound, "Invitation not valid", InvitationInvalid())
+}
+
+// switchForInvitation signs this browser out and opens the invitation again,
+// for somebody who opened it signed in as an address it does not name. The
+// token goes back only into its own path, so this redirects nowhere else.
+func (s *Server) switchForInvitation(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	if raw := sessionToken(r); raw != "" {
+		if err := s.accounts.RevokeSession(r.Context(), raw); err != nil {
+			s.log.Error("revoke session for an invitation", slog.String("error", err.Error()))
+			http.Error(w, "could not sign you out", http.StatusInternalServerError)
+			return
+		}
+	}
+	clearSessionCookie(w, r)
+	http.Redirect(w, r, "/invitations/"+url.PathEscape(token), http.StatusSeeOther)
 }
 
 // signInRedirect sends a request with no usable session to the sign-in page.
