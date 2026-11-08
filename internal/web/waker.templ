@@ -3,6 +3,8 @@ package web
 import "strconv"
 
 // WakingPage is what a browser is shown while the app it asked for wakes up.
+// It says only that the app is on its way: a visitor has no reason to know the
+// app was asleep, and "waking up" reads as the site being unreliable.
 //
 // A page of its own, with its styles inline, rather than one in the
 // dashboard's layout: it is served on the app's hostname, where the
@@ -21,7 +23,7 @@ templ WakingPage(d WakingData) {
 				if d.State == wakeBusy {
 					{ d.App } is busy
 				} else {
-					Waking up { d.App }…
+					Loading { d.App }…
 				}
 			</title>
 			<style>
@@ -32,15 +34,11 @@ templ WakingPage(d WakingData) {
 					font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
 				main { width: min(420px, calc(100vw - 48px)); text-align: center; }
 				svg { width: 44px; height: 44px; margin: 0 auto 20px; color: var(--accent); }
-				[data-waker-state=waking] svg { animation: breathe 2.4s ease-in-out infinite; }
-				@keyframes breathe { 50% { opacity: .35; transform: scale(.92); } }
+				[data-waker-state=waking] svg { animation: spin 1s linear infinite; }
+				@keyframes spin { to { transform: rotate(360deg); } }
 				@media (prefers-reduced-motion: reduce) { [data-waker-state=waking] svg { animation: none; } }
 				h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }
 				p { margin: 0; color: var(--muted); }
-				[data-bar] { height: 3px; margin: 24px auto 0; width: 160px; border-radius: 3px; background: var(--line); overflow: hidden; }
-				[data-bar] span { display: block; height: 100%; width: 40%; background: var(--accent); border-radius: 3px; animation: slide 1.4s ease-in-out infinite; }
-				@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
-				@media (prefers-reduced-motion: reduce) { [data-bar] span { animation: none; width: 100%; opacity: .5; } }
 				footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
 				a { color: inherit; }
 			</style>
@@ -52,20 +50,20 @@ templ WakingPage(d WakingData) {
 						<circle cx="12" cy="12" r="9"></circle>
 						<path d="M12 7v5l3 2"></path>
 					} else {
-						<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+						<circle cx="12" cy="12" r="9" opacity=".2"></circle>
+						<path d="M21 12a9 9 0 0 0-9-9"></path>
 					}
 				</svg>
 				switch d.State {
 					case wakeBusy:
 						<h1>Busy right now</h1>
 					case wakeSlow:
-						<h1>Still starting</h1>
+						<h1>Taking longer than usual</h1>
 					default:
-						<h1>Waking up…</h1>
+						<h1>Just a moment…</h1>
 				}
 				<p>{ d.Sentence }</p>
 				if d.State == wakeStarting {
-					<div data-bar aria-hidden="true"><span></span></div>
 					<p style="margin-top:14px;font-size:13px">This page reloads by itself.</p>
 				} else {
 					<p style="margin-top:14px;font-size:13px">

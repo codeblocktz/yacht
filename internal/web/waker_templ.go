@@ -11,6 +11,8 @@ import templruntime "github.com/a-h/templ/runtime"
 import "strconv"
 
 // WakingPage is what a browser is shown while the app it asked for wakes up.
+// It says only that the app is on its way: a visitor has no reason to know the
+// app was asleep, and "waking up" reads as the site being unreliable.
 //
 // A page of its own, with its styles inline, rather than one in the
 // dashboard's layout: it is served on the app's hostname, where the
@@ -45,7 +47,7 @@ func WakingPage(d WakingData) templ.Component {
 		var templ_7745c5c3_Var2 string
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.Itoa(d.Refresh))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 18, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 20, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var2)
 		if templ_7745c5c3_Err != nil {
@@ -59,7 +61,7 @@ func WakingPage(d WakingData) templ.Component {
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(d.App)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 22, Col: 12}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 24, Col: 12}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -70,14 +72,14 @@ func WakingPage(d WakingData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "Waking up ")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "Loading ")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(d.App)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 24, Col: 22}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 26, Col: 20}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -88,14 +90,14 @@ func WakingPage(d WakingData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</title><style>\n\t\t\t\t:root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #4f46e5; }\n\t\t\t\t@media (prefers-color-scheme: dark) { :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --line: #292524; --accent: #818cf8; } }\n\t\t\t\t* { box-sizing: border-box; }\n\t\t\t\tbody { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);\n\t\t\t\t\tfont: 15px/1.55 ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif; }\n\t\t\t\tmain { width: min(420px, calc(100vw - 48px)); text-align: center; }\n\t\t\t\tsvg { width: 44px; height: 44px; margin: 0 auto 20px; color: var(--accent); }\n\t\t\t\t[data-waker-state=waking] svg { animation: breathe 2.4s ease-in-out infinite; }\n\t\t\t\t@keyframes breathe { 50% { opacity: .35; transform: scale(.92); } }\n\t\t\t\t@media (prefers-reduced-motion: reduce) { [data-waker-state=waking] svg { animation: none; } }\n\t\t\t\th1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }\n\t\t\t\tp { margin: 0; color: var(--muted); }\n\t\t\t\t[data-bar] { height: 3px; margin: 24px auto 0; width: 160px; border-radius: 3px; background: var(--line); overflow: hidden; }\n\t\t\t\t[data-bar] span { display: block; height: 100%; width: 40%; background: var(--accent); border-radius: 3px; animation: slide 1.4s ease-in-out infinite; }\n\t\t\t\t@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }\n\t\t\t\t@media (prefers-reduced-motion: reduce) { [data-bar] span { animation: none; width: 100%; opacity: .5; } }\n\t\t\t\tfooter { margin-top: 36px; font-size: 12px; color: var(--muted); }\n\t\t\t\ta { color: inherit; }\n\t\t\t</style></head><body><main data-waker-state=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</title><style>\n\t\t\t\t:root { color-scheme: light dark; --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --accent: #4f46e5; }\n\t\t\t\t@media (prefers-color-scheme: dark) { :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --line: #292524; --accent: #818cf8; } }\n\t\t\t\t* { box-sizing: border-box; }\n\t\t\t\tbody { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--fg);\n\t\t\t\t\tfont: 15px/1.55 ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", sans-serif; }\n\t\t\t\tmain { width: min(420px, calc(100vw - 48px)); text-align: center; }\n\t\t\t\tsvg { width: 44px; height: 44px; margin: 0 auto 20px; color: var(--accent); }\n\t\t\t\t[data-waker-state=waking] svg { animation: spin 1s linear infinite; }\n\t\t\t\t@keyframes spin { to { transform: rotate(360deg); } }\n\t\t\t\t@media (prefers-reduced-motion: reduce) { [data-waker-state=waking] svg { animation: none; } }\n\t\t\t\th1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; letter-spacing: -.01em; }\n\t\t\t\tp { margin: 0; color: var(--muted); }\n\t\t\t\tfooter { margin-top: 36px; font-size: 12px; color: var(--muted); }\n\t\t\t\ta { color: inherit; }\n\t\t\t</style></head><body><main data-waker-state=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var5 string
 		templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(string(d.State))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 49, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 47, Col: 43}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 		if templ_7745c5c3_Err != nil {
@@ -111,7 +113,7 @@ func WakingPage(d WakingData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<path d=\"M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z\"></path>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "<circle cx=\"12\" cy=\"12\" r=\"9\" opacity=\".2\"></circle> <path d=\"M21 12a9 9 0 0 0-9-9\"></path>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -127,12 +129,12 @@ func WakingPage(d WakingData) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		case wakeSlow:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<h1>Still starting</h1>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "<h1>Taking longer than usual</h1>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		default:
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<h1>Waking up…</h1>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "<h1>Just a moment…</h1>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -144,7 +146,7 @@ func WakingPage(d WakingData) templ.Component {
 		var templ_7745c5c3_Var6 string
 		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(d.Sentence)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 66, Col: 19}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 65, Col: 19}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 		if templ_7745c5c3_Err != nil {
@@ -155,7 +157,7 @@ func WakingPage(d WakingData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if d.State == wakeStarting {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<div data-bar aria-hidden=\"true\"><span></span></div><p style=\"margin-top:14px;font-size:13px\">This page reloads by itself.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<p style=\"margin-top:14px;font-size:13px\">This page reloads by itself.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -167,7 +169,7 @@ func WakingPage(d WakingData) templ.Component {
 			var templ_7745c5c3_Var7 string
 			templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(strconv.Itoa(d.Refresh))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 72, Col: 56}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 70, Col: 56}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 			if templ_7745c5c3_Err != nil {
@@ -185,7 +187,7 @@ func WakingPage(d WakingData) templ.Component {
 		var templ_7745c5c3_Var8 string
 		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(d.App)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 75, Col: 19}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 73, Col: 19}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
@@ -198,7 +200,7 @@ func WakingPage(d WakingData) templ.Component {
 		var templ_7745c5c3_Var9 string
 		templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(d.Brand)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 75, Col: 44}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/waker.templ`, Line: 73, Col: 44}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 		if templ_7745c5c3_Err != nil {
