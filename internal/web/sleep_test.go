@@ -151,7 +151,7 @@ func TestTheWakerShowsABrowserAWakingUpPage(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "3" {
 		t.Fatalf("status %d, Retry-After %q; want 503, 3", rec.Code, rec.Header().Get("Retry-After"))
 	}
-	for _, want := range []string{"Waking up…", "shop was asleep and is waking up", `http-equiv="refresh" content="3"`,
+	for _, want := range []string{"Just a moment…", "Waiting for shop to respond. This takes a few seconds.", `http-equiv="refresh" content="3"`,
 		"hosted on Kilicore", `data-waker-state="waking"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("waking-up page missing %q", want)
@@ -254,7 +254,7 @@ func TestTheWakerSaysBusyWhenThereIsNoRoom(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, wakeRequest(http.MethodGet, a.Host, "application/json", nil))
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "no room to wake it") ||
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "the server is busy") ||
 		strings.Contains(rec.Body.String(), "<html") {
 		t.Fatalf("API client = %d %q; want a plain 503 saying so", rec.Code, rec.Body.String())
 	}
@@ -269,7 +269,7 @@ func TestTheWakerSaysWhenAWakeTimedOut(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wakerFor(t, f).ServeHTTP(rec, wakeRequest(http.MethodGet, a.Host, "*/*", nil))
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "15" ||
-		!strings.Contains(rec.Body.String(), "took too long to start") {
+		!strings.Contains(rec.Body.String(), "didn't respond in time") {
 		t.Fatalf("timed-out wake = %d %q", rec.Code, rec.Body.String())
 	}
 }

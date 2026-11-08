@@ -21,7 +21,7 @@ import (
 // is asleep. The app is woken — one wake however many requests arrive for it —
 // and then the request is answered in whichever way suits who sent it:
 //
-//   - A browser asking for a page gets a small "waking up" page straight away,
+//   - A browser asking for a page gets a small "just a moment" page straight away,
 //     which reloads itself until the app answers instead. Holding a browser on
 //     a blank tab for ten seconds reads as the site being down.
 //   - Anything else — an API client, a webhook, a health check — is held until
@@ -210,12 +210,11 @@ func wakeRetry(state wakeState) int {
 func wakeSentence(name string, state wakeState) string {
 	switch state {
 	case wakeBusy:
-		return name + " is asleep, and the server is busy — there is no room to wake it right now. " +
-			"Try again in a minute."
+		return name + " can't be reached right now because the server is busy. Try again in a minute."
 	case wakeSlow:
-		return name + " took too long to start, so it has gone back to sleep. Try again shortly."
+		return name + " didn't respond in time. Try again shortly."
 	}
-	return name + " was asleep and is waking up. This takes a few seconds."
+	return "Waiting for " + name + " to respond. This takes a few seconds."
 }
 
 // wantsPage reports whether the request is a browser asking for a page, which
