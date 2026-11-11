@@ -334,19 +334,23 @@ func (s *Server) apiBuildLog(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	ctx, cancel := context.WithTimeout(r.Context(), maxStreamAge)
 	defer cancel()
-	sent := 0
+	// Read from where the last read ended, so a follower is sent what is new
+	// rather than the engine loading the whole log every second to send it.
+	from := 0
 	for {
-		b, err := s.logs.BuildForDeployment(ctx, a.OwnerID, d.ID)
-		if err == nil && len(b.Log) > sent {
-			_, _ = io.WriteString(w, b.Log[sent:])
-			sent = len(b.Log)
+		part, err := s.logs.BuildLogFrom(ctx, a.OwnerID, d.ID, from)
+		if err == nil && part.Text != "" {
+			_, _ = io.WriteString(w, part.Text)
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
+		if err == nil {
+			from = part.Next
+		}
 		// Done when the build is, or — for a deploy that has not started
 		// building yet — when the deploy itself has finished without one.
-		finished := err == nil && !b.Running()
+		finished := err == nil && !part.Running
 		if !finished && errors.Is(err, app.ErrNotFound) {
 			if cur, derr := s.logs.Deployment(ctx, a.OwnerID, a.Name, d.ID); derr == nil && cur.FinishedAt != nil {
 				finished = true

@@ -82,7 +82,7 @@ func (s *Service) ReconcileBuilds(ctx context.Context) error {
 			continue
 		}
 
-		if s.settleBuild(ctx, recordOfBuild(row), state) {
+		if s.settleBuild(ctx, buildRecord(row), state) {
 			settled++
 		}
 	}
@@ -218,7 +218,8 @@ func (s *Service) resetMissingBuildRow(
 }
 
 // buildRecord is what the reconciler knows of a build: everything but its
-// log, which it never reads and which can run to megabytes.
+// log, which it never reads and which can run to megabytes. The columns of
+// ListRunningBuilds and ListSettledBuildOperations, which convert to it.
 type buildRecord struct {
 	ID           uuid.UUID
 	OwnerID      string
@@ -230,14 +231,6 @@ type buildRecord struct {
 	CommitSha    string
 	JobName      string
 	StartedAt    time.Time
-}
-
-func recordOfBuild(row dbgen.Build) buildRecord {
-	return buildRecord{
-		ID: row.ID, OwnerID: row.OwnerID, AppID: row.AppID, DeploymentID: row.DeploymentID,
-		Status: row.Status, Message: row.Message, Image: row.Image,
-		CommitSha: row.CommitSha, JobName: row.JobName, StartedAt: row.StartedAt,
-	}
 }
 
 const settledBuildRecoveryBatch = 100

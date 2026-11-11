@@ -44,6 +44,12 @@ type Logger interface {
 		ctx context.Context, ownerID string, deployID uuid.UUID,
 	) (app.Build, error)
 
+	// BuildLogFrom is that build's log from an offset, for a reader following
+	// it, which is sent what is new rather than the whole log each time.
+	BuildLogFrom(
+		ctx context.Context, ownerID string, deployID uuid.UUID, from int,
+	) (app.BuildLogPart, error)
+
 	// DeploymentHTTPLogs is what the ingress controller recorded for this
 	// app's hostnames.
 	DeploymentHTTPLogs(ctx context.Context, ownerID, appName string) (app.HTTPLogs, error)

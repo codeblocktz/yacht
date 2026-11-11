@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -245,12 +246,38 @@ func (s *Service) runBuild(
 	return image, nil
 }
 
-// buildLogger appends output to the build row as it arrives.
+// DefaultMaxBuildLogBytes is how much of one build's output is kept unless
+// the install says otherwise: far more than a build that works prints, and
+// little enough that one printing without end costs a bounded row.
+const DefaultMaxBuildLogBytes = 4 << 20
+
+// buildLogTruncated is written once, in place of the output that would have
+// taken a build's log past its limit. The build goes on; only its log stops.
+func buildLogTruncated(limit int32) string {
+	return fmt.Sprintf("\n[yacht] The build log reached its limit of %s; "+
+		"the build carries on, but nothing more of its output is kept.\n", byteSize(int64(limit)))
+}
+
+// byteSize says a size in the largest whole binary unit it fills.
+func byteSize(n int64) string {
+	switch {
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return fmt.Sprintf("%d MiB", n>>20)
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return fmt.Sprintf("%d KiB", n>>10)
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
+
+// buildLogger appends output to the build row as it arrives, up to the
+// install's limit; see AppendBuildLog.
 //
 // It takes its own context rather than the build's. When a build is cancelled
 // the last thing written is usually the reason, and a logger cancelled with it
 // would drop exactly that line.
 func (s *Service) buildLogger(ctx context.Context, id uuid.UUID) func(string) {
+	marker := buildLogTruncated(s.opts.MaxBuildLogBytes)
 	return func(chunk string) {
 		if chunk == "" {
 			return
@@ -259,10 +286,43 @@ func (s *Service) buildLogger(ctx context.Context, id uuid.UUID) func(string) {
 		defer cancel()
 		if err := s.q.AppendBuildLog(writeCtx, dbgen.AppendBuildLogParams{
 			ID: id, Chunk: chunk,
+			MaxBytes: int64(s.opts.MaxBuildLogBytes), Marker: marker,
 		}); err != nil {
 			s.log.Warn("append build log", "error", err)
 		}
 	}
+}
+
+// BuildLogPart is a build's log from an offset: Text is what follows it, Next
+// the offset to ask from next time, and Running whether more may come.
+// Offsets count characters, not bytes, and mean nothing but where to resume.
+type BuildLogPart struct {
+	Text    string
+	Next    int
+	Running bool
+}
+
+// BuildLogFrom reads one deployment's build log from an offset, so a reader
+// following it is sent what is new rather than the whole log every time it
+// looks. ErrNotFound means the deployment has no build, or none yet.
+func (s *Service) BuildLogFrom(
+	ctx context.Context, ownerID string, deployID uuid.UUID, from int,
+) (BuildLogPart, error) {
+	if from < 0 {
+		from = 0
+	}
+	row, err := s.q.GetBuildLogFrom(ctx, dbgen.GetBuildLogFromParams{
+		OffsetChars: int32(min(from, math.MaxInt32)), OwnerID: ownerID, DeploymentID: deployID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BuildLogPart{}, ErrNotFound
+		}
+		return BuildLogPart{}, fmt.Errorf("app: read build log: %w", err)
+	}
+	return BuildLogPart{
+		Text: row.Chunk, Next: max(int(row.Length), from), Running: row.Status == BuildRunning,
+	}, nil
 }
 
 func buildFrom(row dbgen.Build) Build {

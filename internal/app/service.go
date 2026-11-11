@@ -356,6 +356,10 @@ type Options struct {
 	// Zero takes the production default so tests and embedders stay safe.
 	MaxConcurrentBuilds int32
 
+	// MaxBuildLogBytes is how much of one build's output is kept. Zero takes
+	// DefaultMaxBuildLogBytes.
+	MaxBuildLogBytes int32
+
 	// RolloutTimeout bounds verification after Kubernetes accepts an apply.
 	// RolloutPollInterval exists so tests can exercise slow and failed rollouts
 	// without sleeping on production intervals.
@@ -508,6 +512,9 @@ func NewService(
 	}
 	if opts.MaxConcurrentBuilds == 0 {
 		opts.MaxConcurrentBuilds = 2
+	}
+	if opts.MaxBuildLogBytes <= 0 {
+		opts.MaxBuildLogBytes = DefaultMaxBuildLogBytes
 	}
 	if opts.RolloutTimeout == 0 {
 		opts.RolloutTimeout = 10 * time.Minute

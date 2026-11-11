@@ -18,6 +18,12 @@ type Querier interface {
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
+	//
+	// Up to max_bytes, and then the marker once in place of the chunk that would
+	// have crossed it, and nothing after. A build that prints without end would
+	// otherwise grow one row without end, rewriting all of it on every line.
+	// Decided in the statement, under the row lock, so two writers cannot both
+	// fit a chunk the limit had room for only once, nor both write the marker.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
 	// A deployment's pre-deploy transcript, owner-scoped like the deployment.
 	// Appended rather than replaced: a run retried after its worker went away
@@ -276,6 +282,10 @@ type Querier interface {
 	GetBucket(ctx context.Context, arg GetBucketParams) (Bucket, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
+	// A build log from a character offset, with where it ends and whether the
+	// build still runs, for a reader following it: each poll sends what is new
+	// rather than the whole log again.
+	GetBuildLogFrom(ctx context.Context, arg GetBuildLogFromParams) (GetBuildLogFromRow, error)
 	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
 	GetCLILoginByUserCode(ctx context.Context, userCode string) (CliLogin, error)
 	// The install's capacity policy and the changes refused for it.
@@ -598,8 +608,10 @@ type Querier interface {
 	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
 	// Every build still claiming to run, oldest first. Not owner-scoped: this
 	// feeds the reconciler, which is the platform settling its own records rather
-	// than a team reading theirs.
-	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	// than a team reading theirs. Without the log, which the reconciler never
+	// reads and which would otherwise come along for every running build on
+	// every pass.
+	ListRunningBuilds(ctx context.Context) ([]ListRunningBuildsRow, error)
 	ListRunningDatabaseBackups(ctx context.Context) ([]ListRunningDatabaseBackupsRow, error)
 	// Operations a worker left at building after their build's result was
 	// written: the build row is terminal and the lease has since expired, so

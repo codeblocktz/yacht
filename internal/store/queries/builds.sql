@@ -10,9 +10,30 @@ RETURNING *;
 -- name: AppendBuildLog :exec
 -- Appended rather than replaced, so a build streaming its output does not have
 -- to hold the whole log in memory to write any of it.
+--
+-- Up to max_bytes, and then the marker once in place of the chunk that would
+-- have crossed it, and nothing after. A build that prints without end would
+-- otherwise grow one row without end, rewriting all of it on every line.
+-- Decided in the statement, under the row lock, so two writers cannot both
+-- fit a chunk the limit had room for only once, nor both write the marker.
 UPDATE builds
-SET log = log || @chunk::text
-WHERE id = @id;
+SET log = CASE
+        WHEN octet_length(log) + octet_length(@chunk::text) <= @max_bytes::bigint
+            THEN log || @chunk::text
+        ELSE log || @marker::text
+    END,
+    log_truncated = octet_length(log) + octet_length(@chunk::text) > @max_bytes::bigint
+WHERE id = @id AND NOT log_truncated;
+
+-- name: GetBuildLogFrom :one
+-- A build log from a character offset, with where it ends and whether the
+-- build still runs, for a reader following it: each poll sends what is new
+-- rather than the whole log again.
+SELECT CAST(substr(log, sqlc.arg(offset_chars)::int + 1) AS text) AS chunk,
+       char_length(log)::int AS length,
+       status
+FROM builds
+WHERE owner_id = @owner_id AND deployment_id = @deployment_id;
 
 -- name: FinishBuild :one
 UPDATE builds
@@ -55,8 +76,12 @@ UPDATE builds SET job_name = @job_name WHERE id = @id;
 -- name: ListRunningBuilds :many
 -- Every build still claiming to run, oldest first. Not owner-scoped: this
 -- feeds the reconciler, which is the platform settling its own records rather
--- than a team reading theirs.
-SELECT * FROM builds WHERE status = 'running' ORDER BY started_at;
+-- than a team reading theirs. Without the log, which the reconciler never
+-- reads and which would otherwise come along for every running build on
+-- every pass.
+SELECT id, owner_id, app_id, deployment_id, status, message,
+       image, commit_sha, job_name, started_at
+FROM builds WHERE status = 'running' ORDER BY started_at;
 
 -- name: SetBuildArgs :exec
 -- What the build's Dockerfile declared, recorded once it has pushed. See
