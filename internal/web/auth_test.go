@@ -1558,3 +1558,90 @@ func TestAnInviteeSigningInWithoutTheLinkGetsNoTeam(t *testing.T) {
 		t.Fatalf("after the invitation's link, role = %q (%v), want member", role, err)
 	}
 }
+
+// A password is a way in like a link, so somebody on no team who signs in
+// with one is refused the same way, with no session.
+func TestATeamlessPasswordSignInIsRefused(t *testing.T) {
+	rt := newRoleTeam(t, "web-pw-noteam", "pw-noteam-app")
+	const password = "a perfectly good passphrase"
+
+	if code := rt.postFormAs(t, "/account/password", rt.member, url.Values{
+		"password": {password}, "confirm": {password},
+	}).Code; code != http.StatusSeeOther {
+		t.Fatalf("setting the member's password = %d, want 303", code)
+	}
+	if code := rt.postAs(t, "/team/members/"+rt.memberID.String()+"/remove", rt.owner).Code; code != http.StatusSeeOther {
+		t.Fatalf("removing the member = %d, want 303", code)
+	}
+
+	rec := postPassword(rt.handler, "member@web.test", password, "198.51.100.40:1000")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a removed member signing in with a password = %d, want 403\n%s", rec.Code, rec.Body.String())
+	}
+	if c := sessionCookie(rec); c != nil && c.Value != "" {
+		t.Fatal("a removed member signing in with a password was given a session")
+	}
+	if !strings.Contains(rec.Body.String(), "not on a team") {
+		t.Errorf("the refusal does not say why:\n%s", rec.Body.String())
+	}
+	if teams, err := rt.accounts.TeamsFor(context.Background(), rt.memberID); err != nil || len(teams) != 0 {
+		t.Fatalf("signing in gave the removed member teams %v (%v), want none", teams, err)
+	}
+}
+
+// YACHT_OWNER_EMAIL is matched however it was written: in another case from
+// the address signed in with, or with a display name round it. Either way
+// the configured owner bootstraps into the install's team.
+func TestTheOwnerAddressMatchesHoweverItIsWritten(t *testing.T) {
+	for _, tc := range []struct{ team, configured, signIn string }{
+		{"web-owner-case", "Founder-Case@WEB.test", "founder-case@web.test"},
+		{"web-owner-named", "The Founder <founder-named@web.test>", "founder-named@web.test"},
+	} {
+		t.Run(tc.team, func(t *testing.T) {
+			h := newLiveHarnessOwnedBy(t, tc.team, tc.configured)
+			h.installedApp(t, tc.team+"-app")
+
+			rec := h.signIn(t, tc.signIn)
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("the configured owner signing in = %d, want 303\n%s", rec.Code, rec.Body.String())
+			}
+			u := h.user(t, tc.signIn)
+			if role, err := h.accounts.RoleIn(context.Background(), u.ID, tc.team); err != nil || role != account.RoleOwner {
+				t.Fatalf("role in the install's team = %q (%v), want owner", role, err)
+			}
+		})
+	}
+}
+
+// The owner address signing in with no team while somebody else already owns
+// the install's team is given a team of its own: not the install's, and so
+// not the install to run.
+func TestTheOwnerAddressGetsItsOwnTeamWhenTheInstallsIsTaken(t *testing.T) {
+	h := newLiveHarnessOwnedBy(t, "web-owner-late", "late-owner@web.test")
+	h.installedApp(t, "owner-late-app")
+	ctx := context.Background()
+
+	early := h.user(t, "early-owner@web.test")
+	if err := h.accounts.BootstrapOwner(ctx, h.teamID, "Local", early); err != nil {
+		t.Fatalf("BootstrapOwner: %v", err)
+	}
+
+	rec := h.signIn(t, "late-owner@web.test")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("the owner address signing in = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	late := h.user(t, "late-owner@web.test")
+	if _, err := h.accounts.RoleIn(ctx, late.ID, h.teamID); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatalf("the owner address joined the install's team, which was taken: %v", err)
+	}
+	teams, err := h.accounts.TeamsFor(ctx, late.ID)
+	if err != nil || len(teams) != 1 || teams[0].Role != account.RoleOwner {
+		t.Fatalf("teams = %+v (%v), want one of their own, as owner", teams, err)
+	}
+	if code := h.getAs(t, "/admin", sessionCookie(rec)).Code; code != http.StatusForbidden {
+		t.Errorf("GET /admin as the owner of a team of their own = %d, want 403", code)
+	}
+	if n := h.owners(t, h.teamID); n != 1 {
+		t.Fatalf("owners of the install's team = %d, want 1", n)
+	}
+}

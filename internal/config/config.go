@@ -373,9 +373,9 @@ func Load() (Config, error) {
 		Kubeconfig:               env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
 		KubeInCluster:            envBool("YACHT_KUBE_IN_CLUSTER", false),
 		AuthToken:                env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:                  env("YACHT_OWNER_ID", "owner-local"),
+		OwnerID:                  strings.TrimSpace(env("YACHT_OWNER_ID", "owner-local")),
 		OwnerName:                env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		OwnerEmail:               bareAddress(env("YACHT_OWNER_EMAIL", "")),
 		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
 		RequestAccessURL:         strings.TrimSpace(env("YACHT_REQUEST_ACCESS_URL", "")),
 		TurnstileSiteKey:         strings.TrimSpace(env("YACHT_TURNSTILE_SITE_KEY", "")),
@@ -445,6 +445,21 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// bareAddress is raw as one bare address — "Name <a@b>" read as "a@b" — or
+// raw trimmed when it is not one, for validate to refuse. It is compared with
+// the address somebody signs in as, which is always bare, so a display name
+// kept would be an owner nobody could ever sign in as.
+func bareAddress(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if addr, err := mail.ParseAddress(raw); err == nil && addr.Address != "" {
+		return addr.Address
+	}
+	return raw
 }
 
 func (c Config) validate() error {

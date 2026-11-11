@@ -513,6 +513,39 @@ func TestAnotherTeamsOwnerIsNotTheOperator(t *testing.T) {
 	}
 }
 
+// An admin of the install's own team is not its operator: with nobody named,
+// that is its owners and only them.
+func TestAnAdminOfTheInstallsTeamIsNotTheOperator(t *testing.T) {
+	rt := newRoleTeam(t, "web-role-admin-not-op", "admin-not-op-app")
+	for _, path := range []string{"/admin", "/cluster/nodes", "/cluster/pods"} {
+		if code := rt.getAs(t, path, rt.admin).Code; code != http.StatusForbidden {
+			t.Errorf("GET %s as an admin of the install's team = %d, want 403", path, code)
+		}
+	}
+}
+
+// A named operator with no team is given one of their own on signing in,
+// rather than turned away: the install is theirs to run by name.
+func TestANamedOperatorWithNoTeamGetsOne(t *testing.T) {
+	rt := newRoleTeamWith(t, "web-role-op-teamless", "op-teamless-app", []string{"Ops-Teamless@Web.Test"})
+	ctx := context.Background()
+
+	op := rt.user(t, "ops-teamless@web.test")
+	rec := rt.signIn(t, "ops-teamless@web.test")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("a named operator with no team signing in = %d, want 303\n%s", rec.Code, rec.Body.String())
+	}
+	if _, err := rt.accounts.RoleIn(ctx, op.ID, rt.teamID); !errors.Is(err, account.ErrNotAMember) {
+		t.Fatalf("the operator was put in the install's team: %v", err)
+	}
+	if teams, err := rt.accounts.TeamsFor(ctx, op.ID); err != nil || len(teams) != 1 {
+		t.Fatalf("teams = %+v (%v), want one of their own", teams, err)
+	}
+	if code := rt.getAs(t, "/admin", sessionCookie(rec)).Code; code != http.StatusOK {
+		t.Errorf("GET /admin as the named operator = %d, want 200", code)
+	}
+}
+
 // Named operators replace the team-owner reading entirely. On an install
 // hosting several teams this is the whole point: a team's owner must not be
 // able to drain the nodes every other team runs on.

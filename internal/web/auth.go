@@ -602,8 +602,8 @@ func sessionToken(r *http.Request) string {
 }
 
 // errNoTeam is a proven person with no team to act as, on an install that
-// does not hand them one: sign-up is closed and they are not its configured
-// owner.
+// does not hand them one: sign-up is closed and they are neither its
+// configured owner nor one of its named operators.
 var errNoTeam = errors.New("web: the person is on no team")
 
 // activeTeam picks the team a new session acts as.
@@ -614,11 +614,15 @@ var errNoTeam = errors.New("web: the person is on no team")
 // to inherit. Without it they would sign in successfully and resolve to no
 // owner, which every page reads as not being signed in at all.
 //
+// A named operator with no team is given one of their own: the install is
+// theirs to run by name, whichever team they own, and without a team they
+// could not sign in to run it.
+//
 // Nobody else is given a team unless sign-up is open. While it is closed,
 // somebody with no team got an account some other way — they were removed
 // from the team they had, or opened an invitation and then signed in without
-// it — and minting them a team would make them the owner of one, which is
-// what the install's own pages are gated on. They get errNoTeam instead.
+// it — and minting them a team would make them the owner of one. They get
+// errNoTeam instead.
 func (s *Server) activeTeam(ctx context.Context, user account.User) (string, error) {
 	teams, err := s.accounts.TeamsFor(ctx, user.ID)
 	if err != nil {
@@ -627,13 +631,13 @@ func (s *Server) activeTeam(ctx context.Context, user account.User) (string, err
 	if len(teams) == 0 {
 		// The team the install runs as goes only to the address configured to
 		// own it — or to a team of its own, which BootstrapOwner gives when the
-		// install's is taken. With sign-up open everybody else gets one of their
-		// own, which BootstrapOwner gives for an empty id; with it closed they
-		// get nothing.
+		// install's is taken. A named operator, and with sign-up open everybody
+		// else, gets one of their own, which BootstrapOwner gives for an empty
+		// id; with sign-up closed anybody else gets nothing.
 		teamID, teamName := s.bootstrapID, s.bootstrapName
 		switch {
 		case s.isBootstrapEmail(user.Email):
-		case s.openSignup:
+		case s.operators[strings.ToLower(strings.TrimSpace(user.Email))], s.openSignup:
 			teamID, teamName = "", ""
 		default:
 			return "", errNoTeam
@@ -1047,6 +1051,17 @@ func (s *Server) bootstrapAccount(ctx context.Context, email string) {
 	}
 	s.log.Info("created the configured owner on first sign-in",
 		slog.String("user", created.ID.String()))
+}
+
+// bareAddress is raw as one bare address, "Name <a@b>" read as "a@b", or raw
+// trimmed if it is not one. The configured owner's address is compared with
+// the address a person signs in as, which is always bare: kept as given, a
+// display name would make it an address nobody can ever sign in as.
+func bareAddress(raw string) string {
+	if addr, err := parseEmail(raw); err == nil {
+		return addr
+	}
+	return strings.TrimSpace(raw)
 }
 
 // isBootstrapEmail reports whether email is the address configured to own the

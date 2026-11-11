@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -910,6 +911,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		}
 		opts.RequestAccessURL = cfg.RequestAccessURL
 		opts.SignUpLead, opts.SignUpNext = ov.SignUpLead, ov.SignUpNext
+		warnNobodyRunsTheInstall(ctx, cfg, e.Accounts, log)
 	}
 
 	logs, metrics, err := attachObserve(&opts, cfg, log)
@@ -1192,6 +1194,38 @@ func wakerEndpoint(cfg Config, log *slog.Logger) (*orchestrator.WakerEndpoint, e
 		slog.String("waker", cfg.WakerAddr), slog.String("listen", cfg.WakerListenAddr()),
 		slog.String("needs", "the ingress controller's pods reaching "+cfg.WakerAddr))
 	return &orchestrator.WakerEndpoint{IP: ip, Port: port}, nil
+}
+
+// warnNobodyRunsTheInstall says so at startup when the install's operators
+// could be nobody. With YACHT_OPERATORS empty they are the owners of the
+// install's own team, and that team gets its owner only from
+// YACHT_OWNER_EMAIL: with neither, or with the team unowned, no page an
+// operator needs can be reached, and nothing else would say why.
+func warnNobodyRunsTheInstall(ctx context.Context, cfg Config, accounts *Accounts, log *slog.Logger) {
+	if len(cfg.Operators) > 0 || accounts == nil {
+		return
+	}
+	members, err := accounts.ListMembers(ctx, cfg.OwnerID)
+	if err != nil {
+		log.Warn("could not check who runs the install", slog.String("error", err.Error()))
+		return
+	}
+	owned := slices.ContainsFunc(members, func(m account.Member) bool { return m.Role == account.RoleOwner })
+	switch {
+	case !owned && cfg.OwnerEmail == "":
+		log.Warn("nobody runs this install: YACHT_OPERATORS is empty, so its operators are the "+
+			"owners of its own team, which has none, and YACHT_OWNER_EMAIL is empty, so nobody "+
+			"can become one — set YACHT_OPERATORS, or YACHT_OWNER_EMAIL and sign in as it",
+			slog.String("team", cfg.OwnerID))
+	case !owned:
+		log.Warn("nobody runs this install yet: YACHT_OPERATORS is empty, so its operators are "+
+			"the owners of its own team, which has none until YACHT_OWNER_EMAIL signs in",
+			slog.String("team", cfg.OwnerID), slog.String("owner_email", cfg.OwnerEmail))
+	case cfg.OwnerEmail == "":
+		log.Warn("YACHT_OPERATORS and YACHT_OWNER_EMAIL are both empty: the install's operators are "+
+			"its own team's owners, and if that team loses them nobody can be made one — "+
+			"set YACHT_OPERATORS", slog.String("team", cfg.OwnerID))
+	}
 }
 
 // gitHubApp is the install's GitHub App, nil when it has none — and then a

@@ -183,6 +183,20 @@ That one only swaps the binary and restarts. If the new version does not come
 up healthy it puts the old one back, so a bad release costs a restart rather
 than an outage.
 
+> [!IMPORTANT]
+> **Upgrading an install with accounts on and `YACHT_OPERATORS` empty.** The
+> Admin area, the cluster's pages, the registry and adding, draining and
+> removing nodes used to be open to the owner of *any* team. They are now open
+> only to the owners of the install's own team, the one `YACHT_OWNER_ID`
+> names; the owners of every other team lose them. And with sign-up closed,
+> somebody on no team who signs in — removed from theirs, say — is told so
+> rather than given an empty team of their own. If the person who runs your
+> install is not an owner of that team, or the team has no owner, either name
+> them in `YACHT_OPERATORS` (they are given a team of their own if they have
+> none), or set `YACHT_OWNER_EMAIL` to their address and have them sign in,
+> which makes them the team's owner if it has none. Yacht warns at startup
+> when nobody would run the install.
+
 | | |
 |---|---|
 | Binary | `/usr/local/bin/yacht` |
@@ -500,7 +514,7 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
 | `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
 | `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
-| `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means the owners of the install's own team (`YACHT_OWNER_ID`), never another team's owner. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
+| `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means the owners of the install's own team (`YACHT_OWNER_ID`), never another team's owner. A named operator on no team is given one of their own when they sign in. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
 | `YACHT_SMTP_ADDR` / `YACHT_RESEND_API_KEY` / `YACHT_CLOUDFLARE_EMAIL_TOKEN` | — | How sign-in links are delivered: one of them. None means they go to the log. An SMTP address on port 465 is TLS from the start; any other port uses STARTTLS when the relay offers it. Resend takes `YACHT_RESEND_FROM`; Cloudflare Email Sending's API (HTTPS, where a host blocks 465) takes `YACHT_CLOUDFLARE_EMAIL_ACCOUNT_ID` and `YACHT_CLOUDFLARE_EMAIL_FROM` (and `_REPLY_TO`), and a token with Email Sending: Edit; it sends each message as text and as the same text in HTML |
