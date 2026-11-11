@@ -38,7 +38,7 @@ func (m *mysqlBrowser) config(meter *wireMeter) *mysql.Config {
 	// refused before the driver reads it (see mysql_wire.go). Which needs
 	// the connection in the clear: no TLS, as on every connection to an app
 	// on the cluster's network.
-	c.DialFunc = meter.dial(&net.Dialer{Timeout: m.limits.Connect})
+	c.DialFunc = meter.dialMySQL(&net.Dialer{Timeout: m.limits.Connect})
 	c.TLS = nil
 	c.User, c.Passwd, c.DBName = m.target.User, m.target.Password, m.target.Database
 	c.Timeout = m.limits.Connect
@@ -95,18 +95,26 @@ func (m *mysqlBrowser) session(ctx context.Context, meter *wireMeter) (*sql.DB, 
 func (m *mysqlBrowser) readOnly(ctx context.Context, fn func(context.Context, *sql.Conn) error) error {
 	ctx, cancel := context.WithTimeout(ctx, m.limits.Connect+m.limits.Statement*3)
 	defer cancel()
-	meter := &wireMeter{limit: m.limits.Message}
+	meter := newWireMeter(m.limits)
 	db, conn, id, err := m.session(ctx, meter)
 	if err != nil {
+		// Cut off while signing in or setting the session up: the reason is
+		// the meter's, not the driver's "invalid connection".
+		if refused := meter.refusal(); refused != nil {
+			return refused
+		}
 		return err
 	}
 	defer db.Close()
 	defer conn.Close()
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION READ ONLY"); err != nil {
+		if refused := meter.refusal(); refused != nil {
+			return refused
+		}
 		return mysqlFriendly(err)
 	}
 	err = fn(ctx, conn)
-	if tooLarge := meter.tooLarge(); tooLarge != nil {
+	if tooLarge := meter.refusal(); tooLarge != nil {
 		// The driver has closed the connection under the statement; the
 		// server is told to stop sending rather than finding out by failing
 		// to.
@@ -134,7 +142,7 @@ var errStopped = errors.New("database: stopped at the limit")
 func (m *mysqlBrowser) kill(id int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.limits.Connect)
 	defer cancel()
-	connector, err := mysql.NewConnector(m.config(&wireMeter{limit: m.limits.Message}))
+	connector, err := mysql.NewConnector(m.config(newWireMeter(m.limits)))
 	if err != nil {
 		return
 	}

@@ -44,6 +44,15 @@ var ErrNoSuchTable = errors.New("database: no such table")
 // the engine's memory, which every team shares.
 var ErrRowTooLarge = errors.New("database: a row is larger than the browser will read")
 
+// ErrResultTooLarge is an answer the browser stopped reading: more from the
+// server over one connection than Limits.Wire, or more columns than a result
+// can have.
+var ErrResultTooLarge = errors.New("database: the server's answer is larger than the browser will read")
+
+// maxMessage is the largest Limits.Message: one byte under MySQL's largest
+// packet.
+const maxMessage = 0xffffff - 1
+
 // Target is where a database is and how to sign in to it.
 type Target struct {
 	// Addr is host:port, dialable from the engine's process: the Service's
@@ -88,6 +97,11 @@ type Limits struct {
 	// page of a table is cut on the server first (see Rows), so it is a
 	// query asking for a huge value that meets it.
 	Message int
+
+	// Wire is the most bytes read from the server over one connection,
+	// whatever they are: a flood of small rows, of column definitions, of
+	// session parameters is bounded here, where no one message is large.
+	Wire int
 }
 
 // DefaultLimits are the browser's bounds.
@@ -99,6 +113,7 @@ var DefaultLimits = Limits{
 	Cell:      1000,
 	Bytes:     1 << 20,
 	Message:   4 << 20,
+	Wire:      64 << 20,
 }
 
 // PageSize is how many rows a page of a table shows.
@@ -126,6 +141,12 @@ func (l Limits) orDefault() Limits {
 	}
 	if l.Message > 0 {
 		d.Message = l.Message
+	}
+	// Below MySQL's largest packet, so a row that spans packets — which
+	// starts with one of the largest size — is always over it.
+	d.Message = min(d.Message, maxMessage)
+	if l.Wire > 0 {
+		d.Wire = l.Wire
 	}
 	return d
 }

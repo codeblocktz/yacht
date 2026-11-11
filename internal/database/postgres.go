@@ -37,7 +37,7 @@ type postgres struct {
 // The client's deadline is the second line, and cancelling it sends the
 // server a cancel request rather than only dropping the socket — a backend
 // whose client has gone carries on with a query until it next writes to it.
-func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
+func (p *postgres) connect(ctx context.Context, meter *wireMeter) (*pgx.Conn, error) {
 	host, port, err := net.SplitHostPort(p.target.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("database: address %q: %w", p.target.Addr, err)
@@ -78,6 +78,16 @@ func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
 		f.SetMaxBodyLen(maxMessage)
 		return f
 	}
+	// And everything read on the connection together, past which it ends:
+	// see countedConn.
+	dial := cfg.DialFunc
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &countedConn{Conn: conn, meter: meter}, nil
+	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{
 			Conn: c, CancelRequestDelay: 0, DeadlineDelay: time.Second,
@@ -88,6 +98,9 @@ func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
 	defer cancel()
 	conn, err := pgx.ConnectConfig(dialCtx, cfg)
 	if err != nil {
+		if refused := meter.refusal(); refused != nil {
+			return nil, refused
+		}
 		return nil, fmt.Errorf("database: connect: %w", friendly(err))
 	}
 	return conn, nil
@@ -108,14 +121,22 @@ func closeConn(conn *pgx.Conn) {
 // snapshot, after which Postgres refuses to turn read-only off for the rest
 // of it — SET TRANSACTION READ WRITE and set_config both. And it ends in
 // ROLLBACK, never COMMIT, so a write that got past both would still not land.
-func (p *postgres) readOnly(ctx context.Context, fn func(context.Context, *pgx.Conn) error) error {
+func (p *postgres) readOnly(ctx context.Context, fn func(context.Context, *pgx.Conn) error) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, p.limits.Connect+p.limits.Statement*3)
 	defer cancel()
-	conn, err := p.connect(ctx)
+	meter := newWireMeter(p.limits)
+	conn, err := p.connect(ctx, meter)
 	if err != nil {
 		return err
 	}
 	defer closeConn(conn)
+	// Cut off past Limits.Wire: the reason is the meter's, whatever pgx
+	// made of the read that failed.
+	defer func() {
+		if refused := meter.refusal(); refused != nil {
+			err = refused
+		}
+	}()
 
 	if _, err := conn.Exec(ctx, "BEGIN TRANSACTION READ ONLY"); err != nil {
 		return fmt.Errorf("database: begin: %w", friendly(err))

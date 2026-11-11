@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +145,54 @@ func TestARowTooLargeSaysWhatToDoWhereItWasMet(t *testing.T) {
 	}
 	if other := errors.New("x"); withAdvice(other, pageTooLargeAdvice) != other {
 		t.Error("advice was added to another error")
+	}
+}
+
+// No one message is large, but there is no end to them: a server that
+// answers sign-in with session parameters forever is cut off past
+// Limits.Wire on the connection, and said so.
+func TestAPostgresConnectionEndsPastItsByteBudget(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+				be := pgproto3.NewBackend(conn, conn)
+				if _, err := be.ReceiveStartupMessage(); err != nil {
+					return
+				}
+				be.Send(&pgproto3.AuthenticationOk{})
+				for i := 0; ; i++ {
+					be.Send(&pgproto3.ParameterStatus{Name: "p" + strconv.Itoa(i), Value: strings.Repeat("v", 500)})
+					if be.Flush() != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	b := Postgres(Target{Addr: ln.Addr().String(), User: "u", Database: "d"},
+		Limits{Connect: 5 * time.Second, Statement: time.Second, Wire: 256 << 10})
+	_, err = b.Query(context.Background(), "SELECT 1")
+	if !errors.Is(err, ErrResultTooLarge) {
+		t.Fatalf("an endless sign-in gave %v, want ErrResultTooLarge", err)
+	}
+}
+
+// A message limit at or past MySQL's largest packet would let a row that
+// spans packets through; it is kept below.
+func TestTheMessageLimitStaysBelowTheLargestPacket(t *testing.T) {
+	if got := (Limits{Message: 1 << 30}).orDefault().Message; got >= 0xffffff {
+		t.Errorf("Message = %d, want below 0xffffff", got)
 	}
 }
