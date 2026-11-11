@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +49,41 @@ func TestNoRepositoryIsNotAFailure(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("branches = %v, want none", got)
+	}
+}
+
+// A repository URL is a tenant's input and the engine runs inside the
+// cluster, so a remote on a private address is refused before anything is
+// sent: otherwise the branch picker would be a way to probe the cluster's own
+// network and read what answered from the error or the time it took. The
+// server listens on loopback, which stands in for any private address.
+func TestARemoteOnAPrivateAddressIsNotAsked(t *testing.T) {
+	hit := make(chan string, 4)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		hit <- r.URL.String()
+	}))
+	t.Cleanup(srv.Close)
+
+	s := &Service{}
+	for _, repo := range []string{
+		srv.URL + "/acme/web.git",
+		"https://localhost:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + "/acme/web.git",
+		"ssh://git@127.0.0.1/acme/web.git",
+		"ssh://git@[::1]:22/acme/web.git",
+	} {
+		_, err := s.Branches(context.Background(), repo, "")
+		if !errors.Is(err, ErrRepoUnreachable) || !strings.Contains(err.Error(), "private network") {
+			t.Errorf("Branches(%s) = %v, want ErrRepoUnreachable for a private network", repo, err)
+		}
+		_, err = s.DefaultBranch(context.Background(), repo)
+		if !errors.Is(err, ErrRepoUnreachable) || !strings.Contains(err.Error(), "private network") {
+			t.Errorf("DefaultBranch(%s) = %v, want ErrRepoUnreachable for a private network", repo, err)
+		}
+	}
+	select {
+	case u := <-hit:
+		t.Errorf("the private remote was asked for %s", u)
+	default:
 	}
 }
 

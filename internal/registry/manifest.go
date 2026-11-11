@@ -33,6 +33,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/codeblocktz/yacht/internal/egress"
 )
 
 // ErrManifestNotFound means the registry answered, authoritatively, that the
@@ -137,13 +139,8 @@ func (s *Store) clientForManifest(
 		return manifestClient{}, err
 	}
 
-	client := manifestClient{http: s.http}
+	client := s.manifestClientFor(set, parsed)
 	if ownHost(set, parsed) {
-		// Plain HTTP only for the host the install already declared insecure.
-		// Anything else is asked over TLS regardless, because a reference is
-		// not a place to opt out of it.
-		client.insecure = set.Insecure
-
 		creds, err := s.Credentials(ctx)
 		switch {
 		case err == nil:
@@ -157,6 +154,22 @@ func (s *Store) clientForManifest(
 		}
 	}
 	return client, nil
+}
+
+// manifestClientFor is the client for a reference, short of its credential.
+func (s *Store) manifestClientFor(set Settings, parsed reference) manifestClient {
+	client := manifestClient{http: s.http}
+	if ownHost(set, parsed) {
+		// Plain HTTP only for the host the install already declared insecure.
+		// Anything else is asked over TLS regardless, because a reference is
+		// not a place to opt out of it.
+		client.insecure = set.Insecure
+		// The install's own registry is often an address inside the cluster,
+		// and it is the one private address resolution may dial: the operator
+		// chose it. See manifestClient.own.
+		client.own = authorityOf(client.registryURL(parsed))
+	}
+	return client
 }
 
 // ownHost reports whether a reference points at the registry this install
@@ -174,6 +187,17 @@ type manifestClient struct {
 	http     *http.Client
 	creds    *Credentials
 	insecure bool
+
+	// own is the authority — host:port — of the install's registry when the
+	// reference names it, and the only private address the client will dial.
+	//
+	// Every other connection, redirect hops and token endpoints included, is
+	// to a public address or not made. An image reference is a tenant's
+	// input; without this, "10.43.0.1:443/a/b:c" would have the engine probe
+	// the cluster's API, and how the request failed or how long it took would
+	// say what is there. Empty means nothing private is dialled, which is the
+	// safe zero value for a client built anywhere else.
+	own string
 }
 
 // manifestTypes is what Yacht can be handed back, and the only thing it will
@@ -341,9 +365,30 @@ const maxRedirects = 5
 // and keeps the timeout, and the policy travels with the request instead of
 // depending on how whoever built the client happened to configure it.
 func (m manifestClient) do(req *http.Request) (*http.Response, error) {
-	client := *m.client()
+	client, err := m.guarded()
+	if err != nil {
+		return nil, err
+	}
 	client.CheckRedirect = refuseUnsafeRedirect
 	return client.Do(req)
+}
+
+// guarded is a copy of the client that dials public addresses and the
+// install's own registry, and nothing else. The guard is in the dial, so it
+// holds for each redirect hop and against a name that resolves differently by
+// the time it is connected to.
+func (m manifestClient) guarded() (http.Client, error) {
+	client := *m.client()
+	var allow []string
+	if m.own != "" {
+		allow = append(allow, m.own)
+	}
+	transport, err := egress.Transport(client.Transport, allow...)
+	if err != nil {
+		return http.Client{}, err
+	}
+	client.Transport = transport
+	return client, nil
 }
 
 // refuseUnsafeRedirect stops a redirect that would move a credential or drop
@@ -671,12 +716,16 @@ var errUnsafeRealmAddress = errors.New("registry: token realm resolves to a non-
 //
 // A preflight DNS lookup is insufficient: a hostile name can answer publicly
 // during validation and privately when net/http connects. Resolving and
-// selecting the address in DialContext closes that gap. Same-authority realms
-// are exempt because an explicitly configured private registry must remain
-// usable; the request is not being delegated anywhere the operator did not
-// already choose.
+// selecting the address in DialContext closes that gap. A same-authority realm
+// is held to the registry's own rule instead (see manifestClient.own): the
+// install's configured registry may be private and must remain usable, and
+// the request is not being delegated anywhere the operator did not already
+// choose.
 func (m manifestClient) doToken(req *http.Request, ref reference) (*http.Response, error) {
-	client := *m.client()
+	client, err := m.guarded()
+	if err != nil {
+		return nil, err
+	}
 	origin := req.URL
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
 		if err := refuseUnsafeRedirect(next, via); err != nil {
@@ -690,7 +739,7 @@ func (m manifestClient) doToken(req *http.Request, ref reference) (*http.Respons
 	}
 
 	if !sameAuthority(req.URL, m.registryURL(ref)) {
-		transport, err := publicRealmTransport(client.Transport)
+		transport, err := publicRealmTransport(m.client().Transport)
 		if err != nil {
 			return nil, err
 		}
@@ -757,7 +806,8 @@ func publicRealmAddress(address netip.Addr) bool {
 	address = address.Unmap()
 	return address.IsValid() && address.IsGlobalUnicast() &&
 		!address.IsPrivate() && !address.IsLoopback() &&
-		!address.IsLinkLocalUnicast() && !carrierGradeNAT.Contains(address)
+		!address.IsLinkLocalUnicast() && !carrierGradeNAT.Contains(address) &&
+		!egress.Blocked(address)
 }
 
 func (m manifestClient) client() *http.Client {

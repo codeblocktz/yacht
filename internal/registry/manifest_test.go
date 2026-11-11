@@ -47,12 +47,15 @@ func serveManifest(w http.ResponseWriter, body []byte) {
 
 // fakeRegistry serves a handler over plain HTTP and returns the host to
 // address it by, which is what an image reference carries.
+//
+// It stands in for the install's own registry, which is the one private
+// address resolution dials — the fake listens on loopback, which is private.
 func fakeRegistry(t *testing.T, h http.HandlerFunc) (host string, client manifestClient) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return strings.TrimPrefix(srv.URL, "http://"),
-		manifestClient{http: srv.Client(), insecure: true}
+	host = strings.TrimPrefix(srv.URL, "http://")
+	return host, manifestClient{http: srv.Client(), insecure: true, own: host}
 }
 
 // recorder keeps what a handler saw, for a test goroutine to read afterwards.
@@ -324,7 +327,9 @@ func TestARegistryThatCannotBeReachedIsNotAnAbsentImage(t *testing.T) {
 	host := strings.TrimPrefix(srv.URL, "http://")
 	srv.Close()
 
-	client := manifestClient{http: &http.Client{Timeout: 5 * time.Second}, insecure: true}
+	client := manifestClient{
+		http: &http.Client{Timeout: 5 * time.Second}, insecure: true, own: host,
+	}
 	_, err := resolveRef(t, client, host+"/acme/web:abc123")
 	if !errors.Is(err, ErrUnreachable) {
 		t.Fatalf("a dead registry is %v, want ErrUnreachable", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -11,9 +12,12 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	gogit "github.com/go-git/go-git/v5"
+
+	"github.com/codeblocktz/yacht/internal/egress"
 )
 
 // Reading a repository's branches without cloning it.
@@ -66,12 +70,7 @@ func (s *Service) Branches(ctx context.Context, repoURL, query string) ([]string
 	ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 	defer cancel()
 
-	remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{
-		Name: "origin",
-		URLs: []string{repoURL},
-	})
-
-	refs, err := remote.ListContext(ctx, &gogit.ListOptions{})
+	refs, err := listRefs(ctx, repoURL)
 	if err != nil {
 		// Deliberately not wrapped with the remote's own message. It is often
 		// a full HTTP transcript, and on a private repository it is an auth
@@ -80,7 +79,7 @@ func (s *Service) Branches(ctx context.Context, repoURL, query string) ([]string
 			errors.Is(err, transport.ErrAuthorizationFailed) {
 			return nil, fmt.Errorf("%w: it is private, or does not exist", ErrRepoUnreachable)
 		}
-		return nil, fmt.Errorf("%w: %s", ErrRepoUnreachable, shortRemoteError(err))
+		return nil, remoteError(err)
 	}
 
 	needle := strings.ToLower(strings.TrimSpace(query))
@@ -128,6 +127,70 @@ func sortBranches(names []string) {
 	})
 }
 
+// remoteError is a failed ls-remote as ErrRepoUnreachable. A private address
+// is said as such, because it is the one failure that waiting will not fix.
+func remoteError(err error) error {
+	if errors.Is(err, egress.ErrBlocked) {
+		return fmt.Errorf("%w: its host is on a private network, which is not reached from here",
+			ErrRepoUnreachable)
+	}
+	return fmt.Errorf("%w: %s", ErrRepoUnreachable, shortRemoteError(err))
+}
+
+// listRefs is ls-remote, held to public addresses.
+//
+// The URL is a tenant's input and the engine runs inside the cluster, so
+// without a guard "https://10.43.0.1/x" would have it probe the cluster's API
+// and report, in the error or in how long it took, what answered. Over HTTPS
+// the check is in the dial, through go-git's transport given a client of the
+// engine's own rather than its process-wide default: every redirect hop is
+// checked, and a name that resolves publicly when looked at and privately when
+// connected to is still refused. go-git's SSH transport dials for itself, so
+// an SSH host is resolved and checked first instead — weaker, since a name can
+// answer differently a moment later, but an SSH ls-remote here carries no key
+// and is answered with a refusal by every real host anyway.
+func listRefs(ctx context.Context, repoURL string) ([]*plumbing.Reference, error) {
+	ep, err := transport.NewEndpoint(repoURL)
+	if err != nil {
+		return nil, err
+	}
+	switch ep.Protocol {
+	case "https":
+		guarded, err := egress.Transport(nil)
+		if err != nil {
+			return nil, err
+		}
+		session, err := githttp.NewClient(&http.Client{Transport: guarded}).
+			NewUploadPackSession(ep, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer session.Close() //nolint:errcheck
+		adv, err := session.AdvertisedReferencesContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all, err := adv.AllReferences()
+		if err != nil {
+			return nil, err
+		}
+		refs := make([]*plumbing.Reference, 0, len(all))
+		for _, ref := range all {
+			refs = append(refs, ref)
+		}
+		return refs, nil
+	case "ssh":
+		if err := egress.CheckHost(ctx, ep.Host); err != nil {
+			return nil, err
+		}
+		remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{
+			Name: "origin", URLs: []string{repoURL},
+		})
+		return remote.ListContext(ctx, &gogit.ListOptions{})
+	}
+	return nil, fmt.Errorf("app: %q is not a scheme this can read — https or ssh", ep.Protocol)
+}
+
 // shortRemoteError keeps the first line and nothing else.
 func shortRemoteError(err error) string {
 	msg, _, _ := strings.Cut(err.Error(), "\n")
@@ -150,12 +213,9 @@ func (s *Service) DefaultBranch(ctx context.Context, repoURL string) (string, er
 	ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 	defer cancel()
 
-	remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{
-		Name: "origin", URLs: []string{strings.TrimSpace(repoURL)},
-	})
-	refs, err := remote.ListContext(ctx, &gogit.ListOptions{})
+	refs, err := listRefs(ctx, strings.TrimSpace(repoURL))
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", ErrRepoUnreachable, shortRemoteError(err))
+		return "", remoteError(err)
 	}
 
 	for _, ref := range refs {

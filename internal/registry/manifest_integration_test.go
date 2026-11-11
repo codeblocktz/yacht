@@ -95,10 +95,15 @@ func realRegistry(t *testing.T) (string, manifestClient) {
 		if os.Getenv("YACHT_TEST_REGISTRY_INSECURE") == "" {
 			client.insecure = true
 		}
+		// The test registry plays the install's own, which may be private.
+		client.own = authorityOf(client.registryURL(reference{host: normalizeHost(host)}))
 		seedFixture(t, client, host)
 		return host + "/" + fixtureRepository + ":fixture", client
 	}
 	if ref := os.Getenv("YACHT_TEST_REGISTRY_REF"); ref != "" {
+		if parsed, err := parseReference(ref); err == nil {
+			client.own = authorityOf(client.registryURL(parsed))
+		}
 		return ref, client
 	}
 	t.Skip("set YACHT_TEST_REGISTRY (a writable registry, seeded here) or " +

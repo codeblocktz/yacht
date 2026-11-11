@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/codeblocktz/yacht/internal/egress"
 )
 
 // challengeTo returns a fake registry that answers everything with a bearer
@@ -551,5 +553,94 @@ func TestARealmKeepsItsOwnQuery(t *testing.T) {
 	}
 	if !strings.HasPrefix(u.String(), "https://auth.example.com/token?") {
 		t.Errorf("the realm was rebuilt into %s", u)
+	}
+}
+
+// An image reference naming a private address is not dialled.
+//
+// A reference is a tenant's input, and the engine is the one process inside
+// the cluster that resolves it: "10.43.0.1:443/a/b:c" would otherwise have it
+// probe the cluster's API, with how the request failed — or how long it took —
+// saying what is there. The fake listens on loopback, which stands in for any
+// private address.
+func TestAReferenceToAPrivateAddressIsNotDialled(t *testing.T) {
+	var hits recorder
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.set("hit", r.URL.Path)
+		serveManifest(w, testManifest)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+
+	// Not the install's registry: no own authority to exempt.
+	client := manifestClient{http: srv.Client(), insecure: true}
+	_, err := resolveRef(t, client, host+"/acme/web:v1")
+	if !errors.Is(err, ErrUnreachable) || !errors.Is(err, egress.ErrBlocked) {
+		t.Fatalf("a private reference gave %v, want ErrUnreachable from egress.ErrBlocked", err)
+	}
+	if got := hits.get("hit"); got != "" {
+		t.Errorf("the private address was dialled and asked for %s", got)
+	}
+	if _, err := client.tags(context.Background(), reference{host: host, name: "acme/web"}); !errors.Is(err, egress.ErrBlocked) {
+		t.Errorf("listing tags at a private address gave %v, want egress.ErrBlocked", err)
+	}
+}
+
+// A redirect is a second address, and is held to the same rule. The guard is
+// in the dial, so a registry the engine may reach cannot hand the request on
+// to one it may not.
+func TestARedirectToAPrivateAddressIsNotFollowed(t *testing.T) {
+	var hits recorder
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.set("hit", r.URL.Path)
+		serveManifest(w, testManifest)
+	}))
+	t.Cleanup(elsewhere.Close)
+
+	host, client := fakeRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	})
+	_, err := resolveRef(t, client, host+"/acme/web:v1")
+	if !errors.Is(err, egress.ErrBlocked) {
+		t.Fatalf("a redirect to a private address gave %v, want egress.ErrBlocked", err)
+	}
+	if got := hits.get("hit"); got != "" {
+		t.Errorf("the redirect was followed to a private address for %s", got)
+	}
+}
+
+// The install's own registry is commonly inside the cluster, and resolving
+// what the install built is the point of the capability: its address is the
+// one private address dialled, and only when a reference names it.
+func TestTheInstallsOwnRegistryIsStillReachedWhenPrivate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serveManifest(w, testManifest)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	store := &Store{http: srv.Client()}
+	set := Settings{Host: host, Repository: "acme", Insecure: true}
+
+	own, err := parseReference(host + "/acme/web:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.manifestClientFor(set, own).resolve(context.Background(), own)
+	if err != nil {
+		t.Fatalf("the install's own private registry was refused: %v", err)
+	}
+	if got != digestOfBytes(testManifest) {
+		t.Errorf("digest = %s, want %s", got, digestOfBytes(testManifest))
+	}
+
+	// The same loopback address under another spelling is another authority,
+	// not the one the operator configured.
+	_, port, _ := strings.Cut(host, ":")
+	other, err := parseReference("localhost:" + port + "/acme/web:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.manifestClientFor(set, other).resolve(context.Background(), other); !errors.Is(err, egress.ErrBlocked) {
+		t.Errorf("a private host other than the install's own gave %v, want egress.ErrBlocked", err)
 	}
 }
