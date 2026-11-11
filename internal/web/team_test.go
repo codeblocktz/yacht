@@ -893,9 +893,9 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 // opening one is a mail anybody holding the link can trigger. Neither may be
 // a way to have the install mail somebody without end.
 
-// One address is invited a few times — to fix a mistake — and then refused,
-// with nothing written and nothing mailed; and one team is refused past its
-// own budget, whoever it invites.
+// One address is invited by one team a few times — to fix a mistake — and
+// then refused, with nothing written and nothing mailed; and one team is
+// refused past its own budget, whoever it invites.
 func TestInvitationsAreRateLimited(t *testing.T) {
 	rt := newRoleTeam(t, "web-inv-limit", "inv-limit-app")
 
@@ -918,9 +918,8 @@ func TestInvitationsAreRateLimited(t *testing.T) {
 	}
 
 	// The team's budget, spent on addresses that are each new. The refused
-	// attempt above counted against it too: a team hammering one address
-	// spends its own budget doing so.
-	for i := invitesPerAddress + 2; i <= invitesPerTeam; i++ {
+	// attempt above spent none of it.
+	for i := invitesPerAddress + 1; i <= invitesPerTeam; i++ {
 		rec := rt.invite(t, rt.owner, fmt.Sprintf("guest-%d@web.test", i), "member")
 		if strings.Contains(rec.Header().Get("Location"), "error=") {
 			t.Fatalf("invitation %d from the team was refused, want accepted", i)
@@ -989,4 +988,59 @@ func TestOpeningAnInvitationMailsAFewTimesOnly(t *testing.T) {
 	if n := len(rt.mailer.messages()); n != before {
 		t.Fatal("opening the invitation once too often mailed the address again")
 	}
+}
+
+// One team spends only its own share of an address's invitations: another
+// team can still invite it, until every team together reaches the looser cap
+// across all of them.
+func TestOneTeamCannotUseUpAnAddressForAnother(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-share", "inv-share-app")
+	const target = "shared-target@web.test"
+	refused := func(c *http.Cookie) bool {
+		t.Helper()
+		return strings.Contains(rt.invite(t, c, target, "member").Header().Get("Location"), "error=")
+	}
+
+	owners := []*http.Cookie{rt.owner}
+	for i := 1; len(owners)*invitesPerAddress < invitesPerAddressAnywhere+invitesPerAddress; i++ {
+		email := fmt.Sprintf("share-owner-%d@web.test", i)
+		rt.team(t, fmt.Sprintf("web-inv-share-%d", i), "Team", rt.user(t, email), "")
+		owners = append(owners, sessionCookie(rt.signIn(t, email)))
+	}
+
+	sent := 0
+	for n, c := range owners {
+		for i := range invitesPerAddress {
+			want := sent < invitesPerAddressAnywhere
+			if got := !refused(c); got != want {
+				t.Fatalf("team %d's invitation %d with %d sent everywhere: accepted = %v, want %v",
+					n+1, i+1, sent, got, want)
+			}
+			if want {
+				sent++
+			}
+		}
+		if sent < invitesPerAddressAnywhere && !refused(c) {
+			t.Fatalf("team %d invited one address more than %d times", n+1, invitesPerAddress)
+		}
+	}
+}
+
+// An invitation refused for the role or the inviter's authority was never
+// going to be sent, so it spends nobody's budget: an admin trying again and
+// again to invite an owner does not stop the address being invited.
+func TestARefusedInvitationSpendsNothing(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-unspent", "inv-unspent-app")
+
+	for i := range invitesPerAddress + 2 {
+		if code := rt.invite(t, rt.admin, "unspent@web.test", "owner").Code; code != http.StatusForbidden {
+			t.Fatalf("an admin inviting an owner, attempt %d = %d, want 403", i+1, code)
+		}
+	}
+	before := len(rt.mailer.messages())
+	rec := rt.invite(t, rt.owner, "unspent@web.test", "member")
+	if strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("refused attempts used up the address: %q", rec.Header().Get("Location"))
+	}
+	rt.lastMail(t, before)
 }

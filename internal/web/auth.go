@@ -809,11 +809,39 @@ func newAttemptLimiter(window time.Duration) *attemptLimiter {
 // allow records an attempt against key and reports whether it is within limit.
 func (l *attemptLimiter) allow(key string, limit int) bool {
 	now := time.Now()
-	cutoff := now.Add(-l.window)
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	ts := l.recentLocked(key, now)
+	if len(ts) >= limit {
+		return false
+	}
+	l.hits[key] = append(ts, now)
+	return true
+}
+
+// spent reports whether key has used its limit, recording nothing: for a
+// caller that may only count an attempt once it knows the attempt was one
+// it would have carried out (see record).
+func (l *attemptLimiter) spent(key string, limit int) bool {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.recentLocked(key, now)) >= limit
+}
+
+// record counts an attempt against key without asking whether it fits.
+func (l *attemptLimiter) record(key string) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hits[key] = append(l.recentLocked(key, now), now)
+}
+
+// recentLocked sweeps when due and returns key's attempts still in the
+// window, storing the trimmed slice back. l.mu must be held.
+func (l *attemptLimiter) recentLocked(key string, now time.Time) []time.Time {
+	cutoff := now.Add(-l.window)
 	if now.Sub(l.swept) >= l.window || len(l.hits) > maxTrackedKeys {
 		for k, ts := range l.hits {
 			if kept := recent(ts, cutoff); len(kept) == 0 {
@@ -824,14 +852,13 @@ func (l *attemptLimiter) allow(key string, limit int) bool {
 		}
 		l.swept = now
 	}
-
 	ts := recent(l.hits[key], cutoff)
-	if len(ts) >= limit {
-		l.hits[key] = ts
-		return false
+	if len(ts) == 0 {
+		delete(l.hits, key)
+		return nil
 	}
-	l.hits[key] = append(ts, now)
-	return true
+	l.hits[key] = ts
+	return ts
 }
 
 // recent drops the attempts that have fallen out of the window. The slice is
