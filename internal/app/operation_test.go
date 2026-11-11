@@ -1281,3 +1281,89 @@ func TestABuildingDeployNamesTheImageItBuilt(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// lateCancelBuilder is a cancellation landing while a build's Job is being
+// made: beforeCreate runs it, and its delete finds no Job yet. Only a delete
+// once the Job exists is reported.
+type lateCancelBuilder struct {
+	beforeCreate func()
+	mu           sync.Mutex
+	created      bool
+	deleted      chan string
+}
+
+func (b *lateCancelBuilder) Build(
+	ctx context.Context, req orchestrator.BuildRequest,
+) (orchestrator.BuildResult, error) {
+	b.beforeCreate()
+	b.mu.Lock()
+	b.created = true
+	b.mu.Unlock()
+	if req.Created != nil {
+		req.Created()
+	}
+	select {
+	case <-ctx.Done():
+		return orchestrator.BuildResult{}, ctx.Err()
+	case <-time.After(5 * time.Second):
+		return orchestrator.BuildResult{}, errors.New("the build ran on after its operation was cancelled")
+	}
+}
+func (*lateCancelBuilder) BuildJobName(orchestrator.BuildRequest) string {
+	return "build-late-cancel"
+}
+func (*lateCancelBuilder) BuildState(context.Context, string) (orchestrator.BuildState, error) {
+	return orchestrator.BuildState{Found: true}, nil
+}
+func (b *lateCancelBuilder) CancelBuild(_ context.Context, name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.created {
+		b.deleted <- name
+	}
+	return nil
+}
+
+// A cancellation that lands after the build's job name is recorded and
+// before the Job exists deletes nothing. The worker looks again once the Job
+// is made, deletes it, and stops waiting on it, rather than leaving it to
+// run until the next lease renewal notices.
+func TestACancelWhileTheBuildJobIsMadeDeletesTheJob(t *testing.T) {
+	ctx := context.Background()
+	builder := &lateCancelBuilder{deleted: make(chan string, 2)}
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "operation-late-build-cancel")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:1.27", Replicas: 1, Port: 8080,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	a, op := buildingOperationWithoutRow(t, s, ownerID, a)
+	builder.beforeCreate = func() {
+		if err := s.CancelOperation(ctx, ownerID, op.ID); err != nil {
+			t.Errorf("CancelOperation: %v", err)
+		}
+	}
+
+	started := time.Now()
+	_, err = s.buildOperation(ctx, &op, a)
+	if err == nil {
+		t.Fatal("a cancelled build reported success")
+	}
+	if took := time.Since(started); took > 2*time.Second {
+		t.Fatalf("the cancelled build was waited on for %s", took)
+	}
+	select {
+	case got := <-builder.deleted:
+		if got != "build-late-cancel" {
+			t.Fatalf("deleted Job = %q", got)
+		}
+	default:
+		t.Fatal("the Job made after the cancellation was not deleted")
+	}
+	row := waitForOperationStatus(t, s, ownerID, op.ID, OperationCancelled)
+	if row.ClaimToken.Valid {
+		t.Fatal("cancelled operation still holds a claim")
+	}
+}

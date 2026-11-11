@@ -617,6 +617,32 @@ func (s *Service) finishFencedBuild(
 	return nil
 }
 
+// stopOrphanedBuild runs once a build's Job exists and stops it if the
+// operation it was for is no longer this worker's. The job's name is recorded
+// before the Job is made, so a cancellation landing between the two finds a
+// name and nothing to delete under it; without this look the build would run
+// on until the next lease renewal noticed. A cancellation after this look
+// finds the Job and deletes it itself. A store that cannot be read is not
+// evidence of either, and is left to the lease.
+func (s *Service) stopOrphanedBuild(
+	ctx context.Context, stop context.CancelFunc, op Operation, jobName string,
+) {
+	err := s.checkOperationClaim(ctx, op)
+	if !errors.Is(err, ErrOperationClaimLost) && !errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
+	stop()
+	// Bounded, because this runs inside the build: a cluster that does not
+	// answer must not hold the worker past the deletion the build makes of
+	// its own Job on the way out.
+	del, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.builder.CancelBuild(del, jobName); err != nil {
+		s.log.Warn("delete a build whose operation was lost",
+			"operation_id", op.ID, "job", jobName, "error", err)
+	}
+}
+
 func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App, error) {
 	if a.Source != SourceGit {
 		return a, nil
@@ -690,10 +716,14 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		req.RepoURL, req.Ref, req.Subdir = "", "", ""
 		req.SourceURL, req.SourceToken = sourceURL, sourceToken
 	}
-	if err := s.setFencedBuildJob(ctx, *op, row.ID, s.builder.BuildJobName(req)); err != nil {
+	jobName := s.builder.BuildJobName(req)
+	if err := s.setFencedBuildJob(ctx, *op, row.ID, jobName); err != nil {
 		return a, err
 	}
-	result, buildErr := s.builder.Build(ctx, req)
+	buildCtx, stopBuild := context.WithCancel(ctx)
+	defer stopBuild()
+	req.Created = func() { s.stopOrphanedBuild(buildCtx, stopBuild, *op, jobName) }
+	result, buildErr := s.builder.Build(buildCtx, req)
 	status, message, pushed := BuildSucceeded, "", image
 	if buildErr != nil {
 		status, message, pushed = BuildFailed, buildErr.Error(), ""

@@ -1021,6 +1021,11 @@ type BuildRequest struct {
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.
 	Log func(chunk string)
+
+	// Created, when set, is called once the build's Job exists, before the
+	// build is waited on. A cancellation that arrived while the Job was being
+	// made found nothing to delete; this is where the caller looks again.
+	Created func()
 }
 
 // BuildResult is what a build produced.

@@ -140,3 +140,34 @@ func TestTheTokenIsRedactedFromLogAndError(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// A build says when its Job exists, so a caller whose deploy was cancelled
+// while the Job was being made can stop it there; stopped, the build deletes
+// its Job as it does after any build.
+func TestABuildSaysWhenItsJobExistsAndStopsThere(t *testing.T) {
+	o, client := testOrchestrator(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req := tokenBuild()
+	name := buildJobName(req)
+	var existed bool
+	req.Created = func() {
+		_, err := client.BatchV1().Jobs(BuildNamespace).Get(ctx, name, metav1.GetOptions{})
+		existed = err == nil
+		cancel()
+	}
+	started := time.Now()
+	if _, err := o.Build(ctx, req); err == nil {
+		t.Fatal("a build stopped at its Job succeeded")
+	}
+	if !existed {
+		t.Fatal("Created was called before the Job existed")
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("a stopped build ran on for %s", took)
+	}
+	_, err := client.BatchV1().Jobs(BuildNamespace).Get(context.Background(), name, metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("the stopped build's Job is still there: %v", err)
+	}
+}
