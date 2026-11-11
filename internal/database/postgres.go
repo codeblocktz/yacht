@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 // Postgres browses a Postgres database.
@@ -66,6 +68,16 @@ func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
 	// query box that accepted "SELECT 1; SET TRANSACTION READ WRITE; ..." would
 	// be a read-only guard that lasted one statement.
 	cfg.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec
+	// A row is one protocol message, and pgx reads a message whole before
+	// handing any of it over; the default ceiling is the server's own, about a
+	// gigabyte. Lowered here, a row past Limits.Message is refused at its
+	// header, before its body is read or a buffer for it is made.
+	maxMessage := p.limits.Message
+	cfg.BuildFrontend = func(r io.Reader, w io.Writer) *pgproto3.Frontend {
+		f := pgproto3.NewFrontend(r, w)
+		f.SetMaxBodyLen(maxMessage)
+		return f
+	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{
 			Conn: c, CancelRequestDelay: 0, DeadlineDelay: time.Second,
@@ -251,8 +263,37 @@ func (p *postgres) Rows(ctx context.Context, schema, table string, page int) (Re
 			return err
 		}
 
-		sql := "SELECT * FROM " + ident
+		// Every column, in the order SELECT * gives them, each cut on the
+		// server to a little past what a cell keeps: a page of a table that
+		// stores files is still a page, rather than a row too large to read.
+		var cols []string
+		rows, err = conn.Query(ctx, `
+			SELECT attname FROM pg_attribute
+			WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped
+			ORDER BY attnum`, ident)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				rows.Close()
+				return err
+			}
+			cols = append(cols, cutOnServer(pgx.Identifier{c}.Sanitize(), p.limits.Cell))
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		sql := "SELECT " + strings.Join(cols, ", ") + " FROM " + ident + " AS src"
 		if len(keys) > 0 {
+			// Qualified, so the order is the key's own and not the text the
+			// select list renders it as: a bare name would sort by the
+			// output column, and 10 would come before 9.
+			for i, k := range keys {
+				keys[i] = "src." + k
+			}
 			sql += " ORDER BY " + strings.Join(keys, ", ")
 		}
 		// One more than a page, to know whether there is a next one without
@@ -275,6 +316,19 @@ func (p *postgres) Rows(ctx context.Context, schema, table string, page int) (Re
 		return Result{}, fmt.Errorf("database: read %s.%s: %w", schema, table, friendly(err))
 	}
 	return res, nil
+}
+
+// cutOnServer is a column as the server renders it, cut to one character past
+// cell so the value is marked cut when it was longer.
+//
+// format's %s is the type's own output function — what a text-format result
+// carries, so a boolean is still t and an inet still has no mask, where a
+// cast to text would change both. It turns NULL into an empty string, so
+// NULL is kept apart first; num_nulls tests the value itself, where IS NULL
+// would call a composite of NULL fields null too.
+func cutOnServer(col string, cell int) string {
+	return fmt.Sprintf("CASE WHEN num_nulls(src.%[1]s) = 1 THEN NULL "+
+		"ELSE left(format('%%s', src.%[1]s), %[2]d) END AS %[1]s", col, cell+1)
 }
 
 // Query runs one statement read-only.
@@ -459,6 +513,12 @@ func (p *postgres) Config(ctx context.Context) (Config, error) {
 // Postgres's own message is kept, because it names what was refused; the
 // SQLSTATE decides which explanation goes in front of it.
 func friendly(err error) error {
+	var tooLarge *pgproto3.ExceededMaxBodyLenErr
+	if errors.As(err, &tooLarge) {
+		return fmt.Errorf("%w — the server sent %s at once, and the browser reads at most %s. "+
+			"Select fewer columns, or the start of a long one, as in left(body, 1000)",
+			ErrRowTooLarge, megabytes(tooLarge.ActualBodyLen), megabytes(tooLarge.MaxExpectedBodyLen))
+	}
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -481,4 +541,9 @@ func friendly(err error) error {
 		return fmt.Errorf("the database refused the app's own credentials — %s", pgErr.Message)
 	}
 	return fmt.Errorf("%s", pgErr.Message)
+}
+
+// megabytes is a size as a person reads it.
+func megabytes(n int) string {
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/url"
 	"os"
@@ -270,6 +271,74 @@ func TestAResultIsCappedInRowsAndBytes(t *testing.T) {
 	// é is two bytes: eight bytes is four whole characters, never half of one.
 	if !first.Cut || first.Text != "éééé" {
 		t.Errorf("a long value reads %q cut=%v, want four whole characters, cut", first.Text, first.Cut)
+	}
+}
+
+// A row bigger than the browser reads is refused rather than read, with a
+// sentence saying what to ask for instead. A page of a table is cut on the
+// server before it is sent, so a table that stores files still pages — and
+// is rendered exactly as an uncut page would be, in key order.
+func TestALargeRowIsRefusedByAQueryAndCutInATablePage(t *testing.T) {
+	target := scratch(t)
+	ctx := context.Background()
+	u := &url.URL{Scheme: "postgres", Host: target.Addr, Path: "/" + target.Database,
+		User: url.UserPassword(target.User, target.Password)}
+	db, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close(ctx)
+	for _, stmt := range []string{
+		`CREATE TYPE pair AS (a int, b int)`,
+		`CREATE TABLE files (id int PRIMARY KEY, body text, flag bool, addr inet, p pair)`,
+		`INSERT INTO files SELECT g, 'small', g % 2 = 0, '10.0.0.1', NULL FROM generate_series(12, 2, -1) g`,
+		`INSERT INTO files VALUES (1, repeat('x', 8 << 20), true, '1.2.3.4', ROW(NULL, NULL))`,
+	} {
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+
+	b := Postgres(target, Limits{})
+	for _, q := range []string{
+		"SELECT body FROM files WHERE id = 1",
+		"SELECT repeat('x', 8 << 20)",
+	} {
+		_, err := b.Query(ctx, q)
+		if !errors.Is(err, ErrRowTooLarge) {
+			t.Errorf("%s gave %v, want ErrRowTooLarge", q, err)
+		}
+	}
+
+	page, err := b.Rows(ctx, "public", "files", 0)
+	if err != nil {
+		t.Fatalf("a table holding an 8 MB value: %v", err)
+	}
+	if strings.Join(page.Columns, ",") != "id,body,flag,addr,p" {
+		t.Errorf("columns = %v", page.Columns)
+	}
+	var ids []string
+	for _, r := range page.Rows {
+		ids = append(ids, r[0].Text)
+	}
+	if got := strings.Join(ids, ","); got != "1,2,3,4,5,6,7,8,9,10,11,12" {
+		t.Errorf("ids in order %s, want the key's numeric order", got)
+	}
+	first := page.Rows[0]
+	if body := first[1]; !body.Cut || len(body.Text) != DefaultLimits.Cell {
+		t.Errorf("the 8 MB value reads %d bytes, cut=%v; want %d and cut",
+			len(body.Text), body.Cut, DefaultLimits.Cell)
+	}
+	// The type's own rendering, as an uncut page would have it.
+	if first[2].Text != "t" || first[3].Text != "1.2.3.4" {
+		t.Errorf("bool and inet read %q and %q, want t and 1.2.3.4", first[2].Text, first[3].Text)
+	}
+	// A composite of NULL fields is a value; a NULL column is NULL.
+	if first[4] != (Value{Text: "(,)"}) || page.Rows[1][4] != (Value{Null: true}) {
+		t.Errorf("composite reads %+v, NULL reads %+v", first[4], page.Rows[1][4])
+	}
+	if small := page.Rows[1][1]; small != (Value{Text: "small"}) {
+		t.Errorf("a short value reads %+v", small)
 	}
 }
 

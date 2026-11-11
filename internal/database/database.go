@@ -35,6 +35,13 @@ var ErrNoBrowser = errors.New("database: no data browser for this engine")
 // is refused rather than tried.
 var ErrNoSuchTable = errors.New("database: no such table")
 
+// ErrRowTooLarge is a row bigger than the browser will read. A row arrives
+// from the server as one message and is read whole before any of it can be
+// cut to Cell or Bytes, so a row past Limits.Message is refused instead of
+// read: one "SELECT repeat('x', 1000000000)" would otherwise be a gigabyte of
+// the engine's memory, which every team shares.
+var ErrRowTooLarge = errors.New("database: a row is larger than the browser will read")
+
 // Target is where a database is and how to sign in to it.
 type Target struct {
 	// Addr is host:port, dialable from the engine's process: the Service's
@@ -72,6 +79,13 @@ type Limits struct {
 	// number of rows, so a wide table of large values cannot hold megabytes
 	// of somebody else's data in the engine's memory per request.
 	Bytes int
+
+	// Message is the most bytes of one message read off the wire. Cell and
+	// Bytes are applied to a row once it has been read, and a row is read
+	// whole; this is what bounds the row itself, by refusing it unread. A
+	// page of a table is cut on the server first (see Rows), so it is a
+	// query asking for a huge value that meets it.
+	Message int
 }
 
 // DefaultLimits are the browser's bounds.
@@ -82,6 +96,7 @@ var DefaultLimits = Limits{
 	Rows:      200,
 	Cell:      1000,
 	Bytes:     1 << 20,
+	Message:   4 << 20,
 }
 
 // PageSize is how many rows a page of a table shows.
@@ -106,6 +121,9 @@ func (l Limits) orDefault() Limits {
 	}
 	if l.Bytes > 0 {
 		d.Bytes = l.Bytes
+	}
+	if l.Message > 0 {
+		d.Message = l.Message
 	}
 	return d
 }
