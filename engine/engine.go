@@ -767,6 +767,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		sourceFetch = base + web.APIPrefix + "/build-sources"
 	}
 
+	platformZones, platformNames := cfg.PlatformHosts()
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		BackupS3:            backups,
 		Buckets:             buckets,
@@ -784,6 +785,8 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		TCPProxyPortLast:    proxyLast,
 		Keeper:              e.Keeper,
 		ReservedDomains:     cfg.ReservedDomains,
+		PlatformZones:       platformZones,
+		PlatformNames:       platformNames,
 		Resolver:            e.resolver,
 		Waker:               waker,
 		WakeTimeout:         cfg.WakeTimeout,
@@ -1040,7 +1043,8 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.
-	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
+	go domain.NewChecker(e.Pool, e.resolver, apps, log).
+		Reserving(apps.CustomDomainReservations).Run(ctx)
 
 	// Gives each app its siblings' private names, and isolates its namespace
 	// to its project. Every replica may run it: what it writes is the same

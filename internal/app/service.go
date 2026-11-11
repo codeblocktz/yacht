@@ -328,6 +328,15 @@ type Options struct {
 	// simply by being created first.
 	ReservedDomains []string
 
+	// PlatformZones and PlatformNames are where the install itself is
+	// reached, as URLs or hostnames, so no app may bring them as custom
+	// domains: zones with every name under them, names alone (see
+	// domain.Reservations). The config says which is which; settings kept in
+	// the database — the CNAME target, regions' edges, the registry — are
+	// read when they are needed.
+	PlatformZones []string
+	PlatformNames []string
+
 	// Resolver proves a custom domain points here. Left nil, verification is
 	// refused with a reason rather than silently failing.
 	Resolver domain.Resolver

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,8 +144,12 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 	if !a.Source.Workload() {
 		return ErrNoWorkload
 	}
+	reserved, err := s.CustomDomainReservations(ctx)
+	if err != nil {
+		return err
+	}
 	if _, err := domain.AddCustom(ctx, s.q, ownerID, a.ID, host,
-		s.domainTarget(ctx, a), s.opts.AppDomain, s.opts.ReservedDomains); err != nil {
+		s.domainTarget(ctx, a), reserved); err != nil {
 		return err
 	}
 	if _, err := s.q.IncrementAppConfigVersion(ctx, dbgen.IncrementAppConfigVersionParams{
@@ -155,6 +160,57 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 	s.log.Info("custom domain claimed", slog.String("app", name), slog.String("host", host))
 	s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: a.ID, App: a.Name})
 	return nil
+}
+
+// CustomDomainReservations is every name no app may bring as a custom
+// domain: the app domain, the operator's reserved list, and every name the
+// install itself answers on — the dashboard's, the build source's, the
+// buckets', the TCP proxy's and the other endpoints in its config, and from
+// its settings the CNAME target, each region's edge and the registry.
+//
+// Read fresh each time rather than at startup, because the last three are
+// settings, changed while the engine runs. An error rather than a partial
+// answer: a list missing the registry would let somebody claim it.
+func (s *Service) CustomDomainReservations(ctx context.Context) (domain.Reservations, error) {
+	r := domain.Reservations{
+		AppDomain: s.opts.AppDomain,
+		Zones:     slices.Clone(s.opts.ReservedDomains),
+	}
+	zone := func(v string) {
+		if h := domain.HostOf(v); h != "" {
+			r.Zones = append(r.Zones, h)
+		}
+	}
+	name := func(v string) {
+		if h := domain.HostOf(v); h != "" {
+			r.Names = append(r.Names, h)
+		}
+	}
+	for _, v := range s.opts.PlatformZones {
+		zone(v)
+	}
+	for _, v := range s.opts.PlatformNames {
+		name(v)
+	}
+
+	dns, err := s.q.GetPlatformDNS(ctx)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Reservations{}, fmt.Errorf("app: read the CNAME target: %w", err)
+	}
+	name(dns.CnameTarget)
+	regions, err := s.q.ListRegions(ctx)
+	if err != nil {
+		return domain.Reservations{}, fmt.Errorf("app: read regions' edges: %w", err)
+	}
+	for _, rg := range regions {
+		name(rg.EdgeHost)
+	}
+	reg, err := s.q.GetPlatformRegistry(ctx)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return domain.Reservations{}, fmt.Errorf("app: read the registry: %w", err)
+	}
+	name(reg.Host)
+	return r, nil
 }
 
 // domainTarget is what a custom domain on an app is told to CNAME to: its
@@ -205,7 +261,11 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 	if s.resolver == nil {
 		return errors.New("app: this install cannot resolve DNS, so a domain cannot be verified here")
 	}
-	if err := domain.Verify(ctx, s.q, s.resolver, ownerID, id); err != nil {
+	reserved, err := s.CustomDomainReservations(ctx)
+	if err != nil {
+		return err
+	}
+	if err := domain.Verify(ctx, s.q, s.resolver, reserved, ownerID, id); err != nil {
 		return err
 	}
 

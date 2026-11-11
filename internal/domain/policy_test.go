@@ -246,3 +246,55 @@ func TestCheckCustomHost(t *testing.T) {
 		}
 	}
 }
+
+// The install's own names, refused as custom domains: a zone with every name
+// under it, a name alone. A name is not a suffix — the registry may be
+// ghcr.io, and nothing under it is anybody's to refuse.
+func TestReservationsRefuseTheInstallsOwnNames(t *testing.T) {
+	r := Reservations{
+		AppDomain: "apps.example.com",
+		Zones:     []string{"yacht.example.com"},
+		Names:     []string{"registry.example.com", "edge.example.com"},
+	}
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"web.apps.example.com", true},
+		{"yacht.example.com", true},
+		{"YACHT.example.com.", true},
+		{"evil.yacht.example.com", true},
+		{"notyacht.example.com", false},
+		{"registry.example.com", true},
+		{"edge.example.com", true},
+		{"x.registry.example.com", false},
+		{"shop.customer.test", false},
+		{"", false},
+	} {
+		if got := r.Refuses(tc.host); got != tc.want {
+			t.Errorf("Refuses(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
+// Every shape an install's own address is configured in comes down to the
+// hostname somebody would type as a custom domain.
+func TestHostOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Yacht.Example.com":        "yacht.example.com",
+		"https://yacht.example.com:8443/x": "yacht.example.com",
+		"http://garage.internal:3900":      "garage.internal",
+		"registry.example.com:5000":        "registry.example.com",
+		"registry.example.com/team/app":    "registry.example.com",
+		"tcp.example.com.":                 "tcp.example.com",
+		" edge.example.com ":               "edge.example.com",
+		"10.0.0.5:5000":                    "",
+		"https://[2001:db8::1]:443":        "",
+		"203.0.113.7":                      "",
+		"":                                 "",
+	} {
+		if got := HostOf(in); got != want {
+			t.Errorf("HostOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

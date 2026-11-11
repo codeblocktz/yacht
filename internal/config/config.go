@@ -365,6 +365,27 @@ type Config struct {
 	Debug bool
 }
 
+// PlatformHosts are the addresses the install itself is reached at, as they
+// are configured — URLs or hostnames — for refusing them as custom domains.
+//
+// Zones are refused with every name under them. The dashboard and the build
+// source are the engine, and a sibling of the dashboard can set cookies its
+// pages are sent; buckets are addressed as subdomains of their endpoint.
+// Names are refused alone: the TCP proxy's host is any name that reaches the
+// machines, and the rest are endpoints the engine talks to, which may be
+// another provider's whose subdomains are nobody's here to refuse.
+//
+// MailWebsite is not here. It is the operator's public site, and an operator
+// may well host that on the install as an app with a custom domain.
+func (c Config) PlatformHosts() (zones, names []string) {
+	zones = []string{c.BaseURL, c.BuildSourceURL, c.BucketsEndpoint}
+	names = []string{
+		c.TCPProxyHost, c.BucketsS3URL, c.BucketsAdminURL,
+		c.BackupS3Endpoint, c.LogsURL, c.MetricsURL,
+	}
+	return zones, names
+}
+
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{

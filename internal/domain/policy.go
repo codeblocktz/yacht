@@ -10,6 +10,8 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -175,6 +177,75 @@ func Reserved(host, appDomain string, extra []string) bool {
 		}
 	}
 	return false
+}
+
+// Reservations are every name no app may bring as a custom domain.
+//
+// The operator's list was the only thing here once, and it is empty by
+// default. That left the install's own names open: verification asks only
+// whether a name resolves to the platform, and the dashboard's hostname, the
+// registry's and the CNAME target itself all do, by construction. A team could
+// claim the dashboard's host, watch it verify on the first check, and be given
+// an Ingress and a certificate for it in its own namespace.
+type Reservations struct {
+	// AppDomain is the platform domain, reserved with everything under it.
+	AppDomain string
+
+	// Zones are reserved with every name under them: the operator's
+	// YACHT_RESERVED_DOMAINS, and the install's names under which a sibling
+	// means something — a cookie scoped to the dashboard's parent, a bucket
+	// addressed as a subdomain of the endpoint.
+	Zones []string
+
+	// Names are reserved as themselves and nothing under them: the install's
+	// names that are only ever addresses. The registry may be somebody else's,
+	// ghcr.io, and refusing what sits under a name like that would refuse
+	// nothing anybody could verify while saying something untrue.
+	Names []string
+}
+
+// Refuses reports whether host is one no app may bring.
+func (r Reservations) Refuses(host string) bool {
+	if Reserved(host, r.AppDomain, r.Zones) {
+		return true
+	}
+	h := normalize(host)
+	for _, n := range r.Names {
+		if h != "" && normalize(n) == h {
+			return true
+		}
+	}
+	return false
+}
+
+// HostOf is the hostname in a URL or in host[:port], normalised; empty for
+// nothing, and for an IP address, which no custom domain can be.
+//
+// The install's own names are configured in whatever shape suits their
+// setting — YACHT_BASE_URL is a URL, the registry a host with a port, the TCP
+// proxy a bare name — and a reservation compared against the raw string would
+// match none of the hostnames anybody types.
+func HostOf(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return ""
+		}
+		s = u.Hostname()
+	} else if h, _, err := net.SplitHostPort(s); err == nil {
+		s = h
+	} else if i := strings.IndexAny(s, "/"); i >= 0 {
+		s = s[:i]
+	}
+	s = normalize(strings.Trim(s, "[]"))
+	if s == "" || net.ParseIP(s) != nil {
+		return ""
+	}
+	return s
 }
 
 // CoveredByWildcard reports whether a single *.<appDomain> certificate can

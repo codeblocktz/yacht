@@ -71,7 +71,7 @@ func TestAClaimProvesItselfWithoutBeingAsked(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.auto.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.auto.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAClaimWithNoRecordSettlesIntoWaiting(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.wait.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.wait.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestAMisdirectedDomainRecordsWhereItPoints(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.mis.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.mis.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestADomainIsNotCalledRoutedUntilTheApplyTakes(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.noapply.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.noapply.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestTheCheckerWithdrawsADomainThatDrifts(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.checkdrift.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.checkdrift.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestASettledDomainIsNotRecheckedImmediately(t *testing.T) {
 	q := dbgen.New(pool)
 
 	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.settled.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"shop.settled.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestClaimingLeasesARowAwayFromOtherCheckers(t *testing.T) {
 	q := dbgen.New(pool)
 
 	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.lease.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"shop.lease.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 

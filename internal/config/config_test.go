@@ -529,3 +529,32 @@ func TestTurnstileKeysGoTogether(t *testing.T) {
 		}
 	}
 }
+
+// Every address in the config the install is reached at is offered for
+// reserving, as it is configured; the domain package reduces each to a host.
+func TestPlatformHostsNameTheInstallsOwnAddresses(t *testing.T) {
+	c := Config{
+		BaseURL: "https://yacht.example.com", BuildSourceURL: "https://build.example.com",
+		BucketsEndpoint: "https://s3.example.com", TCPProxyHost: "tcp.example.com",
+		BucketsS3URL: "http://garage:3900", BucketsAdminURL: "http://garage:3903",
+		BackupS3Endpoint: "https://backups.example.com", LogsURL: "http://logs.example.com",
+		MetricsURL: "http://metrics.example.com", MailWebsite: "https://example.com",
+	}
+	zones, names := c.PlatformHosts()
+	all := strings.Join(append(zones, names...), " ")
+	for _, want := range []string{
+		"yacht.example.com", "build.example.com", "s3.example.com", "tcp.example.com",
+		"garage:3900", "garage:3903", "backups.example.com", "logs.example.com", "metrics.example.com",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("PlatformHosts leaves out %s: zones %v, names %v", want, zones, names)
+		}
+	}
+	// The operator's own site may be an app on the install.
+	if strings.Contains(all, "https://example.com") {
+		t.Errorf("PlatformHosts reserves the operator's website: %v %v", zones, names)
+	}
+	if !strings.Contains(strings.Join(zones, " "), "yacht.example.com") {
+		t.Errorf("the dashboard is not a zone: %v", zones)
+	}
+}

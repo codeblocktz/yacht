@@ -202,7 +202,7 @@ func Probe(ctx context.Context, res Resolver, host, target string) Observation {
 // which record to create, and proving it is a separate act — see Verify.
 func AddCustom(
 	ctx context.Context, q *dbgen.Queries, ownerID string, appID uuid.UUID,
-	host, target, appDomain string, reserved []string,
+	host, target string, reserved Reservations,
 ) (Custom, error) {
 	host = normalize(host)
 	// A scheme is what people paste, so it is stripped rather than refused.
@@ -215,8 +215,9 @@ func AddCustom(
 
 	// The platform's own domain is not somebody's to bring: a name under it is
 	// issued by the platform, and claiming one here would route around the
-	// uniqueness the platform relies on.
-	if Reserved(host, appDomain, reserved) {
+	// uniqueness the platform relies on. Nor is any other name the install
+	// answers on — see Reservations.
+	if refused(host, target, reserved) {
 		return Custom{}, fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 	if target == "" {
@@ -248,7 +249,8 @@ func AddCustom(
 // the only function that decides what state a domain is in. Two paths writing
 // state independently is how they end up disagreeing.
 func Verify(
-	ctx context.Context, q *dbgen.Queries, res Resolver, ownerID string, id uuid.UUID,
+	ctx context.Context, q *dbgen.Queries, res Resolver, reserved Reservations,
+	ownerID string, id uuid.UUID,
 ) error {
 	row, err := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: ownerID, ID: id})
 	if err != nil {
@@ -258,7 +260,7 @@ func Verify(
 		return fmt.Errorf("domain: read claim: %w", err)
 	}
 
-	state, err := Check(ctx, q, res, row, time.Now())
+	state, err := Check(ctx, q, res, reserved, row, time.Now())
 	if err != nil {
 		return err
 	}
@@ -277,9 +279,25 @@ func Verify(
 // now is passed rather than read so the backoff can be tested against a clock
 // the test controls.
 func Check(
-	ctx context.Context, q *dbgen.Queries, res Resolver, row dbgen.Domain, now time.Time,
+	ctx context.Context, q *dbgen.Queries, res Resolver, reserved Reservations,
+	row dbgen.Domain, now time.Time,
 ) (State, error) {
 	previous := State(row.State)
+
+	// Refused here as well as at the claim. A claim made before the name was
+	// the install's — the registry moved onto it, say, or a release that did
+	// not reserve the install's own names — would otherwise resolve here,
+	// verify, and keep its Ingress. Never routable, whatever DNS says, and
+	// withdrawn if it was.
+	if refused(row.Host, row.VerifyTarget, reserved) {
+		state := StateMisdirected
+		if previous.Routable() {
+			state = StateDrifted
+		}
+		return state, record(ctx, q, row, state, Observation{
+			Err: fmt.Errorf("%w: %s is one of this install's own names", ErrHostReserved, row.Host),
+		}, now)
+	}
 
 	// No target configured is not a failed check, it is an install that cannot
 	// verify anything. Recorded as the error it is, leaving the state alone.
@@ -292,6 +310,15 @@ func Check(
 	obs := Probe(ctx, res, row.Host, row.VerifyTarget)
 	state := Classify(obs, previous)
 	return state, record(ctx, q, row, state, obs, now)
+}
+
+// refused reports whether host is reserved, or is the very name custom
+// domains are told to point at. The target always verifies against itself —
+// its CNAME lookup answers with its own name — so it needs no configuration
+// to be refused.
+func refused(host, target string, reserved Reservations) bool {
+	h := normalize(host)
+	return reserved.Refuses(h) || (h != "" && h == normalize(target))
 }
 
 // record writes the outcome of one check.
