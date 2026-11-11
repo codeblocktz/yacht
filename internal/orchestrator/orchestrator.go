@@ -24,6 +24,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"path"
 	"regexp"
@@ -1021,6 +1022,28 @@ type BuildRequest struct {
 	// Log receives output as it arrives. A build that only reported at the end
 	// would be silent for the several minutes it is most worth watching.
 	Log func(chunk string)
+
+	// PushLayout pushes the image a Dockerfile build made, which the build
+	// leaves as an OCI layout rather than pushing itself: digest is the
+	// manifest it built, and layout reads the layout out of wherever the
+	// build ran.
+	//
+	// The push is the caller's because the credential is. Everything in a
+	// build that runs a team's Dockerfile can be reached by that Dockerfile,
+	// so the push credential stays out of it, and the engine that holds it
+	// pushes, reading the layout as data. Nil means a Dockerfile build cannot
+	// be pushed, and fails saying so; a buildpacks build does not use it.
+	PushLayout func(ctx context.Context, image, digest string, layout LayoutFiles, logf func(string)) error
+}
+
+// LayoutFiles is an OCI image layout a build left where only the orchestrator
+// can reach it.
+type LayoutFiles interface {
+	// Open returns the file at path inside the layout — "index.json" or
+	// "blobs/sha256/<hex>" — and its size. It refuses anything that is not
+	// a regular file, so a link in the layout is never followed, and
+	// anything larger than limit.
+	Open(ctx context.Context, path string, limit int64) (io.ReadCloser, int64, error)
 }
 
 // BuildResult is what a build produced.

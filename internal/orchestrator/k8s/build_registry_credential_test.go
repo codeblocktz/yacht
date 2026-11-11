@@ -1,15 +1,23 @@
 package k8s
 
 import (
+	"archive/tar"
+	"context"
 	"encoding/base64"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
+	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -52,10 +60,10 @@ func holdsRegistryCredential(c corev1.Container) bool {
 }
 
 // The registry credential is the install's: one account holds every team's
-// images. So no step that runs the repository's code may reach it — not the
-// Dockerfile step, whose RUN lines are the repository's, and not the build
-// phase, which runs its build scripts. Only the steps that push or read the
-// registry, and run nothing of the repository's, hold it.
+// images. So no step that runs the repository's code, or anything a
+// repository can influence, may reach it. Only analyze and export, which run
+// the lifecycle and nothing of the repository's, hold it. A Dockerfile build
+// holds it nowhere: the engine pushes.
 func TestOnlyStepsThatRunNoRepositoryCodeHoldTheRegistryCredential(t *testing.T) {
 	for name, req := range map[string]orchestrator.BuildRequest{
 		"clone": registryBuild(), "upload": uploadBuild(),
@@ -75,10 +83,7 @@ func TestOnlyStepsThatRunNoRepositoryCodeHoldTheRegistryCredential(t *testing.T)
 				t.Fatalf("registry volume = %+v", vol)
 			}
 
-			holds := map[string]bool{
-				pushContainer: true, analyzeContainer: true,
-				restoreContainer: true, exportContainer: true,
-			}
+			holds := map[string]bool{analyzeContainer: true, exportContainer: true}
 			for _, c := range append(append([]corev1.Container{}, pod.InitContainers...), pod.Containers...) {
 				if got := holdsRegistryCredential(c); got != holds[c.Name] {
 					t.Errorf("%s can reach the registry credential: %t, want %t", c.Name, got, holds[c.Name])
@@ -99,7 +104,9 @@ func TestOnlyStepsThatRunNoRepositoryCodeHoldTheRegistryCredential(t *testing.T)
 // so a rename cannot quietly hand one of them the credential.
 func TestTheStepsThatRunRepositoryCodeAreTheOnesWithoutTheCredential(t *testing.T) {
 	req := registryBuild()
-	for _, c := range []corev1.Container{dockerfileStep(req, true), lifecycleBuildStep(req)} {
+	for _, c := range []corev1.Container{
+		dockerfileStep(req, true), detectStep(req, true), lifecycleBuildStep(req), pushStep(), restoreStep(req),
+	} {
 		if holdsRegistryCredential(c) {
 			t.Errorf("%s holds the registry credential", c.Name)
 		}
@@ -143,101 +150,425 @@ func TestTheLifecycleRunsAPhaseAStep(t *testing.T) {
 	}
 }
 
-// The lifecycle's records are on a volume the build phase can only read and
+// The lifecycle's records are on volumes the build phase can only read and
 // the Dockerfile step cannot see. Were they in the layers directory, the
 // build could rewrite analyzed.toml to name another team's image as the run
-// image, and the export would pull it with the install's credential.
+// image, and the export would pull it with the install's credential. Detect,
+// which the repository can influence through its variables, writes its own
+// decisions and nothing else.
 func TestTheBuildCannotRewriteWhatTheExportReads(t *testing.T) {
 	req := registryBuild()
 	job := buildJob("b", req, buildRegistrySecret, "", "")
 	pod := job.Spec.Template.Spec
+
+	type access struct{ mounted, writable bool }
+	want := map[string]map[string]access{
+		phasesVolume: {
+			analyzeContainer: {true, true}, restoreContainer: {true, true}, exportContainer: {true, true},
+			detectContainer: {true, false}, buildContainer: {true, false},
+		},
+		detectedVolume: {
+			detectContainer:  {true, true},
+			analyzeContainer: {true, false}, restoreContainer: {true, false},
+			buildContainer: {true, false}, exportContainer: {true, false},
+		},
+	}
 	for _, c := range append(append([]corev1.Container{}, pod.InitContainers...), pod.Containers...) {
-		mounted, readOnly := false, false
-		for _, m := range c.VolumeMounts {
-			if m.Name == phasesVolume {
-				mounted, readOnly = true, m.ReadOnly
+		for vol, steps := range want {
+			var got access
+			for _, m := range c.VolumeMounts {
+				if m.Name == vol {
+					got = access{true, !m.ReadOnly}
+				}
 			}
-		}
-		switch c.Name {
-		case cloneContainer, dockerfileContainer, pushContainer:
-			if mounted {
-				t.Errorf("%s mounts the lifecycle's records", c.Name)
-			}
-		case buildContainer:
-			if !mounted || !readOnly {
-				t.Errorf("the build mounts the lifecycle's records: %t, read-only: %t", mounted, readOnly)
-			}
-		default:
-			if !mounted || readOnly {
-				t.Errorf("%s mounts the lifecycle's records: %t, read-only: %t", c.Name, mounted, readOnly)
+			if got != steps[c.Name] {
+				t.Errorf("%s mounts %s %+v, want %+v", c.Name, vol, got, steps[c.Name])
 			}
 		}
 	}
 
 	export := exportStep(req).Args[0]
 	for _, flag := range []string{
-		"-analyzed=" + phasesPath + "/", "-group=" + phasesPath + "/", "-cache-dir=" + phasesPath + "/",
+		"-analyzed=" + phasesPath + "/", "-group=" + detectedPath + "/", "-cache-dir=" + phasesPath + "/",
 		"-report=" + phasesPath + "/", "-project-metadata=" + phasesPath + "/", "-extended=" + phasesPath + "/",
 	} {
 		if !strings.Contains(export, flag) {
-			t.Errorf("the export does not read %s from the protected volume", flag)
+			t.Errorf("the export does not read %s from a protected volume", flag)
 		}
 	}
-	if !strings.Contains(detectStep(req, false).Args[0], "-order=/cnb/order.toml") {
-		t.Error("detection may take its order from the layers directory")
+	detect := detectStep(req, false).Args[0]
+	for _, flag := range []string{
+		"-order=/cnb/order.toml", "-group=" + detectedPath + "/", "-plan=" + detectedPath + "/",
+		"-generated=" + detectedPath + "/",
+	} {
+		if !strings.Contains(detect, flag) {
+			t.Errorf("detection does not have %s", flag)
+		}
 	}
 }
 
-// The Dockerfile step builds an OCI layout and pushes nothing; the push step
-// pushes that layout, and the only Dockerfile it builds is its own one line.
-func TestADockerfileIsBuiltInOneStepAndPushedInTheNext(t *testing.T) {
+// No step shares a process namespace with another, or with the node: a
+// shared one would let the repository's code in one container read the
+// credential through /proc in another.
+func TestNoBuildStepSharesAProcessNamespace(t *testing.T) {
+	pod := buildJob("b", registryBuild(), buildRegistrySecret, "b-repo", "b-args").Spec.Template.Spec
+	if pod.ShareProcessNamespace != nil && *pod.ShareProcessNamespace {
+		t.Error("the build's containers share a process namespace")
+	}
+	if pod.HostPID || pod.HostIPC || pod.HostNetwork {
+		t.Errorf("the build shares the node's namespaces: pid %t ipc %t network %t",
+			pod.HostPID, pod.HostIPC, pod.HostNetwork)
+	}
+}
+
+// The Dockerfile step builds an OCI layout and pushes nothing. The push step
+// runs nothing of the image's — no BuildKit, no Dockerfile frontend, so no
+// ONBUILD trigger — and holds no credential: it waits, read-only, for the
+// engine to read the layout out of it.
+func TestADockerfileIsBuiltToALayoutThatTheEnginePushes(t *testing.T) {
 	req := registryBuild()
 	req.Insecure = true
 	build := dockerfileStep(req, false).Args[0]
 	if strings.Contains(build, "push=true") || !strings.Contains(build, "--output type=oci,dest="+imageLayout+",tar=false") {
 		t.Errorf("the Dockerfile step does not build to a layout without pushing:\n%s", build)
 	}
-	if strings.Contains(build, "$INSECURE\n") || strings.Contains(build, "registry.insecure") {
-		t.Error("the Dockerfile step carries a push option")
+	// The digest is said before the uid probe runs anything of the image's.
+	marker, probe := strings.Index(build, `echo "`+imageMarker+`$digest"`), strings.Index(build, "uidprobe")
+	if marker < 0 || probe < 0 || marker > probe {
+		t.Error("the image's digest is not printed before the uid probe runs the image")
 	}
-	// The uid probe runs the image's own "id", so it reads the layout here
-	// rather than pulling the pushed image somewhere with a credential.
-	if !strings.Contains(build, "oci-layout://built@") || strings.Contains(build, `"$IMAGE" \`) {
-		t.Errorf("the uid probe does not read the built layout:\n%s", build)
-	}
-	if i, j := strings.Index(build, "touch "+dockerfileMarker), strings.Index(build, "printf %s \"$digest\" > "+imageDigest); i < 0 || j < 0 || j > i {
-		t.Error("the marker is written before the digest the push needs")
+	if i := strings.Index(build, "touch "+dockerfileMarker); i < marker {
+		t.Error("the marker is written before the digest is said")
 	}
 
-	push := pushStep(req)
-	script := push.Args[0]
-	for _, want := range []string{
-		"printf 'FROM built\\n' > /tmp/push/Dockerfile",
-		"--local context=/tmp/push",
-		"--local dockerfile=/tmp/push",
-		"--output type=image,name=$IMAGE,push=true$INSECURE",
-		pushGuardScript,
+	push := pushStep()
+	script := strings.Join(append(append([]string{}, push.Command...), push.Args...), " ")
+	for _, never := range []string{
+		"buildctl", "buildkit", "dockerfile.v0", "--frontend", "FROM", "oci-layout",
+		"$DOCKERFILE", "$BUILD_ARGS", registryPath,
 	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("the push step does not have %q", want)
-		}
-	}
-	for _, never := range []string{"/workspace/src", "$DOCKERFILE", "$BUILD_ARGS"} {
 		if strings.Contains(script, never) {
-			t.Errorf("the push step reads %s", never)
+			t.Errorf("the push step runs %q:\n%s", never, script)
 		}
 	}
-	if strings.Index(script, pushGuardScript) > strings.Index(script, "buildctl-daemonless.sh") {
-		t.Error("the push step pushes before it checks the layout")
+	if push.Image != gitImage {
+		t.Errorf("the push step runs %s, want the git image, which has tar and nothing of BuildKit's", push.Image)
 	}
-	insecure := ""
-	for _, e := range push.Env {
-		if e.Name == "INSECURE" {
-			insecure = e.Value
+	if len(push.Env) != 0 || len(push.EnvFrom) != 0 {
+		t.Errorf("the push step is given an environment: %+v", push.Env)
+	}
+	if len(push.VolumeMounts) != 1 || push.VolumeMounts[0].Name != buildVolume || !push.VolumeMounts[0].ReadOnly {
+		t.Errorf("the push step mounts %+v, want the workspace read-only and nothing else", push.VolumeMounts)
+	}
+	if sc := push.SecurityContext; sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("the push step is not hardened: %+v", sc)
+	}
+}
+
+// The push step ends at once when there is no Dockerfile image — every
+// buildpacks build — and otherwise when the engine says it has pushed.
+func TestThePushStepWaitsOnlyForADockerfileBuild(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "workspace")
+	mkdirs(t, ws)
+	script := pushStep().Args[0]
+	script = strings.ReplaceAll(script, "/workspace", ws)
+	script = strings.ReplaceAll(script, handedOver, filepath.Join(root, "handed-over"))
+
+	if out, err := exec.Command("/bin/sh", "-euc", script).CombinedOutput(); err != nil {
+		t.Fatalf("with no Dockerfile image the push step failed: %v\n%s", err, out)
+	}
+
+	if err := os.WriteFile(filepath.Join(ws, ".dockerfile-built"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-euc", script)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		t.Fatalf("the push step ended before the image was collected: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := os.WriteFile(filepath.Join(root, "handed-over"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the push step failed once handed over: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("the push step did not end once handed over")
+	}
+}
+
+// Variables that change how a program is loaded or a shell starts are not
+// handed to buildpacks: detection runs the builder's buildpacks, and
+// LD_PRELOAD or BASH_ENV would run the repository's code inside them. The
+// rest reach the lifecycle as before, and the withheld names are said.
+func TestDetectionIsNotGivenLoaderOrShellVariables(t *testing.T) {
+	root := t.TempDir()
+	ws := filepath.Join(root, "workspace")
+	args := filepath.Join(root, "build-args")
+	lifecycle := filepath.Join(root, "cnb", "lifecycle")
+	mkdirs(t, filepath.Join(ws, "src"), filepath.Join(ws, "platform", "env"), args, lifecycle)
+	if err := os.WriteFile(filepath.Join(lifecycle, "detector"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withheld := []string{
+		"LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "BASH_ENV", "ENV", "PATH", "CNB_PLATFORM_API",
+		"CNB_APP_DIR", "GLIBC_TUNABLES", "SHELLOPTS", "BASHOPTS", "PS4", "GCONV_PATH", "BASH_FUNC_x",
+	}
+	given := []string{"DATABASE_URL", "NODE_OPTIONS", "BP_WEB_SERVER", "LDAP_URL", "PATHNAME", "ENVIRONMENT"}
+	for _, name := range append(append([]string{}, withheld...), given...) {
+		if err := os.WriteFile(filepath.Join(args, name), []byte("/workspace/src/evil.so"), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if insecure != ",registry.insecure=true" {
-		t.Errorf("the push to a plain-HTTP registry is not told so: %q", insecure)
+
+	script := detectStep(orchestrator.BuildRequest{Image: "r/x:1"}, true).Args[0]
+	script = strings.ReplaceAll(script, "/workspace", ws)
+	script = strings.ReplaceAll(script, "/cnb/lifecycle", lifecycle)
+	script = strings.ReplaceAll(script, detectedPath, filepath.Join(root, "detected"))
+	cmd := exec.Command("/bin/sh", "-euc", script)
+	cmd.Env = append(os.Environ(), "SUBDIR=", "BUILD_ARGS="+args)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("detect failed: %v\n%s", err, out)
+	}
+	for _, name := range withheld {
+		if _, err := os.Stat(filepath.Join(ws, "platform", "env", name)); err == nil {
+			t.Errorf("%s was handed to buildpacks", name)
+		}
+		if !strings.Contains(string(out), " "+name) {
+			t.Errorf("the log does not say %s was withheld:\n%s", name, out)
+		}
+	}
+	for _, name := range given {
+		if _, err := os.Stat(filepath.Join(ws, "platform", "env", name)); err != nil {
+			t.Errorf("%s was not handed to buildpacks: %v", name, err)
+		}
+	}
+	if strings.Contains(string(out), "evil.so") {
+		t.Errorf("a value reached the log:\n%s", out)
+	}
+}
+
+// The image a Dockerfile build made is read from the Dockerfile step's log
+// alone. The build phase runs the repository's scripts, which can print
+// anything; a line there naming an image is a line.
+func TestTheImageMarkerIsTakenFromTheDockerfileStepAlone(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("ab", 32)
+	for _, tc := range []struct {
+		step, line, want string
+		shown            bool
+	}{
+		{dockerfileContainer, imageMarker + digest, digest, false},
+		{buildContainer, imageMarker + digest, "", true},
+		{exportContainer, imageMarker + digest, "", true},
+		{dockerfileContainer, imageMarker + "sha256:nothex", "", false},
+	} {
+		var (
+			result orchestrator.BuildResult
+			seen   markersSeen
+			shown  string
+		)
+		scanStepLog(tc.step, strings.NewReader(tc.line+"\n"), func(s string) { shown += s }, &result, &seen)
+		if seen.image != tc.want {
+			t.Errorf("%s %q: image = %q, want %q", tc.step, tc.line, seen.image, tc.want)
+		}
+		if (shown != "") != tc.shown {
+			t.Errorf("%s %q: shown %q", tc.step, tc.line, shown)
+		}
+	}
+}
+
+// layoutEntry is one entry of a tar the fake push step answers with.
+type layoutEntry struct {
+	name     string
+	typeflag byte
+	body     string
+	linkname string
+}
+
+// fakePushStep answers execs in the push step: a tar holding entries for
+// tar, and success for anything else. It records every command.
+func fakePushStep(t *testing.T, o *Orchestrator, entries func(path string) []layoutEntry) *[][]string {
+	t.Helper()
+	var commands [][]string
+	var mu sync.Mutex
+	o.execStream = func(_ context.Context, ns, _ string, opts *corev1.PodExecOptions, streams remotecommand.StreamOptions) error {
+		mu.Lock()
+		commands = append(commands, append([]string{opts.Container}, opts.Command...))
+		mu.Unlock()
+		if ns != BuildNamespace || opts.Container != pushContainer {
+			return errors.New("exec outside the push step")
+		}
+		if opts.Command[0] != "tar" {
+			return nil
+		}
+		tw := tar.NewWriter(streams.Stdout)
+		for _, e := range entries(opts.Command[len(opts.Command)-1]) {
+			hdr := &tar.Header{Name: e.name, Typeflag: e.typeflag, Linkname: e.linkname, Mode: 0o644}
+			if e.typeflag == tar.TypeReg {
+				hdr.Size = int64(len(e.body))
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				return err
+			}
+			if _, err := io.WriteString(tw, e.body); err != nil {
+				return err
+			}
+		}
+		return tw.Close()
+	}
+	return &commands
+}
+
+// The layout is read through tar, one named file at a time, and anything
+// that is not a plain file of that name is refused rather than followed.
+func TestTheLayoutIsReadAsPlainFilesOnly(t *testing.T) {
+	blob := "blobs/sha256/" + strings.Repeat("cd", 32)
+	for _, tc := range []struct {
+		name    string
+		path    string
+		entries []layoutEntry
+		limit   int64
+		ok      bool
+	}{
+		{"a plain file", blob, []layoutEntry{{name: blob, typeflag: tar.TypeReg, body: "layer"}}, 100, true},
+		{"the index", "index.json", []layoutEntry{{name: "index.json", typeflag: tar.TypeReg, body: "{}"}}, 100, true},
+		{"a symlink to the credential", blob,
+			[]layoutEntry{{name: blob, typeflag: tar.TypeSymlink, linkname: "/registry/config.json"}}, 100, false},
+		{"a hard link", blob, []layoutEntry{{name: blob, typeflag: tar.TypeLink, linkname: "index.json"}}, 100, false},
+		{"a directory", blob, []layoutEntry{{name: blob + "/", typeflag: tar.TypeDir}}, 100, false},
+		{"a pipe", blob, []layoutEntry{{name: blob, typeflag: tar.TypeFifo}}, 100, false},
+		{"another file", blob, []layoutEntry{{name: "index.json", typeflag: tar.TypeReg, body: "{}"}}, 100, false},
+		{"too large", blob, []layoutEntry{{name: blob, typeflag: tar.TypeReg, body: "layer"}}, 3, false},
+		{"nothing", blob, nil, 100, false},
+		{"a path outside the layout's blobs", "../registry/config.json", nil, 100, false},
+		{"another file of the layout", "oci-layout", nil, 100, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, _ := testOrchestrator(t)
+			commands := fakePushStep(t, o, func(string) []layoutEntry { return tc.entries })
+			rc, size, err := podLayout{o: o, pod: "p"}.Open(context.Background(), tc.path, tc.limit)
+			if !tc.ok {
+				if err == nil {
+					rc.Close()
+					t.Fatal("opened")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(rc)
+			rc.Close()
+			if string(body) != tc.entries[0].body || size != int64(len(body)) {
+				t.Errorf("read %q (%d)", body, size)
+			}
+			want := []string{pushContainer, "tar", "-C", imageLayout, "-cf", "-", tc.path}
+			if got := (*commands)[0]; strings.Join(got, " ") != strings.Join(want, " ") {
+				t.Errorf("ran %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// pushBuildPod makes the build's pod, with its push step in the given state.
+func pushBuildPod(t *testing.T, o *Orchestrator, client *fake.Clientset, state corev1.ContainerState) {
+	t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "build-pod", Namespace: BuildNamespace},
+		Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: pushContainer, State: state}},
+		},
+	}
+	if _, err := client.CoreV1().Pods(BuildNamespace).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A Dockerfile build's image is pushed by the engine through PushLayout,
+// reading the layout out of the push step; only then is the push step told it
+// may end.
+func TestTheEnginePushesTheDockerfileImageThenReleasesThePushStep(t *testing.T) {
+	o, client := testOrchestrator(t)
+	pushBuildPod(t, o, client, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})
+	commands := fakePushStep(t, o, func(path string) []layoutEntry {
+		return []layoutEntry{{name: path, typeflag: tar.TypeReg, body: `{"schemaVersion":2}`}}
+	})
+	digest := "sha256:" + strings.Repeat("ab", 32)
+
+	req := registryBuild()
+	req.Log = func(string) {}
+	var pushed []string
+	req.PushLayout = func(ctx context.Context, image, d string, layout orchestrator.LayoutFiles, _ func(string)) error {
+		rc, _, err := layout.Open(ctx, "index.json", 1<<20)
+		if err != nil {
+			return err
+		}
+		body, _ := io.ReadAll(rc)
+		rc.Close()
+		pushed = append(pushed, image, d, string(body))
+		if len(*commands) != 1 {
+			t.Errorf("the push step was released before the push: %q", *commands)
+		}
+		return nil
+	}
+	if err := o.pushBuiltImage(context.Background(), "build-pod", req, digest); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(pushed, " ") != req.Image+" "+digest+` {"schemaVersion":2}` {
+		t.Errorf("pushed %q", pushed)
+	}
+	last := (*commands)[len(*commands)-1]
+	if strings.Join(last, " ") != pushContainer+" touch "+handedOver {
+		t.Errorf("the push step was not released: %q", last)
+	}
+
+	// A failed push leaves the push step waiting, for the Job's deletion to
+	// end.
+	*commands = nil
+	req.PushLayout = func(context.Context, string, string, orchestrator.LayoutFiles, func(string)) error {
+		return errors.New("refused")
+	}
+	if err := o.pushBuiltImage(context.Background(), "build-pod", req, digest); err == nil {
+		t.Fatal("a refused push succeeded")
+	}
+	for _, c := range *commands {
+		if c[1] == "touch" {
+			t.Error("the push step was released after a failed push")
+		}
+	}
+
+	// Nothing to push with is a failure, not an image left unpushed.
+	req.PushLayout = nil
+	if err := o.pushBuiltImage(context.Background(), "build-pod", req, digest); err == nil {
+		t.Fatal("a Dockerfile build with nothing to push it succeeded")
+	}
+}
+
+// A push step that ended before the engine read from it is a failed build.
+func TestAPushStepThatEndedFailsTheBuild(t *testing.T) {
+	o, client := testOrchestrator(t)
+	pushBuildPod(t, o, client, corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}})
+	req := registryBuild()
+	req.Log = func(string) {}
+	req.PushLayout = func(context.Context, string, string, orchestrator.LayoutFiles, func(string)) error {
+		t.Error("pushed from a push step that had ended")
+		return nil
+	}
+	if err := o.pushBuiltImage(context.Background(), "build-pod", req, "sha256:"+strings.Repeat("ab", 32)); err == nil {
+		t.Fatal("succeeded")
 	}
 }
 
@@ -341,79 +672,6 @@ func TestTheExportRefusesToFollowALinkTheBuildLeft(t *testing.T) {
 			}
 			if !strings.Contains(out, ws+tc.refused) || !strings.Contains(out, "nothing is pushed") {
 				t.Errorf("the refusal does not name %s:\n%s", tc.refused, out)
-			}
-		})
-	}
-}
-
-// The layout the push sends came out of the step that ran the repository's
-// RUN lines. Anything in it but a plain file or directory is refused before
-// the push reads a byte of it, and the digest is checked for shape without
-// being printed.
-func TestThePushRefusesALayoutThatIsNotPlainFiles(t *testing.T) {
-	secretDir := t.TempDir()
-	secret := filepath.Join(secretDir, "config.json")
-	if err := os.WriteFile(secret, []byte(`{"auths":{"r":{"password":"`+testRegistryPassword+`"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	digest := "sha256:" + strings.Repeat("ab", 32)
-
-	for _, tc := range []struct {
-		name  string
-		plant func(ws string)
-		ok    bool
-	}{
-		{"a clean layout", func(string) {}, true},
-		{"a blob that links to the credential", func(ws string) {
-			symlink(t, secret, filepath.Join(ws, "image", "blobs", "sha256", strings.Repeat("cd", 32)))
-		}, false},
-		{"an index that links to the credential", func(ws string) {
-			_ = os.Remove(filepath.Join(ws, "image", "index.json"))
-			symlink(t, secret, filepath.Join(ws, "image", "index.json"))
-		}, false},
-		{"the layout replaced by a link", func(ws string) {
-			_ = os.RemoveAll(filepath.Join(ws, "image"))
-			symlink(t, secretDir, filepath.Join(ws, "image"))
-		}, false},
-		{"the digest replaced by a link", func(ws string) {
-			_ = os.Remove(filepath.Join(ws, "image.digest"))
-			symlink(t, secret, filepath.Join(ws, "image.digest"))
-		}, false},
-		{"a pipe that would hang the push", func(ws string) {
-			if err := syscall.Mkfifo(filepath.Join(ws, "image", "blobs", "fifo"), 0o644); err != nil {
-				t.Skipf("no fifo here: %v", err)
-			}
-		}, false},
-		{"a digest that is not one", func(ws string) {
-			if err := os.WriteFile(filepath.Join(ws, "image.digest"), []byte("sha256:abc; rm -rf /"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ws := filepath.Join(t.TempDir(), "workspace")
-			mkdirs(t, filepath.Join(ws, "image", "blobs", "sha256"))
-			for name, body := range map[string]string{
-				"image/index.json": `{"schemaVersion":2}`, "image/oci-layout": `{}`, "image.digest": digest,
-			} {
-				if err := os.WriteFile(filepath.Join(ws, name), []byte(body), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			tc.plant(ws)
-
-			out, err := runGuard(t, pushGuardScript+`echo "digest=$digest"`, ws, "")
-			if strings.Contains(out, testRegistryPassword) {
-				t.Fatalf("the guard printed the credential:\n%s", out)
-			}
-			if tc.ok {
-				if err != nil || !strings.Contains(out, "digest="+digest) {
-					t.Fatalf("a clean layout was refused: %v\n%s", err, out)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("the push went ahead:\n%s", out)
 			}
 		})
 	}

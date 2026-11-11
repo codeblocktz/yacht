@@ -247,7 +247,7 @@ func TestBuildpacksGetEveryVariableAsPlatformEnv(t *testing.T) {
 	script := detectStep(orchestrator.BuildRequest{Image: "r/x:1"}, true).Args[0]
 	for _, want := range []string{
 		`for f in "$BUILD_ARGS"/*; do`,
-		`> "/workspace/platform/env/${f##*/}"`,
+		`> "/workspace/platform/env/$name"`,
 		buildArgsMarker + orchestrator.BuildArgsAll,
 		"-platform=/workspace/platform",
 	} {

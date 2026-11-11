@@ -168,7 +168,27 @@ func (o *Orchestrator) Build(
 	// Streamed rather than fetched at the end: this is the several minutes
 	// somebody is actually watching, and a log that arrives afterwards is a
 	// post-mortem rather than progress.
-	result, seen := o.streamBuildLog(ctx, pod, req.Log)
+	//
+	// Every step but the push, which waits for the engine to collect the
+	// image the Dockerfile step built: its log ends only once that is done.
+	var (
+		result orchestrator.BuildResult
+		seen   markersSeen
+	)
+	steps := buildSteps[:len(buildSteps)-1]
+	o.streamBuildLog(ctx, pod, req.Log, steps, &result, &seen)
+	if seen.image == "" {
+		// A Dockerfile build whose log was cut before it said what it built
+		// would otherwise be taken for a buildpacks build, and its image
+		// left unpushed.
+		o.recoverBuildMarkers(ctx, pod, &result, &seen, req.Log)
+	}
+	if seen.image != "" {
+		if err := o.pushBuiltImage(ctx, pod, req, seen.image); err != nil {
+			return result, redactError(err, redact...)
+		}
+	}
+	o.streamBuildLog(ctx, pod, req.Log, []string{pushContainer}, &result, &seen)
 
 	if err := o.waitForBuildResult(ctx, name); err != nil {
 		return result, redactError(err, redact...)
@@ -187,16 +207,36 @@ func (o *Orchestrator) Build(
 	return result, nil
 }
 
-// markersSeen records which of the build's markers the log has shown.
-type markersSeen struct{ commit, uid, args bool }
+// markersSeen records which of the build's markers the log has shown, and
+// the digest of the image a Dockerfile build made, empty when it made none.
+type markersSeen struct {
+	commit, uid, args bool
+	image             string
+}
 
 // scanBuildLog reads one container's log: the markers into result, every
 // other line to logf when it is given.
 func scanBuildLog(r io.Reader, logf func(string), result *orchestrator.BuildResult, seen *markersSeen) {
+	scanStepLog("", r, logf, result, seen)
+}
+
+// scanStepLog is scanBuildLog for a named step. The image marker is taken
+// from the Dockerfile step alone: a buildpacks build runs the repository's
+// build scripts, which can print anything, and a line naming an image there
+// would have the engine wait to push one that does not exist.
+func scanStepLog(step string, r io.Reader, logf func(string), result *orchestrator.BuildResult, seen *markersSeen) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
+		if step == dockerfileContainer {
+			if digest, ok := strings.CutPrefix(line, imageMarker); ok {
+				if digest = strings.TrimSpace(digest); imageDigestRE.MatchString(digest) {
+					seen.image = digest
+				}
+				continue
+			}
+		}
 		if sha, ok := strings.CutPrefix(line, commitMarker); ok {
 			result.CommitSHA = strings.TrimSpace(sha)
 			seen.commit = true
@@ -241,7 +281,7 @@ func (o *Orchestrator) recoverBuildMarkers(
 		if err != nil {
 			continue
 		}
-		scanBuildLog(stream, nil, result, seen)
+		scanStepLog(c, stream, nil, result, seen)
 		_ = stream.Close()
 	}
 	if *seen != before {
@@ -649,13 +689,10 @@ func startedAnyContainer(p corev1.Pod) bool {
 // clone's ends — and skipping on the first error drops the one log somebody
 // opened this to read.
 func (o *Orchestrator) streamBuildLog(
-	ctx context.Context, pod string, logf func(string),
-) (orchestrator.BuildResult, markersSeen) {
-	var (
-		result orchestrator.BuildResult
-		seen   markersSeen
-	)
-	for _, c := range buildSteps {
+	ctx context.Context, pod string, logf func(string), steps []string,
+	result *orchestrator.BuildResult, seen *markersSeen,
+) {
+	for _, c := range steps {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
 			// Genuinely nothing to read: the pod finished without reaching
@@ -663,10 +700,9 @@ func (o *Orchestrator) streamBuildLog(
 			// strategy was not used.
 			continue
 		}
-		scanBuildLog(stream, logf, &result, &seen)
+		scanStepLog(c, stream, logf, result, seen)
 		_ = stream.Close()
 	}
-	return result, seen
 }
 
 // openContainerLog waits until a container has output, or until it is clear it

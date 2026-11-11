@@ -3,6 +3,7 @@ package k8s
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -13,29 +14,35 @@ import (
 
 // The steps of a build, named so their logs can be told apart.
 //
-// A Dockerfile is built in one step and pushed in the next, and the
-// buildpacks lifecycle runs a phase a step rather than as one creator. Each
-// split is for the same reason: the registry credential is the install's,
-// one account holding every team's images, so it is mounted only by the steps
-// that run none of the repository's code — push, analyze, restore and export.
-// The steps that do — dockerfile, whose RUN lines are the repository's, and
-// build, which runs its build scripts — never have it.
+// The registry credential is the install's, one account holding every team's
+// images, and a step that runs the repository's code can reach whatever its
+// container holds. So the credential is mounted by two steps, analyze and
+// export, which run the buildpacks lifecycle and nothing of the repository's.
+//
+// A Dockerfile build holds it nowhere. The dockerfile step leaves the image as
+// an OCI layout, the push step holds the volume open while the engine reads
+// the layout out of it and pushes it with the credential it already has, and
+// the push step itself has no credential: it only runs tar. The buildpacks
+// lifecycle runs a phase a step rather than as one creator, so build, which
+// runs the repository's build scripts, is a container of its own without it.
 const (
 	cloneContainer      = "clone"
 	dockerfileContainer = "dockerfile"
-	pushContainer       = "push"
 	analyzeContainer    = "analyze"
 	detectContainer     = "detect"
 	restoreContainer    = "restore"
 	buildContainer      = "build"
 	exportContainer     = "export"
+	pushContainer       = "push"
 )
 
 // buildSteps is every step in the order it runs, which is the order their
-// logs are read in.
+// logs are read in. export and push are the pod's two ordinary containers and
+// run side by side; the rest run one after another.
 var buildSteps = []string{
-	cloneContainer, dockerfileContainer, pushContainer,
-	analyzeContainer, detectContainer, restoreContainer, buildContainer, exportContainer,
+	cloneContainer, dockerfileContainer,
+	analyzeContainer, detectContainer, restoreContainer, buildContainer,
+	exportContainer, pushContainer,
 }
 
 // The registry credential, as a docker config.json, for the steps that push.
@@ -59,12 +66,30 @@ const (
 	phasesPath   = "/phases"
 )
 
-// The image a Dockerfile step built, as an OCI layout, and the digest of its
-// manifest, for the push step to send.
+// What detection decided — group.toml, plan.toml — on a volume of its own,
+// which only the detect step can write.
+//
+// Detection runs the builder's buildpacks against the repository, with the
+// app's variables as their environment, so it is the repository's to
+// influence; it must not be able to write the records the credentialled
+// export reads, analyzed.toml above all. It mounts phasesPath read-only, and
+// every other step mounts this one read-only.
 const (
-	imageLayout = "/workspace/image"
-	imageDigest = "/workspace/image.digest"
+	detectedVolume = "detected"
+	detectedPath   = "/detected"
 )
+
+// imageLayout is where the Dockerfile step leaves the image it built, as an
+// OCI layout, for the engine to push.
+const imageLayout = "/workspace/image"
+
+// imageMarker prefixes the digest of the manifest the Dockerfile step built.
+// Read from that step's log alone, and only from it.
+const imageMarker = "yacht-image:"
+
+// handedOver is the file the engine writes in the push step once it has
+// pushed, which is the step's word to finish.
+const handedOver = "/tmp/handed-over"
 
 // commitMarker prefixes the one line of the clone's output that is data rather
 // than log. Reading it out of the stream avoids a second call into the cluster
@@ -138,18 +163,6 @@ const buildUID = 1000
 // tar keeps, so only setting them afterwards covers both kinds of source. X
 // adds execute to directories and leaves files as they were.
 const shareSourceScript = `chmod -R g+rwX /workspace/src`
-
-// insecureOutput is the BuildKit output option for a plain-HTTP registry.
-//
-// Appended to the output rather than set as a daemon-wide flag, so it applies
-// to this push and not to every registry the build happens to touch — a base
-// image pulled from a public registry still gets TLS.
-func insecureOutput(req orchestrator.BuildRequest) string {
-	if !req.Insecure {
-		return ""
-	}
-	return ",registry.insecure=true"
-}
 
 // insecureHost names the one registry the lifecycle may reach over HTTP.
 func insecureHost(req orchestrator.BuildRequest) string {
@@ -240,8 +253,13 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret
 			},
 		},
 		{
-			// Mounted by push, analyze, restore and export alone; see
-			// credentialMounts.
+			Name: detectedVolume,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		},
+		{
+			// Mounted by analyze and export alone.
 			Name: registryVolume,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
@@ -316,13 +334,12 @@ func buildJob(name string, req orchestrator.BuildRequest, pullSecret, repoSecret
 					InitContainers: []corev1.Container{
 						sourceStep(req, repoSecret != ""),
 						dockerfileStep(req, argsSecret != ""),
-						pushStep(req),
 						analyzeStep(req),
 						detectStep(req, argsSecret != ""),
 						restoreStep(req),
 						lifecycleBuildStep(req),
 					},
-					Containers: []corev1.Container{exportStep(req)},
+					Containers: []corev1.Container{exportStep(req), pushStep()},
 				},
 			},
 		},
@@ -438,11 +455,8 @@ echo "Fetched $(find /workspace/src -type f | wc -l | tr -d ' ') files"
 	}
 }
 
-// insecureHostScript declares a plain-HTTP registry to buildkitd.
-//
-// Not just to the output. Without this the push works — it carries its own
-// option — and every pull from that registry fails, which is a confusing pair
-// of behaviours to debug from the outside.
+// insecureHostScript declares a plain-HTTP registry to buildkitd, so a FROM
+// of an image there is pulled over HTTP.
 const insecureHostScript = `
 if [ -n "$INSECURE_HOST" ]; then
   printf '[registry."%s"]\n  http = true\n' "$INSECURE_HOST" > /tmp/buildkitd.toml
@@ -450,37 +464,33 @@ if [ -n "$INSECURE_HOST" ]; then
 fi
 `
 
-// buildkitEnv is what both BuildKit steps are told.
-//
-// --oci-worker-no-process-sandbox is what lets BuildKit run without the
-// privileges it would otherwise need to set up its own sandbox. The trade is
-// stated rather than hidden: a RUN line shares the daemon's process
-// namespace, so it can see the daemon's processes and reach their files
-// through /proc. That is why the step that runs RUN lines holds no
-// credential, and why this namespace runs nothing but these Jobs.
-func buildkitEnv(req orchestrator.BuildRequest) []corev1.EnvVar {
-	return []corev1.EnvVar{
-		{Name: "IMAGE", Value: req.Image},
-		{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
-		// The host, separately from the output option, because a
-		// plain-HTTP registry has to be declared to the daemon as well: the
-		// output option covers the push, and pulling from one is daemon
-		// configuration.
-		{Name: "INSECURE_HOST", Value: insecureHost(req)},
-	}
-}
-
 // dockerfileStep builds a Dockerfile with rootless BuildKit, if there is one,
 // into an OCI layout on the shared volume. It pushes nothing.
 //
 // It has no registry credential, and no DOCKER_CONFIG to find one by. This
 // is the step that runs the repository's RUN lines, and under
 // --oci-worker-no-process-sandbox a RUN line can read any file the BuildKit
-// processes can, through /proc/<pid>/root: a credential mounted here, as it
-// once was, is a credential every Dockerfile can print. It also means a FROM
-// is pulled anonymously, so a Dockerfile cannot use the install's account to
-// build on another team's image.
+// processes can, through /proc/<pid>/root: a credential mounted here is a
+// credential every Dockerfile can print. It also means a FROM is pulled
+// anonymously, so a Dockerfile cannot use the install's account to build on
+// another team's image.
+//
+// --oci-worker-no-process-sandbox is what lets BuildKit run without the
+// privileges it would otherwise need to set up its own sandbox. The trade is
+// stated rather than hidden: builds are less isolated from each other than
+// they would be under a privileged daemon, which is why this namespace runs
+// nothing but these Jobs.
+//
+// The digest of what it built is printed as a marker, before the uid probe
+// runs anything of the image's. The layout stays writable by the repository's
+// code after that — the probe's RUN is the image's own — but the engine pushes
+// only the manifest that digest names, and refuses any blob that is not what
+// its digest says, so changing the layout afterwards fails the push rather
+// than changing what is pushed.
 func dockerfileStep(req orchestrator.BuildRequest, withArgs bool) corev1.Container {
+	unconfined := corev1.SeccompProfileTypeUnconfined
+	user := int64(buildUID)
+	group := int64(cnbGID)
 	mounts := []corev1.VolumeMount{
 		{Name: buildVolume, MountPath: "/workspace"},
 	}
@@ -493,15 +503,20 @@ func dockerfileStep(req orchestrator.BuildRequest, withArgs bool) corev1.Contain
 	return corev1.Container{
 		Name:  dockerfileContainer,
 		Image: buildkitImage,
-		Env: append(buildkitEnv(req),
-			corev1.EnvVar{Name: "SUBDIR", Value: req.Subdir},
+		Env: []corev1.EnvVar{
+			{Name: "IMAGE", Value: req.Image},
+			{Name: "SUBDIR", Value: req.Subdir},
 			// An environment variable rather than spliced into the script,
 			// like the repository URL: it is somebody's input.
-			corev1.EnvVar{Name: "DOCKERFILE", Value: req.Dockerfile},
+			{Name: "DOCKERFILE", Value: req.Dockerfile},
+			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
+			// A plain-HTTP registry has to be declared to the daemon for a
+			// FROM to pull from it.
+			{Name: "INSECURE_HOST", Value: insecureHost(req)},
 			// Where the variables are, not what they are. Set whether or not
 			// there are any, so the script reads one way.
-			corev1.EnvVar{Name: "BUILD_ARGS", Value: buildArgsPath},
-		),
+			{Name: "BUILD_ARGS", Value: buildArgsPath},
+		},
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{insecureHostScript + `
 cd /workspace/src/$SUBDIR
@@ -533,127 +548,76 @@ buildctl-daemonless.sh build \
   --progress plain \
   "$@"
 digest=$(sed -n 's/.*"containerimage.digest": *"\(sha256:[0-9a-f]*\)".*/\1/p' /tmp/image.json)
-printf %s "$digest" > ` + imageDigest + `
+echo "` + imageMarker + `$digest"
 touch ` + dockerfileMarker + `
 echo "Built $IMAGE"
 ` + resolveUIDScript + `
 `},
-		SecurityContext: buildkitSecurity(),
-		VolumeMounts:    mounts,
+		// This is BuildKit's own documented Kubernetes configuration for the
+		// rootless image, and the deviations from it were tried and reverted
+		// rather than assumed to be safe improvements.
+		//
+		// Unconfined seccomp is required: rootlesskit cannot fork under
+		// RuntimeDefault, which fails with "fork/exec /proc/self/exe:
+		// operation not permitted". That single requirement is what forces
+		// this namespace to "privileged", since baseline forbids Unconfined.
+		//
+		// allowPrivilegeEscalation stays true and capabilities are not
+		// dropped, which looks like an omission and is not. Rootless BuildKit
+		// sets up its user namespace with newuidmap, a setuid helper; denying
+		// privilege escalation sets no_new_privs and the build dies with
+		// "newuidmap: operation not permitted". Dropping ALL takes CAP_SETUID
+		// out of the bounding set and breaks the same call a second way. The
+		// other steps take both, because they need neither.
+		//
+		// AppArmor is unconfined for the same class of reason: on a node that
+		// enforces it, the default profile blocks the mounts BuildKit makes.
+		// It is a no-op where AppArmor is not enforced.
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:       &user,
+			RunAsGroup:      &group,
+			SeccompProfile:  &corev1.SeccompProfile{Type: unconfined},
+			AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+		},
+		VolumeMounts: mounts,
 	}
 }
 
-// pushStep pushes the image the Dockerfile step built.
+// pushStep holds the built image open for the engine to push.
 //
-// It holds the registry credential and runs nothing of the repository's: the
-// Dockerfile it builds is one line written here, FROM the layout, so BuildKit
-// copies the image's layers and configuration and executes nothing. That is
-// what makes it safe to give this step what the Dockerfile step must not
-// have.
+// It pushes nothing and holds no credential. The engine reads the layout out
+// of it with tar, one file at a time, checks every byte against its digest,
+// and pushes it from where the credential already is; then it writes
+// handedOver, and this step ends. Nothing from the image is executed
+// anywhere on the way: no Dockerfile frontend reads it, so no ONBUILD
+// trigger fires, and the only program run here is tar, from the git image.
 //
-// The layout itself came out of a step that ran the repository's code, and a
-// RUN line can write to the shared volume. So it is checked first: nothing in
-// it may be anything but a plain file or directory, because a symlink there
-// is a way to have this step read a file of its own — the credential — and
-// send it somewhere. Checked, then used, with nothing of the repository's
-// left running in between: the step that wrote it has exited.
-//
-// A layout whose blobs were changed after the build pushes something other
-// than what was built, to the team's own image name, and the registry checks
-// every blob against its digest. Nothing in it reaches another team's.
-func pushStep(req orchestrator.BuildRequest) corev1.Container {
+// The workspace is mounted read-only. With no Dockerfile built it ends at
+// once, which is every buildpacks build. It gives up after as long as a build
+// may take, should the engine stop before collecting the image.
+func pushStep() corev1.Container {
 	return corev1.Container{
-		Name:  pushContainer,
-		Image: buildkitImage,
-		Env: append(buildkitEnv(req),
-			// BuildKit reads the push credential from here.
-			corev1.EnvVar{Name: "DOCKER_CONFIG", Value: registryPath},
-			// An empty value leaves the output option off entirely, so the
-			// secure path carries no trace of the insecure one.
-			corev1.EnvVar{Name: "INSECURE", Value: insecureOutput(req)},
-		),
+		Name:    pushContainer,
+		Image:   gitImage,
 		Command: []string{"/bin/sh", "-euc"},
 		Args: []string{`
 if [ ! -f ` + dockerfileMarker + ` ]; then
   exit 0
 fi
-` + pushGuardScript + insecureHostScript + `
-mkdir -p /tmp/push
-printf 'FROM built\n' > /tmp/push/Dockerfile
-echo "Pushing $IMAGE"
-buildctl-daemonless.sh build \
-  --frontend dockerfile.v0 \
-  --local context=/tmp/push \
-  --local dockerfile=/tmp/push \
-  --oci-layout built=` + imageLayout + ` \
-  --opt context:built=oci-layout://built@"$digest" \
-  --output type=image,name=$IMAGE,push=true$INSECURE \
-  --progress plain
-echo "Pushed $IMAGE"
+waited=0
+while [ ! -f ` + handedOver + ` ]; do
+  if [ "$waited" -ge ` + strconv.Itoa(int(buildTimeout/time.Second)) + ` ]; then
+    echo "Yacht did not collect the built image."
+    exit 1
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
 `},
-		SecurityContext: buildkitSecurity(),
-		VolumeMounts:    credentialMounts(),
-	}
-}
-
-// pushGuardScript refuses a layout with anything in it but plain files and
-// directories, and reads the digest to push, which must be one.
-//
-// The digest is printed nowhere: were it a link to the credential, which the
-// check before it rules out, reading it would have read the credential.
-const pushGuardScript = `
-if [ -L ` + imageLayout + ` ] || [ ! -d ` + imageLayout + ` ] ||
-   [ -L ` + imageDigest + ` ] || [ ! -f ` + imageDigest + ` ] ||
-   [ -n "$(find ` + imageLayout + ` ! -type f ! -type d)" ]; then
-  echo "The built image holds something other than files and directories, so it is not pushed."
-  exit 1
-fi
-digest=$(cat ` + imageDigest + `)
-if ! printf %s "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
-  echo "The build did not say which image it built, so there is nothing to push."
-  exit 1
-fi
-`
-
-// credentialMounts is the workspace and the registry credential: what a step
-// that pushes, or reads the registry, mounts.
-func credentialMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
-		{Name: buildVolume, MountPath: "/workspace"},
-		{Name: registryVolume, MountPath: registryPath, ReadOnly: true},
-	}
-}
-
-// buildkitSecurity is the security context of both BuildKit steps.
-//
-// This is BuildKit's own documented Kubernetes configuration for the
-// rootless image, and the deviations from it were tried and reverted rather
-// than assumed to be safe improvements.
-//
-// Unconfined seccomp is required: rootlesskit cannot fork under
-// RuntimeDefault, which fails with "fork/exec /proc/self/exe: operation not
-// permitted". That single requirement is what forces this namespace to
-// "privileged", since baseline forbids Unconfined.
-//
-// allowPrivilegeEscalation stays true and capabilities are not dropped,
-// which looks like an omission and is not. Rootless BuildKit sets up its user
-// namespace with newuidmap, a setuid helper; denying privilege escalation
-// sets no_new_privs and the build dies with "newuidmap: operation not
-// permitted". Dropping ALL takes CAP_SETUID out of the bounding set and
-// breaks the same call a second way. The clone and lifecycle steps take
-// both, because they need neither.
-//
-// AppArmor is unconfined for the same class of reason: on a node that
-// enforces it, the default profile blocks the mounts BuildKit makes. It is a
-// no-op where AppArmor is not enforced.
-func buildkitSecurity() *corev1.SecurityContext {
-	user := int64(buildUID)
-	group := int64(cnbGID)
-	return &corev1.SecurityContext{
-		RunAsUser:       &user,
-		RunAsGroup:      &group,
-		SeccompProfile:  &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
-		AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+		SecurityContext: hardened(buildUID),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: buildVolume, MountPath: "/workspace", ReadOnly: true},
+		},
 	}
 }
 
@@ -760,13 +724,27 @@ const nodeEnvScript = `if [ ! -f /workspace/platform/env/NODE_ENV ]; then
 fi`
 
 // The lifecycle's records, each named rather than left to default into the
-// layers directory, which the build phase can write; see phasesPath.
+// layers directory, which the build phase can write; see phasesPath and
+// detectedPath.
 const (
 	analyzedFlag = `-analyzed=` + phasesPath + `/analyzed.toml`
-	groupFlag    = `-group=` + phasesPath + `/group.toml`
-	planFlag     = `-plan=` + phasesPath + `/plan.toml`
 	cacheFlag    = `-cache-dir=` + phasesPath + `/cache`
+	groupFlag    = `-group=` + detectedPath + `/group.toml`
+	planFlag     = `-plan=` + detectedPath + `/plan.toml`
 )
+
+// platformEnvFilter is the variable names, as a shell case pattern, that are
+// not handed to buildpacks as their environment.
+//
+// The lifecycle gives a buildpack's detect and build every file in the
+// platform's env directory as an environment variable, and detection runs
+// before anything of the repository's should. A variable named LD_PRELOAD,
+// BASH_ENV or PATH is a way to run the repository's code inside a buildpack's
+// detect anyway: the loader loads what LD_PRELOAD names, bash sources
+// BASH_ENV, sh sources ENV, and PATH chooses which program a name runs.
+// CNB_ names are the lifecycle's own. These still reach the running app as
+// its variables; they are withheld from the build alone.
+const platformEnvFilter = `LD_*|DYLD_*|CNB_*|BASH_FUNC_*|BASH_ENV|ENV|PATH|SHELLOPTS|BASHOPTS|PS4|IFS|CDPATH|GLOBIGNORE|GCONV_PATH|GLIBC_TUNABLES|LOCPATH|NLSPATH|HOSTALIASES|RESOLV_HOST_CONF|MALLOC_*`
 
 // skipWhenDockerfileBuilt ends a lifecycle step that has nothing to do. Only
 // the first of them says so.
@@ -793,10 +771,9 @@ fi
 // itself makes for a builder it does not trust, which runs the phases in
 // separate containers and gives the registry only to the ones that need it.
 //
-// withCredential mounts the registry credential and tells the lifecycle
-// where it is. writesPhases mounts the lifecycle's records writable; every
-// other phase gets them read-only. script begins by skipping the step when
-// the Dockerfile step built.
+// access says what the phase may reach: the registry credential, and which
+// of the lifecycle's records it may write rather than only read. script
+// begins by skipping the step when the Dockerfile step built.
 //
 // The lifecycle runs inside the builder image rather than on its own, because
 // the buildpacks that detect what the code is live in that image — a lifecycle
@@ -805,10 +782,12 @@ fi
 // Each exits immediately when the Dockerfile step already built. Every
 // container in a pod runs, so "did the previous step handle this" is a
 // question each has to ask rather than something the pod can express.
-func lifecycleStep(name string, req orchestrator.BuildRequest, withCredential, writesPhases bool, script string) corev1.Container {
+func lifecycleStep(name string, req orchestrator.BuildRequest, access phaseAccess, script string) corev1.Container {
+	withCredential := access.credential
 	mounts := []corev1.VolumeMount{
 		{Name: buildVolume, MountPath: "/workspace"},
-		{Name: phasesVolume, MountPath: phasesPath, ReadOnly: !writesPhases},
+		{Name: phasesVolume, MountPath: phasesPath, ReadOnly: !access.writesPhases},
+		{Name: detectedVolume, MountPath: detectedPath, ReadOnly: !access.writesDetected},
 	}
 	env := []corev1.EnvVar{
 		{Name: "IMAGE", Value: req.Image},
@@ -842,6 +821,16 @@ func lifecycleStep(name string, req orchestrator.BuildRequest, withCredential, w
 	}
 }
 
+// phaseAccess is what one lifecycle phase may reach.
+type phaseAccess struct {
+	// credential mounts the registry credential and tells the lifecycle
+	// where it is.
+	credential bool
+	// writesPhases and writesDetected mount phasesPath and detectedPath
+	// writable; otherwise they are read-only.
+	writesPhases, writesDetected bool
+}
+
 // analyzeStep starts a buildpacks build: it checks the registry can be
 // written and records the run image the export builds on.
 //
@@ -850,7 +839,7 @@ func lifecycleStep(name string, req orchestrator.BuildRequest, withCredential, w
 // write to the shared volume. So the lifecycle's directories are made here,
 // from nothing, rather than trusted to be as an earlier step left them.
 func analyzeStep(req orchestrator.BuildRequest) corev1.Container {
-	return lifecycleStep(analyzeContainer, req, true, true, sayAndSkipWhenDockerfileBuilt+`
+	return lifecycleStep(analyzeContainer, req, phaseAccess{credential: true, writesPhases: true}, sayAndSkipWhenDockerfileBuilt+`
 echo "No Dockerfile — detecting what this is with buildpacks."
 # The lifecycle writes layers and a platform directory, and refuses to guess
 # where. They go on the shared volume rather than the image's own
@@ -867,21 +856,37 @@ mkdir -p /workspace/layers /workspace/platform/env `+phasesPath+`/cache
 }
 
 // detectStep works out which buildpacks apply. It has no credential: it
-// needs none, and runs the builder's buildpacks against the repository.
+// needs none, and runs the builder's buildpacks against the repository with
+// the app's variables as their environment, which makes it the repository's
+// to influence. So it writes what it decides to detectedPath and nothing else
+// of the lifecycle's: phasesPath, where analyzed.toml says what the
+// credentialled export builds on, is read-only here.
 //
 // The app's variables become the platform environment here, the one place
-// they are read, and a static site is retried here when nothing else is
-// recognised.
+// they are read, less the names that change how a program is loaded or a
+// shell starts (see platformEnvFilter); and a static site is retried here
+// when nothing else is recognised.
 func detectStep(req orchestrator.BuildRequest, withArgs bool) corev1.Container {
-	c := lifecycleStep(detectContainer, req, false, true, skipWhenDockerfileBuilt+`
+	c := lifecycleStep(detectContainer, req, phaseAccess{writesDetected: true}, skipWhenDockerfileBuilt+`
 # Every variable, as the platform environment: one file a variable, which is
 # how the buildpacks spec gives a build its environment. Which of them a
 # buildpack reads is up to the buildpack.
+withheld=
 for f in "$BUILD_ARGS"/*; do
   if [ -f "$f" ]; then
-    cat "$f" > "/workspace/platform/env/${f##*/}"
+    name=${f##*/}
+    case "$name" in
+      `+platformEnvFilter+`)
+        withheld="$withheld $name"
+        continue
+        ;;
+    esac
+    cat "$f" > "/workspace/platform/env/$name"
   fi
 done
+if [ -n "$withheld" ]; then
+  echo "Not given to buildpacks, because they change how programs load or shells start:$withheld"
+fi
 `+nodeEnvScript+`
 echo "`+buildArgsMarker+orchestrator.BuildArgsAll+`"
 detect() {
@@ -893,7 +898,7 @@ detect() {
     `+groupFlag+` \
     `+planFlag+` \
     `+analyzedFlag+` \
-    -generated=`+phasesPath+`/generated \
+    -generated=`+detectedPath+`/generated \
     -log-level=info
 }
 code=0
@@ -910,10 +915,16 @@ exit "$code"
 	return c
 }
 
-// restoreStep restores what the analysis found. It runs nothing of the
-// repository's, and may read the registry for the run image.
+// restoreStep restores what the analysis found, and has no credential.
+//
+// On platform API 0.13 the restorer reads the registry only for image
+// extensions — to pull the run image's metadata to extend it, or to fill in
+// target data a group with extensions needs — and the pinned builder has
+// none: its builder.toml declares no [[extensions]] or [[order-extensions]].
+// Its cache is the volume on phasesPath. A builder with extensions would
+// need the credential back here, and fail at this step saying so.
 func restoreStep(req orchestrator.BuildRequest) corev1.Container {
-	return lifecycleStep(restoreContainer, req, true, true, skipWhenDockerfileBuilt+`
+	return lifecycleStep(restoreContainer, req, phaseAccess{writesPhases: true}, skipWhenDockerfileBuilt+`
 /cnb/lifecycle/restorer \
   -layers=/workspace/layers \
   `+analyzedFlag+` \
@@ -928,7 +939,7 @@ func restoreStep(req orchestrator.BuildRequest) corev1.Container {
 // own build scripts. It is the step the credential is split away from: no
 // registry volume, no DOCKER_CONFIG, and the lifecycle's records read-only.
 func lifecycleBuildStep(req orchestrator.BuildRequest) corev1.Container {
-	return lifecycleStep(buildContainer, req, false, false, skipWhenDockerfileBuilt+`
+	return lifecycleStep(buildContainer, req, phaseAccess{}, skipWhenDockerfileBuilt+`
 /cnb/lifecycle/builder \
   -app="/workspace/src/$SUBDIR" \
   -layers=/workspace/layers \
@@ -959,7 +970,7 @@ func lifecycleBuildStep(req orchestrator.BuildRequest) corev1.Container {
 // extension layers it would otherwise pick up from the layers directory are
 // looked for there too.
 func exportStep(req orchestrator.BuildRequest) corev1.Container {
-	return lifecycleStep(exportContainer, req, true, true, skipWhenDockerfileBuilt+exportGuardScript+`
+	return lifecycleStep(exportContainer, req, phaseAccess{credential: true, writesPhases: true}, skipWhenDockerfileBuilt+exportGuardScript+`
 /cnb/lifecycle/exporter \
   -app="/workspace/src/$SUBDIR" \
   -layers=/workspace/layers \

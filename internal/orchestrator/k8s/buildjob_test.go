@@ -74,14 +74,16 @@ func TestTheBuildStepsShareOneGroupOnOneVolume(t *testing.T) {
 		if *sc.RunAsUser != w.uid || *sc.RunAsGroup != w.gid {
 			t.Errorf("%s runs as %d:%d, want %d:%d", c.Name, *sc.RunAsUser, *sc.RunAsGroup, w.uid, w.gid)
 		}
+		// The push step only reads: the engine takes the layout out of it.
+		writable := c.Name != pushContainer
 		mounted := false
 		for _, m := range c.VolumeMounts {
-			if m.Name == buildVolume && m.MountPath == "/workspace" && !m.ReadOnly {
+			if m.Name == buildVolume && m.MountPath == "/workspace" && m.ReadOnly != writable {
 				mounted = true
 			}
 		}
 		if !mounted {
-			t.Errorf("%s does not mount the workspace writable at /workspace", c.Name)
+			t.Errorf("%s does not mount the workspace at /workspace, writable %t", c.Name, writable)
 		}
 	}
 	// The lifecycle is told the user it runs as, or the layers it writes
@@ -232,6 +234,7 @@ exit "${1:-0}"
 		script = strings.ReplaceAll(script, "/workspace", ws)
 		script = strings.ReplaceAll(script, "/cnb/lifecycle", lifecycle)
 		script = strings.ReplaceAll(script, phasesPath, filepath.Join(root, "phases"))
+		script = strings.ReplaceAll(script, detectedPath, filepath.Join(root, "detected"))
 
 		cmd := exec.Command(c.Command[0], append(c.Command[1:], script)...)
 		cmd.Env = append(os.Environ(), "ROOT="+root, "IMAGE=r/x:1", "SUBDIR=", "BUILD_ARGS="+args)

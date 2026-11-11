@@ -603,6 +603,31 @@ explicit, visible escape hatch (`WritableRootFilesystem`).
 An important consequence: **images that run as root will not start.** That is
 the intended behaviour. Most official images already ship a non-root user.
 
+### Builds and the registry credential
+
+One registry account holds every team's images, so no part of a build that
+runs a team's code can reach its credential. A Dockerfile is built with no
+credential at all, into an OCI image layout; the engine then reads that layout
+out of the build, checks every blob against its digest, and pushes it itself,
+running nothing from the image. A buildpacks build runs the lifecycle a phase
+a container, and only the phases that run none of the repository's code —
+analyze and export — have the credential.
+
+Two consequences a team can notice:
+
+- **A Dockerfile's `FROM` is pulled anonymously.** A base image in this
+  install's registry that needs the install's credential to pull — another
+  app's image, say — can no longer be built on. Use a public base image, or
+  one from a registry the Dockerfile can reach without Yacht's account.
+- **Some variable names are not given to buildpacks.** `PATH`, `ENV`,
+  `BASH_ENV`, `IFS`, `PS4`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `GLOBIGNORE`,
+  `GCONV_PATH`, `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`,
+  `RESOLV_HOST_CONF`, and anything starting `LD_`, `DYLD_`, `CNB_`,
+  `BASH_FUNC_` or `MALLOC_` change how programs load or shells start, and a
+  buildpacks build leaves them out of the buildpacks' environment and says so
+  in the build log. They still reach the running app, and a Dockerfile still
+  gets any it declares with `ARG`.
+
 ### Network isolation
 
 Every app's namespace also gets a `NetworkPolicy`. It accepts connections

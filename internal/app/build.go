@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/codeblocktz/yacht/internal/orchestrator"
+	"github.com/codeblocktz/yacht/internal/registry"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
 
@@ -66,6 +67,28 @@ type Images interface {
 	// both read. Fetched per use rather than held, so it is unsealed only
 	// when something is about to push or pull.
 	DockerConfig(ctx context.Context) ([]byte, error)
+}
+
+// LayoutPusher pushes the image a Dockerfile build made.
+//
+// The build leaves it as an OCI layout and the engine pushes it, because the
+// push holds the install's credential and a Dockerfile can reach everything
+// in the build that runs it. Optional, checked on Images, so an Images that
+// cannot push this way still builds with buildpacks.
+type LayoutPusher interface {
+	PushLayout(ctx context.Context, image, digest string, layout registry.LayoutFiles, logf func(string)) error
+}
+
+// layoutPush is what a build is given to push a Dockerfile's image with, nil
+// when Images cannot.
+func (s *Service) layoutPush() func(context.Context, string, string, orchestrator.LayoutFiles, func(string)) error {
+	p, ok := s.images.(LayoutPusher)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, image, digest string, layout orchestrator.LayoutFiles, logf func(string)) error {
+		return p.PushLayout(ctx, image, digest, layout, logf)
+	}
 }
 
 // Manifests answers what digest is behind an image reference.
@@ -201,6 +224,7 @@ func (s *Service) runBuild(
 		Variables:    vars,
 		Redact:       redact,
 		Log:          s.buildLogger(ctx, row.ID),
+		PushLayout:   s.layoutPush(),
 	}
 
 	// Recorded before the build starts. A Job whose name was never stored is a
