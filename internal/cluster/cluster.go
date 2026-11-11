@@ -233,9 +233,10 @@ func (j *Joiner) Command(ctx context.Context, m Machine) (string, error) {
 // Every machine value goes in unquoted, the pool twice when dedicated, and
 // that is safe only because Validate has refused anything a shell would read
 // as more than one word. Command checks it; a caller building the line itself
-// must too. The token is checked as well (ValidateToken) and single-quoted on
-// top: it is pasted in by a person, from a file on another machine, and is the
-// one value here nobody chose the alphabet of.
+// must too. The token is the one value here whose alphabet nobody chose — a
+// cluster's --token can be anything — so it is single-quoted instead, which
+// leaves the shell nothing to act on in it; ValidateToken refuses the single
+// quote and the whitespace that quoting cannot carry safely.
 func BuildCommand(serverURL, token string, m Machine) string {
 	cmd := "curl -sfL https://get.k3s.io | K3S_URL=" + serverURL +
 		" K3S_TOKEN=" + shellQuote(token) + " sh -s -"
@@ -292,13 +293,14 @@ func ValidateServerURL(raw string) error {
 
 // ValidateToken checks a join token before it is stored or put in a command.
 //
-// K3s writes one of two shapes: the secure form in its node-token file,
-// "K10" then the hex digest of the cluster's CA, "::", and a credential —
-// "server:<password>", "node:<password>", or a bootstrap token
-// "<id>.<secret>" — or the bare password a cluster was started with --token.
-// Both are held to letters, digits and . _ - + / = (and the colons that
-// separate the secure form's parts), which covers every token K3s generates
-// and leaves nothing a shell acts on even before the quoting.
+// K3s writes the secure form in its node-token file: "K10", the hex digest of
+// the cluster's CA, "::", and a credential — "server:<password>",
+// "node:<password>", or a bootstrap token "<id>.<secret>". A cluster started
+// with --token can have any password at all, so a bare token is held only to
+// what the command can carry: printable ASCII, with no whitespace to split it
+// and no single quote to end the quoting BuildCommand puts round it. A token
+// that starts like the secure form must be one, which catches a node-token
+// file pasted with a piece missing.
 func ValidateToken(token string) error {
 	if token == "" {
 		return errors.New("a join token is required")
@@ -306,15 +308,14 @@ func ValidateToken(token string) error {
 	if len(token) > maxTokenLen {
 		return errors.New("that join token is too long to be one — paste the contents of the node-token file")
 	}
-	if strings.HasPrefix(token, "K10") && strings.Contains(token, "::") {
-		if !secureToken.MatchString(token) {
-			return errors.New("that join token is not in the form K10<hex>::<user>:<password> — " +
+	for i := 0; i < len(token); i++ {
+		if c := token[i]; c <= ' ' || c > '~' || c == '\'' {
+			return errors.New("a join token has no spaces, single quotes or characters outside ASCII — " +
 				"paste the contents of the node-token file as they are")
 		}
-		return nil
 	}
-	if !plainToken.MatchString(token) {
-		return errors.New("a join token is letters, digits and . _ - + / = — " +
+	if strings.HasPrefix(token, "K10") && strings.Contains(token, "::") && !secureToken.MatchString(token) {
+		return errors.New("that join token is not in the form K10<hex>::<user>:<password> — " +
 			"paste the contents of the node-token file as they are")
 	}
 	return nil
@@ -324,12 +325,8 @@ func ValidateToken(token string) error {
 // characters) and far below anything that is not one.
 const maxTokenLen = 512
 
-var (
-	// secureToken is K10<CA digest>::<credential>.
-	secureToken = regexp.MustCompile(`^K10[0-9a-fA-F]+::[A-Za-z0-9._-]+(:[A-Za-z0-9._+/=-]+)?$`)
-	// plainToken is a bare password, as given to --token.
-	plainToken = regexp.MustCompile(`^[A-Za-z0-9._+/=-]+$`)
-)
+// secureToken is K10<CA digest>::<credential>.
+var secureToken = regexp.MustCompile(`^K10[0-9a-fA-F]+::.+$`)
 
 // shellQuote wraps s in single quotes for a POSIX shell, inside which nothing
 // is special but the quote itself, which is closed, escaped and reopened.
