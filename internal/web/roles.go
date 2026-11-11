@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -129,9 +130,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // install itself.
 //
 // With no account service there is one principal, and it is the operator.
-// With no operators configured, the owner of the team the request acts as is
-// — the single-team reading, and what every install did before operators
-// existed. Otherwise the signed-in person's email must be one of them.
+// With no operators configured, an owner of the install's own team is — the
+// team YACHT_OWNER_ID names, which the configured owner bootstrapped into.
+// Not the owner of whichever team the request acts as: anybody who owns any
+// team would then run the install, and owning a team is cheap — open sign-up
+// gives everybody one. Otherwise the signed-in person's email must be one of
+// the operators.
 //
 // Always the person, never the team they are acting as: an operator acting as
 // a customer's team is still the operator, and keeps the Admin area — which is
@@ -149,19 +153,44 @@ func (s *Server) IsOperator(r *http.Request) bool {
 		_, ok := identity.FromContext(r.Context())
 		return ok
 	}
-	if len(s.operators) == 0 {
-		role, ok := s.roleOf(r)
-		return ok && role.AtLeast(account.RoleOwner)
-	}
 	sess, err := s.accounts.ResolveSession(r.Context(), sessionToken(r))
 	if err != nil {
 		return false
+	}
+	if len(s.operators) == 0 {
+		return s.ownsInstallTeam(r.Context(), sess)
 	}
 	u, err := s.accounts.User(r.Context(), sess.UserID)
 	if err != nil {
 		return false
 	}
 	return s.operators[strings.ToLower(strings.TrimSpace(u.Email))]
+}
+
+// ownsInstallTeam reports whether the session's person is an owner of the
+// team the install runs as. The person's, not the session's: an owner of the
+// install's team looking at another team of theirs still runs the install,
+// and an owner of that other team who is nothing in the install's does not.
+func (s *Server) ownsInstallTeam(ctx context.Context, sess account.Session) bool {
+	if s.bootstrapID == "" {
+		return false
+	}
+	// The session already carries the person's role in its own team, which
+	// acting leaves alone, so the common case costs no query.
+	if sess.ActiveTeamID == s.bootstrapID {
+		return sess.Role.AtLeast(account.RoleOwner)
+	}
+	teams, err := s.accounts.TeamsFor(ctx, sess.UserID)
+	if err != nil {
+		s.log.Error("read teams for the operator check", slog.String("error", err.Error()))
+		return false
+	}
+	for _, m := range teams {
+		if m.TeamID == s.bootstrapID {
+			return m.Role.AtLeast(account.RoleOwner)
+		}
+	}
+	return false
 }
 
 // PersonEmail is the signed-in person's address — the person, not the team

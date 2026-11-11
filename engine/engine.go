@@ -1233,8 +1233,9 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 				"YACHT_RESEND_API_KEY or YACHT_CLOUDFLARE_EMAIL_TOKEN to deliver them")
 		}
 		// Operators may act as a team for support only where they are named.
-		// With none named every team's owner reads as an operator, and any of
-		// them could act as every other team — so the check approves nobody.
+		// With none named the install's own team's owners read as operators,
+		// but acting reaches into every team and is kept for people named for
+		// it — so the check approves nobody.
 		if len(cfg.Operators) == 0 {
 			log.Info("acting as a team is off — name the install's operators in " +
 				"YACHT_OPERATORS to let them act as a team for support")

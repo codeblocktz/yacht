@@ -107,12 +107,11 @@ func (s *Server) adminTeamAct(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !s.impersonation() {
 		// Refused plainly rather than left unmounted, so the person who tries
-		// learns what would make it work. With nobody named, every team owner
-		// passes the operator gate — and every one of them could act as every
-		// other team.
+		// learns what would make it work. Acting is the one power that reaches
+		// into every team, so it goes only to people named for it, never to
+		// whoever the unnamed reading of the operator gate lets through.
 		http.Error(w, "forbidden — acting as a team needs the install's operators named in "+
-			"YACHT_OPERATORS. With none named, every team's owner counts as an operator, "+
-			"and any of them could act as every other team.", http.StatusForbidden)
+			"YACHT_OPERATORS.", http.StatusForbidden)
 		return
 	}
 

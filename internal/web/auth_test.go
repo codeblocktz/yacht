@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -935,7 +936,7 @@ func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 }
 
 func TestValidTokenCreatesASessionAndRedirects(t *testing.T) {
-	h := newLiveHarness(t, "web-valid")
+	h := newLiveHarnessOwnedBy(t, "web-valid", "alice@web.test")
 	h.installedApp(t, "already-here")
 	h.user(t, "alice@web.test")
 
@@ -962,7 +963,7 @@ func TestValidTokenCreatesASessionAndRedirects(t *testing.T) {
 // The cookie must carry the flags from the cookie helper, on the one response
 // that ever sets it.
 func TestCallbackSetsTheSessionCookie(t *testing.T) {
-	h := newLiveHarness(t, "web-cookie")
+	h := newLiveHarnessOwnedBy(t, "web-cookie", "cookie@web.test")
 	h.user(t, "cookie@web.test")
 
 	c := sessionCookie(h.signIn(t, "cookie@web.test"))
@@ -1005,7 +1006,7 @@ func TestCallbackSetsTheSessionCookie(t *testing.T) {
 // A link sits in a mailbox forever. One that still worked the second time would
 // be a permanent key to the account.
 func TestConsumedTokenIsRejected(t *testing.T) {
-	h := newLiveHarness(t, "web-consumed")
+	h := newLiveHarnessOwnedBy(t, "web-consumed", "spent@web.test")
 	h.user(t, "spent@web.test")
 
 	if code := postSignIn(h.handler, "spent@web.test", "198.51.100.2:2000").Code; code != http.StatusOK {
@@ -1057,9 +1058,9 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 // The spec's third lockout guard, dropped between spec and plan in sub-project
 // B. Without it an existing single-owner install switches accounts on and the
 // apps already deployed under YACHT_OWNER_ID belong to a team nobody can sign
-// in to.
+// in to. It is the configured owner's, YACHT_OWNER_EMAIL.
 func TestFirstSignInInheritsTheConfiguredOwner(t *testing.T) {
-	h := newLiveHarness(t, "web-inherit")
+	h := newLiveHarnessOwnedBy(t, "web-inherit", "first@web.test")
 	h.installedApp(t, "legacy-app")
 	first := h.user(t, "first@web.test")
 
@@ -1089,10 +1090,12 @@ func TestFirstSignInInheritsTheConfiguredOwner(t *testing.T) {
 	}
 }
 
-// ...and only the first. The second person must not be handed ownership of the
-// existing team just for signing in.
+// ...and only the owner. Anybody else with no team, on an install whose
+// accounts are by invitation, is handed nothing: not the existing team, and
+// not a team of their own either, since owning any team is what the install's
+// own pages used to be gated on.
 func TestSecondSignInDoesNotInheritOwnership(t *testing.T) {
-	h := newLiveHarness(t, "web-second")
+	h := newLiveHarnessOwnedBy(t, "web-second", "first@web.test")
 	h.installedApp(t, "private-app")
 	h.user(t, "first@web.test")
 	second := h.user(t, "second@web.test")
@@ -1102,27 +1105,25 @@ func TestSecondSignInDoesNotInheritOwnership(t *testing.T) {
 	}
 
 	rec := h.signIn(t, "second@web.test")
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("the second sign-in = %d, want 303", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("the second sign-in = %d, want 403", rec.Code)
 	}
-	c := sessionCookie(rec)
-	if c == nil {
-		t.Fatal("no session cookie for the second person")
+	if c := sessionCookie(rec); c != nil && c.Value != "" {
+		t.Fatal("somebody on no team was given a session")
+	}
+	if !strings.Contains(rec.Body.String(), "not on a team") {
+		t.Errorf("the refusal does not say why:\n%s", rec.Body.String())
 	}
 
 	if _, err := h.accounts.RoleIn(context.Background(), second.ID, h.teamID); !errors.Is(
 		err, account.ErrNotAMember) {
 		t.Fatalf("signing in joined the second person to the configured team: %v", err)
 	}
+	if teams, err := h.accounts.TeamsFor(context.Background(), second.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("signing in gave the second person teams %v (%v), want none", teams, err)
+	}
 	if n := h.owners(t, h.teamID); n != 1 {
 		t.Fatalf("owners of %s = %d, want 1", h.teamID, n)
-	}
-
-	// And the apps of the team they were never invited to are not on their
-	// screen, which is what the ownership would have bought them.
-	body := h.getAs(t, "/apps", c).Body.String()
-	if strings.Contains(body, "private-app") {
-		t.Fatalf("the second person to sign in can see the first team's apps:\n%s", body)
 	}
 }
 
@@ -1132,7 +1133,7 @@ func TestSecondSignInDoesNotInheritOwnership(t *testing.T) {
 // stops working — not that a handler was called.
 
 func TestSignOutClearsTheCookieAndRevokesTheSession(t *testing.T) {
-	h := newLiveHarness(t, "web-signout")
+	h := newLiveHarnessOwnedBy(t, "web-signout", "out@web.test")
 	h.installedApp(t, "signout-app")
 	h.user(t, "out@web.test")
 
@@ -1184,10 +1185,11 @@ func TestSignOutClearsTheCookieAndRevokesTheSession(t *testing.T) {
 // Without this a leaked session cannot be revoked at all: it runs until it
 // expires and the person it belongs to can do nothing about it.
 func TestSignOutEverywhereInvalidatesEveryDevice(t *testing.T) {
-	h := newLiveHarness(t, "web-signout-all")
+	h := newLiveHarnessOwnedBy(t, "web-signout-all", "all@web.test")
 	h.installedApp(t, "everywhere-app")
 	h.user(t, "all@web.test")
-	h.user(t, "bystander@web.test")
+	// On a team of their own: with sign-up closed, nobody else is given one.
+	h.team(t, "web-signout-all-bystander", "Bystander", h.user(t, "bystander@web.test"), "")
 
 	here := sessionCookie(h.signIn(t, "all@web.test"))
 	phone := sessionCookie(h.signIn(t, "all@web.test"))
@@ -1233,7 +1235,7 @@ func TestSignOutEverywhereInvalidatesEveryDevice(t *testing.T) {
 // and mail clients fetch links nobody clicked, and a sign-out that answers them
 // is a sign-out anyone can trigger with an <img> tag.
 func TestSignOutRejectsGET(t *testing.T) {
-	h := newLiveHarness(t, "web-signout-get")
+	h := newLiveHarnessOwnedBy(t, "web-signout-get", "getter@web.test")
 	h.installedApp(t, "get-app")
 	h.user(t, "getter@web.test")
 
@@ -1261,7 +1263,7 @@ func TestSignOutRejectsGET(t *testing.T) {
 // that the cookie can still be cleared; refusing here would leave a browser
 // holding a dead cookie with no way to drop it.
 func TestSignOutWithADeadSessionStillClearsTheCookie(t *testing.T) {
-	h := newLiveHarness(t, "web-signout-dead")
+	h := newLiveHarnessOwnedBy(t, "web-signout-dead", "dead@web.test")
 	h.user(t, "dead@web.test")
 
 	c := sessionCookie(h.signIn(t, "dead@web.test"))
@@ -1334,7 +1336,7 @@ func TestHealthzStaysOutsideAuth(t *testing.T) {
 // The settings page has to say whether accounts are on, because otherwise the
 // only way to find out is to sign out and see what happens.
 func TestSettingsShowsAccountsPosture(t *testing.T) {
-	h := newLiveHarness(t, "web-settings-posture")
+	h := newLiveHarnessOwnedBy(t, "web-settings-posture", "settings@web.test")
 	h.user(t, "settings@web.test")
 	c := sessionCookie(h.signIn(t, "settings@web.test"))
 
@@ -1370,7 +1372,7 @@ func TestNoStaleNoSignInPageWarning(t *testing.T) {
 // A route that answers 501 is worse than a route that does not exist: it is
 // advertised, gated, and useless.
 func TestNoRoutesAnswerNotImplemented(t *testing.T) {
-	h := newLiveHarness(t, "web-no-stubs")
+	h := newLiveHarnessOwnedBy(t, "web-no-stubs", "stub@web.test")
 	h.user(t, "stub@web.test")
 	c := sessionCookie(h.signIn(t, "stub@web.test"))
 
@@ -1473,5 +1475,86 @@ func TestFreshInstallDoesNotAdmitAnyoneElse(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatal("the sign-in form created an account for a stranger")
+	}
+}
+
+// ------------------------------------------- nobody else is minted a team
+//
+// With sign-up closed, a person with no team is not handed one: owning any
+// team was what the install's own pages were gated on, so minting one made
+// whoever arrived teamless the install's operator.
+
+// A member removed from their only team signs in again and is told they are
+// on no team — not made the owner of a fresh one, nor of the install's.
+func TestARemovedMemberSignsInToNoTeam(t *testing.T) {
+	rt := newRoleTeam(t, "web-removed", "removed-app")
+	ctx := context.Background()
+
+	if code := rt.postAs(t, "/team/members/"+rt.memberID.String()+"/remove", rt.owner).Code; code != http.StatusSeeOther {
+		t.Fatalf("removing the member = %d, want 303", code)
+	}
+
+	rec := rt.signIn(t, "member@web.test")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a removed member signing in = %d, want 403\n%s", rec.Code, rec.Body.String())
+	}
+	if c := sessionCookie(rec); c != nil && c.Value != "" {
+		t.Fatal("a removed member was given a session")
+	}
+	if !strings.Contains(rec.Body.String(), "not on a team") {
+		t.Errorf("the refusal does not say why:\n%s", rec.Body.String())
+	}
+	if teams, err := rt.accounts.TeamsFor(ctx, rt.memberID); err != nil || len(teams) != 0 {
+		t.Fatalf("signing in gave the removed member teams %v (%v), want none", teams, err)
+	}
+
+	// And none of the install's pages are theirs, with the cookie they had.
+	for _, path := range []string{"/admin", "/cluster/nodes", "/cluster/pods"} {
+		if code := rt.getAs(t, path, rt.member).Code; code == http.StatusOK {
+			t.Errorf("GET %s as the removed member = 200", path)
+		}
+	}
+}
+
+// Somebody invited, who opens the invitation (which makes their account) and
+// then signs in from the sign-in page instead of the link it mails, is on no
+// team yet. The invitation's own link still brings them into the team.
+func TestAnInviteeSigningInWithoutTheLinkGetsNoTeam(t *testing.T) {
+	rt := newRoleTeam(t, "web-invitee-nolink", "invitee-app")
+	ctx := context.Background()
+
+	before := len(rt.mailer.messages())
+	if code := rt.invite(t, rt.owner, "invitee@web.test", "member").Code; code != http.StatusSeeOther {
+		t.Fatalf("invite = %d, want 303", code)
+	}
+	token := invitationToken(t, rt.lastMail(t, before))
+
+	before = len(rt.mailer.messages())
+	if code := rt.follow(t, "/invitations/"+token).Code; code != http.StatusOK {
+		t.Fatalf("opening the invitation = %d, want 200", code)
+	}
+	invited := rt.lastMail(t, before)
+
+	rec := rt.signIn(t, "invitee@web.test")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("an invitee signing in without the link = %d, want 403\n%s", rec.Code, rec.Body.String())
+	}
+	if c := sessionCookie(rec); c != nil && c.Value != "" {
+		t.Fatal("an invitee with no team was given a session")
+	}
+	invitee := rt.user(t, "invitee@web.test")
+	if teams, err := rt.accounts.TeamsFor(ctx, invitee.ID); err != nil || len(teams) != 0 {
+		t.Fatalf("signing in gave the invitee teams %v (%v), want none", teams, err)
+	}
+
+	link := regexp.MustCompile(`https?://[^/\s]+(/auth/\S+)`).FindStringSubmatch(invited)
+	if link == nil {
+		t.Fatalf("no sign-in link in the invitation's mail:\n%s", invited)
+	}
+	if code := rt.follow(t, link[1]).Code; code != http.StatusSeeOther {
+		t.Fatalf("the invitation's sign-in link = %d, want 303", code)
+	}
+	if role, err := rt.accounts.RoleIn(ctx, invitee.ID, rt.teamID); err != nil || role != account.RoleMember {
+		t.Fatalf("after the invitation's link, role = %q (%v), want member", role, err)
 	}
 }

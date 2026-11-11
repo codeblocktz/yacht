@@ -302,7 +302,7 @@ func actingSection(d AdminTeamData) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		if !d.Acting.Available {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<p class=\"text-[12.5px] text-muted-foreground\">Acting as a team is off on this install, because no operators are named. Without names, every team's owner counts as an operator — and any of them could act as every other team. Name the people who run the install in <span class=\"mono\">YACHT_OPERATORS</span> to turn it on.</p>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 18, "<p class=\"text-[12.5px] text-muted-foreground\">Acting as a team is off on this install, because no operators are named. Name the people who run the install in <span class=\"mono\">YACHT_OPERATORS</span> to turn it on.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -344,7 +344,7 @@ func actingSection(d AdminTeamData) templ.Component {
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.ResolveAttributeValue(ev.At.UTC().Format("2006-01-02 15:04:05 UTC"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 137, Col: 113}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 136, Col: 113}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var15)
 				if templ_7745c5c3_Err != nil {
@@ -357,7 +357,7 @@ func actingSection(d AdminTeamData) templ.Component {
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(relativeTime(ev.At))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 137, Col: 137}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 136, Col: 137}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -370,7 +370,7 @@ func actingSection(d AdminTeamData) templ.Component {
 				var templ_7745c5c3_Var17 string
 				templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(ev.OperatorEmail)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 138, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 137, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 				if templ_7745c5c3_Err != nil {
@@ -383,7 +383,7 @@ func actingSection(d AdminTeamData) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(impersonationAction(ev.Action))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 139, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 138, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -396,7 +396,7 @@ func actingSection(d AdminTeamData) templ.Component {
 				var templ_7745c5c3_Var19 string
 				templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(ev.Reason)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 140, Col: 67}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/web/acting.templ`, Line: 139, Col: 67}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 				if templ_7745c5c3_Err != nil {

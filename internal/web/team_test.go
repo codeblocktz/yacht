@@ -81,13 +81,14 @@ func (h *liveHarness) team(t *testing.T, id, name string, owner account.User, ap
 // The one that matters: switching is an authorization decision, not a
 // preference. A crafted POST must not move a session into someone else's team.
 func TestCannotSwitchIntoATeamYouAreNotIn(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-outsider")
+	h := newLiveHarnessOwnedBy(t, "web-switch-outsider", "insider@web.test")
 	h.installedApp(t, "insider-app")
 	h.user(t, "insider@web.test")
-	h.user(t, "outsider@web.test")
+	// The insider takes the configured team, and the outsider is in one of
+	// their own — which is the position anyone signed in to a running install
+	// is in.
+	h.team(t, "web-switch-outsider-own", "Outsider", h.user(t, "outsider@web.test"), "")
 
-	// The insider takes the configured team, so the outsider gets one of their
-	// own — which is the position anyone signing in to a running install is in.
 	if code := h.signIn(t, "insider@web.test").Code; code != http.StatusSeeOther {
 		t.Fatalf("the insider's sign-in = %d, want 303", code)
 	}
@@ -122,7 +123,7 @@ func TestCannotSwitchIntoATeamYouAreNotIn(t *testing.T) {
 // The end-to-end proof that owner_id scoping follows the session: the same
 // cookie, the same person, and a different set of apps on the page.
 func TestSwitchingChangesWhichAppsAreVisible(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-apps")
+	h := newLiveHarnessOwnedBy(t, "web-switch-apps", "both@web.test")
 	h.installedApp(t, "first-app")
 	u := h.user(t, "both@web.test")
 
@@ -164,7 +165,7 @@ func TestSwitchingChangesWhichAppsAreVisible(t *testing.T) {
 // A switcher offering a team you are not in is either a broken control or an
 // invitation to try the request the test above forbids.
 func TestSwitcherListsOnlyYourTeams(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-list")
+	h := newLiveHarnessOwnedBy(t, "web-switch-list", "lister@web.test")
 	h.installedApp(t, "list-app")
 	u := h.user(t, "lister@web.test")
 	stranger := h.user(t, "stranger@web.test")
@@ -205,7 +206,7 @@ func TestSwitcherListsOnlyYourTeams(t *testing.T) {
 // landing in another team without asking is both confusing and a way to make
 // somebody act in a team they did not choose.
 func TestSwitchRejectsGET(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-get")
+	h := newLiveHarnessOwnedBy(t, "web-switch-get", "getter@web.test")
 	h.installedApp(t, "get-app")
 	u := h.user(t, "getter@web.test")
 
@@ -566,7 +567,7 @@ func TestPendingInvitationDoesNotLeakItsToken(t *testing.T) {
 // TestAcceptingAnInvitationWhileSignedInAddsTheTeam is the straightforward
 // path: the person is already known, so the token only has to be spent.
 func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-signedin")
+	h := newLiveHarnessOwnedBy(t, "web-inv-signedin", "owner-inv-in@web.test")
 	owner := h.user(t, "owner-inv-in@web.test")
 	h.team(t, "web-inv-signedin", "Team", owner, "")
 
@@ -578,8 +579,9 @@ func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
 	}
 	token := invitationToken(t, h.lastMail(t, before))
 
-	// The invited person signs in first, on their own address.
-	h.user(t, "joiner-in@web.test")
+	// The invited person signs in first, on their own address, to the team
+	// they already have.
+	h.team(t, "web-inv-signedin-own", "Their own", h.user(t, "joiner-in@web.test"), "")
 	joinerCookie := sessionCookie(h.signIn(t, "joiner-in@web.test"))
 
 	rec := httptest.NewRecorder()
@@ -612,7 +614,7 @@ func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
 // a sign-in link to the invited address — which means an intercepted or
 // forwarded invitation is useless to anyone who cannot read that mailbox.
 func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-signedout")
+	h := newLiveHarnessOwnedBy(t, "web-inv-signedout", "owner-inv-out@web.test")
 	owner := h.user(t, "owner-inv-out@web.test")
 	h.team(t, "web-inv-signedout", "Team", owner, "")
 
@@ -648,7 +650,7 @@ func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) 
 // invitation too. Before, it only signed them in, onto an empty team of their
 // own, and the invitation waited to be opened a second time.
 func TestASignedOutInviteeJoinsWithTheOneSignInLink(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-onelink")
+	h := newLiveHarnessOwnedBy(t, "web-inv-onelink", "owner-inv-one@web.test")
 	owner := h.user(t, "owner-inv-one@web.test")
 	h.team(t, "web-inv-onelink", "Kibo", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-one@web.test"))
@@ -693,7 +695,7 @@ func TestASignedOutInviteeJoinsWithTheOneSignInLink(t *testing.T) {
 // is said on the page. A team made by signing up is named after its email
 // address until somebody does.
 func TestAnOwnerRenamesTheTeam(t *testing.T) {
-	h := newLiveHarness(t, "web-rename")
+	h := newLiveHarnessOwnedBy(t, "web-rename", "owner-rename@web.test")
 	owner := h.user(t, "owner-rename@web.test")
 	h.team(t, "web-rename", "amina@kibo.test", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-rename@web.test"))
@@ -723,7 +725,7 @@ func TestAnOwnerRenamesTheTeam(t *testing.T) {
 // A stranger who gets hold of the link cannot use it, because acceptance is
 // bound to the invited address rather than to whoever presents the token.
 func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-stranger")
+	h := newLiveHarnessOwnedBy(t, "web-inv-stranger", "owner-inv-str@web.test")
 	owner := h.user(t, "owner-inv-str@web.test")
 	h.team(t, "web-inv-stranger", "Team", owner, "")
 
@@ -733,7 +735,7 @@ func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
 	h.invite(t, ownerCookie, "intended-str@web.test", "admin")
 	token := invitationToken(t, h.lastMail(t, before))
 
-	h.user(t, "stranger-str@web.test")
+	h.team(t, "web-inv-stranger-own", "Stranger", h.user(t, "stranger-str@web.test"), "")
 	strangerCookie := sessionCookie(h.signIn(t, "stranger-str@web.test"))
 
 	rec := httptest.NewRecorder()
@@ -755,7 +757,7 @@ func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
 // invitation live, and opening it again signed out mails the invited
 // address its sign-in link.
 func TestOpeningSomebodyElsesInvitationOffersToSwitch(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-switch")
+	h := newLiveHarnessOwnedBy(t, "web-inv-switch", "owner-inv-sw@web.test")
 	owner := h.user(t, "owner-inv-sw@web.test")
 	h.team(t, "web-inv-switch", "Team", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-sw@web.test"))
@@ -813,7 +815,7 @@ func TestAnUnusableInvitationSaysWhatToDo(t *testing.T) {
 // A spent invitation is spent. Otherwise the link in a mailbox stays a way in
 // long after it was used.
 func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-replay")
+	h := newLiveHarnessOwnedBy(t, "web-inv-replay", "owner-inv-rep@web.test")
 	owner := h.user(t, "owner-inv-rep@web.test")
 	h.team(t, "web-inv-replay", "Team", owner, "")
 
@@ -823,7 +825,7 @@ func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
 	h.invite(t, ownerCookie, "joiner-rep@web.test", "member")
 	token := invitationToken(t, h.lastMail(t, before))
 
-	h.user(t, "joiner-rep@web.test")
+	h.team(t, "web-inv-replay-own", "Their own", h.user(t, "joiner-rep@web.test"), "")
 	joinerCookie := sessionCookie(h.signIn(t, "joiner-rep@web.test"))
 
 	accept := func() int {
@@ -846,7 +848,7 @@ func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
 // adversarial review: an admin who is removed from a team left behind live
 // invitations for any address they controlled — a self-service way back in.
 func TestInvitationsDieWithTheirInviter(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-inviter")
+	h := newLiveHarnessOwnedBy(t, "web-inv-inviter", "admin-inv-inv@web.test")
 	ctx := context.Background()
 
 	owner := h.user(t, "owner-inv-inv@web.test")
@@ -870,7 +872,7 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 	}
 
 	// Their outstanding invitation must have gone with them.
-	h.user(t, "accomplice@web.test")
+	h.team(t, "web-inv-inviter-accomplice", "Accomplice", h.user(t, "accomplice@web.test"), "")
 	accompliceCookie := sessionCookie(h.signIn(t, "accomplice@web.test"))
 
 	rec := httptest.NewRecorder()

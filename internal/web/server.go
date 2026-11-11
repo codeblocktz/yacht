@@ -277,8 +277,8 @@ type Options struct {
 
 	// Operators are the email addresses of the people who run the install:
 	// the only ones who reach cluster-wide pages and actions. Empty means the
-	// owner of the team a request acts as, which is right for one team and
-	// wrong for many. See config.Config.Operators.
+	// owners of the install's own team, BootstrapTeamID. See
+	// config.Config.Operators and Server.IsOperator.
 	Operators []string
 
 	// Authenticated reports whether a credential is required, purely so the
@@ -1878,10 +1878,11 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 // of the machine from the person responsible for it. A named operator is that
 // person, and so is the one principal of an install without accounts.
 //
-// With accounts on and no operators named, the operator is whichever team's
-// owner is looking (see IsOperator). On an install hosting several teams that
-// is a customer, so they are listed their own team's and nobody else's —
-// which is what these pages did for everybody before operators existed.
+// With accounts on and no operators named, the operator is an owner of the
+// install's own team (see IsOperator), and they are listed the team they are
+// looking at and nobody else's — which is what these pages did for everybody
+// before operators existed, and keeps another team's workloads behind a name
+// in YACHT_OPERATORS.
 func (s *Server) clusterOwner(r *http.Request) orchestrator.OwnerID {
 	if s.IsOperator(r) && (s.accounts == nil || len(s.operators) > 0) {
 		return ""

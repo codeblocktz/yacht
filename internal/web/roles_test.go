@@ -239,13 +239,13 @@ func newRoleTeamWith(
 	t.Helper()
 	ctx := context.Background()
 
-	h := newLiveHarnessWith(t, teamID, "", operators, more...)
+	h := newLiveHarnessWith(t, teamID, "owner@web.test", operators, more...)
 	h.installedApp(t, appName)
 
 	rt := &roleTeam{liveHarness: h, appName: appName}
 
-	// The first person in inherits the configured team, which is how a real
-	// install acquires its first owner.
+	// The configured owner inherits the configured team on their first sign-in,
+	// which is how a real install acquires its first owner.
 	owner := h.user(t, "owner@web.test")
 	rt.ownerID = owner.ID
 	rt.owner = sessionCookie(h.signIn(t, "owner@web.test"))
@@ -447,8 +447,8 @@ func (rt *roleTeam) postClaiming(
 }
 
 // Cluster-wide pages read across every team, so they are the operator's. With
-// no operators named, that is the owner of the team — the single-team reading
-// — and a member neither reaches them nor is offered them.
+// no operators named, that is the owner of the install's own team, and a
+// member neither reaches them nor is offered them.
 func TestClusterPagesAreTheOperators(t *testing.T) {
 	rt := newRoleTeam(t, "web-role-operator", "operator-app")
 
@@ -470,6 +470,46 @@ func TestClusterPagesAreTheOperators(t *testing.T) {
 	}
 	if !strings.Contains(rt.getAs(t, "/admin", rt.owner).Body.String(), `href="/cluster/nodes"`) {
 		t.Error("the owner, who is the operator here, is not offered the cluster's pages")
+	}
+}
+
+// With no operators named the operator is an owner of the install's own team,
+// not of whichever team is looking: owning a team is cheap, and an owner of
+// any team reaching every node is the install handed to a customer. The
+// install's owner keeps it while looking at another team of theirs.
+func TestAnotherTeamsOwnerIsNotTheOperator(t *testing.T) {
+	rt := newRoleTeam(t, "web-role-other-owner", "other-owner-app")
+	ctx := context.Background()
+
+	other := rt.user(t, "other-owner@web.test")
+	rt.team(t, "web-role-other-owner-theirs", "Their Co", other, "")
+	c := sessionCookie(rt.signIn(t, "other-owner@web.test"))
+	if c == nil {
+		t.Fatal("the other team's owner got no session")
+	}
+	for _, path := range []string{"/admin", "/cluster/nodes", "/cluster/pods"} {
+		if code := rt.getAs(t, path, c).Code; code != http.StatusForbidden {
+			t.Errorf("GET %s as another team's owner = %d, want 403", path, code)
+		}
+	}
+	if code := rt.postAs(t, "/cluster/nodes/any/drain", c).Code; code == http.StatusSeeOther || code == http.StatusOK {
+		t.Errorf("another team's owner could drain a node: %d", code)
+	}
+	if strings.Contains(rt.getAs(t, "/", c).Body.String(), `href="/admin"`) {
+		t.Error("another team's owner is offered the Admin area")
+	}
+
+	// The install's owner, switched to a side team of their own.
+	owner, err := rt.accounts.User(ctx, rt.ownerID)
+	if err != nil {
+		t.Fatalf("User: %v", err)
+	}
+	rt.team(t, "web-role-other-owner-side", "Side", owner, "")
+	if code := rt.postFormAs(t, "/teams/switch", rt.owner, url.Values{"team": {"web-role-other-owner-side"}}).Code; code != http.StatusSeeOther {
+		t.Fatalf("switching the owner's team = %d, want 303", code)
+	}
+	if code := rt.getAs(t, "/admin", rt.owner).Code; code != http.StatusOK {
+		t.Errorf("GET /admin as the install team's owner, looking at another team = %d, want 200", code)
 	}
 }
 

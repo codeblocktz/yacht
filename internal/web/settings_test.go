@@ -43,8 +43,8 @@ func TestSettingsDescribesTheInstallItIsOn(t *testing.T) {
 	t.Run("teams with no operators named", func(t *testing.T) {
 		rt := newRoleTeam(t, "web-settings-noops", "settings-noops-app")
 		body := rt.getAs(t, "/settings", rt.owner).Body.String()
-		if !strings.Contains(body, "YACHT_OPERATORS") || !strings.Contains(body, "Each team") {
-			t.Error("settings do not warn that every team's owner is an operator")
+		if !strings.Contains(body, "YACHT_OPERATORS") || !strings.Contains(body, "install&#39;s own team") {
+			t.Error("settings do not say the install's own team's owners are its operators")
 		}
 	})
 }

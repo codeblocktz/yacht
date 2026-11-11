@@ -432,10 +432,12 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 // looks like a sign-in that succeeded and landed on a dashboard with nothing
 // on it.
 //
-// It picks the team itself rather than taking one, deliberately. Somebody whose
-// only membership was removed, and the configured owner of an install signing in
-// for the first time, both need BootstrapOwner — and that is a thing only this
-// function knows to ask for.
+// It picks the team itself rather than taking one, deliberately. The configured
+// owner of an install signing in for the first time needs BootstrapOwner, and
+// so does anybody with no team while sign-up is open; anybody else with no
+// team must get none — and telling those apart is a thing only this function
+// knows to do. The second kind is answered with a page saying so, and no
+// session.
 //
 // Reports whether it succeeded, having already rendered the failure. The caller
 // redirects on true and returns on false.
@@ -464,6 +466,15 @@ func (s *Server) startSessionIn(
 	}
 
 	team, err := s.activeTeam(ctx, user)
+	if errors.Is(err, errNoTeam) {
+		// Said plainly: the person has just proved who they are, so that they
+		// belong to no team here is theirs to know, and a generic failure would
+		// have them ask for link after link.
+		s.log.Info("sign-in refused: on no team",
+			slog.String("user", user.ID.String()), slog.String("method", string(method)))
+		s.renderSignedOut(w, r, http.StatusForbidden, "Not on a team", NoTeam(s.requestAccess))
+		return false
+	}
 	if err != nil {
 		return failed("find a team to sign in to", err)
 	}
@@ -590,26 +601,42 @@ func sessionToken(r *http.Request) string {
 	return c.Value
 }
 
+// errNoTeam is a proven person with no team to act as, on an install that
+// does not hand them one: sign-up is closed and they are not its configured
+// owner.
+var errNoTeam = errors.New("web: the person is on no team")
+
 // activeTeam picks the team a new session acts as.
 //
 // Someone with no team at all is the case the bootstrap exists for: on an
-// install that has just switched accounts on they are the first person in, and
-// the team the install was already running as is theirs to inherit. Without it
-// they would sign in successfully and resolve to no owner, which every page
-// reads as not being signed in at all.
+// install that has just switched accounts on, its configured owner is the
+// first person in, and the team the install was already running as is theirs
+// to inherit. Without it they would sign in successfully and resolve to no
+// owner, which every page reads as not being signed in at all.
+//
+// Nobody else is given a team unless sign-up is open. While it is closed,
+// somebody with no team got an account some other way — they were removed
+// from the team they had, or opened an invitation and then signed in without
+// it — and minting them a team would make them the owner of one, which is
+// what the install's own pages are gated on. They get errNoTeam instead.
 func (s *Server) activeTeam(ctx context.Context, user account.User) (string, error) {
 	teams, err := s.accounts.TeamsFor(ctx, user.ID)
 	if err != nil {
 		return "", err
 	}
 	if len(teams) == 0 {
-		// With sign-up open anybody can arrive here with no team, so the team
-		// the install runs as goes only to the address configured to own it.
-		// Everyone else gets one of their own, which BootstrapOwner gives for
-		// an empty id.
+		// The team the install runs as goes only to the address configured to
+		// own it — or to a team of its own, which BootstrapOwner gives when the
+		// install's is taken. With sign-up open everybody else gets one of their
+		// own, which BootstrapOwner gives for an empty id; with it closed they
+		// get nothing.
 		teamID, teamName := s.bootstrapID, s.bootstrapName
-		if s.openSignup && !strings.EqualFold(user.Email, s.bootstrapEmail) {
+		switch {
+		case s.isBootstrapEmail(user.Email):
+		case s.openSignup:
 			teamID, teamName = "", ""
+		default:
+			return "", errNoTeam
 		}
 		if err := s.accounts.BootstrapOwner(
 			ctx, teamID, teamName, user); err != nil {
@@ -972,7 +999,7 @@ func (s *Server) signInRedirect(next http.Handler) http.Handler {
 // happened here, and an error that changed the response would say whether the
 // address is the configured one.
 func (s *Server) bootstrapAccount(ctx context.Context, email string) {
-	if s.bootstrapEmail == "" || !strings.EqualFold(email, s.bootstrapEmail) {
+	if !s.isBootstrapEmail(email) {
 		return
 	}
 	created, err := s.accounts.EnsureUser(ctx, email, "")
@@ -983,4 +1010,11 @@ func (s *Server) bootstrapAccount(ctx context.Context, email string) {
 	}
 	s.log.Info("created the configured owner on first sign-in",
 		slog.String("user", created.ID.String()))
+}
+
+// isBootstrapEmail reports whether email is the address configured to own the
+// install. An install that names none has no such address, so an empty one
+// never matches.
+func (s *Server) isBootstrapEmail(email string) bool {
+	return s.bootstrapEmail != "" && strings.EqualFold(strings.TrimSpace(email), s.bootstrapEmail)
 }
