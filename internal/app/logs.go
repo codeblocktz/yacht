@@ -573,16 +573,31 @@ func (s *Service) storedHTTPLogs(ctx context.Context, held []domain.Held, out HT
 		lines, more = lines[len(lines)-requestLogLimit:], true
 	}
 	out.Lines = lines
-	out.Since = now.Add(-span)
-	if more && len(lines) > 0 {
+	out.Since = from
+	// An app that took its address inside the span was not sent the requests
+	// before, and has not been shown them; saying "the last 24 hours" would
+	// claim otherwise.
+	given := ""
+	if first := firstHeld(held); first.After(from) {
+		out.Since = first
+		given = ", when this app was given its address"
+	}
+	switch {
+	case more && len(lines) > 0:
 		out.Since = lines[0].At
 		out.Coverage = fmt.Sprintf("The newest %d requests, since %s. Older ones are kept, "+
 			"and are past what one page holds.", len(lines), coverageTime(out.Since, now))
-	} else {
+	case given != "":
+		out.Coverage = "Every request since " + coverageTime(out.Since, now) + given + "."
+	default:
 		out.Coverage = "Every request in the last " + spanText(span) + "."
 	}
 	if len(lines) == 0 {
-		out.Note = "No requests to this app in the last " + spanText(span) + "."
+		if given != "" {
+			out.Note = "No requests to this app since " + coverageTime(out.Since, now) + given + "."
+		} else {
+			out.Note = "No requests to this app in the last " + spanText(span) + "."
+		}
 	}
 	return out, nil
 }

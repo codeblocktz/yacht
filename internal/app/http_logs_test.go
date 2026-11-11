@@ -43,6 +43,9 @@ type storedRequests struct {
 	hosts      []string
 	start, end time.Time
 	reads      []storedRead
+
+	// moreFor cuts a read short at the limit when it asks about the host.
+	moreFor map[string]bool
 }
 
 type storedRead struct {
@@ -56,12 +59,14 @@ func (s *storedRequests) Requests(
 	s.hosts, s.start, s.end = hosts, start, end
 	s.reads = append(s.reads, storedRead{hosts: hosts, start: start})
 	var out []orchestrator.HTTPLogLine
+	more := s.more
 	for _, l := range s.lines {
 		if slices.Contains(hosts, l.Host) {
 			out = append(out, l)
+			more = more || s.moreFor[l.Host]
 		}
 	}
-	return out, s.more, s.err
+	return out, more, s.err
 }
 
 func httpLogsService(t *testing.T) (*Service, *controllerLog, string, App) {
@@ -238,5 +243,66 @@ func TestHTTPLogsBeginWhenTheAppTookItsHostname(t *testing.T) {
 	if !got.Since.Equal(took) || !strings.Contains(got.Coverage, "given its address") {
 		t.Errorf("Since %v, Coverage %q; want them to begin when the app took its names, %v",
 			got.Since, got.Coverage, took)
+	}
+}
+
+// Two windows, one cut short at the limit: what the other returned from
+// before the cut is dropped as well, so the page is whole from where it says
+// it begins rather than a day of one host beside an hour of the other.
+func TestHTTPLogsAcrossWindowsAreWholeFromWhereTheyBegin(t *testing.T) {
+	ctx := context.Background()
+	s, _, id, a := httpLogsService(t)
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO domains (owner_id, app_id, host, state, managed, verify_target)
+		VALUES ($1, $2, 'busy.httplog.test', 'routed', false, 'edge.httplog.test')`, id, a.ID); err != nil {
+		t.Fatalf("claim a custom domain: %v", err)
+	}
+	now := time.Now().UTC()
+	holdSince(t, s, a.ID, now.Add(-time.Hour), "busy.httplog.test")
+	cut := now.Add(-40 * time.Minute)
+	store := &storedRequests{
+		moreFor: map[string]bool{"busy.httplog.test": true},
+		lines: []orchestrator.HTTPLogLine{
+			{At: now.Add(-5 * time.Hour), Host: a.Host, Path: "/early"},
+			{At: now.Add(-2 * time.Hour), Host: a.Host, Path: "/before-the-cut"},
+			{At: cut, Host: "busy.httplog.test", Path: "/busy-1"},
+			{At: now.Add(-20 * time.Minute), Host: "busy.httplog.test", Path: "/busy-2"},
+			{At: now.Add(-10 * time.Minute), Host: a.Host, Path: "/late"},
+		},
+	}
+	s.UseRequestLog(store, 0)
+
+	got, err := s.DeploymentHTTPLogs(ctx, id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, l := range got.Lines {
+		paths = append(paths, l.Path)
+	}
+	if want := []string{"/busy-1", "/busy-2", "/late"}; !slices.Equal(paths, want) {
+		t.Errorf("paths = %v, want %v: nothing from before the cut read", paths, want)
+	}
+	if !got.Since.Equal(cut) || !strings.Contains(got.Coverage, "The newest 3 requests") {
+		t.Errorf("Since %v, Coverage %q; want them to begin at the cut, %v", got.Since, got.Coverage, cut)
+	}
+}
+
+// An app that took its only address inside the span is not told it is
+// seeing every request of the last day.
+func TestHTTPLogCoverageBeginsWhenTheAddressWasGiven(t *testing.T) {
+	ctx := context.Background()
+	s, _, id, a := httpLogsService(t)
+	given := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	holdSince(t, s, a.ID, given)
+	s.UseRequestLog(&storedRequests{}, 0)
+
+	got, err := s.DeploymentHTTPLogs(ctx, id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Since.Equal(given) || strings.Contains(got.Coverage, "24 hours") ||
+		!strings.Contains(got.Coverage, "given its address") || strings.Contains(got.Note, "24 hours") {
+		t.Errorf("Since %v, Coverage %q, Note %q; want them to begin at %v", got.Since, got.Coverage, got.Note, given)
 	}
 }
