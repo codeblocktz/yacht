@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codeblocktz/yacht/internal/egress"
 )
@@ -71,8 +73,6 @@ func TestARemoteOnAPrivateAddressIsNotAsked(t *testing.T) {
 	for _, repo := range []string{
 		srv.URL + "/acme/web.git",
 		"https://localhost:" + srv.URL[strings.LastIndex(srv.URL, ":")+1:] + "/acme/web.git",
-		"ssh://git@127.0.0.1/acme/web.git",
-		"ssh://git@[::1]:22/acme/web.git",
 	} {
 		_, err := s.Branches(context.Background(), repo, "")
 		if !errors.Is(err, ErrRepoUnreachable) || !strings.Contains(err.Error(), "private network") {
@@ -216,5 +216,83 @@ func TestARemotesRedirectToAPrivateAddressIsNotFollowed(t *testing.T) {
 	case u := <-hit:
 		t.Errorf("the redirect was followed to a private address for %s", u)
 	default:
+	}
+}
+
+// An SSH repository's branches are not listed, and nothing is dialled for
+// one: the engine has no key to list with, and go-git's SSH handshake has no
+// deadline, so a host that accepts and then says nothing would hold the
+// request forever. The listener here does exactly that.
+func TestAnSSHRemoteIsAnsweredWithoutAConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c // held open, silent
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+
+	s := &Service{}
+	for _, repo := range []string{
+		"ssh://git@127.0.0.1:" + port + "/acme/web.git",
+		"ssh://git@github.com/acme/web.git",
+	} {
+		start := time.Now()
+		_, err := s.Branches(context.Background(), repo, "")
+		if !errors.Is(err, ErrRepoUnreachable) || !strings.Contains(err.Error(), "SSH") {
+			t.Errorf("Branches(%s) = %v, want ErrRepoUnreachable saying SSH is not listed", repo, err)
+		}
+		if _, err := s.DefaultBranch(context.Background(), repo); !errors.Is(err, errSSHListing) {
+			t.Errorf("DefaultBranch(%s) = %v, want errSSHListing", repo, err)
+		}
+		if took := time.Since(start); took > time.Second {
+			t.Errorf("Branches(%s) took %v", repo, took)
+		}
+	}
+	select {
+	case c := <-accepted:
+		c.Close()
+		t.Error("an SSH remote was connected to")
+	default:
+	}
+}
+
+// A remote that keeps answering is read only so far, and the cut is an error
+// rather than a shorter list taken for the whole one.
+func TestARemotesAdvertisementIsReadOnlySoFar(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		chunk := []byte(strings.Repeat("0", 1<<16))
+		for written := 0; written <= maxAdvertisement+len(chunk); written += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	defer func(old http.RoundTripper) { gitHTTPBase = old }(gitHTTPBase)
+	gitHTTPBase = srv.Client().Transport
+	policy, err := egress.ParsePolicy([]string{strings.TrimPrefix(srv.URL, "https://")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{opts: Options{Outbound: policy}}
+	if _, err := s.listRefs(context.Background(), srv.URL+"/acme/web.git"); err == nil {
+		t.Error("an endless advertisement was read as a list of branches")
+	}
+
+	body := &cappedBody{ReadCloser: io.NopCloser(strings.NewReader("abcdef")), left: 4}
+	got, err := io.ReadAll(body)
+	if string(got) != "abcd" || !errors.Is(err, errAdvertisementTooLarge) {
+		t.Errorf("a capped body read %q, %v; want abcd and errAdvertisementTooLarge", got, err)
 	}
 }

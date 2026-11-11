@@ -11,9 +11,9 @@
 // The check is on the address actually dialled, inside the dial, so a name
 // that resolves somewhere public when it is looked at and somewhere private
 // when it is connected to is still refused, and so is every redirect hop.
-// The exceptions are spelled out where they are made: a request sent through
-// the operator's HTTP proxy, and an SSH host, are checked by resolving the
-// name first, which a name that answers differently a moment later gets past.
+// The exception is spelled out where it is made: a request sent through the
+// operator's HTTP proxy is checked by resolving the name first, which a name
+// that answers differently a moment later gets past.
 package egress
 
 import (
@@ -25,10 +25,13 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 // ErrBlocked is a connection refused because its address is private to this
@@ -38,18 +41,18 @@ var ErrBlocked = errors.New("that address is private to this network, and only p
 // blockedPrefixes are the ranges a tenant-named connection may not reach: this
 // machine, the private networks the cluster's pods, services and API sit on,
 // link-local — which is where a cloud's metadata service answers — carrier-
-// grade NAT, the reserved and multicast ranges nothing legitimate is at, and
-// the IPv6 forms that carry an IPv4 address inside them — NAT64, 6to4,
-// Teredo, IPv4-compatible — any of which can be a private IPv4 address by
-// another name.
+// grade NAT, the documentation, benchmarking, reserved and multicast ranges
+// nothing legitimate is at, and the IPv6 forms that carry an IPv4 address
+// inside them — NAT64, 6to4, Teredo, IPv4-compatible, IPv4-translated — any
+// of which can be a private IPv4 address by another name.
 var blockedPrefixes = func() []netip.Prefix {
 	var out []netip.Prefix
 	for _, p := range []string{
 		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
-		"172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15",
-		"224.0.0.0/4", "240.0.0.0/4",
-		"::/96", "fc00::/7", "fe80::/10", "fec0::/10", "ff00::/8",
-		"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32",
+		"172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16",
+		"198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
+		"::/96", "::ffff:0:0:0/96", "100::/64", "2001::/23", "2001:db8::/32", "2002::/16",
+		"64:ff9b::/96", "64:ff9b:1::/48", "fc00::/7", "fe80::/10", "fec0::/10", "ff00::/8",
 	} {
 		out = append(out, netip.MustParsePrefix(p))
 	}
@@ -61,9 +64,10 @@ var blockedPrefixes = func() []netip.Prefix {
 // a tailnet — and ranges to refuse besides it, such as a pod or service
 // network outside the private ranges. The nil Policy is the rule alone.
 type Policy struct {
-	allowHosts map[string]bool // host:port, or host for every port; lower case
-	allowNets  []netip.Prefix
-	denyNets   []netip.Prefix
+	allowNames     map[string]bool // host:port, or host for every port
+	allowAddrPorts map[netip.AddrPort]bool
+	allowNets      []netip.Prefix
+	denyNets       []netip.Prefix
 
 	transports sync.Map // transportKey → *http.Transport
 }
@@ -84,50 +88,169 @@ func (p *Policy) or() *Policy {
 	return p
 }
 
-// ParsePolicy reads the operator's lists. allow holds host, host:port, IP
-// addresses and CIDRs; deny holds IP addresses and CIDRs. A host allowed by
-// name is dialled as it resolves, without a check, because the operator named
-// it; an address or range allowed is still refused when deny also covers it.
+// ParsePolicy reads the operator's lists.
+//
+// allow holds host:port — the form to prefer, since it opens one service
+// rather than every port on a machine — host, address:port, addresses and
+// CIDRs. deny holds addresses and CIDRs. A host allowed by name is dialled as
+// it resolves, without a check, because the operator named it; an address,
+// address:port or range allowed is still refused when deny covers it.
 func ParsePolicy(allow, deny []string) (*Policy, error) {
-	p := &Policy{allowHosts: map[string]bool{}}
+	p := &Policy{allowNames: map[string]bool{}, allowAddrPorts: map[netip.AddrPort]bool{}}
 	for _, raw := range allow {
-		s := strings.ToLower(strings.TrimSpace(raw))
+		s := strings.TrimSpace(raw)
 		if s == "" {
 			continue
 		}
-		if pfx, ok := parseNet(s); ok {
-			p.allowNets = append(p.allowNets, pfx)
-			continue
+		if err := p.addAllow(s); err != nil {
+			return nil, fmt.Errorf("egress: allow %q: %w", raw, err)
 		}
-		if strings.ContainsAny(s, "/%@ ") || strings.Contains(s, "://") {
-			return nil, fmt.Errorf("egress: %q is not a host, host:port, address or CIDR", raw)
-		}
-		p.allowHosts[s] = true
 	}
 	for _, raw := range deny {
 		s := strings.TrimSpace(raw)
 		if s == "" {
 			continue
 		}
-		pfx, ok := parseNet(s)
-		if !ok {
-			return nil, fmt.Errorf("egress: %q is not an address or CIDR", raw)
+		pfx, err := parseNet(s)
+		if err != nil {
+			return nil, fmt.Errorf("egress: deny %q: %w", raw, err)
 		}
 		p.denyNets = append(p.denyNets, pfx)
 	}
 	return p, nil
 }
 
-// parseNet reads an address as a one-address range, or a CIDR.
-func parseNet(s string) (netip.Prefix, bool) {
+func (p *Policy) addAllow(s string) error {
+	switch {
+	case strings.Contains(s, "://"):
+		return errors.New("a host or address, not a URL")
+	case strings.Contains(s, "*"):
+		return errors.New("wildcards are not supported; name each host")
+	case strings.ContainsAny(s, "@% \t"):
+		return errors.New("not a host, host:port, address or CIDR")
+	}
+	if strings.Contains(s, "/") {
+		pfx, err := parseNet(s)
+		if err != nil {
+			return err
+		}
+		p.allowNets = append(p.allowNets, pfx)
+		return nil
+	}
+	if addr, err := netip.ParseAddr(s); err == nil {
+		pfx, err := parseNet(addr.String())
+		if err != nil {
+			return err
+		}
+		p.allowNets = append(p.allowNets, pfx)
+		return nil
+	}
+	if host, port, err := net.SplitHostPort(s); err == nil {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("%q is not a port", port)
+		}
+		if addr, err := netip.ParseAddr(host); err == nil {
+			if addr.Zone() != "" {
+				return errors.New("an address with a zone is never reached")
+			}
+			p.allowAddrPorts[netip.AddrPortFrom(addr.Unmap(), uint16(n))] = true
+			return nil
+		}
+		name, ok := canonicalHost(host)
+		if !ok || !validName(name) {
+			return fmt.Errorf("%q is not a host name", host)
+		}
+		p.allowNames[net.JoinHostPort(name, port)] = true
+		return nil
+	}
+	if strings.ContainsAny(s, "[]") {
+		return errors.New("brackets go only around an IPv6 address with a port, as in [fd00::1]:5000")
+	}
+	name, ok := canonicalHost(s)
+	if !ok || !validName(name) {
+		return fmt.Errorf("%q is not a host name", s)
+	}
+	p.allowNames[name] = true
+	return nil
+}
+
+// parseNet reads an address as a one-address range, or a CIDR. An IPv4 range
+// written as IPv6 (::ffff:10.0.0.0/104) is read as the IPv4 range it is,
+// because addresses are judged after the same unmapping.
+func parseNet(s string) (netip.Prefix, error) {
 	if pfx, err := netip.ParsePrefix(s); err == nil {
-		return pfx.Masked(), true
+		if pfx.Addr().Is4In6() {
+			if pfx.Bits() < 96 {
+				return netip.Prefix{}, errors.New("an IPv4-mapped range must be /96 or longer")
+			}
+			pfx = netip.PrefixFrom(pfx.Addr().Unmap(), pfx.Bits()-96)
+		}
+		return pfx.Masked(), nil
 	}
-	if addr, err := netip.ParseAddr(s); err == nil && addr.Zone() == "" {
-		addr = addr.Unmap()
-		return netip.PrefixFrom(addr, addr.BitLen()), true
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, errors.New("not an address or CIDR")
 	}
-	return netip.Prefix{}, false
+	if addr.Zone() != "" {
+		return netip.Prefix{}, errors.New("an address with a zone is never reached")
+	}
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
+}
+
+// canonicalHost is a host as it is dialled and compared: mapped to ASCII the
+// way net/http maps it before dialling — so a fullwidth "１２７.0.0.1" is the
+// 127.0.0.1 it reaches — in lower case, without brackets or a trailing dot.
+// false is a host that cannot be one.
+func canonicalHost(h string) (string, bool) {
+	h = strings.TrimSuffix(strings.Trim(h, "[]"), ".")
+	if h == "" {
+		return "", false
+	}
+	if _, err := netip.ParseAddr(h); err == nil {
+		return strings.ToLower(h), true
+	}
+	for i := 0; i < len(h); i++ {
+		if h[i] >= 0x80 {
+			a, err := idna.Lookup.ToASCII(h)
+			if err != nil {
+				return "", false
+			}
+			h = strings.TrimSuffix(a, ".")
+			break
+		}
+	}
+	return strings.ToLower(h), true
+}
+
+// canonicalAuthority is host:port with the host canonical.
+func canonicalAuthority(authority string) (string, bool) {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		return "", false
+	}
+	host, ok := canonicalHost(host)
+	if !ok {
+		return "", false
+	}
+	return net.JoinHostPort(host, port), true
+}
+
+// validName is a DNS name's characters: letters, digits, hyphens, dots, and
+// the underscores some service names carry.
+func validName(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Blocked reports whether an address may not be reached.
@@ -142,10 +265,8 @@ func (p *Policy) Blocked(addr netip.Addr) bool {
 		return true
 	}
 	addr = addr.Unmap()
-	for _, n := range p.denyNets {
-		if n.Contains(addr) {
-			return true
-		}
+	if p.denied(addr) {
+		return true
 	}
 	for _, n := range p.allowNets {
 		if n.Contains(addr) {
@@ -160,22 +281,45 @@ func (p *Policy) Blocked(addr netip.Addr) bool {
 	return false
 }
 
+func (p *Policy) denied(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	for _, n := range p.denyNets {
+		if n.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
 // Blocked is the rule without an operator's policy.
 func Blocked(addr netip.Addr) bool { return none.Blocked(addr) }
 
-// allowedName reports whether the operator allowed a host, or host:port, by
-// name.
-func (p *Policy) allowedName(authority string) bool {
+// allowedAuthority reports whether the operator allowed an authority —
+// host:port, or a bare host — by name, or as an address:port that deny does
+// not cover. A range allowed is not answered here: that is judged on the
+// address dialled, in Blocked.
+func (p *Policy) allowedAuthority(authority string) bool {
 	p = p.or()
-	if len(p.allowHosts) == 0 {
+	host, port, err := net.SplitHostPort(authority)
+	if err != nil {
+		host, port = authority, ""
+	}
+	host, ok := canonicalHost(host)
+	if !ok {
 		return false
 	}
-	authority = strings.ToLower(authority)
-	if p.allowHosts[authority] {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || addr.Zone() != "" {
+			return false
+		}
+		addr = addr.Unmap()
+		return p.allowAddrPorts[netip.AddrPortFrom(addr, uint16(n))] && !p.denied(addr)
+	}
+	if port != "" && p.allowNames[net.JoinHostPort(host, port)] {
 		return true
 	}
-	host, _, err := net.SplitHostPort(authority)
-	return err == nil && p.allowHosts[host]
+	return p.allowNames[host]
 }
 
 // Control is a net.Dialer Control that refuses a blocked address. It runs
@@ -212,6 +356,9 @@ func Control(network, address string, c syscall.RawConn) error {
 // differently by the time the proxy connects to it. Every redirect hop is a
 // request of its own, and checked the same way. A request whose destination
 // is the proxy itself, sent around it, is refused.
+//
+// Every host is compared in the form it is dialled in (see canonicalHost), so
+// another spelling of the same address is the same address.
 func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Transport, error) {
 	p = p.or()
 	if base == nil {
@@ -223,7 +370,9 @@ func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Trans
 	}
 	allowed := make([]string, 0, len(allow))
 	for _, a := range allow {
-		allowed = append(allowed, strings.ToLower(a))
+		if c, ok := canonicalAuthority(a); ok {
+			allowed = append(allowed, c)
+		}
 	}
 	slices.Sort(allowed)
 	key := transportKey{base: t, allow: strings.Join(allowed, ",")}
@@ -234,11 +383,10 @@ func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Trans
 	plain := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
 	guarded := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: p.Control}
 	exempt := func(authority string) bool {
-		authority = strings.ToLower(authority)
-		return slices.Contains(allowed, authority) || p.allowedName(authority)
+		return slices.Contains(allowed, authority) || p.allowedAuthority(authority)
 	}
 
-	var proxies sync.Map // authority of a proxy the base sent a request to
+	var proxies sync.Map // canonical authority of a proxy the base sends to
 	baseProxy := t.Proxy
 	if baseProxy != nil {
 		// Known before any request, so one that targets a proxy directly is
@@ -246,7 +394,9 @@ func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Trans
 		for _, scheme := range []string{"https", "http"} {
 			probe := &http.Request{URL: &url.URL{Scheme: scheme, Host: "egress-probe.invalid"}}
 			if u, err := baseProxy(probe); err == nil && u != nil {
-				proxies.Store(authorityOf(u), true)
+				if a, ok := authorityOf(u); ok {
+					proxies.Store(a, true)
+				}
 			}
 		}
 	}
@@ -263,7 +413,10 @@ func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Trans
 			}
 			proxy = u
 		}
-		target := authorityOf(req.URL)
+		target, ok := authorityOf(req.URL)
+		if !ok {
+			return nil, ErrBlocked
+		}
 		if exempt(target) {
 			return proxy, nil
 		}
@@ -276,14 +429,20 @@ func (p *Policy) Transport(base http.RoundTripper, allow ...string) (*http.Trans
 		if err := p.CheckHost(req.Context(), target); err != nil {
 			return nil, err
 		}
-		proxies.Store(authorityOf(proxy), true)
+		if a, ok := authorityOf(proxy); ok {
+			proxies.Store(a, true)
+		}
 		return proxy, nil
 	}
 	clone.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		if exempt(address) {
+		authority, ok := canonicalAuthority(address)
+		if !ok {
+			return nil, ErrBlocked
+		}
+		if exempt(authority) {
 			return plain.DialContext(ctx, network, address)
 		}
-		if _, isProxy := proxies.Load(strings.ToLower(address)); isProxy {
+		if _, isProxy := proxies.Load(authority); isProxy {
 			return plain.DialContext(ctx, network, address)
 		}
 		return guarded.DialContext(ctx, network, address)
@@ -297,9 +456,9 @@ func Transport(base http.RoundTripper, allow ...string) (*http.Transport, error)
 	return none.Transport(base, allow...)
 }
 
-// authorityOf is host:port, lower case, with the scheme's port made explicit
-// — what a transport dials for the URL.
-func authorityOf(u *url.URL) string {
+// authorityOf is the canonical host:port a transport dials for a URL, with
+// the scheme's port made explicit.
+func authorityOf(u *url.URL) (string, bool) {
 	host, port := u.Hostname(), u.Port()
 	if port == "" {
 		switch u.Scheme {
@@ -311,29 +470,25 @@ func authorityOf(u *url.URL) string {
 			port = "1080"
 		}
 	}
-	return strings.ToLower(net.JoinHostPort(host, port))
+	return canonicalAuthority(net.JoinHostPort(host, port))
 }
 
 // CheckHost resolves a host — host or host:port — and refuses it when any
-// address it has is blocked, unless the operator allowed the name. For a
-// connection whose dial cannot be guarded — one through a proxy, or an SSH
-// transport that dials for itself — this is the best that can be done, and
-// it is weaker: a name can resolve differently between this lookup and the
-// dial.
+// address it has is blocked, unless the operator allowed it. For a
+// connection whose dial cannot be guarded — one through a proxy — this is the
+// best that can be done, and it is weaker: a name can resolve differently
+// between this lookup and the dial.
 func (p *Policy) CheckHost(ctx context.Context, hostport string) error {
-	hostport = strings.ToLower(strings.TrimSpace(hostport))
+	hostport = strings.TrimSpace(hostport)
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
-		if p.allowedName(hostport) {
-			return nil
-		}
 	}
-	host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
-	if host == "" || strings.Contains(host, "%") {
+	host, ok := canonicalHost(host)
+	if !ok || strings.Contains(host, "%") {
 		return ErrBlocked
 	}
-	if p.allowedName(host) {
+	if p.allowedAuthority(hostport) {
 		return nil
 	}
 	if addr, err := netip.ParseAddr(host); err == nil {
@@ -341,6 +496,9 @@ func (p *Policy) CheckHost(ctx context.Context, hostport string) error {
 			return ErrBlocked
 		}
 		return nil
+	}
+	if !validName(host) {
+		return ErrBlocked
 	}
 	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {

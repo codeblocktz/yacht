@@ -1,21 +1,18 @@
 package app
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
 	"github.com/codeblocktz/yacht/internal/egress"
 )
@@ -130,6 +127,9 @@ func sortBranches(names []string) {
 // remoteError is a failed ls-remote as ErrRepoUnreachable. A private address
 // is said as such, because it is the one failure that waiting will not fix.
 func remoteError(err error) error {
+	if errors.Is(err, errSSHListing) {
+		return fmt.Errorf("%w: %w", ErrRepoUnreachable, err)
+	}
 	if errors.Is(err, egress.ErrBlocked) {
 		return fmt.Errorf("%w: its host is on a private network, which is not reached from here",
 			ErrRepoUnreachable)
@@ -141,49 +141,37 @@ func remoteError(err error) error {
 //
 // The URL is a tenant's input and the engine runs inside the cluster, so
 // without a guard "https://10.43.0.1/x" would have it probe the cluster's API
-// and report, in the error or in how long it took, what answered. Over HTTPS
-// the check is in the dial, through go-git's transport given a client of the
+// and report, in the error or in how long it took, what answered. The check
+// is in the dial, through go-git's HTTP transport given a client of the
 // engine's own rather than its process-wide default: every redirect hop is
 // checked, and a name that resolves publicly when looked at and privately when
-// connected to is still refused. go-git's SSH transport dials for itself, so
-// an SSH host is resolved and checked first instead — weaker, since a name can
-// answer differently a moment later.
+// connected to is still refused. What the remote answers is read up to
+// maxAdvertisement and no further.
 //
-// Over SSH nothing of the engine's is offered: not the operator's SSH agent,
-// which go-git would otherwise sign in with, lending their keys to whatever
-// host somebody typed, and not their ssh_config, whose Hostname and Port
-// would make the host dialled a different one from the host checked (see
-// init). Every real host refuses an ls-remote without a key, so an SSH
-// repository's branches are not listed; the check is for the connection that
-// is still made.
+// HTTPS only. Over SSH there is nothing to list with: the engine has no key
+// to offer, and every real host refuses an ls-remote without one. Connecting
+// anyway would be the engine dialling whatever host was typed — through
+// go-git's SSH transport, which takes no context and sets no deadline on its
+// handshake, so a host that accepts and says nothing holds the request
+// forever. So an SSH URL is answered without a connection.
 func (s *Service) listRefs(ctx context.Context, repoURL string) ([]*plumbing.Reference, error) {
 	ep, err := transport.NewEndpoint(repoURL)
 	if err != nil {
 		return nil, err
 	}
-	var (
-		client transport.Transport
-		auth   transport.AuthMethod
-	)
 	switch ep.Protocol {
 	case "https":
-		guarded, err := s.opts.Outbound.Transport(gitHTTPBase)
-		if err != nil {
-			return nil, err
-		}
-		client = githttp.NewClient(&http.Client{Transport: guarded})
 	case "ssh":
-		if err := s.opts.Outbound.CheckHost(ctx,
-			net.JoinHostPort(strings.Trim(ep.Host, "[]"), strconv.Itoa(cmp.Or(ep.Port, gitssh.DefaultPort)))); err != nil {
-			return nil, err
-		}
-		client = gitssh.DefaultClient
-		auth = &gitssh.Password{User: ep.User}
+		return nil, errSSHListing
 	default:
 		return nil, fmt.Errorf("app: %q is not a scheme this can read — https or ssh", ep.Protocol)
 	}
-
-	session, err := client.NewUploadPackSession(ep, auth)
+	guarded, err := s.opts.Outbound.Transport(gitHTTPBase)
+	if err != nil {
+		return nil, err
+	}
+	client := githttp.NewClient(&http.Client{Transport: cappedBodies{guarded, maxAdvertisement}})
+	session, err := client.NewUploadPackSession(ep, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -203,17 +191,53 @@ func (s *Service) listRefs(ctx context.Context, repoURL string) ([]*plumbing.Ref
 	return refs, nil
 }
 
+// errSSHListing is an SSH repository's branches, which are not listed.
+var errSSHListing = errors.New("branches are not listed over SSH — use an https:// URL, or connect the repository through the GitHub App")
+
 // gitHTTPBase is the transport ls-remote's guarded one is made from; nil is
 // net/http's default. A variable so a test can trust its own TLS server.
 var gitHTTPBase http.RoundTripper
 
-func init() {
-	// go-git reads ssh_config for every SSH connection it makes and dials the
-	// Hostname and Port it finds there instead of the URL's — so the host
-	// listRefs checked would not be the host dialled. The engine has no
-	// ssh_config of its own to honour; go-git's SSH transport is used only by
-	// listRefs.
-	gitssh.DefaultSSHConfig = nil
+// maxAdvertisement bounds what a remote's ref advertisement is read to. A
+// repository with tens of thousands of branches and tags advertises a few
+// megabytes; past this, it is a remote answering with something else.
+const maxAdvertisement = 16 << 20
+
+// errAdvertisementTooLarge is a remote that kept answering past
+// maxAdvertisement.
+var errAdvertisementTooLarge = errors.New("the remote's list of branches is larger than is read")
+
+// cappedBodies stops reading a response body at max bytes, with an error
+// rather than a silent end, so a cut list is never taken for a whole one.
+type cappedBodies struct {
+	rt  http.RoundTripper
+	max int64
+}
+
+func (c cappedBodies) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := c.rt.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &cappedBody{ReadCloser: resp.Body, left: c.max}
+	return resp, nil
+}
+
+type cappedBody struct {
+	io.ReadCloser
+	left int64
+}
+
+func (b *cappedBody) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		return 0, errAdvertisementTooLarge
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.ReadCloser.Read(p)
+	b.left -= int64(n)
+	return n, err
 }
 
 // shortRemoteError keeps the first line and nothing else.
