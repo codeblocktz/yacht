@@ -615,10 +615,12 @@ analyze and export — have the credential.
 
 Two consequences a team can notice:
 
-- **A Dockerfile's `FROM` is pulled anonymously.** A base image in this
-  install's registry that needs the install's credential to pull — another
-  app's image, say — can no longer be built on. Use a public base image, or
-  one from a registry the Dockerfile can reach without Yacht's account.
+- **A Dockerfile's `FROM` is pulled anonymously, including from this
+  install's own registry.** A Dockerfile used to pull with the install's
+  credential; it no longer has it. A `FROM` naming an image in the install's
+  private registry — another app's image, say — now fails unless that image
+  can be pulled without credentials. Use a public base image, or one from a
+  registry the Dockerfile can reach without Yacht's account.
 - **Some variable names are not given to buildpacks.** `PATH`, `ENV`,
   `BASH_ENV`, `IFS`, `PS4`, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `GLOBIGNORE`,
   `GCONV_PATH`, `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`,

@@ -110,6 +110,19 @@ const uidMarker = "yacht-uid:"
 // order matters for the credential too: a step that holds it starts only
 // once the step before has exited, and every process the repository's code
 // left running went with that step's container.
+//
+// The repository's code can write this file or remove it — a RUN line
+// reaches the volume through /proc, and the buildpacks build phase writes the
+// workspace directly — and what follows is the repository's own problem.
+// Removed after a Dockerfile build, the buildpacks steps run as well, analyze
+// starting from a clean layers directory and the export behind its guard; the
+// push step finds no marker and ends, and the engine, told of an image by the
+// Dockerfile step's log, fails the build for want of anywhere to collect it
+// from. Written during a buildpacks build, it skips the export, and the push
+// step waits for an image the engine was never told of until it gives up and
+// fails the build. Either way the build fails or builds the repository's own
+// image: nothing done with this file reaches the credential or another
+// team's image.
 const dockerfileMarker = "/workspace/.dockerfile-built"
 
 // buildVolume holds the checkout and the marker, shared by every step.
@@ -995,6 +1008,9 @@ echo "Pushed $IMAGE"
 // and .sha files, config/metadata.toml, the SBOM directories. Deeper than
 // that is the content of a layer, which the exporter walks without following
 // a link, and where links are ordinary: node_modules/.bin is made of them.
+// The one deeper place the exporter writes into by name, the lifecycle's own
+// SBOM under sbom/build and sbom/launch, is removed instead, for the exporter
+// to make afresh.
 //
 // Checked, then used, with nothing of the repository's running in between:
 // the build step has exited, and every process it started went with it.
@@ -1019,4 +1035,10 @@ set +f
 if [ -L /workspace/layers ]; then refuse /workspace/layers; fi
 link=$(find /workspace/layers -mindepth 1 -maxdepth 2 -type l | head -n 1)
 if [ -n "$link" ]; then refuse "$link"; fi
+# The exporter writes the lifecycle's own SBOM below these two, making
+# whatever is missing on the way. Whatever the build left there goes first:
+# rm removes a link rather than following it, and the levels above were
+# checked just now.
+rm -rf /workspace/layers/sbom/build/buildpacksio_lifecycle \
+  /workspace/layers/sbom/launch/buildpacksio_lifecycle
 `

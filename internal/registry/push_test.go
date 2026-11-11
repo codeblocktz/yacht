@@ -133,8 +133,19 @@ type pushRegistry struct {
 	requests  []string
 	location  string // overrides the upload Location when set
 	bearer    bool
-	scopes    []string
+	// storage answers, as a registry on object storage does, a HEAD on an
+	// existing blob and, when postToStorage, an upload's start with a
+	// redirect to a signed URL.
+	storage       bool
+	postToStorage bool
+	// uploads records how each blob's PUT was framed.
+	uploads []string
+	scopes  []string
 }
+
+// signedURL is where object storage keeps a blob: a credential in its own
+// right, which must never be followed or repeated.
+const signedURL = "https://bucket.storage.invalid/docker/blobs/data?X-Amz-Signature=PRESIGNED-SECRET&X-Amz-Credential=AKIA"
 
 const (
 	testUser = "yacht"
@@ -188,10 +199,18 @@ func (f *pushRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodHead && strings.HasPrefix(rest, "blobs/"):
 		if _, ok := f.blobs[strings.TrimPrefix(rest, "blobs/")]; ok {
+			if f.storage {
+				w.Header().Set("Location", signedURL)
+				w.WriteHeader(http.StatusTemporaryRedirect)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
+	case r.Method == http.MethodPost && rest == "blobs/uploads/" && f.postToStorage:
+		w.Header().Set("Location", signedURL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
 	case r.Method == http.MethodPost && rest == "blobs/uploads/":
 		loc := "/v2/yacht/owner-web/blobs/uploads/u1?_state=kept"
 		if f.location != "" {
@@ -206,6 +225,8 @@ func (f *pushRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		digest := r.URL.Query().Get("digest")
+		f.uploads = append(f.uploads, fmt.Sprintf("%s length=%d chunked=%t",
+			digest, r.ContentLength, len(r.TransferEncoding) > 0))
 		if r.URL.Query().Get("_state") != "kept" || sha(body) != digest {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"errors":[{"code":"DIGEST_INVALID"}]}`)
@@ -364,6 +385,17 @@ func TestALayoutThatIsNotOneVerifiableImageIsRefused(t *testing.T) {
 		{"a manifest that says it is something else", func(img *testImage) {
 			img.manifest["mediaType"] = dockerManifestType
 		}, nil},
+		{"a manifest that names a subject", func(img *testImage) {
+			img.manifest["subject"] = map[string]any{
+				"mediaType": ociManifestType, "digest": sha([]byte("another team's image")), "size": 10,
+			}
+		}, nil},
+		{"a config that is not an image configuration", func(img *testImage) {
+			img.manifest["config"].(map[string]any)["mediaType"] = "application/vnd.example.artifact+json"
+		}, nil},
+		{"a layer of a type no image is made of", func(img *testImage) {
+			img.manifest["layers"].([]map[string]any)[0]["mediaType"] = "application/octet-stream"
+		}, nil},
 		{"a manifest that is an index", func(img *testImage) {
 			img.manifest["manifests"] = []any{}
 		}, nil},
@@ -434,4 +466,161 @@ func TestStrictObject(t *testing.T) {
 			t.Errorf("%s: err = %v", raw, err)
 		}
 	}
+}
+
+// A registry on object storage answers a HEAD on a blob it has with a
+// redirect to a signed URL. That is the answer — the blob is there — and the
+// redirect is not followed: the first build pushes, and so does every one
+// after it.
+func TestABlobRedirectedToStorageIsThereAndNotFollowed(t *testing.T) {
+	img := defaultImage()
+	layout, digest, _ := img.layout(t)
+	f := newPushRegistry()
+	f.storage = true
+	f.blobs[sha(img.layers[0])] = img.layers[0]
+	if err := pushTo(t, f, layout, digest); err != nil {
+		t.Fatalf("a push to a registry on object storage failed: %v", err)
+	}
+	for _, u := range f.uploads {
+		if strings.HasPrefix(u, sha(img.layers[0])) {
+			t.Errorf("a blob the registry redirected to was uploaded again: %s", u)
+		}
+	}
+
+	// A rebuild: everything is there now, and nothing is sent again.
+	f.uploads = nil
+	if err := pushTo(t, f, layout, digest); err != nil {
+		t.Fatalf("the rebuild's push failed: %v", err)
+	}
+	if len(f.uploads) != 0 {
+		t.Errorf("the rebuild uploaded %q", f.uploads)
+	}
+}
+
+// A redirect anywhere else in a push is a refusal, and the error that says
+// so — which is shown on the team's build — names no signed URL.
+func TestARedirectedUploadIsRefusedWithoutItsURL(t *testing.T) {
+	layout, digest, _ := defaultImage().layout(t)
+	f := newPushRegistry()
+	f.postToStorage = true
+	err := pushTo(t, f, layout, digest)
+	if err == nil {
+		t.Fatal("pushed through a redirect")
+	}
+	for _, secret := range []string{"PRESIGNED-SECRET", "X-Amz", "AKIA", "storage.invalid"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("the error carries %q: %v", secret, err)
+		}
+	}
+}
+
+// An empty layer — which BuildKit makes for a step that changes nothing — is
+// sent as an empty body with a length of zero, not chunked; and an empty
+// blob that claims any digest but the empty one is refused.
+func TestAnEmptyBlobIsSentAsNoBody(t *testing.T) {
+	img := defaultImage()
+	img.layers = append(img.layers, []byte{})
+	img.manifest["layers"] = append(img.manifest["layers"].([]map[string]any), map[string]any{
+		"mediaType": "application/vnd.oci.image.layer.v1.tar", "digest": emptyDigest, "size": 0,
+	})
+	layout, digest, _ := img.layout(t)
+	f := newPushRegistry()
+	if err := pushTo(t, f, layout, digest); err != nil {
+		t.Fatal(err)
+	}
+	want := emptyDigest + " length=0 chunked=false"
+	found := false
+	for _, u := range f.uploads {
+		found = found || u == want
+	}
+	if !found {
+		t.Errorf("uploads = %q, want %q among them", f.uploads, want)
+	}
+
+	img = defaultImage()
+	img.manifest["layers"].([]map[string]any)[0]["size"] = 0
+	layout, digest, _ = img.layout(t)
+	if err := pushTo(t, newPushRegistry(), layout, digest); !errors.Is(err, ErrBadLayout) {
+		t.Errorf("an empty blob with another digest: err = %v", err)
+	}
+}
+
+// Docker's media types and zstd layers are images too.
+func TestDockerAndZstdImagesArePushed(t *testing.T) {
+	img := defaultImage()
+	img.manifest["mediaType"] = dockerManifestType
+	img.indexType = dockerManifestType
+	img.manifest["config"].(map[string]any)["mediaType"] = "application/vnd.docker.container.image.v1+json"
+	ls := img.manifest["layers"].([]map[string]any)
+	ls[0]["mediaType"] = "application/vnd.docker.image.rootfs.diff.tar.gzip"
+	ls[1]["mediaType"] = "application/vnd.oci.image.layer.v1.tar+zstd"
+	layout, digest, _ := img.layout(t)
+	f := newPushRegistry()
+	if err := pushTo(t, f, layout, digest); err != nil {
+		t.Fatal(err)
+	}
+	if f.types["d1"] != dockerManifestType {
+		t.Errorf("pushed as %q", f.types["d1"])
+	}
+}
+
+// The push is to one image of this install's: one path segment under the
+// configured repository, which is what ImageRef makes.
+func TestOnlyThisInstallsImagesArePushed(t *testing.T) {
+	for _, tc := range []struct {
+		repo, image string
+		ok          bool
+	}{
+		{"yacht", "registry.test/yacht/owner-web:d1", true},
+		{"acme/yacht", "registry.test/acme/yacht/owner-web:d1", true},
+		{"yacht", "registry.test/other/owner-web:d1", false},
+		{"yacht", "registry.test/yacht/owner/web:d1", false},
+		{"yacht", "registry.test/yachtx/owner-web:d1", false},
+		{"acme/yacht", "registry.test/acme/owner-web:d1", false},
+		{"", "registry.test/owner-web:d1", true},
+		{"", "registry.test/team/owner-web:d1", false},
+		{"", "docker.io/owner-web:d1", true},
+	} {
+		ref, err := parseReference(tc.image)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := "registry.test"
+		if strings.HasPrefix(tc.image, "docker.io") {
+			host = "docker.io"
+		}
+		set := Settings{Host: host, Repository: tc.repo}
+		if got := ownHost(set, ref) && inRepository(set, ref); got != tc.ok {
+			t.Errorf("repository %q, %s: %t, want %t", tc.repo, tc.image, got, tc.ok)
+		}
+	}
+}
+
+// No more than concurrentPushes images go through one engine at once; the
+// next waits, says so, and gives up with its deadline.
+func TestPushesTakeTurns(t *testing.T) {
+	s := &Store{pushes: make(chan struct{}, concurrentPushes)}
+	var releases []func()
+	for i := 0; i < concurrentPushes; i++ {
+		release, err := s.takePushSlot(context.Background(), "x", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var said string
+	if _, err := s.takePushSlot(ctx, "x", func(m string) { said += m }); err == nil {
+		t.Fatal("a third push went ahead")
+	}
+	if !strings.Contains(said, "Waiting for another image") {
+		t.Errorf("the wait was not said: %q", said)
+	}
+	releases[0]()
+	release, err := s.takePushSlot(context.Background(), "x", nil)
+	if err != nil {
+		t.Fatalf("a freed slot was not taken: %v", err)
+	}
+	release()
 }

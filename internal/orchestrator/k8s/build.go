@@ -71,6 +71,15 @@ const (
 // a state anybody should have to interpret.
 const buildTimeout = 30 * time.Minute
 
+// pushTimeout caps the engine's push of a Dockerfile build's image, waiting
+// for its turn included; finishTimeout is what is left for the build to end
+// once it is pushed. The push step waits for the engine for buildTimeout,
+// which is longer than both together.
+const (
+	pushTimeout   = 20 * time.Minute
+	finishTimeout = 2 * time.Minute
+)
+
 // Build runs one build to completion and returns what it produced.
 //
 // Synchronous from this seam's point of view. Deciding whether to wait belongs
@@ -157,6 +166,7 @@ func (o *Orchestrator) Build(
 	redact := buildRedactions(req, credential)
 	req.Log = redactingLog(req.Log, redact...)
 
+	outer := ctx
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
 
@@ -184,9 +194,18 @@ func (o *Orchestrator) Build(
 		o.recoverBuildMarkers(ctx, pod, &result, &seen, req.Log)
 	}
 	if seen.image != "" {
-		if err := o.pushBuiltImage(ctx, pod, req, seen.image); err != nil {
+		// The push has a clock of its own rather than what is left of the
+		// build's, so a build that took most of its half hour is not pushed
+		// in a hurry; and so does what follows it, the push step's exit.
+		pushCtx, cancelPush := context.WithTimeout(outer, pushTimeout)
+		err := o.pushBuiltImage(pushCtx, pod, req, seen.image)
+		cancelPush()
+		if err != nil {
 			return result, redactError(err, redact...)
 		}
+		var cancelFinish context.CancelFunc
+		ctx, cancelFinish = context.WithTimeout(outer, finishTimeout)
+		defer cancelFinish()
 	}
 	o.streamBuildLog(ctx, pod, req.Log, []string{pushContainer}, &result, &seen)
 

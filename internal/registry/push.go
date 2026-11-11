@@ -54,6 +54,33 @@ type LayoutFiles interface {
 // ErrBadLayout means the layout a build left is not an image Yacht will push.
 var ErrBadLayout = errors.New("registry: the built image is not one Yacht will push")
 
+// concurrentPushes is how many images one engine pushes at once. A push
+// waiting for its turn waits within its own deadline, which the caller sets.
+const concurrentPushes = 2
+
+// emptyDigest is the digest of no bytes, the only one a zero-length blob may
+// have.
+const emptyDigest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// The media types a build's image may be made of: OCI's and Docker's image
+// configuration, and their layer types, uncompressed, gzip and zstd. Anything
+// else — an artifact, a foreign or non-distributable layer — is not what a
+// Dockerfile build makes, and is refused rather than pushed as if it were.
+var (
+	configTypes = map[string]bool{
+		"application/vnd.oci.image.config.v1+json":       true,
+		"application/vnd.docker.container.image.v1+json": true,
+	}
+	layerTypes = map[string]bool{
+		"application/vnd.oci.image.layer.v1.tar":            true,
+		"application/vnd.oci.image.layer.v1.tar+gzip":       true,
+		"application/vnd.oci.image.layer.v1.tar+zstd":       true,
+		"application/vnd.docker.image.rootfs.diff.tar":      true,
+		"application/vnd.docker.image.rootfs.diff.tar.gzip": true,
+		"application/vnd.docker.image.rootfs.diff.tar.zstd": true,
+	}
+)
+
 // Bounds on what a layout may hold. A build's image is the team's to make as
 // large as they like within reason; these are the reason.
 const (
@@ -103,7 +130,7 @@ func (s *Store) PushLayout(
 	// A build's image is named by the engine, but the push holds the
 	// install's credential, so where it goes is checked here, where the
 	// credential is.
-	if !ownHost(set, ref) {
+	if !ownHost(set, ref) || !inRepository(set, ref) {
 		return fmt.Errorf("registry: %s is not in this install's registry, so it is not pushed", image)
 	}
 	creds, err := s.Credentials(ctx)
@@ -111,14 +138,58 @@ func (s *Store) PushLayout(
 		return err
 	}
 	// A client of its own: the resolver's has a 30-second timeout, which is a
-	// manifest's lifetime, not a layer's. The build's own deadline bounds it.
+	// manifest's lifetime, not a layer's. The push's own deadline bounds it.
 	client := manifestClient{
 		http:     &http.Client{Transport: s.http.Transport},
 		creds:    &creds,
 		insecure: set.Insecure,
 		actions:  "pull,push",
 	}
+	release, err := s.takePushSlot(ctx, image, logf)
+	if err != nil {
+		return err
+	}
+	defer release()
 	return pushLayout(ctx, client, ref, digest, layout, logf)
+}
+
+// takePushSlot waits for one of the engine's push slots, saying so when it
+// has to wait, and returns how to give it back.
+func (s *Store) takePushSlot(ctx context.Context, image string, logf func(string)) (func(), error) {
+	release := func() { <-s.pushes }
+	select {
+	case s.pushes <- struct{}{}:
+		return release, nil
+	default:
+	}
+	if logf != nil {
+		logf("Waiting for another image to finish pushing.\n")
+	}
+	select {
+	case s.pushes <- struct{}{}:
+		return release, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("registry: waiting to push %s: %w", image, ctx.Err())
+	}
+}
+
+// inRepository reports whether a reference is an image of this install's,
+// which is one path segment under the configured repository: the path
+// ImageRef builds. The credential may reach further than that — one account
+// holds every team's images — and the push is where that is stopped.
+func inRepository(set Settings, ref reference) bool {
+	name := ref.name
+	if set.Repository != "" {
+		var ok bool
+		if name, ok = strings.CutPrefix(name, set.Repository+"/"); !ok {
+			return false
+		}
+	} else if ref.host == dockerHubHost {
+		// Docker Hub's library/ is what parseReference adds to a one-segment
+		// name, which is the only kind an empty repository makes.
+		name = strings.TrimPrefix(name, "library/")
+	}
+	return name != "" && !strings.Contains(name, "/")
 }
 
 func pushLayout(
@@ -213,7 +284,7 @@ func readIndex(ctx context.Context, layout LayoutFiles, digest string) (descript
 
 // parseManifest returns an image manifest's config and layers.
 func parseManifest(raw []byte, mediaType string) (descriptor, []descriptor, error) {
-	fields, err := strictObject(raw, "the manifest", "schemaVersion", "mediaType", "config", "layers", "manifests")
+	fields, err := strictObject(raw, "the manifest", "schemaVersion", "mediaType", "config", "layers", "manifests", "subject")
 	if err != nil {
 		return descriptor{}, nil, err
 	}
@@ -222,6 +293,12 @@ func parseManifest(raw []byte, mediaType string) (descriptor, []descriptor, erro
 	}
 	if _, ok := fields["manifests"]; ok {
 		return descriptor{}, nil, fmt.Errorf("%w: the manifest is an index", ErrBadLayout)
+	}
+	// A subject makes the manifest a referrer of another image, which a
+	// registry indexes against that image — possibly another team's. A build
+	// makes an image, not a statement about one.
+	if _, ok := fields["subject"]; ok {
+		return descriptor{}, nil, fmt.Errorf("%w: the manifest names a subject", ErrBadLayout)
 	}
 	if mt, ok := fields["mediaType"]; ok {
 		var stated string
@@ -244,6 +321,10 @@ func parseManifest(raw []byte, mediaType string) (descriptor, []descriptor, erro
 	if config.Size > configLimit {
 		return descriptor{}, nil, fmt.Errorf("%w: the config is larger than %d bytes", ErrBadLayout, configLimit)
 	}
+	if !configTypes[config.MediaType] {
+		return descriptor{}, nil, fmt.Errorf("%w: the config is a %q, not an image configuration",
+			ErrBadLayout, config.MediaType)
+	}
 
 	var rawLayers []json.RawMessage
 	if l, ok := fields["layers"]; !ok || json.Unmarshal(l, &rawLayers) != nil {
@@ -262,9 +343,9 @@ func parseManifest(raw []byte, mediaType string) (descriptor, []descriptor, erro
 		// A foreign layer is one the puller fetches from somewhere else; a
 		// build has no business making one, and pushing one would be pushing
 		// a pointer rather than the image.
-		if len(d.URLs) > 0 || strings.Contains(d.MediaType, "foreign") ||
-			strings.Contains(d.MediaType, "nondistributable") {
-			return descriptor{}, nil, fmt.Errorf("%w: layer %d is not distributable", ErrBadLayout, i+1)
+		if len(d.URLs) > 0 || !layerTypes[d.MediaType] {
+			return descriptor{}, nil, fmt.Errorf("%w: layer %d is a %q, not a layer Yacht pushes",
+				ErrBadLayout, i+1, d.MediaType)
 		}
 		total += d.Size
 		if total > imageLimit {
@@ -294,6 +375,9 @@ func parseDescriptor(raw json.RawMessage, what string) (descriptor, error) {
 	}
 	if u, ok := fields["urls"]; ok && json.Unmarshal(u, &d.URLs) != nil {
 		return descriptor{}, fmt.Errorf("%w: %s has unreadable urls", ErrBadLayout, what)
+	}
+	if d.Size == 0 && d.Digest != emptyDigest {
+		return descriptor{}, fmt.Errorf("%w: %s is empty and says it is %s", ErrBadLayout, what, d.Digest)
 	}
 	return d, nil
 }
@@ -382,9 +466,13 @@ func openBlob(ctx context.Context, layout LayoutFiles, d descriptor) (io.ReadClo
 	return &verifyingReader{r: io.LimitReader(rc, d.Size), c: rc, want: d, h: sha256.New()}, nil
 }
 
-// verifyingReader hashes what it reads and turns the end of a blob that is
-// not what it should be into an error, so a request sending it fails rather
-// than completes.
+// verifyingReader hashes what it reads and refuses a blob that is not what
+// its descriptor says before the blob is complete.
+//
+// Checked on the read that would deliver the last byte, and that read's
+// bytes withheld on a mismatch: net/http stops reading a body once it has
+// Content-Length bytes, so a check at EOF can come after the registry already
+// has all of it. Withholding the end means a wrong blob is never sent whole.
 type verifyingReader struct {
 	r    io.Reader
 	c    io.Closer
@@ -397,10 +485,10 @@ func (v *verifyingReader) Read(p []byte) (int, error) {
 	n, err := v.r.Read(p)
 	v.h.Write(p[:n])
 	v.n += int64(n)
-	if err == io.EOF {
+	if v.n == v.want.Size || err == io.EOF {
 		got := "sha256:" + hex.EncodeToString(v.h.Sum(nil))
 		if v.n != v.want.Size || got != v.want.Digest {
-			return n, fmt.Errorf("%w: %s holds content that is %s (%d bytes)",
+			return 0, fmt.Errorf("%w: %s holds content that is %s (%d bytes)",
 				ErrBadLayout, v.want.Digest, got, v.n)
 		}
 	}
@@ -437,6 +525,13 @@ func (p *pusher) send(
 				return nil, err
 			}
 		}
+		if size == 0 && rc != http.NoBody {
+			// An empty blob, its digest already checked to be the empty
+			// one. Sent as no body rather than a reader of none, which
+			// net/http would send chunked.
+			rc.Close() //nolint:errcheck
+			rc = http.NoBody
+		}
 		req, err := http.NewRequestWithContext(ctx, method, target, rc)
 		if err != nil {
 			rc.Close() //nolint:errcheck
@@ -449,7 +544,7 @@ func (p *pusher) send(
 		if p.auth != "" {
 			req.Header.Set("Authorization", p.auth)
 		}
-		resp, err := p.client.do(req)
+		resp, err := p.do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -468,6 +563,30 @@ func (p *pusher) send(
 		p.auth = next
 	}
 	return nil, fmt.Errorf("%w: %s", ErrCredentialsRejected, p.ref.host)
+}
+
+// do sends a request and follows no redirect.
+//
+// Nothing in a push is a redirect to follow. A HEAD on a blob that a
+// registry keeps in S3, GCS or Azure is answered with a redirect to a signed
+// URL for it, which says the blob is there and is a credential in its own
+// right; the POST and PUTs of an upload are the registry's to answer itself,
+// and a redirect of one is a refusal. So the redirect is the answer, and its
+// Location is never read into anything — and a failed request is reported
+// by its method, host and path, never by a URL whose query could be signed.
+func (p *pusher) do(req *http.Request) (*http.Response, error) {
+	client := *p.client.client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("registry: %s %s://%s%s: %w",
+				req.Method, req.URL.Scheme, req.URL.Host, req.URL.Path, ue.Err)
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 func drain(resp *http.Response) {
@@ -501,11 +620,15 @@ func (p *pusher) pushBlob(ctx context.Context, layout LayoutFiles, d descriptor,
 	if err != nil {
 		return err
 	}
-	switch resp.StatusCode {
-	case http.StatusOK:
+	switch {
+	case resp.StatusCode == http.StatusOK:
 		drain(resp)
 		return nil
-	case http.StatusNotFound:
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// A redirect to where the blob is stored: it is there.
+		drain(resp)
+		return nil
+	case resp.StatusCode == http.StatusNotFound:
 		drain(resp)
 	default:
 		return p.refused(resp, "a check for "+d.Digest)

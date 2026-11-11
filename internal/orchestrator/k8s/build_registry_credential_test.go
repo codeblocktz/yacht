@@ -709,3 +709,53 @@ func TestTheRegistryCredentialIsRedactedFromTheLog(t *testing.T) {
 		t.Errorf("an unreadable config gave %q", got)
 	}
 }
+
+// The exporter writes the lifecycle's own SBOM three and four levels into
+// the layers directory, below where the guard looks for links. What the build
+// left at those two paths is removed before the export — links removed, not
+// followed — for the exporter to make afresh.
+func TestTheExportClearsTheLifecyclesSBOMPaths(t *testing.T) {
+	root := t.TempDir()
+	secret := filepath.Join(root, "registry")
+	mkdirs(t, secret)
+	if err := os.WriteFile(filepath.Join(secret, "config.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(root, "workspace")
+	build := filepath.Join(ws, "layers", "sbom", "build")
+	launch := filepath.Join(ws, "layers", "sbom", "launch", "buildpacksio_lifecycle")
+	mkdirs(t, filepath.Join(ws, "src"), build, launch, filepath.Join(ws, "layers", "sbom", "launch", "paketo_node"))
+	symlink(t, secret, filepath.Join(build, "buildpacksio_lifecycle"))
+	symlink(t, secret, filepath.Join(launch, "launcher"))
+	if err := os.WriteFile(filepath.Join(ws, "layers", "sbom", "launch", "paketo_node", "sbom.cdx.json"),
+		[]byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := runGuard(t, exportGuardScript, ws, ""); err != nil {
+		t.Fatalf("the guard refused: %v\n%s", err, out)
+	}
+	for _, p := range []string{filepath.Join(build, "buildpacksio_lifecycle"), launch} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s is still there: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(secret, "config.json")); err != nil {
+		t.Errorf("removing a link removed what it pointed at: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "layers", "sbom", "launch", "paketo_node", "sbom.cdx.json")); err != nil {
+		t.Errorf("a buildpack's SBOM was removed: %v", err)
+	}
+}
+
+// The push step waits for the engine for buildTimeout, so the engine's push
+// and the build's end after it must fit inside that, or the step gives up on
+// an image that is still being pushed.
+func TestThePushFitsInsideThePushStepsWait(t *testing.T) {
+	if pushTimeout+finishTimeout >= buildTimeout {
+		t.Errorf("push %v + finish %v is not inside the push step's wait of %v", pushTimeout, finishTimeout, buildTimeout)
+	}
+	if !strings.Contains(pushStep().Args[0], `"$waited" -ge 1800`) {
+		t.Error("the push step does not wait for buildTimeout")
+	}
+}
