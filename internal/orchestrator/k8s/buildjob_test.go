@@ -26,10 +26,10 @@ func uploadBuild() orchestrator.BuildRequest {
 	}
 }
 
-// The three steps share one volume as three users in one group: the clone
-// and BuildKit as 1000, the lifecycle as 1001. Every step is in group 1000
-// and the volume belongs to it, which is what lets each read and write what
-// the one before it left.
+// The steps share one volume as two users in one group: the clone and
+// BuildKit as 1000, the lifecycle as 1001. Every step is in group 1000 and
+// the volume belongs to it, which is what lets each read and write what the
+// one before it left.
 func TestTheBuildStepsShareOneGroupOnOneVolume(t *testing.T) {
 	job := buildJob("b", cloneBuild(), "pull", "", "")
 	pod := job.Spec.Template.Spec
@@ -50,11 +50,20 @@ func TestTheBuildStepsShareOneGroupOnOneVolume(t *testing.T) {
 	want := map[string]struct{ uid, gid int64 }{
 		cloneContainer:      {buildUID, cnbGID},
 		dockerfileContainer: {buildUID, cnbGID},
-		buildpackContainer:  {cnbUID, cnbGID},
+		pushContainer:       {buildUID, cnbGID},
+		analyzeContainer:    {cnbUID, cnbGID},
+		detectContainer:     {cnbUID, cnbGID},
+		restoreContainer:    {cnbUID, cnbGID},
+		buildContainer:      {cnbUID, cnbGID},
+		exportContainer:     {cnbUID, cnbGID},
 	}
 	steps := append(append([]corev1.Container{}, pod.InitContainers...), pod.Containers...)
-	if len(steps) != 3 {
-		t.Fatalf("%d steps, want 3", len(steps))
+	var names []string
+	for _, c := range steps {
+		names = append(names, c.Name)
+	}
+	if strings.Join(names, " ") != strings.Join(buildSteps, " ") {
+		t.Fatalf("steps = %q, want %q", names, buildSteps)
 	}
 	for _, c := range steps {
 		w := want[c.Name]
@@ -76,10 +85,13 @@ func TestTheBuildStepsShareOneGroupOnOneVolume(t *testing.T) {
 		}
 	}
 	// The lifecycle is told the user it runs as, or the layers it writes
-	// belong to somebody else.
-	script := pod.Containers[0].Args[0]
-	if !strings.Contains(script, "-uid=1001 -gid=1000") {
-		t.Error("the lifecycle is not given the user its step runs as")
+	// belong to somebody else. Only the phases that write layers or the
+	// image take the flags; the detector and builder refuse them.
+	for _, c := range steps {
+		takesUser := c.Name == analyzeContainer || c.Name == restoreContainer || c.Name == exportContainer
+		if got := strings.Contains(c.Args[0], "-uid=1001 -gid=1000"); got != takesUser {
+			t.Errorf("%s is given the lifecycle's user: %t, want %t", c.Name, got, takesUser)
+		}
 	}
 }
 
@@ -154,10 +166,12 @@ func TestShareSourceScriptMakesTheCheckoutGroupWritable(t *testing.T) {
 	}
 }
 
-// runBuildpackStep runs the buildpack step's script against a stand-in
-// lifecycle, with /workspace and /cnb moved into a temporary directory. The
-// stand-in records each run's platform environment and exits with what
-// exits says for that run.
+// runBuildpackStep runs the buildpacks steps' scripts in order, as the pod
+// runs them, against a stand-in lifecycle, with /workspace, /phases and /cnb
+// moved into a temporary directory. A step that fails ends the run, as an
+// init container that fails ends the pod. The stand-in detector records each
+// run's platform environment and exits with what exits says for that run;
+// the other phases succeed.
 func runBuildpackStep(t *testing.T, files map[string]string, env map[string]string, exits ...string) (string, []string, error) {
 	t.Helper()
 	root := t.TempDir()
@@ -186,7 +200,7 @@ func runBuildpackStep(t *testing.T, files map[string]string, env map[string]stri
 	}
 	// Run n exits with the nth code given, and appends what it was given
 	// as BP_* platform variables to runs.
-	creator := `#!/bin/sh
+	detector := `#!/bin/sh
 n=$(( $(cat "$ROOT/count" 2>/dev/null || echo 0) + 1 ))
 echo $n > "$ROOT/count"
 line="run$n"
@@ -199,18 +213,35 @@ set -- ` + strings.Join(exits, " ") + `
 shift $(( n - 1 ))
 exit "${1:-0}"
 `
-	if err := os.WriteFile(filepath.Join(lifecycle, "creator"), []byte(creator), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(lifecycle, "detector"), []byte(detector), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	for _, phase := range []string{"analyzer", "restorer", "builder", "exporter"} {
+		if err := os.WriteFile(filepath.Join(lifecycle, phase), []byte("#!/bin/sh\necho "+phase+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	c := buildpackStep(orchestrator.BuildRequest{Image: "r/x:1"}, true)
-	script := c.Args[0]
-	script = strings.ReplaceAll(script, "/workspace", ws)
-	script = strings.ReplaceAll(script, "/cnb/lifecycle", lifecycle)
+	req := orchestrator.BuildRequest{Image: "r/x:1"}
+	var out []byte
+	var err error
+	for _, c := range []corev1.Container{
+		analyzeStep(req), detectStep(req, true), restoreStep(req), lifecycleBuildStep(req), exportStep(req),
+	} {
+		script := c.Args[0]
+		script = strings.ReplaceAll(script, "/workspace", ws)
+		script = strings.ReplaceAll(script, "/cnb/lifecycle", lifecycle)
+		script = strings.ReplaceAll(script, phasesPath, filepath.Join(root, "phases"))
 
-	cmd := exec.Command(c.Command[0], append(c.Command[1:], script)...)
-	cmd.Env = append(os.Environ(), "ROOT="+root, "IMAGE=r/x:1", "SUBDIR=", "BUILD_ARGS="+args)
-	out, err := cmd.CombinedOutput()
+		cmd := exec.Command(c.Command[0], append(c.Command[1:], script)...)
+		cmd.Env = append(os.Environ(), "ROOT="+root, "IMAGE=r/x:1", "SUBDIR=", "BUILD_ARGS="+args)
+		var step []byte
+		step, err = cmd.CombinedOutput()
+		out = append(out, step...)
+		if err != nil {
+			break
+		}
+	}
 	runs, _ := os.ReadFile(filepath.Join(root, "runs"))
 	return string(out), strings.Split(strings.TrimSpace(string(runs)), "\n"), err
 }

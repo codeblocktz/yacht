@@ -3,6 +3,8 @@ package k8s
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -152,7 +154,7 @@ func (o *Orchestrator) Build(
 			o.ownBuildSecret(ctx, s, created)
 		}
 	}
-	redact := append([]string{credential}, req.Redact...)
+	redact := buildRedactions(req, credential)
 	req.Log = redactingLog(req.Log, redact...)
 
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
@@ -223,15 +225,15 @@ func scanBuildLog(r io.Reader, logf func(string), result *orchestrator.BuildResu
 // recoverBuildMarkers reads the finished build's logs without following
 // them, which needs nothing of the kubelet but the file, for the markers the
 // live log did not show. A buildpack build prints no uid, and finds none.
-// Only the buildpack step says what a buildpacks build was given, so it is
-// read when that is what is missing.
+// Only the detect step says what a buildpacks build was given, so it is read
+// when that is what is missing.
 func (o *Orchestrator) recoverBuildMarkers(
 	ctx context.Context, pod string, result *orchestrator.BuildResult, seen *markersSeen, logf func(string),
 ) {
 	before := *seen
 	containers := []string{cloneContainer, dockerfileContainer}
 	if !seen.args {
-		containers = append(containers, buildpackContainer)
+		containers = append(containers, detectContainer)
 	}
 	for _, c := range containers {
 		stream, err := o.client.CoreV1().Pods(BuildNamespace).GetLogs(pod,
@@ -316,6 +318,50 @@ func (o *Orchestrator) deleteBuildSecret(ctx context.Context, name string) error
 		return err
 	}
 	return nil
+}
+
+// buildRedactions is every secret a build's log and error are kept clear of:
+// the source credential, the app's secret variables, and the registry
+// credential.
+//
+// The registry credential is not mounted by any step that runs the
+// repository's code, so nothing should be able to print it. It is here
+// anyway, for the day a tool in one of the steps that does hold it prints
+// what it was given.
+func buildRedactions(req orchestrator.BuildRequest, credential string) []string {
+	redact := append([]string{credential}, req.Redact...)
+	return append(redact, registrySecrets(req.RegistryAuth)...)
+}
+
+// registrySecrets is the secret part of a docker config.json: each
+// registry's password, the base64 of user:password that docker writes
+// beside it, and any token. The username is not secret, and hiding it would
+// hide every mention of the account rather than the credential.
+//
+// A config that does not parse gives nothing, rather than failing a build
+// over its log.
+func registrySecrets(dockerConfig []byte) []string {
+	var cfg struct {
+		Auths map[string]struct {
+			Password      string `json:"password"`
+			Auth          string `json:"auth"`
+			IdentityToken string `json:"identitytoken"`
+			RegistryToken string `json:"registrytoken"`
+		} `json:"auths"`
+	}
+	if len(dockerConfig) == 0 || json.Unmarshal(dockerConfig, &cfg) != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range cfg.Auths {
+		out = append(out, a.Password, a.Auth, a.IdentityToken, a.RegistryToken)
+		if raw, err := base64.StdEncoding.DecodeString(a.Auth); err == nil {
+			if _, password, ok := strings.Cut(string(raw), ":"); ok {
+				out = append(out, password)
+			}
+		}
+	}
+	return out
 }
 
 // redactingLog keeps a token out of the build log. Nothing in the clone
@@ -609,7 +655,7 @@ func (o *Orchestrator) streamBuildLog(
 		result orchestrator.BuildResult
 		seen   markersSeen
 	)
-	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer} {
+	for _, c := range buildSteps {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
 			// Genuinely nothing to read: the pod finished without reaching
