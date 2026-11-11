@@ -27,7 +27,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -158,7 +157,7 @@ func (s *Store) clientForManifest(
 
 // manifestClientFor is the client for a reference, short of its credential.
 func (s *Store) manifestClientFor(set Settings, parsed reference) manifestClient {
-	client := manifestClient{http: s.http}
+	client := manifestClient{http: s.http, policy: s.outbound}
 	if ownHost(set, parsed) {
 		// Plain HTTP only for the host the install already declared insecure.
 		// Anything else is asked over TLS regardless, because a reference is
@@ -198,6 +197,10 @@ type manifestClient struct {
 	// say what is there. Empty means nothing private is dialled, which is the
 	// safe zero value for a client built anywhere else.
 	own string
+
+	// policy is the operator's allowed and refused addresses on top of that
+	// rule; nil is the rule alone.
+	policy *egress.Policy
 }
 
 // manifestTypes is what Yacht can be handed back, and the only thing it will
@@ -383,7 +386,7 @@ func (m manifestClient) guarded() (http.Client, error) {
 	if m.own != "" {
 		allow = append(allow, m.own)
 	}
-	transport, err := egress.Transport(client.Transport, allow...)
+	transport, err := m.policy.Transport(client.Transport, allow...)
 	if err != nil {
 		return http.Client{}, err
 	}
@@ -667,7 +670,7 @@ func (m manifestClient) bearerToken(
 
 	resp, err := m.doToken(req, ref)
 	if err != nil {
-		if errors.Is(err, errUnsafeRealmAddress) {
+		if errors.Is(err, egress.ErrBlocked) {
 			return "", fmt.Errorf("%w: %s: %w", ErrCredentialsRejected, u.Host, err)
 		}
 		return "", fmt.Errorf("%w: %s: %w", ErrUnreachable, u.Host, err)
@@ -709,14 +712,13 @@ func (m manifestClient) bearerToken(
 	return "Bearer " + value, nil
 }
 
-var errUnsafeRealmAddress = errors.New("registry: token realm resolves to a non-public address")
-
 // doToken applies the ordinary redirect rules and, for a delegated token
-// service, pins dialing to public addresses resolved inside the dial itself.
+// service, holds dialing to public addresses, checked inside the dial itself
+// (see package egress).
 //
 // A preflight DNS lookup is insufficient: a hostile name can answer publicly
-// during validation and privately when net/http connects. Resolving and
-// selecting the address in DialContext closes that gap. A same-authority realm
+// during validation and privately when net/http connects. Checking the
+// address in the dial closes that gap. A same-authority realm
 // is held to the registry's own rule instead (see manifestClient.own): the
 // install's configured registry may be private and must remain usable, and
 // the request is not being delegated anywhere the operator did not already
@@ -739,75 +741,15 @@ func (m manifestClient) doToken(req *http.Request, ref reference) (*http.Respons
 	}
 
 	if !sameAuthority(req.URL, m.registryURL(ref)) {
-		transport, err := publicRealmTransport(m.client().Transport)
+		// A delegated token service is never the install's own registry,
+		// so it is held to public addresses with no exception for it.
+		transport, err := m.policy.Transport(m.client().Transport)
 		if err != nil {
 			return nil, err
 		}
 		client.Transport = transport
 	}
 	return client.Do(req)
-}
-
-// publicRealmTransport returns a private copy of an HTTP transport whose
-// connections can reach public addresses only. Proxying is deliberately
-// disabled for this one delegated request: otherwise DialContext sees the
-// proxy rather than the challenged destination and cannot enforce the rule.
-func publicRealmTransport(base http.RoundTripper) (*http.Transport, error) {
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	transport, ok := base.(*http.Transport)
-	if !ok {
-		return nil, fmt.Errorf("registry: cannot secure token dialing through %T", base)
-	}
-	clone := transport.Clone()
-	clone.Proxy = nil
-	clone.DialContext = dialPublicRealm
-	return clone, nil
-}
-
-func dialPublicRealm(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, err
-	}
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-
-	dialer := &net.Dialer{}
-	var dialErrors []error
-	foundPublic := false
-	for _, address := range addresses {
-		address = address.Unmap()
-		if !publicRealmAddress(address) {
-			continue
-		}
-		if network == "tcp4" && !address.Is4() || network == "tcp6" && !address.Is6() {
-			continue
-		}
-		foundPublic = true
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(address.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		dialErrors = append(dialErrors, err)
-	}
-	if !foundPublic {
-		return nil, fmt.Errorf("%w: %s", errUnsafeRealmAddress, host)
-	}
-	return nil, errors.Join(dialErrors...)
-}
-
-var carrierGradeNAT = netip.MustParsePrefix("100.64.0.0/10")
-
-func publicRealmAddress(address netip.Addr) bool {
-	address = address.Unmap()
-	return address.IsValid() && address.IsGlobalUnicast() &&
-		!address.IsPrivate() && !address.IsLoopback() &&
-		!address.IsLinkLocalUnicast() && !carrierGradeNAT.Contains(address) &&
-		!egress.Blocked(address)
 }
 
 func (m manifestClient) client() *http.Client {

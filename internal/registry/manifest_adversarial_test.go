@@ -212,13 +212,13 @@ func TestADelegatedRealmCannotResolveIntoTheInternalNetwork(t *testing.T) {
 		"169.254.169.254", "100.64.0.1", "::1", "fc00::1", "fe80::1",
 	} {
 		address := netip.MustParseAddr(raw)
-		if publicRealmAddress(address) {
+		if !(*egress.Policy)(nil).Blocked(address) {
 			t.Errorf("internal address %s may receive a delegated token request", address)
 		}
 	}
 	for _, raw := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
 		address := netip.MustParseAddr(raw)
-		if !publicRealmAddress(address) {
+		if (*egress.Policy)(nil).Blocked(address) {
 			t.Errorf("public address %s was refused", address)
 		}
 	}
@@ -642,5 +642,48 @@ func TestTheInstallsOwnRegistryIsStillReachedWhenPrivate(t *testing.T) {
 	}
 	if _, err := store.manifestClientFor(set, other).resolve(context.Background(), other); !errors.Is(err, egress.ErrBlocked) {
 		t.Errorf("a private host other than the install's own gave %v, want egress.ErrBlocked", err)
+	}
+}
+
+// A registry on the LAN or a tailnet that apps deploy from, other than the
+// install's own, is reached once the operator names it — and nothing else
+// private is, because of it.
+func TestARegistryTheOperatorAllowedIsReachedWhenPrivate(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serveManifest(w, testManifest)
+	}))
+	t.Cleanup(srv.Close)
+	lan := strings.TrimPrefix(srv.URL, "http://")
+	_, port, _ := strings.Cut(lan, ":")
+
+	policy, err := egress.ParsePolicy([]string{lan}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{http: srv.Client()}
+	store.SetOutbound(policy)
+	set := Settings{Host: "registry.example.com", Repository: "acme"}
+
+	// Over HTTPS, as any registry but the install's own is asked; the fake
+	// speaks plain HTTP, so the client is pointed at it the way the install's
+	// would be, keeping the policy the store gave it.
+	ref, err := parseReference(lan + "/acme/web:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := store.manifestClientFor(set, ref)
+	client.insecure = true
+	if _, err := client.resolve(context.Background(), ref); err != nil {
+		t.Fatalf("a registry the operator allowed was refused: %v", err)
+	}
+
+	other, err := parseReference("localhost:" + port + "/acme/web:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client = store.manifestClientFor(set, other)
+	client.insecure = true
+	if _, err := client.resolve(context.Background(), other); !errors.Is(err, egress.ErrBlocked) {
+		t.Errorf("a private host the operator did not name gave %v, want egress.ErrBlocked", err)
 	}
 }

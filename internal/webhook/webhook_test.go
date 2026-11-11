@@ -345,6 +345,8 @@ func TestInputIsChecked(t *testing.T) {
 	for _, in := range []Input{
 		{URL: "ftp://x.test", Events: []string{app.EventDeploySucceeded}},
 		{URL: "https://user:pass@x.test", Events: []string{app.EventDeploySucceeded}},
+		{URL: "https://[fe80::1%25eth0]/hook", Events: []string{app.EventDeploySucceeded}},
+		{URL: "http://[::1%2525zz]:8080/hook", Events: []string{app.EventDeploySucceeded}},
 		{URL: "https://x.test", Events: nil},
 		{URL: "https://x.test", Events: []string{"deploy.exploded"}},
 		{URL: "https://x.test", Events: []string{app.EventDeploySucceeded}, Headers: []Header{{Name: "webhook-signature", Value: "x"}}},

@@ -529,3 +529,29 @@ func TestTurnstileKeysGoTogether(t *testing.T) {
 		}
 	}
 }
+
+// The engine's outbound lists are read and checked at start, so a typo in
+// one stops the engine rather than silently allowing nothing — or refusing
+// a range somebody meant to refuse.
+func TestTheOutboundListsAreReadAndChecked(t *testing.T) {
+	t.Setenv("YACHT_OUTBOUND_ALLOW", " registry.lan:5000, 100.64.0.0/10 ,")
+	t.Setenv("YACHT_OUTBOUND_DENY", "203.0.113.0/24")
+	c := Config{
+		OutboundAllow: envList("YACHT_OUTBOUND_ALLOW"),
+		OutboundDeny:  envList("YACHT_OUTBOUND_DENY"),
+	}
+	if len(c.OutboundAllow) != 2 || c.OutboundAllow[1] != "100.64.0.0/10" {
+		t.Errorf("allow = %q", c.OutboundAllow)
+	}
+	if _, err := c.Outbound(); err != nil {
+		t.Errorf("valid lists: %v", err)
+	}
+	for _, bad := range []Config{
+		{OutboundAllow: []string{"https://registry.lan"}},
+		{OutboundDeny: []string{"registry.lan"}},
+	} {
+		if _, err := bad.Outbound(); err == nil {
+			t.Errorf("%+v was accepted", bad)
+		}
+	}
+}

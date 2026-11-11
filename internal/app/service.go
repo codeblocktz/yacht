@@ -30,6 +30,7 @@ import (
 	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/bucket"
 	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/egress"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/secret"
@@ -420,6 +421,11 @@ type Options struct {
 	// one archive; zero is DefaultMaxUploadBytes. See upload.go.
 	SourceFetchURL string
 	MaxUploadBytes int64
+
+	// Outbound is the operator's allowed and refused addresses for what the
+	// engine reaches on a tenant's behalf: the branch picker's ls-remote, here.
+	// Nil is the rule alone (see package egress).
+	Outbound *egress.Policy
 }
 
 // Service manages app lifecycle.

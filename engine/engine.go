@@ -698,7 +698,14 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	var images app.Images
 	var manifests app.Manifests
 	var builder app.Builder
+	// What the engine reaches on a team's behalf: validated at Load, read
+	// again here for the policy itself.
+	outbound, err := cfg.Outbound()
+	if err != nil {
+		return err
+	}
 	registryStore := registry.New(e.Pool, e.Keeper, log)
+	registryStore.SetOutbound(outbound)
 	e.registry = registryStore
 	manifests = registryStore
 	if e.Keeper.Configured() {
@@ -757,6 +764,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if e.Keeper.Configured() {
 		e.Webhooks = webhook.New(e.Pool, e.Keeper, e.Orchestrator, log, webhook.Options{
 			BaseURL: cfg.BaseURL, Brand: cmp.Or(ov.WakerBrand, web.DefaultBrandName),
+			Outbound: outbound,
 		})
 		events = e.Webhooks
 	}
@@ -768,6 +776,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	}
 
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
+		Outbound:            outbound,
 		BackupS3:            backups,
 		Buckets:             buckets,
 		BackupToolImage:     cfg.BackupToolImage,

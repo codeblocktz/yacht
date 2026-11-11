@@ -183,6 +183,13 @@ That one only swaps the binary and restarts. If the new version does not come
 up healthy it puts the old one back, so a bad release costs a restart rather
 than an outage.
 
+> [!NOTE]
+> **Upgrading an install whose apps deploy images from a private registry other
+> than the install's own** — one on the LAN or a tailnet: the engine now
+> refuses to resolve images at private addresses on a team's behalf, so those
+> deploys fail until the registry is named in `YACHT_OUTBOUND_ALLOW`. See
+> [What the engine reaches for you](#what-the-engine-reaches-for-you).
+
 | | |
 |---|---|
 | Binary | `/usr/local/bin/yacht` |
@@ -500,6 +507,8 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
 | `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
 | `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
+| `YACHT_OUTBOUND_ALLOW` | | Private hosts, `host:port`s, addresses or CIDRs the engine itself may reach on a team's behalf — a LAN or tailnet registry apps deploy from. See [What the engine reaches for you](#what-the-engine-reaches-for-you) |
+| `YACHT_OUTBOUND_DENY` | | Addresses or CIDRs the engine refuses on a team's behalf besides the private ranges |
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
@@ -613,6 +622,31 @@ which run customers' Dockerfiles. Nothing connects to a build at all. One
 exception keeps references working: an app in another of the team's projects
 whose variables name this one (`${{db.DATABASE_URL}}`, or its full host) is
 let in too.
+
+### What the engine reaches for you
+
+Some of what a team types makes the engine itself open a connection: an image
+reference is resolved to a digest at its registry, a repository URL is asked
+for its branches, a webhook is sent. The engine sits inside the cluster, where
+it can reach what no team can — the Kubernetes API, every Service, the cloud's
+metadata endpoint — so those connections go to public addresses only.
+Loopback, the private and carrier-grade-NAT ranges, link-local, IPv6 unique
+local and site-local addresses, and the IPv6 forms that carry an IPv4 address
+inside them (NAT64, 6to4, Teredo) are refused, checked on the address actually
+dialled, for every redirect hop.
+
+The install's own registry, as configured under **Admin → Registry**, is always
+reached, for references that name it. Anything else private that apps
+legitimately use — a registry on the LAN or a tailnet — is named in
+`YACHT_OUTBOUND_ALLOW`; ranges the cluster uses that are not private by
+address go in `YACHT_OUTBOUND_DENY`.
+
+Two places are weaker than the dial check, because the dial is not the
+engine's to check. Through an HTTP proxy (`HTTPS_PROXY`), the destination's
+name is resolved and checked before the request is handed to the proxy, and a
+name that answers differently a moment later gets past it. An `ssh://`
+repository's host is checked the same way before go-git dials it; nothing of
+the engine's — its SSH agent, its `ssh_config` — is used for one.
 
 ### Private networking
 

@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/egress"
 )
 
 // The branch a person wants is almost always one of two or three conventional
@@ -137,4 +140,81 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// A zoned IPv6 literal is loopback by another spelling. Repo.Validate refuses
+// the URL; listRefs refuses the dial even when asked directly.
+func TestAZonedRemoteIsNotAsked(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("no IPv6 loopback here: %v", err)
+	}
+	accepted := make(chan struct{}, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- struct{}{}
+			c.Close()
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	repo := "https://[::1%2525zz]:" + port + "/acme/web.git"
+
+	s := &Service{}
+	if _, err := s.Branches(context.Background(), repo, ""); err == nil {
+		t.Error("a zoned remote was accepted")
+	}
+	if err := (Repo{URL: "https://[fe80::1%25eth0]/a/b.git"}).Validate(); err == nil {
+		t.Error("Validate accepted a zoned host")
+	}
+	if _, err := s.listRefs(context.Background(), repo); !errors.Is(err, egress.ErrBlocked) {
+		t.Errorf("listRefs(%s) = %v, want egress.ErrBlocked", repo, err)
+	}
+	// Escaped once, go-git cannot build its request URL from it at all.
+	if _, err := s.listRefs(context.Background(), "https://[::1%25zz]:"+port+"/acme/web.git"); err == nil {
+		t.Error("a zoned remote escaped once was listed")
+	}
+	select {
+	case <-accepted:
+		t.Error("the zoned loopback remote was connected to")
+	default:
+	}
+}
+
+// go-git follows a redirect, and the redirect is a second address held to the
+// same rule: a remote the operator allowed cannot hand ls-remote on to a
+// private one it did not.
+func TestARemotesRedirectToAPrivateAddressIsNotFollowed(t *testing.T) {
+	hit := make(chan string, 4)
+	inside := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		hit <- r.URL.String()
+	}))
+	t.Cleanup(inside.Close)
+	allowed := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, inside.URL+r.URL.RequestURI(), http.StatusFound)
+	}))
+	t.Cleanup(allowed.Close)
+
+	// Both test servers share one certificate; trust it for the test.
+	defer func(old http.RoundTripper) { gitHTTPBase = old }(gitHTTPBase)
+	gitHTTPBase = allowed.Client().Transport
+
+	policy, err := egress.ParsePolicy([]string{strings.TrimPrefix(allowed.URL, "https://")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{opts: Options{Outbound: policy}}
+	_, err = s.Branches(context.Background(), allowed.URL+"/acme/web.git", "")
+	if !errors.Is(err, ErrRepoUnreachable) || !strings.Contains(err.Error(), "private network") {
+		t.Errorf("a redirect to a private remote gave %v, want ErrRepoUnreachable for a private network", err)
+	}
+	select {
+	case u := <-hit:
+		t.Errorf("the redirect was followed to a private address for %s", u)
+	default:
+	}
 }

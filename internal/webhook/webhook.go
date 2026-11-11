@@ -41,6 +41,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/codeblocktz/yacht/internal/app"
+	"github.com/codeblocktz/yacht/internal/egress"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
@@ -123,6 +124,9 @@ type Options struct {
 	// sits beside the cluster's API and every app's private port. On only
 	// for tests whose receiver is on 127.0.0.1.
 	AllowPrivate bool
+	// Outbound is the operator's allowed and refused ranges for what the
+	// engine reaches on a tenant's behalf. Nil is the rule alone.
+	Outbound *egress.Policy
 	// Client sends the requests. Nil is one with the address guard above
 	// and a ten-second timeout.
 	Client *http.Client
@@ -162,7 +166,7 @@ func New(pool *pgxpool.Pool, keeper *secret.Keeper, orch orchestrator.Orchestrat
 	}
 	client := opts.Client
 	if client == nil {
-		client = guardedClient(opts.AllowPrivate)
+		client = guardedClient(opts.AllowPrivate, opts.Outbound)
 	}
 	return &Service{
 		pool: pool, q: dbgen.New(pool), keeper: keeper, orch: orch, log: log,
@@ -304,6 +308,11 @@ func checkURL(raw string) (string, error) {
 	}
 	if u.User != nil {
 		return "", InputError{"put credentials in a header rather than in the URL — a URL is shown on this page"}
+	}
+	if strings.Contains(u.Host, "%") {
+		// An IPv6 zone, as in [fe80::1%25eth0]: a link on this machine,
+		// never a public receiver.
+		return "", InputError{"the URL's host must be a name or a public address"}
 	}
 	u.Fragment = ""
 	return u.String(), nil

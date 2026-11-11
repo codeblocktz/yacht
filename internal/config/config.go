@@ -17,6 +17,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/bucket"
+	"github.com/codeblocktz/yacht/internal/egress"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -208,6 +209,20 @@ type Config struct {
 	// lets workloads and builds reach: an image registry on the LAN, say.
 	EgressAllow string
 
+	// OutboundAllow are what the engine itself may reach on a tenant's
+	// behalf although it is private: hosts, host:ports, addresses and CIDRs.
+	// The engine resolves image references, lists repositories' branches and
+	// sends webhooks, all to addresses somebody typed, and refuses private
+	// ones; a registry on the LAN or a tailnet that apps deploy from is the
+	// usual entry. Distinct from EgressAllow, which is the apps' and builds'
+	// own network policy.
+	OutboundAllow []string
+
+	// OutboundDeny are addresses and CIDRs the engine refuses on a tenant's
+	// behalf besides the private ranges: a pod or service network outside
+	// them, for one.
+	OutboundDeny []string
+
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://yacht.example.com. It is what a sign-in link is built from, and
 	// setting it is what switches accounts on: without it there is no address
@@ -390,6 +405,8 @@ func Load() (Config, error) {
 		TCPProxyPorts:            strings.TrimSpace(env("YACHT_TCP_PROXY_PORTS", defaultTCPProxyPorts)),
 		NetworkIsolation:         env("YACHT_NETWORK_ISOLATION", ""),
 		EgressAllow:              env("YACHT_EGRESS_ALLOW", ""),
+		OutboundAllow:            envList("YACHT_OUTBOUND_ALLOW"),
+		OutboundDeny:             envList("YACHT_OUTBOUND_DENY"),
 		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
 		Operators:                envList("YACHT_OPERATORS"),
 		BaseURL:                  strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
@@ -533,6 +550,9 @@ func (c Config) validate() error {
 		errs = append(errs, err)
 	}
 	errs = append(errs, c.observeFaults()...)
+	if _, err := c.Outbound(); err != nil {
+		errs = append(errs, err)
+	}
 
 	return errors.Join(errs...)
 }
@@ -908,6 +928,16 @@ func envInt32(key string, fallback int32) int32 {
 }
 
 // String redacts secrets so a Config can be logged safely.
+// Outbound is what the engine may and may not reach on a tenant's behalf,
+// from YACHT_OUTBOUND_ALLOW and YACHT_OUTBOUND_DENY.
+func (c Config) Outbound() (*egress.Policy, error) {
+	p, err := egress.ParsePolicy(c.OutboundAllow, c.OutboundDeny)
+	if err != nil {
+		return nil, fmt.Errorf("YACHT_OUTBOUND_ALLOW or YACHT_OUTBOUND_DENY: %w", err)
+	}
+	return p, nil
+}
+
 // Isolation is the network isolation the settings ask for.
 func (c Config) Isolation() (orchestrator.Isolation, error) {
 	return orchestrator.ParseIsolation(c.NetworkIsolation, c.EgressAllow)

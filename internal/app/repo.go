@@ -124,6 +124,11 @@ func (r Repo) Validate() error {
 	if u.Host == "" {
 		return fmt.Errorf("app: %q has no host", r.URL)
 	}
+	if strings.Contains(u.Host, "%") {
+		// An IPv6 zone, as in [fe80::1%25eth0]: a link on the engine's own
+		// machine, never where a repository is.
+		return fmt.Errorf("app: %q is not a host a repository can be at", u.Host)
+	}
 
 	if r.Branch != "" && !refRE.MatchString(r.Branch) {
 		return fmt.Errorf("app: %q is not a branch name", r.Branch)

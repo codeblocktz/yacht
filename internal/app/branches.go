@@ -1,21 +1,21 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage/memory"
-
-	gogit "github.com/go-git/go-git/v5"
+	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
 	"github.com/codeblocktz/yacht/internal/egress"
 )
@@ -70,7 +70,7 @@ func (s *Service) Branches(ctx context.Context, repoURL, query string) ([]string
 	ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 	defer cancel()
 
-	refs, err := listRefs(ctx, repoURL)
+	refs, err := s.listRefs(ctx, repoURL)
 	if err != nil {
 		// Deliberately not wrapped with the remote's own message. It is often
 		// a full HTTP transcript, and on a private repository it is an auth
@@ -147,48 +147,73 @@ func remoteError(err error) error {
 // checked, and a name that resolves publicly when looked at and privately when
 // connected to is still refused. go-git's SSH transport dials for itself, so
 // an SSH host is resolved and checked first instead — weaker, since a name can
-// answer differently a moment later, but an SSH ls-remote here carries no key
-// and is answered with a refusal by every real host anyway.
-func listRefs(ctx context.Context, repoURL string) ([]*plumbing.Reference, error) {
+// answer differently a moment later.
+//
+// Over SSH nothing of the engine's is offered: not the operator's SSH agent,
+// which go-git would otherwise sign in with, lending their keys to whatever
+// host somebody typed, and not their ssh_config, whose Hostname and Port
+// would make the host dialled a different one from the host checked (see
+// init). Every real host refuses an ls-remote without a key, so an SSH
+// repository's branches are not listed; the check is for the connection that
+// is still made.
+func (s *Service) listRefs(ctx context.Context, repoURL string) ([]*plumbing.Reference, error) {
 	ep, err := transport.NewEndpoint(repoURL)
 	if err != nil {
 		return nil, err
 	}
+	var (
+		client transport.Transport
+		auth   transport.AuthMethod
+	)
 	switch ep.Protocol {
 	case "https":
-		guarded, err := egress.Transport(nil)
+		guarded, err := s.opts.Outbound.Transport(gitHTTPBase)
 		if err != nil {
 			return nil, err
 		}
-		session, err := githttp.NewClient(&http.Client{Transport: guarded}).
-			NewUploadPackSession(ep, nil)
-		if err != nil {
-			return nil, err
-		}
-		defer session.Close() //nolint:errcheck
-		adv, err := session.AdvertisedReferencesContext(ctx)
-		if err != nil {
-			return nil, err
-		}
-		all, err := adv.AllReferences()
-		if err != nil {
-			return nil, err
-		}
-		refs := make([]*plumbing.Reference, 0, len(all))
-		for _, ref := range all {
-			refs = append(refs, ref)
-		}
-		return refs, nil
+		client = githttp.NewClient(&http.Client{Transport: guarded})
 	case "ssh":
-		if err := egress.CheckHost(ctx, ep.Host); err != nil {
+		if err := s.opts.Outbound.CheckHost(ctx,
+			net.JoinHostPort(strings.Trim(ep.Host, "[]"), strconv.Itoa(cmp.Or(ep.Port, gitssh.DefaultPort)))); err != nil {
 			return nil, err
 		}
-		remote := gogit.NewRemote(memory.NewStorage(), &config.RemoteConfig{
-			Name: "origin", URLs: []string{repoURL},
-		})
-		return remote.ListContext(ctx, &gogit.ListOptions{})
+		client = gitssh.DefaultClient
+		auth = &gitssh.Password{User: ep.User}
+	default:
+		return nil, fmt.Errorf("app: %q is not a scheme this can read — https or ssh", ep.Protocol)
 	}
-	return nil, fmt.Errorf("app: %q is not a scheme this can read — https or ssh", ep.Protocol)
+
+	session, err := client.NewUploadPackSession(ep, auth)
+	if err != nil {
+		return nil, err
+	}
+	defer session.Close() //nolint:errcheck
+	adv, err := session.AdvertisedReferencesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all, err := adv.AllReferences()
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]*plumbing.Reference, 0, len(all))
+	for _, ref := range all {
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// gitHTTPBase is the transport ls-remote's guarded one is made from; nil is
+// net/http's default. A variable so a test can trust its own TLS server.
+var gitHTTPBase http.RoundTripper
+
+func init() {
+	// go-git reads ssh_config for every SSH connection it makes and dials the
+	// Hostname and Port it finds there instead of the URL's — so the host
+	// listRefs checked would not be the host dialled. The engine has no
+	// ssh_config of its own to honour; go-git's SSH transport is used only by
+	// listRefs.
+	gitssh.DefaultSSHConfig = nil
 }
 
 // shortRemoteError keeps the first line and nothing else.
@@ -213,7 +238,7 @@ func (s *Service) DefaultBranch(ctx context.Context, repoURL string) (string, er
 	ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 	defer cancel()
 
-	refs, err := listRefs(ctx, strings.TrimSpace(repoURL))
+	refs, err := s.listRefs(ctx, strings.TrimSpace(repoURL))
 	if err != nil {
 		return "", remoteError(err)
 	}
