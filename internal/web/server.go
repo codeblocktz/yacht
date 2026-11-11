@@ -569,6 +569,9 @@ type Server struct {
 	// strangerLimit spaces the mail an unknown address is sent while sign-up
 	// is closed: one per address per strangerMailEvery.
 	strangerLimit *attemptLimiter
+	// inviteLimit counts the invitation mail a team sends and an address is
+	// sent, and the mail opening an invitation sends, per inviteWindow.
+	inviteLimit *attemptLimiter
 
 	// flashKey authenticates the one-shot message a redirect carries.
 	// Options.FlashKey, or a key of this process's own; see newFlashKey.
@@ -706,6 +709,7 @@ func New(opts Options) (*Server, error) {
 		mailStatus:     opts.MailStatus,
 		signInLimit:    newAttemptLimiter(signInWindow),
 		strangerLimit:  newAttemptLimiter(strangerMailEvery),
+		inviteLimit:    newAttemptLimiter(inviteWindow),
 		flashKey:       flashKey,
 		tokens:         opts.Tokens,
 		audit:          opts.Audit,

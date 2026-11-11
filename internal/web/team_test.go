@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -883,5 +884,109 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 	accomplice, _ := h.accounts.EnsureUser(ctx, "accomplice@web.test", "")
 	if _, err := h.accounts.RoleIn(ctx, accomplice.ID, "web-inv-inviter"); !errors.Is(err, account.ErrNotAMember) {
 		t.Fatal("an invitation issued by a since-removed admin was still redeemable")
+	}
+}
+
+// ------------------------------------------------- invitations as a relay
+//
+// An invitation is a mail this install sends to an address a team chose, and
+// opening one is a mail anybody holding the link can trigger. Neither may be
+// a way to have the install mail somebody without end.
+
+// One address is invited a few times — to fix a mistake — and then refused,
+// with nothing written and nothing mailed; and one team is refused past its
+// own budget, whoever it invites.
+func TestInvitationsAreRateLimited(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-limit", "inv-limit-app")
+
+	for i := range invitesPerAddress {
+		before := len(rt.mailer.messages())
+		rec := rt.invite(t, rt.owner, "pestered@web.test", "member")
+		if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Fatalf("invitation %d = %d → %q, want 303 → /team", i+1, rec.Code, rec.Header().Get("Location"))
+		}
+		rt.lastMail(t, before)
+	}
+	before := len(rt.mailer.messages())
+	rec := rt.invite(t, rt.owner, "Pestered@Web.test", "member")
+	if !strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("invitation %d to one address = %d → %q, want refused",
+			invitesPerAddress+1, rec.Code, rec.Header().Get("Location"))
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatalf("a refused invitation was mailed (%d mails, want %d)", n, before)
+	}
+
+	// The team's budget, spent on addresses that are each new. The refused
+	// attempt above counted against it too: a team hammering one address
+	// spends its own budget doing so.
+	for i := invitesPerAddress + 2; i <= invitesPerTeam; i++ {
+		rec := rt.invite(t, rt.owner, fmt.Sprintf("guest-%d@web.test", i), "member")
+		if strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Fatalf("invitation %d from the team was refused, want accepted", i)
+		}
+	}
+	before = len(rt.mailer.messages())
+	rec = rt.invite(t, rt.owner, "one-too-many@web.test", "member")
+	if !strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("invitation %d from one team = %d → %q, want refused",
+			invitesPerTeam+1, rec.Code, rec.Header().Get("Location"))
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatal("an invitation over the team's budget was mailed")
+	}
+}
+
+// The address is parsed as the sign-in form parses it: something that is not
+// one is refused before anything is written, and a display name is dropped,
+// so the mail goes to one bare address.
+func TestAnInvitationIsToOneAddress(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-parse", "inv-parse-app")
+
+	before := len(rt.mailer.messages())
+	for _, bad := range []string{"not an address", "a@web.test, b@web.test", ""} {
+		rec := rt.invite(t, rt.owner, bad, "member")
+		if !strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Errorf("an invitation to %q = %d → %q, want refused", bad, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatalf("a malformed address was mailed (%d mails, want %d)", n, before)
+	}
+
+	rec := rt.invite(t, rt.owner, "Juma <juma-bare@web.test>", "member")
+	if strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("an address with a display name was refused: %q", rec.Header().Get("Location"))
+	}
+	sent := rt.mailer.messages()
+	if len(sent) != before+1 || sent[len(sent)-1].To != "juma-bare@web.test" {
+		t.Fatalf("the invitation went to %+v, want juma-bare@web.test alone", sent[before:])
+	}
+}
+
+// Opening an invitation signed out mails the address a link, and the open
+// page is anybody's who holds the token: past a few, it mails nothing more,
+// and says the same thing it always does.
+func TestOpeningAnInvitationMailsAFewTimesOnly(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-reopen", "inv-reopen-app")
+
+	before := len(rt.mailer.messages())
+	rt.invite(t, rt.owner, "reopen@web.test", "member")
+	token := invitationToken(t, rt.lastMail(t, before))
+
+	for i := range invitesPerAddress {
+		before := len(rt.mailer.messages())
+		if code := rt.follow(t, "/invitations/"+token).Code; code != http.StatusOK {
+			t.Fatalf("opening %d = %d, want 200", i+1, code)
+		}
+		rt.lastMail(t, before)
+	}
+	before = len(rt.mailer.messages())
+	rec := rt.follow(t, "/invitations/"+token)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Check your mail") {
+		t.Fatalf("opening once too often = %d, want the same Check your mail page", rec.Code)
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatal("opening the invitation once too often mailed the address again")
 	}
 }

@@ -301,8 +301,27 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(r.FormValue("email"))
+	// Parsed as the sign-in form parses it, so what is stored and mailed is
+	// one bare address — never a display name, or a list, riding along.
+	email, err := parseEmail(r.FormValue("email"))
+	if err != nil {
+		http.Redirect(w, r, "/team?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
 	role := account.Role(strings.TrimSpace(r.FormValue("role")))
+
+	// Every invitation is a mail this install sends to an address a team
+	// chose, under a subject carrying the team's name, which the team also
+	// chose. Without a limit that is a relay. Both counters are asked, so an
+	// address being hammered still counts against the team doing it, and
+	// before the invitation is written, so a refused one leaves nothing behind.
+	teamOK := s.inviteLimit.allow("team:"+owner.ID, invitesPerTeam)
+	addressOK := s.inviteLimit.allow("to:"+strings.ToLower(email), invitesPerAddress)
+	if !teamOK || !addressOK {
+		http.Redirect(w, r, "/team?error="+url.QueryEscape(
+			"Too many invitations sent. Try again in an hour."), http.StatusSeeOther)
+		return
+	}
 
 	raw, err := s.accounts.Invite(ctx, sess.UserID, owner.ID, email, role, s.inviteTTL())
 	if err != nil {
@@ -457,6 +476,17 @@ func (s *Server) teamActionFailed(
 		http.Error(w, "could not "+what, http.StatusInternalServerError)
 	}
 }
+
+// How many invitations go out per inviteWindow: from one team, and to one
+// address from any team — and, separately, how many sign-in links opening an
+// invitation mails one address. Generous for a team adding its people, and an
+// address is invited again only to fix a mistake, while a relay needs far more
+// than either.
+const (
+	inviteWindow      = time.Hour
+	invitesPerTeam    = 30
+	invitesPerAddress = 3
+)
 
 // inviteTTL is how long an invitation stays redeemable.
 //

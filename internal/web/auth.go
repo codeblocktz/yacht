@@ -884,6 +884,16 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Anybody holding the link can open it, unauthenticated, as often as they
+	// like, and each opening mails the address. Counted per address, as the
+	// invitations it is sent are, and answered alike when over: the page says
+	// to check the mail either way, and the links already sent still work.
+	if !s.inviteLimit.allow("open:"+strings.ToLower(inv.Email), invitesPerAddress) {
+		s.log.Info("invitation opened again too often; no mail sent")
+		s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup, "/sign-in"))
+		return
+	}
+
 	// Somebody new is given their account now, at the invited address. The
 	// sign-in form never registers an address, so as not to say which ones
 	// exist; an invitation is different. A team's owner named this address,
