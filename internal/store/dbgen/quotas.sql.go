@@ -92,16 +92,23 @@ func (q *Queries) GetTeamQuotaSummary(ctx context.Context, id string) (GetTeamQu
 }
 
 const listAllAppFootprints = `-- name: ListAllAppFootprints :many
-SELECT owner_id, replicas, cpu_limit, memory_limit
-FROM apps
-ORDER BY owner_id
+SELECT a.owner_id, a.replicas, a.cpu_limit, a.memory_limit,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id
+ORDER BY a.owner_id
 `
 
 type ListAllAppFootprintsRow struct {
-	OwnerID     string
-	Replicas    int32
-	CpuLimit    string
-	MemoryLimit string
+	OwnerID            string
+	Replicas           int32
+	CpuLimit           string
+	MemoryLimit        string
+	RunningReplicas    *int32
+	RunningCpuLimit    *string
+	RunningMemoryLimit *string
 }
 
 // Every team's apps at once, for the operator's list of teams.
@@ -124,6 +131,9 @@ func (q *Queries) ListAllAppFootprints(ctx context.Context) ([]ListAllAppFootpri
 			&i.Replicas,
 			&i.CpuLimit,
 			&i.MemoryLimit,
+			&i.RunningReplicas,
+			&i.RunningCpuLimit,
+			&i.RunningMemoryLimit,
 		); err != nil {
 			return nil, err
 		}
@@ -136,18 +146,29 @@ func (q *Queries) ListAllAppFootprints(ctx context.Context) ([]ListAllAppFootpri
 }
 
 const listAppFootprints = `-- name: ListAppFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit
-FROM apps
-WHERE owner_id = $1
+SELECT a.id, a.replicas, a.cpu_limit, a.memory_limit,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id
+WHERE a.owner_id = $1
 `
 
 type ListAppFootprintsRow struct {
-	ID          uuid.UUID
-	Replicas    int32
-	CpuLimit    string
-	MemoryLimit string
+	ID                 uuid.UUID
+	Replicas           int32
+	CpuLimit           string
+	MemoryLimit        string
+	RunningReplicas    *int32
+	RunningCpuLimit    *string
+	RunningMemoryLimit *string
 }
 
+// Each app as it is saved and, beside it, as the release it is running: with
+// changes staged rather than deployed the two differ, and the running one is
+// what the cluster holds. Counting only the saved row let a team stage a
+// smaller limit, spend what that freed on another app, and discard the stage.
 func (q *Queries) ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error) {
 	rows, err := q.db.Query(ctx, listAppFootprints, ownerID)
 	if err != nil {
@@ -162,6 +183,9 @@ func (q *Queries) ListAppFootprints(ctx context.Context, ownerID string) ([]List
 			&i.Replicas,
 			&i.CpuLimit,
 			&i.MemoryLimit,
+			&i.RunningReplicas,
+			&i.RunningCpuLimit,
+			&i.RunningMemoryLimit,
 		); err != nil {
 			return nil, err
 		}

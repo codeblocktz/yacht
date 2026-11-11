@@ -490,6 +490,10 @@ type Querier interface {
 	// Every team's, newest first, with the team's name: Admin › Impersonations,
 	// the operators' own record of where they went.
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
+	// Each app as it is saved and, beside it, as the release it is running: with
+	// changes staged rather than deployed the two differ, and the running one is
+	// what the cluster holds. Counting only the saved row let a team stage a
+	// smaller limit, spend what that freed on another app, and discard the stage.
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	// Every app's namespace, for metering what each sent from a store that knows
@@ -574,6 +578,7 @@ type Querier interface {
 	// place. What the admission check totals; see ListAppFootprints for why the
 	// arithmetic is in Go. Asleep is whether the app is counted at the wake
 	// reserve rather than in full: a waking app's pods are already asked for.
+	// The running release rides along for the reason ListAppFootprints gives.
 	ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)

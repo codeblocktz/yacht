@@ -298,7 +298,11 @@ func (s *Service) usageWith(
 	}
 	apps := make([]footprint, len(rows))
 	for i, a := range rows {
-		apps[i] = footprint{ID: a.ID, shape: shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}}
+		apps[i] = footprint{
+			ID:      a.ID,
+			shape:   shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
+			Running: runningShape(a.RunningReplicas, a.RunningCpuLimit, a.RunningMemoryLimit),
+		}
 	}
 	u := tally(apps, storage, c, 100)
 	for _, b := range buckets {
@@ -315,8 +319,46 @@ type footprint struct {
 	shape
 	Asleep bool
 
+	// Running is the shape of the release the app is running, nil when it
+	// runs none. With changes staged the saved shape is only what the next
+	// deploy will run; until then the cluster holds this one.
+	Running *shape
+
 	// Region is the region recorded for the app, nil where none is.
 	Region *string
+}
+
+// cost is what the app commits: the larger of what it is saved as and what
+// it is running, each resource on its own.
+//
+// Either alone is a way around the limit. The saved shape alone let a team
+// stage a smaller limit without deploying it, spend what that freed on a new
+// app while the old limit still ran, and discard the stage to get the old
+// limit back. The running shape alone would admit a raise that is only saved,
+// and the next deploy would run it unasked.
+func (f footprint) cost() (cpuMillis, memoryBytes int64) {
+	cpuMillis, memoryBytes = f.shape.cost()
+	if f.Running != nil {
+		cpu, mem := f.Running.cost()
+		cpuMillis, memoryBytes = max(cpuMillis, cpu), max(memoryBytes, mem)
+	}
+	return cpuMillis, memoryBytes
+}
+
+// runningShape is a footprint's running release as a query returns it: every
+// column null for an app that runs none.
+func runningShape(replicas *int32, cpuLimit, memoryLimit *string) *shape {
+	if replicas == nil {
+		return nil
+	}
+	sh := shape{Replicas: *replicas}
+	if cpuLimit != nil {
+		sh.CPULimit = *cpuLimit
+	}
+	if memoryLimit != nil {
+		sh.MemoryLimit = *memoryLimit
+	}
+	return &sh
 }
 
 // tally is what a set of apps and volumes commits, with a change applied when
@@ -327,11 +369,12 @@ type footprint struct {
 func tally(apps []footprint, storage int64, c *quotaChange, asleepPercent int) Usage {
 	u := Usage{Apps: int64(len(apps)), StorageBytes: storage}
 	for _, a := range apps {
-		sh := a.shape
+		// A change reshapes what is saved. The running release is history,
+		// and stays counted until a deploy replaces it.
 		if c != nil && c.Reshape != nil && a.ID == c.Changed {
-			sh = c.Reshape(sh)
+			a.shape = c.Reshape(a.shape)
 		}
-		cpu, mem := sh.cost()
+		cpu, mem := a.cost()
 		if a.Asleep {
 			cpu, mem = share(cpu, asleepPercent), share(mem, asleepPercent)
 		}
@@ -423,7 +466,10 @@ func (s *Service) TeamUsages(ctx context.Context) ([]TeamUsage, error) {
 		if !ok {
 			continue
 		}
-		cpu, mem := shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit}.cost()
+		cpu, mem := footprint{
+			shape:   shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
+			Running: runningShape(a.RunningReplicas, a.RunningCpuLimit, a.RunningMemoryLimit),
+		}.cost()
 		u.Apps++
 		u.CPUMillis += cpu
 		u.MemoryBytes += mem

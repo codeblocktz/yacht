@@ -804,6 +804,22 @@ func (s *Service) DiscardStaged(ctx context.Context, ownerID, appName string) ([
 			return nil, err
 		}
 		if len(settingChanges(a, release)) > 0 {
+			// Held to the quota and the install's capacity as a rollback to
+			// this release is. The running release is counted alongside the
+			// saved row, so going back to it adds nothing and fits; checked
+			// all the same, because a discard that skipped admission was the
+			// other half of the way around a quota (see footprint.cost), and
+			// it should not take the counting alone to keep it shut.
+			if err := s.admit(ctx, q, ownerID, quotaChange{
+				Changed: a.ID, Reshape: func(shape) shape {
+					return shape{
+						Replicas: release.Replicas, CPULimit: release.CPULimit,
+						MemoryLimit: release.MemoryLimit,
+					}
+				},
+			}); err != nil {
+				return nil, err
+			}
 			row, err := q.RestoreAppFromRelease(ctx, dbgen.RestoreAppFromReleaseParams{
 				OwnerID: ownerID, AppID: a.ID, ReleaseID: release.ID,
 			})
