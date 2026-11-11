@@ -180,7 +180,7 @@ func TestAReservedHostnameIsNotIssued(t *testing.T) {
 	_, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
 		AppDomain: "apps.domain.test", TLS: true,
-		Reserved: []string{"admin.apps.domain.test"},
+		Reserved: Reservations{Reserved: []string{"admin.apps.domain.test"}},
 	})
 	if !errors.Is(err, ErrHostReserved) {
 		t.Fatalf("EnsureManaged = %v, want ErrHostReserved", err)
@@ -211,7 +211,7 @@ func TestReservingASuffixMatchesOnLabels(t *testing.T) {
 	under := seedApp(t, pool, "test-reserved-under", "thing", "ns-test-res-under")
 	if _, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: under.OwnerID, AppID: under.ID, AppName: under.Name,
-		AppDomain: "internal.domain.test", TLS: true, Reserved: reserved,
+		AppDomain: "internal.domain.test", TLS: true, Reserved: Reservations{Reserved: reserved},
 	}); !errors.Is(err, ErrHostReserved) {
 		t.Fatalf("a name under the reserved domain = %v, want ErrHostReserved", err)
 	}
@@ -219,7 +219,7 @@ func TestReservingASuffixMatchesOnLabels(t *testing.T) {
 	beside := seedApp(t, pool, "test-reserved-beside", "thing", "ns-test-res-beside")
 	host, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: beside.OwnerID, AppID: beside.ID, AppName: beside.Name,
-		AppDomain: "notinternal.domain.test", TLS: true, Reserved: reserved,
+		AppDomain: "notinternal.domain.test", TLS: true, Reserved: Reservations{Reserved: reserved},
 	})
 	if err != nil {
 		t.Fatalf("a name merely sharing a substring was refused: %v", err)
@@ -241,7 +241,7 @@ func TestReservingNothingIssuesNormally(t *testing.T) {
 
 	host, err := EnsureManaged(ctx, q, ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
-		AppDomain: "apps.domain.test", TLS: true, Reserved: nil,
+		AppDomain: "apps.domain.test", TLS: true, Reserved: Reservations{},
 	})
 	if err != nil {
 		t.Fatalf("EnsureManaged with nothing reserved: %v", err)
@@ -298,7 +298,7 @@ func TestIssueGeneratedReplacesAndMoves(t *testing.T) {
 		t.Fatal("IssueGenerated accepted a label that is not one")
 	}
 	in.Label = "admin"
-	in.Reserved = []string{"admin.up.apps.domain-gen.test"}
+	in.Reserved = Reservations{Reserved: []string{"admin.up.apps.domain-gen.test"}}
 	if _, err := IssueGenerated(ctx, q, in); !errors.Is(err, ErrHostReserved) {
 		t.Fatalf("a reserved name = %v, want ErrHostReserved", err)
 	}

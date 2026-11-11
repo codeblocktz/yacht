@@ -17,6 +17,7 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/bucket"
+	"github.com/codeblocktz/yacht/internal/domain"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -161,6 +162,13 @@ type Config struct {
 	// ReservedDomains are additional suffixes no tenant may claim. AppDomain
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
+
+	// ReservedDomainsAllow are names, each with everything under it, that
+	// the install's own addresses (PlatformHosts) do not take from custom
+	// domains. For an install whose dashboard or other address shares a
+	// domain teams legitimately bring. Never frees AppDomain or
+	// ReservedDomains, which the operator chose.
+	ReservedDomainsAllow []string
 
 	// DNSResolver pins custom-domain lookups to one nameserver, as host or
 	// host:port — "1.1.1.1" or "10.0.0.53:53".
@@ -378,12 +386,34 @@ type Config struct {
 // MailWebsite is not here. It is the operator's public site, and an operator
 // may well host that on the install as an app with a custom domain.
 func (c Config) PlatformHosts() (zones, names []string) {
-	zones = []string{c.BaseURL, c.BuildSourceURL, c.BucketsEndpoint}
-	names = []string{
-		c.TCPProxyHost, c.BucketsS3URL, c.BucketsAdminURL,
-		c.BackupS3Endpoint, c.LogsURL, c.MetricsURL,
+	for _, a := range c.platformAddresses() {
+		if a.zone {
+			zones = append(zones, a.value)
+		} else {
+			names = append(names, a.value)
+		}
 	}
 	return zones, names
+}
+
+// platformAddress is one of PlatformHosts, with the variable it is set by.
+type platformAddress struct {
+	env, value string
+	zone       bool
+}
+
+func (c Config) platformAddresses() []platformAddress {
+	return []platformAddress{
+		{"YACHT_BASE_URL", c.BaseURL, true},
+		{"YACHT_BUILD_SOURCE_URL", c.BuildSourceURL, true},
+		{"YACHT_BUCKETS_ENDPOINT", c.BucketsEndpoint, true},
+		{"YACHT_TCP_PROXY_HOST", c.TCPProxyHost, false},
+		{"YACHT_BUCKETS_S3_URL", c.BucketsS3URL, false},
+		{"YACHT_BUCKETS_ADMIN_URL", c.BucketsAdminURL, false},
+		{"YACHT_BACKUP_S3_ENDPOINT", c.BackupS3Endpoint, false},
+		{"YACHT_LOGS_URL", c.LogsURL, false},
+		{"YACHT_METRICS_URL", c.MetricsURL, false},
+	}
 }
 
 // Load reads configuration from the environment and validates it.
@@ -412,6 +442,7 @@ func Load() (Config, error) {
 		NetworkIsolation:         env("YACHT_NETWORK_ISOLATION", ""),
 		EgressAllow:              env("YACHT_EGRESS_ALLOW", ""),
 		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
+		ReservedDomainsAllow:     envList("YACHT_RESERVED_DOMAINS_ALLOW"),
 		Operators:                envList("YACHT_OPERATORS"),
 		BaseURL:                  strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
 		BuildSourceURL:           strings.TrimRight(env("YACHT_BUILD_SOURCE_URL", ""), "/"),
@@ -516,6 +547,20 @@ func (c Config) validate() error {
 	for _, d := range c.ReservedDomains {
 		if fault := domainFault(d); fault != "" {
 			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS entry %q %s", d, fault))
+		}
+	}
+	for _, d := range c.ReservedDomainsAllow {
+		if fault := domainFault(d); fault != "" {
+			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS_ALLOW entry %q %s", d, fault))
+		}
+	}
+	// Each of the install's own addresses is refused as a custom domain. One
+	// that cannot be read as a host would be dropped from that, silently,
+	// and the name it was meant to be could be claimed.
+	for _, a := range c.platformAddresses() {
+		if _, _, err := domain.PlatformHost(a.value); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w — it is refused as a custom domain, "+
+				"and a value that is not a host would refuse nothing", a.env, err))
 		}
 	}
 	// Written into an annotation cert-manager resolves by name. A value that

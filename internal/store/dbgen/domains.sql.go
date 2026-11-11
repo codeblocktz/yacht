@@ -475,6 +475,18 @@ func (q *Queries) MarkVerifiedDomainsRoutedForApp(ctx context.Context, arg MarkV
 }
 
 const recordDomainCheck = `-- name: RecordDomainCheck :execrows
+WITH before AS (
+    SELECT b.app_id, b.owner_id, b.state FROM domains b
+    WHERE b.id = $7
+), withdrawn AS (
+    UPDATE apps
+    SET config_version = apps.config_version + 1, updated_at = now()
+    FROM before
+    WHERE apps.id = before.app_id AND apps.owner_id = before.owner_id
+      AND before.state IN ('verified', 'routed')
+      AND $1::text NOT IN ('verified', 'routed')
+    RETURNING apps.id
+)
 UPDATE domains
 SET state = $1,
     observed = $2,
@@ -489,7 +501,7 @@ SET state = $1,
         WHEN $1::text IN ('verified', 'routed') AND verified_at IS NULL THEN $4
         ELSE verified_at
     END
-WHERE id = $7
+WHERE domains.id = $7
 `
 
 type RecordDomainCheckParams struct {
@@ -511,6 +523,16 @@ type RecordDomainCheckParams struct {
 //
 // The schedule arrives already computed rather than being worked out in SQL, so
 // the backoff can be tested against an injected clock instead of against now().
+//
+// A domain leaving a routable state takes its app's config version up in the
+// same statement. The routable-hosts query no longer carries the name, and the
+// app reconciler applies every version it has not seen until the cluster
+// carries it, so the withdrawal is as durable as the state: neither is
+// written without the other, and nothing after this has to remember to ask.
+//
+// before is not FOR UPDATE: a row locked in a WITH and updated by the same
+// statement leaves the WITH's join seeing nothing, and the version unmoved.
+// Two checks racing on one row at worst both move it, which costs an apply.
 func (q *Queries) RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordDomainCheck,
 		arg.State,

@@ -200,11 +200,13 @@ func (c *Checker) checkOne(
 	switch {
 	case state == StateVerified:
 		c.route(ctx, row)
-	case previous.Routable() && !state.Routable():
-		// Fell out of routing. The Ingress is rebuilt from the routable-hosts
-		// query, so re-applying is what drops the host — there is nothing to
-		// withdraw by name. Verified counts: that query carries it too, so a
-		// verified name refused before it settled is on an Ingress as well.
+	case Transition{From: previous, To: state}.Withdrew():
+		// Fell out of routing. The app's config version moved in the same
+		// statement as the state (RecordDomainCheck), and the app reconciler
+		// applies every version it has not seen until the cluster carries it,
+		// so the host comes off the Ingress whether or not this succeeds — a
+		// failure here costs the notice, never the withdrawal. Verified counts:
+		// the routable-hosts query carries it too.
 		c.apply(ctx, row, "withdraw")
 	}
 }

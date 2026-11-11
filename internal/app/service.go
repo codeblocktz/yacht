@@ -337,6 +337,11 @@ type Options struct {
 	PlatformZones []string
 	PlatformNames []string
 
+	// AllowedDomains are names, each with everything under it, that the
+	// install's own names do not take from custom domains:
+	// YACHT_RESERVED_DOMAINS_ALLOW. Never the app domain or ReservedDomains.
+	AllowedDomains []string
+
 	// Resolver proves a custom domain points here. Left nil, verification is
 	// refused with a reason rather than silently failing.
 	Resolver domain.Resolver
@@ -1576,11 +1581,23 @@ func cnameTargetFor(a App, target string) string {
 
 // managedInput describes where the app's platform hostname, if it holds one,
 // belongs under the current app domain.
-func (s *Service) managedInput(a App) domain.ManagedInput {
+//
+// Read on every apply, where the reservations matter only if the hostname is
+// moving. A failed read of the install's stored addresses falls back to the
+// configured ones, logged: an apply refused because the registry setting
+// could not be read would take the app down over a name it is not changing.
+func (s *Service) managedInput(ctx context.Context, a App) domain.ManagedInput {
+	reserved, err := s.CustomDomainReservations(ctx)
+	if err != nil {
+		s.log.Warn("could not read every address the install is reached at; "+
+			"checking the app's hostname against the configured ones",
+			slog.String("app", a.Name), slog.String("error", err.Error()))
+		reserved = s.configuredReservations()
+	}
 	return domain.ManagedInput{
 		OwnerID: a.OwnerID, AppID: a.ID, AppName: a.Name,
 		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
-		Reserved: s.opts.ReservedDomains,
+		Reserved: reserved,
 	}
 }
 
@@ -1602,7 +1619,7 @@ func servesHTTP(a App) bool { return a.Port > 0 && !a.Internal }
 func (s *Service) reconcileHosts(
 	ctx context.Context, q *dbgen.Queries, a App,
 ) ([]string, error) {
-	if _, err := domain.ReconcileManaged(ctx, q, s.managedInput(a)); err != nil {
+	if _, err := domain.ReconcileManaged(ctx, q, s.managedInput(ctx, a)); err != nil {
 		return nil, fmt.Errorf("app: reconcile hostname: %w", err)
 	}
 	return routedHosts(ctx, q, a)

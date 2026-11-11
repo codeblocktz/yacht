@@ -737,6 +737,16 @@ type Querier interface {
 	//
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
+	//
+	// A domain leaving a routable state takes its app's config version up in the
+	// same statement. The routable-hosts query no longer carries the name, and the
+	// app reconciler applies every version it has not seen until the cluster
+	// carries it, so the withdrawal is as durable as the state: neither is
+	// written without the other, and nothing after this has to remember to ask.
+	//
+	// before is not FOR UPDATE: a row locked in a WITH and updated by the same
+	// statement leaves the WITH's join seeing nothing, and the version unmoved.
+	// Two checks racing on one row at worst both move it, which costs an apply.
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
 	// Zero rows is a delivery already acted on.
 	RecordGitHubDelivery(ctx context.Context, arg RecordGitHubDeliveryParams) (int64, error)

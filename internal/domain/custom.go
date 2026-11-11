@@ -251,24 +251,36 @@ func AddCustom(
 func Verify(
 	ctx context.Context, q *dbgen.Queries, res Resolver, reserved Reservations,
 	ownerID string, id uuid.UUID,
-) error {
+) (Transition, error) {
 	row, err := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: ownerID, ID: id})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrDomainNotFound
+			return Transition{}, ErrDomainNotFound
 		}
-		return fmt.Errorf("domain: read claim: %w", err)
+		return Transition{}, fmt.Errorf("domain: read claim: %w", err)
 	}
 
-	state, err := Check(ctx, q, res, reserved, row, time.Now())
-	if err != nil {
-		return err
+	t := Transition{From: State(row.State)}
+	if t.To, err = Check(ctx, q, res, reserved, row, time.Now()); err != nil {
+		return Transition{From: t.From, To: t.From}, err
 	}
-	if !state.Routable() {
-		return ErrNotVerified
+	if !t.To.Routable() {
+		return t, ErrNotVerified
 	}
-	return nil
+	return t, nil
 }
+
+// Transition is what one check did to a domain: the state it found it in and
+// the one it left it in. Returned with ErrNotVerified as well as without, so a
+// caller can tell a name that was never routed from one this check withdrew.
+type Transition struct {
+	From, To State
+}
+
+// Withdrew reports whether the check took a routed name out of routing. The
+// app's config version has already moved with it (RecordDomainCheck); what is
+// left to a caller is telling whoever watches routes.
+func (t Transition) Withdrew() bool { return t.From.Routable() && !t.To.Routable() }
 
 // Check looks one domain up and records what it found.
 //

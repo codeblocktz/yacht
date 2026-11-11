@@ -84,7 +84,7 @@ func TestAVerifiedDomainIsRouted(t *testing.T) {
 	}
 
 	res := fakeResolver{cname: map[string]string{"shop.verified.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestADomainPointingElsewhereIsRefused(t *testing.T) {
 			"edge.domain.test": {"198.51.100.1"},
 		},
 	}
-	if err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
 		t.Fatalf("Verify = %v, want ErrNotVerified", err)
 	}
 }
@@ -150,7 +150,7 @@ func TestAnApexVerifiesByAddress(t *testing.T) {
 			"edge.domain.test": {"198.51.100.1"},
 		},
 	}
-	if err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("a flattened apex was refused: %v", err)
 	}
 }
@@ -286,7 +286,7 @@ func TestALiveDomainThatStopsResolvingDrifts(t *testing.T) {
 	}
 
 	working := fakeResolver{cname: map[string]string{"shop.drift.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
@@ -341,7 +341,7 @@ func TestAResolverOutageDoesNotDriftEveryDomain(t *testing.T) {
 	}
 
 	working := fakeResolver{cname: map[string]string{"shop.outage.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
@@ -507,7 +507,7 @@ func TestAClaimOnTheInstallsOwnNameIsWithdrawn(t *testing.T) {
 		t.Fatalf("AddCustom before the name was reserved: %v", err)
 	}
 	here := fakeResolver{cname: map[string]string{"registry.domain.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, here, Reservations{}, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, here, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
@@ -529,8 +529,22 @@ func TestAClaimOnTheInstallsOwnNameIsWithdrawn(t *testing.T) {
 	if hosts, _ := RoutableHosts(ctx, q, a.ID); hasHost(hosts, "registry.domain.test") {
 		t.Fatalf("a reserved name is still routed — hosts were %v", hosts)
 	}
-	if err := Verify(ctx, q, here, reserved, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+	if _, err := Verify(ctx, q, here, reserved, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
 		t.Fatalf("Verify of a reserved name = %v, want ErrNotVerified", err)
+	}
+
+	// Verify reports a withdrawal it makes, for the caller to pass on; the
+	// app's config version has already moved with it.
+	if _, err := pool.Exec(ctx, `UPDATE domains SET state = 'routed' WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, pool, a.ID)
+	tr, err := Verify(ctx, q, here, reserved, a.OwnerID, c.ID)
+	if !errors.Is(err, ErrNotVerified) || !tr.Withdrew() {
+		t.Fatalf("Verify of a routed reserved name = %+v, %v; want a withdrawal and ErrNotVerified", tr, err)
+	}
+	if after := configVersion(t, pool, a.ID); after != before+1 {
+		t.Errorf("config version %d → %d; want the withdrawal to move it", before, after)
 	}
 	got, _ := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
 	if !strings.Contains(got.LastError, "own names") {

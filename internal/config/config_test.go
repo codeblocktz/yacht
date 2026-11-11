@@ -558,3 +558,24 @@ func TestPlatformHostsNameTheInstallsOwnAddresses(t *testing.T) {
 		t.Errorf("the dashboard is not a zone: %v", zones)
 	}
 }
+
+// An address that cannot be read as a host would be dropped from what is
+// reserved, silently; it is refused at startup instead, naming the variable.
+// An IP address is fine: it is not a name anybody could bring.
+func TestAnUnreadablePlatformAddressIsRefused(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "http://"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_METRICS_URL") {
+		t.Fatalf("Load = %v, want YACHT_METRICS_URL refused", err)
+	}
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "", "YACHT_TCP_PROXY_HOST": "203.0.113.7",
+		"YACHT_LOGS_URL": "http://10.0.0.5:9428"})
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load with IP addresses: %v", err)
+	}
+	setEnv(t, map[string]string{"YACHT_TCP_PROXY_HOST": "", "YACHT_LOGS_URL": "", "YACHT_METRICS_URL": "",
+		"YACHT_RESERVED_DOMAINS_ALLOW": "shop.example.com"})
+	c, err := Load()
+	if err != nil || len(c.ReservedDomainsAllow) != 1 {
+		t.Fatalf("Load with an allow list = %+v, %v", c.ReservedDomainsAllow, err)
+	}
+}

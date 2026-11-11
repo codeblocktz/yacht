@@ -13,7 +13,11 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
+
+	"golang.org/x/net/idna"
+	"golang.org/x/net/publicsuffix"
 )
 
 // ErrNoAppDomain means no platform domain is configured. Callers treat this as
@@ -191,10 +195,18 @@ type Reservations struct {
 	// AppDomain is the platform domain, reserved with everything under it.
 	AppDomain string
 
-	// Zones are reserved with every name under them: the operator's
-	// YACHT_RESERVED_DOMAINS, and the install's names under which a sibling
-	// means something — a cookie scoped to the dashboard's parent, a bucket
-	// addressed as a subdomain of the endpoint.
+	// Reserved is the operator's YACHT_RESERVED_DOMAINS, each reserved with
+	// everything under it. Said by the operator, so nothing in Allowed
+	// overrides it.
+	Reserved []string
+
+	// Zones are the install's own names under which a sibling means
+	// something — a cookie scoped to the dashboard's parent, a bucket
+	// addressed as a subdomain of the endpoint — reserved with every name
+	// under them. Except a registrable domain itself, example.com rather than
+	// yacht.example.com: an install whose dashboard sits at its apex would
+	// otherwise take every name the operator's company has from every team,
+	// including the ones already routed. That is refused as a name.
 	Zones []string
 
 	// Names are reserved as themselves and nothing under them: the install's
@@ -202,50 +214,119 @@ type Reservations struct {
 	// ghcr.io, and refusing what sits under a name like that would refuse
 	// nothing anybody could verify while saying something untrue.
 	Names []string
+
+	// Allowed is YACHT_RESERVED_DOMAINS_ALLOW: names, each with everything
+	// under it, that the install's own Zones and Names do not take. The
+	// operator's way out when one of those reaches a domain somebody
+	// legitimately brings. It never frees the app domain, the operator's own
+	// list, or a domain's CNAME target.
+	Allowed []string
 }
 
-// Refuses reports whether host is one no app may bring.
+// Refuses reports whether host is one no app may bring as a custom domain.
 func (r Reservations) Refuses(host string) bool {
-	if Reserved(host, r.AppDomain, r.Zones) {
+	if Reserved(host, r.AppDomain, r.Reserved) {
 		return true
 	}
 	h := normalize(host)
-	for _, n := range r.Names {
-		if h != "" && normalize(n) == h {
+	if h == "" || Reserved(h, "", r.Allowed) {
+		return false
+	}
+	for _, z := range r.Zones {
+		if z = normalize(z); z != "" && (h == z || (!registrable(z) && strings.HasSuffix(h, "."+z))) {
 			return true
 		}
 	}
-	return false
+	return slices.Contains(normalizeAll(r.Names), h)
 }
 
-// HostOf is the hostname in a URL or in host[:port], normalised; empty for
-// nothing, and for an IP address, which no custom domain can be.
+// Issuable reports whether the platform may issue host as an app's own
+// hostname, under the app domain.
 //
-// The install's own names are configured in whatever shape suits their
-// setting — YACHT_BASE_URL is a URL, the registry a host with a port, the TCP
-// proxy a bare name — and a reservation compared against the raw string would
-// match none of the hostnames anybody types.
-func HostOf(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
+// The app domain is left out, since every issued name is under it by
+// construction, and the install's own names are matched as names alone: the
+// dashboard may sit at the app domain itself, and taken as a zone it would
+// refuse every hostname the platform issues. What is refused is a generated
+// label that lands exactly on one of them — tcp.up.apps.example.com chosen as
+// a name when that is where the TCP proxy is reached.
+func (r Reservations) Issuable(host string) bool {
+	h := normalize(host)
+	if Reserved(h, "", r.Reserved) {
+		return false
 	}
+	if Reserved(h, "", r.Allowed) {
+		return true
+	}
+	return !slices.Contains(normalizeAll(r.Zones), h) && !slices.Contains(normalizeAll(r.Names), h)
+}
+
+func normalizeAll(in []string) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = normalize(s)
+	}
+	return out
+}
+
+// registrable reports whether host is a registrable domain itself — the
+// part of a name somebody buys, example.com or example.co.uk — rather than a
+// name under one. A name the public suffix list cannot place, a bare label,
+// counts as one: nothing under it is a name a custom domain could be.
+func registrable(host string) bool {
+	apex, err := publicsuffix.EffectiveTLDPlusOne(host)
+	return err != nil || apex == host
+}
+
+// PlatformHost reads one of the install's own addresses as configured — a
+// URL, host[:port], a bare name, or *.example.com — into the hostname a
+// custom domain would be spelled as, in ASCII.
+//
+// Empty, with no error, for nothing and for an IP address, which no custom
+// domain can be. Wildcard reports a *. prefix: everything under the name was
+// meant, so the name is a zone whichever list it came from. An error for a
+// value that is none of these, so a setting that reserves nothing says so
+// rather than quietly reserving nothing.
+func PlatformHost(s string) (host string, wildcard bool, err error) {
+	raw := strings.TrimSpace(s)
+	if raw == "" {
+		return "", false, nil
+	}
+	s = raw
 	if strings.Contains(s, "://") {
-		u, err := url.Parse(s)
-		if err != nil {
-			return ""
+		u, perr := url.Parse(s)
+		if perr != nil || u.Hostname() == "" {
+			return "", false, fmt.Errorf("%q is not a URL with a host", raw)
 		}
 		s = u.Hostname()
-	} else if h, _, err := net.SplitHostPort(s); err == nil {
-		s = h
-	} else if i := strings.IndexAny(s, "/"); i >= 0 {
-		s = s[:i]
+	} else {
+		if i := strings.IndexByte(s, '/'); i >= 0 {
+			s = s[:i]
+		}
+		if h, _, serr := net.SplitHostPort(s); serr == nil {
+			s = h
+		}
 	}
-	s = normalize(strings.Trim(s, "[]"))
-	if s == "" || net.ParseIP(s) != nil {
+	s = strings.Trim(s, "[]")
+	if net.ParseIP(s) != nil {
+		return "", false, nil
+	}
+	if rest, ok := strings.CutPrefix(s, "*."); ok {
+		s, wildcard = rest, true
+	}
+	ascii, ierr := idna.Lookup.ToASCII(normalize(s))
+	if ierr != nil || !domainRE.MatchString(ascii) && !labelRE.MatchString(ascii) {
+		return "", false, fmt.Errorf("%q is not a hostname", raw)
+	}
+	return ascii, wildcard, nil
+}
+
+// HostOf is PlatformHost's hostname, empty for anything it cannot read.
+func HostOf(s string) string {
+	h, _, err := PlatformHost(s)
+	if err != nil {
 		return ""
 	}
-	return s
+	return h
 }
 
 // CoveredByWildcard reports whether a single *.<appDomain> certificate can

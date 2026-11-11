@@ -181,7 +181,7 @@ func TestALegacyHostnameStaysUntilItIsRenamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := domain.EnsureManaged(ctx, s.q, s.managedInput(a)); err != nil {
+	if _, err := domain.EnsureManaged(ctx, s.q, s.managedInput(ctx, a)); err != nil {
 		t.Fatalf("issue the old hostname: %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestTheAppDomainChangingMovesEachKindOfHostname(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := domain.EnsureManaged(ctx, s.q, s.managedInput(old)); err != nil {
+	if _, err := domain.EnsureManaged(ctx, s.q, s.managedInput(ctx, old)); err != nil {
 		t.Fatalf("issue the old hostname: %v", err)
 	}
 	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{

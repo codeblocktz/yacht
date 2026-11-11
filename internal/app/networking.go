@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -172,45 +173,73 @@ func (s *Service) AddDomain(ctx context.Context, ownerID, name, host string) err
 // settings, changed while the engine runs. An error rather than a partial
 // answer: a list missing the registry would let somebody claim it.
 func (s *Service) CustomDomainReservations(ctx context.Context) (domain.Reservations, error) {
-	r := domain.Reservations{
-		AppDomain: s.opts.AppDomain,
-		Zones:     slices.Clone(s.opts.ReservedDomains),
-	}
-	zone := func(v string) {
-		if h := domain.HostOf(v); h != "" {
-			r.Zones = append(r.Zones, h)
-		}
-	}
-	name := func(v string) {
-		if h := domain.HostOf(v); h != "" {
-			r.Names = append(r.Names, h)
-		}
-	}
-	for _, v := range s.opts.PlatformZones {
-		zone(v)
-	}
-	for _, v := range s.opts.PlatformNames {
-		name(v)
-	}
-
+	r, bad := s.reservationsFromConfig()
+	add := func(v string) { bad = cmp.Or(bad, addPlatformHost(&r, v, false)) }
 	dns, err := s.q.GetPlatformDNS(ctx)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return domain.Reservations{}, fmt.Errorf("app: read the CNAME target: %w", err)
 	}
-	name(dns.CnameTarget)
+	add(dns.CnameTarget)
 	regions, err := s.q.ListRegions(ctx)
 	if err != nil {
 		return domain.Reservations{}, fmt.Errorf("app: read regions' edges: %w", err)
 	}
 	for _, rg := range regions {
-		name(rg.EdgeHost)
+		add(rg.EdgeHost)
 	}
 	reg, err := s.q.GetPlatformRegistry(ctx)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return domain.Reservations{}, fmt.Errorf("app: read the registry: %w", err)
 	}
-	name(reg.Host)
+	add(reg.Host)
+	// Every one of these is checked where it is set. One that still cannot be
+	// read is refused as a whole, as a failed read is: a partial list is one a
+	// name it left out can be claimed through.
+	if bad != nil {
+		return domain.Reservations{}, fmt.Errorf("app: read the install's own names: %w", bad)
+	}
 	return r, nil
+}
+
+// reservationsFromConfig is CustomDomainReservations without the settings
+// kept in the database, and the first of the configured addresses that could
+// not be read — config.Load refuses those, so in practice none.
+func (s *Service) reservationsFromConfig() (domain.Reservations, error) {
+	r := domain.Reservations{
+		AppDomain: s.opts.AppDomain,
+		Reserved:  slices.Clone(s.opts.ReservedDomains),
+		Allowed:   slices.Clone(s.opts.AllowedDomains),
+	}
+	var bad error
+	for _, v := range s.opts.PlatformZones {
+		bad = cmp.Or(bad, addPlatformHost(&r, v, true))
+	}
+	for _, v := range s.opts.PlatformNames {
+		bad = cmp.Or(bad, addPlatformHost(&r, v, false))
+	}
+	return r, bad
+}
+
+// configuredReservations is reservationsFromConfig with whatever it could read.
+func (s *Service) configuredReservations() domain.Reservations {
+	r, _ := s.reservationsFromConfig()
+	return r
+}
+
+// addPlatformHost adds one of the install's addresses to r: a zone when it
+// was configured as one or written *.example.com, a name otherwise.
+func addPlatformHost(r *domain.Reservations, v string, zone bool) error {
+	h, wildcard, err := domain.PlatformHost(v)
+	switch {
+	case err != nil:
+		return err
+	case h == "":
+	case zone || wildcard:
+		r.Zones = append(r.Zones, h)
+	default:
+		r.Names = append(r.Names, h)
+	}
+	return nil
 }
 
 // domainTarget is what a custom domain on an app is told to CNAME to: its
@@ -265,7 +294,18 @@ func (s *Service) VerifyDomain(ctx context.Context, ownerID, name string, id uui
 	if err != nil {
 		return err
 	}
-	if err := domain.Verify(ctx, s.q, s.resolver, reserved, ownerID, id); err != nil {
+	t, err := domain.Verify(ctx, s.q, s.resolver, reserved, ownerID, id)
+	if t.Withdrew() {
+		// The check took a routed name out — it stopped pointing here, or it
+		// is one of the install's own. The config version moved with the
+		// state, so the reconciler takes it off the Ingress; the refusal still
+		// goes back to the person who asked.
+		if row, gerr := s.q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: ownerID, ID: id}); gerr == nil {
+			s.log.Info("custom domain withdrawn", slog.String("app", name), slog.String("host", row.Host))
+			s.notifyRoutes(RouteChange{Kind: RouteChangeApp, OwnerID: ownerID, AppID: row.AppID})
+		}
+	}
+	if err != nil {
 		return err
 	}
 

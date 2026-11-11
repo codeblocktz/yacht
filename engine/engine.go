@@ -787,6 +787,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		ReservedDomains:     cfg.ReservedDomains,
 		PlatformZones:       platformZones,
 		PlatformNames:       platformNames,
+		AllowedDomains:      cfg.ReservedDomainsAllow,
 		Resolver:            e.resolver,
 		Waker:               waker,
 		WakeTimeout:         cfg.WakeTimeout,
