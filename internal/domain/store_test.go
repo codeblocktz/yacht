@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -310,5 +311,48 @@ func TestIssueGeneratedReplacesAndMoves(t *testing.T) {
 	}
 	if held, _, _ := GetManaged(ctx, q, a.ID); !held.Generated || held.Label != "web-production" {
 		t.Fatalf("held = %+v, want the generated kind and label kept", held)
+	}
+}
+
+// A hostname that changes is a new holding, and the HTTP log is bounded by
+// it; one reissued unchanged is not. Read from the row's own column because
+// created_at stays where it was while the host moves under it.
+func TestAPlatformHostnameRecordsWhenItWasTaken(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-held", "web", "ns-test-held")
+	q := dbgen.New(pool)
+	in := GenerateInput{OwnerID: a.OwnerID, AppID: a.ID, AppDomain: "apps.domain-held.test", Label: "first"}
+
+	since := func() time.Time {
+		t.Helper()
+		held, err := RoutableHostsHeld(ctx, q, a.ID)
+		if err != nil || len(held) != 1 {
+			t.Fatalf("RoutableHostsHeld = %v, %v; want one host", held, err)
+		}
+		return held[0].Since
+	}
+	if _, err := IssueGenerated(ctx, q, in); err != nil {
+		t.Fatalf("IssueGenerated: %v", err)
+	}
+	// Moved back, so a later issue can be told from this one.
+	if _, err := pool.Exec(ctx, `UPDATE domains SET host_since = now() - interval '1 day' WHERE app_id = $1`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	first := since()
+
+	if _, err := IssueGenerated(ctx, q, in); err != nil {
+		t.Fatalf("IssueGenerated again: %v", err)
+	}
+	if got := since(); !got.Equal(first) {
+		t.Fatalf("reissuing the same name moved its holding from %v to %v", first, got)
+	}
+
+	in.Label = "second"
+	if _, err := IssueGenerated(ctx, q, in); err != nil {
+		t.Fatalf("IssueGenerated another name: %v", err)
+	}
+	if got := since(); !got.After(first.Add(time.Hour)) {
+		t.Fatalf("a new name is held since %v, want now rather than the old name's %v", got, first)
 	}
 }

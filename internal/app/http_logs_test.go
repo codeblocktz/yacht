@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
@@ -31,20 +33,35 @@ func (c *controllerLog) HTTPLogHint() string                  { return "" }
 func (c *controllerLog) HTTPLogsEnabled(context.Context) bool { return true }
 func (c *controllerLog) EnableHTTPLogs(context.Context) error { return nil }
 
-// storedRequests is the log store's copy of the access log.
+// storedRequests is the log store's copy of the access log. Like the store,
+// it answers a read with the lines for the hosts asked about, and keeps every
+// read it was asked for; hosts, start and end are the last.
 type storedRequests struct {
 	lines      []orchestrator.HTTPLogLine
 	more       bool
 	err        error
 	hosts      []string
 	start, end time.Time
+	reads      []storedRead
+}
+
+type storedRead struct {
+	hosts []string
+	start time.Time
 }
 
 func (s *storedRequests) Requests(
 	_ context.Context, hosts []string, start, end time.Time, _ int,
 ) ([]orchestrator.HTTPLogLine, bool, error) {
 	s.hosts, s.start, s.end = hosts, start, end
-	return s.lines, s.more, s.err
+	s.reads = append(s.reads, storedRead{hosts: hosts, start: start})
+	var out []orchestrator.HTTPLogLine
+	for _, l := range s.lines {
+		if slices.Contains(hosts, l.Host) {
+			out = append(out, l)
+		}
+	}
+	return out, s.more, s.err
 }
 
 func httpLogsService(t *testing.T) (*Service, *controllerLog, string, App) {
@@ -59,7 +76,22 @@ func httpLogsService(t *testing.T) (*Service, *controllerLog, string, App) {
 	a := publicApp(t, s, id, "web")
 	ctl := &controllerLog{recordingOrchestrator: orch}
 	s.orch = ctl
+	// Held for days: what bounds a read here is how far back it may reach,
+	// not how long the app has had its address. TestHTTPLogsBeginWhenTheApp
+	// TookItsHostname is the test of the other.
+	holdSince(t, s, a.ID, time.Now().Add(-72*time.Hour))
 	return s, ctl, id, a
+}
+
+// holdSince records an app's hostnames as held since at.
+func holdSince(t *testing.T, s *Service, appID uuid.UUID, at time.Time, hosts ...string) {
+	t.Helper()
+	tag, err := s.pool.Exec(context.Background(), `
+		UPDATE domains SET host_since = $2
+		WHERE app_id = $1 AND (coalesce(cardinality($3::text[]), 0) = 0 OR host = ANY($3))`, appID, at, hosts)
+	if err != nil || tag.RowsAffected() == 0 {
+		t.Fatalf("hold the hostnames since %v: %v, %d rows", at, err, tag.RowsAffected())
+	}
 }
 
 // QA OBSERVE-1: the controller's log had been rotated at 19:40:16, so the
@@ -138,5 +170,73 @@ func TestHTTPLogsFallBackToTheControllerWhenTheStoreFails(t *testing.T) {
 	}
 	if ctl.asked != 1 || len(got.Lines) != 1 || !strings.Contains(got.Coverage, "controller's log begins") {
 		t.Errorf("asked the controller %d times; got %+v", ctl.asked, got)
+	}
+}
+
+// A hostname outlives whoever held it, and the ingress controller's log is
+// filed by the name. An app that took a name another had just given up was
+// shown that app's last day of requests — its users' addresses, paths and
+// query strings. Each host is read from when this app came to hold it, from
+// the store and from the controller's own log alike.
+func TestHTTPLogsBeginWhenTheAppTookItsHostname(t *testing.T) {
+	ctx := context.Background()
+	s, ctl, id, a := httpLogsService(t)
+	// A custom domain, proven and routed.
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO domains (owner_id, app_id, host, state, managed, verify_target)
+		VALUES ($1, $2, 'shop.httplog.test', 'routed', false, 'edge.httplog.test')`, id, a.ID); err != nil {
+		t.Fatalf("claim a custom domain: %v", err)
+	}
+	now := time.Now().UTC()
+	took := now.Add(-time.Hour).Truncate(time.Microsecond)
+	holdSince(t, s, a.ID, took, "shop.httplog.test")
+
+	lines := []orchestrator.HTTPLogLine{
+		{At: now.Add(-5 * time.Hour), Host: a.Host, Method: "GET", Path: "/ours-all-along", Status: 200},
+		{At: now.Add(-3 * time.Hour), Host: "shop.httplog.test", Method: "GET", Path: "/theirs?token=x", Status: 200},
+		{At: now.Add(-10 * time.Minute), Host: "shop.httplog.test", Method: "GET", Path: "/ours", Status: 200},
+	}
+	paths := func(got HTTPLogs) []string {
+		var out []string
+		for _, l := range got.Lines {
+			out = append(out, l.Path)
+		}
+		return out
+	}
+
+	store := &storedRequests{lines: lines}
+	s.UseRequestLog(store, 0)
+	got, err := s.DeploymentHTTPLogs(ctx, id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/ours-all-along", "/ours"}; !slices.Equal(paths(got), want) {
+		t.Errorf("from the store, paths = %v; want %v and nothing the name's previous holder was sent",
+			paths(got), want)
+	}
+	var shopRead *storedRead
+	for i, r := range store.reads {
+		if slices.Contains(r.hosts, "shop.httplog.test") {
+			shopRead = &store.reads[i]
+		}
+	}
+	if len(store.reads) != 2 || shopRead == nil || len(shopRead.hosts) != 1 || !shopRead.start.Equal(took) {
+		t.Errorf("the store was read %+v; want the new name read on its own, from %v", store.reads, took)
+	}
+
+	// The controller's log, when the store cannot be read, likewise.
+	s.UseRequestLog(&storedRequests{err: errors.New("connection refused")}, 0)
+	holdSince(t, s, a.ID, took)
+	ctl.from, ctl.lines = now.Add(-6*time.Hour), lines
+	got, err = s.DeploymentHTTPLogs(ctx, id, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/ours"}; !slices.Equal(paths(got), want) {
+		t.Errorf("from the controller, paths = %v; want %v", paths(got), want)
+	}
+	if !got.Since.Equal(took) || !strings.Contains(got.Coverage, "given its address") {
+		t.Errorf("Since %v, Coverage %q; want them to begin when the app took its names, %v",
+			got.Since, got.Coverage, took)
 	}
 }

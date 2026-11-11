@@ -22,7 +22,10 @@
 INSERT INTO domains (owner_id, app_id, host, tls, state, managed, generated)
 VALUES (@owner_id, @app_id, lower(@host), @tls, 'routed', true, @generated)
 ON CONFLICT (app_id) WHERE managed
-DO UPDATE SET host = lower(@host), tls = @tls, generated = @generated
+DO UPDATE SET host = lower(@host), tls = @tls, generated = @generated,
+    -- A new name is a new holding; the same one, reissued, is not.
+    host_since = CASE WHEN domains.host = lower(@host)
+                      THEN domains.host_since ELSE now() END
 RETURNING *;
 
 -- name: ListDomainsByApp :many
@@ -190,5 +193,12 @@ WHERE owner_id = @owner_id AND id = @id AND NOT managed;
 -- lives here rather than in a caller that might forget it.
 -- name: RoutableHostsForApp :many
 SELECT host FROM domains
+WHERE app_id = @app_id AND (managed OR verified)
+ORDER BY managed DESC, host;
+
+-- RoutableHostsForApp, with when the app came to hold each: what an app's
+-- HTTP log is bounded by, so it never shows a previous holder's requests.
+-- name: RoutableHostsHeldByApp :many
+SELECT host, host_since FROM domains
 WHERE app_id = @app_id AND (managed OR verified)
 ORDER BY managed DESC, host;

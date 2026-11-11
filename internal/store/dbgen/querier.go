@@ -787,6 +787,9 @@ type Querier interface {
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	// RoutableHostsForApp, with when the app came to hold each: what an app's
+	// HTTP log is bounded by, so it never shows a previous holder's requests.
+	RoutableHostsHeldByApp(ctx context.Context, appID uuid.UUID) ([]RoutableHostsHeldByAppRow, error)
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
 	// Where an app made by Create belongs, written in Create's transaction.
 	SetAppEnvironment(ctx context.Context, arg SetAppEnvironmentParams) error

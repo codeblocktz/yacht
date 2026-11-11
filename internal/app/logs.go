@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -428,6 +431,11 @@ func (s *Service) canApplyHTTPLogs(ctx context.Context, l orchestrator.HTTPLogge
 // An app with no hostname gets nothing, not everything. That is the failure
 // worth naming, because an empty filter over a shared log is the difference
 // between this feature and a way to read the whole cluster's traffic.
+//
+// The hostnames bound it in time as well. A name outlives whoever held it, and
+// the log is keyed by the name: an app that took a hostname another had just
+// given up was shown that app's last day of requests. Each host is read from
+// when this app came to hold it.
 func (s *Service) DeploymentHTTPLogs(
 	ctx context.Context, ownerID, appName string,
 ) (HTTPLogs, error) {
@@ -441,9 +449,13 @@ func (s *Service) DeploymentHTTPLogs(
 		return HTTPLogs{Note: "This install cannot read the ingress controller's log."}, nil
 	}
 
-	hosts, err := domain.RoutableHosts(ctx, s.q, a.ID)
+	held, err := domain.RoutableHostsHeld(ctx, s.q, a.ID)
 	if err != nil {
 		return HTTPLogs{}, err
+	}
+	hosts := make([]string, len(held))
+	for i, h := range held {
+		hosts[i] = h.Host
 	}
 	out := HTTPLogs{Hosts: hosts}
 	if len(hosts) == 0 {
@@ -456,7 +468,7 @@ func (s *Service) DeploymentHTTPLogs(
 		// The pod log is the fallback, not the answer: a store that cannot
 		// be read now is better covered by what the controller still has
 		// than by nothing.
-		stored, err := s.storedHTTPLogs(ctx, hosts, out)
+		stored, err := s.storedHTTPLogs(ctx, held, out)
 		if err == nil {
 			return stored, nil
 		}
@@ -468,8 +480,12 @@ func (s *Service) DeploymentHTTPLogs(
 	if err != nil {
 		return HTTPLogs{}, fmt.Errorf("app: read http logs: %w", err)
 	}
-	out.Lines = got.Lines
-	if !got.From.IsZero() {
+	out.Lines = heldLines(got.Lines, held)
+	if first := firstHeld(held); !got.From.IsZero() && first.After(got.From) {
+		out.Since = first
+		out.Coverage = "Since " + coverageTime(first, time.Now()) + ", when this app was " +
+			"given its address. Requests to it before then were somebody else's."
+	} else if !got.From.IsZero() {
 		out.Since = got.From
 		out.Coverage = "Since " + coverageTime(got.From, time.Now()) + ", when the ingress " +
 			"controller's log begins. Requests before then are not kept, and every app's " +
@@ -506,15 +522,55 @@ func (s *Service) DeploymentHTTPLogs(
 }
 
 // storedHTTPLogs reads an app's requests from the log store.
-func (s *Service) storedHTTPLogs(ctx context.Context, hosts []string, out HTTPLogs) (HTTPLogs, error) {
+//
+// One read for each moment a host's window opens, hosts that share one read
+// together: on an app that has held its names longer than the span — nearly
+// every app — that is one read, as it always was. Each read returns the newest
+// requests in its window, so where one was cut short at the limit, whatever
+// another returned from before that point is dropped too, and what is shown
+// is whole from where it begins.
+func (s *Service) storedHTTPLogs(ctx context.Context, held []domain.Held, out HTTPLogs) (HTTPLogs, error) {
 	now := time.Now()
 	span := requestLogSpan
 	if s.requestLogRetention > 0 && s.requestLogRetention < span {
 		span = s.requestLogRetention
 	}
-	lines, more, err := s.requestLog.Requests(ctx, hosts, now.Add(-span), now, requestLogLimit)
-	if err != nil {
-		return HTTPLogs{}, err
+	from := now.Add(-span)
+	byStart := map[int64][]string{}
+	for _, h := range held {
+		start := from
+		if h.Since.After(start) {
+			start = h.Since
+		}
+		byStart[start.UnixNano()] = append(byStart[start.UnixNano()], h.Host)
+	}
+	starts := slices.Sorted(maps.Keys(byStart))
+
+	var (
+		lines []orchestrator.HTTPLogLine
+		more  bool
+		whole time.Time
+	)
+	for _, start := range starts {
+		got, cut, err := s.requestLog.Requests(ctx, byStart[start], time.Unix(0, start), now, requestLogLimit)
+		if err != nil {
+			return HTTPLogs{}, err
+		}
+		if cut && len(got) > 0 {
+			more = true
+			if got[0].At.After(whole) {
+				whole = got[0].At
+			}
+		}
+		lines = append(lines, got...)
+	}
+	lines = heldLines(lines, held)
+	slices.SortStableFunc(lines, func(a, b orchestrator.HTTPLogLine) int { return a.At.Compare(b.At) })
+	if !whole.IsZero() {
+		lines = slices.DeleteFunc(lines, func(l orchestrator.HTTPLogLine) bool { return l.At.Before(whole) })
+	}
+	if len(lines) > requestLogLimit {
+		lines, more = lines[len(lines)-requestLogLimit:], true
 	}
 	out.Lines = lines
 	out.Since = now.Add(-span)
@@ -529,6 +585,33 @@ func (s *Service) storedHTTPLogs(ctx context.Context, hosts []string, out HTTPLo
 		out.Note = "No requests to this app in the last " + spanText(span) + "."
 	}
 	return out, nil
+}
+
+// heldLines drops each request made to a host before this app held it: the
+// previous holder's, which the store and the controller's log still file
+// under the name. Applied to every read, whatever the read was asked for,
+// because the store bounds a query by when a line was logged and a line says
+// when its request began.
+func heldLines(lines []orchestrator.HTTPLogLine, held []domain.Held) []orchestrator.HTTPLogLine {
+	since := make(map[string]time.Time, len(held))
+	for _, h := range held {
+		since[strings.ToLower(h.Host)] = h.Since
+	}
+	return slices.DeleteFunc(lines, func(l orchestrator.HTTPLogLine) bool {
+		start, ok := since[strings.ToLower(l.Host)]
+		return !ok || l.At.Before(start)
+	})
+}
+
+// firstHeld is when the app came to hold the first of its hosts.
+func firstHeld(held []domain.Held) time.Time {
+	var first time.Time
+	for _, h := range held {
+		if first.IsZero() || h.Since.Before(first) {
+			first = h.Since
+		}
+	}
+	return first
 }
 
 // coverageTime names a moment the way the rows beside it do: a time of day

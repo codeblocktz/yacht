@@ -400,6 +400,32 @@ func RoutableHosts(
 	return hosts, nil
 }
 
+// Held is a hostname routed to an app, and when the app came to hold it.
+type Held struct {
+	Host  string
+	Since time.Time
+}
+
+// RoutableHostsHeld is RoutableHosts with when the app came to hold each.
+//
+// A hostname outlives its holder: renamed, regenerated, deleted or released,
+// it goes to whoever asks next, and anything keyed only by the name — the
+// ingress controller's shared log above all — still has the last holder's
+// traffic under it. Since is where this app's share of that begins.
+func RoutableHostsHeld(
+	ctx context.Context, q *dbgen.Queries, appID uuid.UUID,
+) ([]Held, error) {
+	rows, err := q.RoutableHostsHeldByApp(ctx, appID)
+	if err != nil {
+		return nil, fmt.Errorf("domain: routable hosts: %w", err)
+	}
+	out := make([]Held, len(rows))
+	for i, r := range rows {
+		out[i] = Held{Host: r.Host, Since: r.HostSince}
+	}
+	return out, nil
+}
+
 // ToCustom converts a stored row into the shape the rest of the system reads.
 //
 // Exported because the install-wide list joins domains to apps and so cannot go

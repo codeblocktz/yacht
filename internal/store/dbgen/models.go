@@ -355,6 +355,7 @@ type Domain struct {
 	CheckAttempts int32
 	Verified      bool
 	Generated     bool
+	HostSince     time.Time
 }
 
 type Environment struct {
