@@ -920,3 +920,170 @@ func TestGenuinelyFailedBuildNeverResolvesAStaleManifest(t *testing.T) {
 		t.Fatalf("failed build resolved stale refs: %v", manifests.refs)
 	}
 }
+
+// settledBuildOperation is a worker that wrote its build's result and then
+// stopped before advancing the operation: the build row is terminal, and the
+// operation is back in the queue at its building checkpoint.
+func settledBuildOperation(
+	t *testing.T, s *Service, ownerID string, a App, status, message, commit string,
+) (Operation, dbgen.Build) {
+	t.Helper()
+	ctx := context.Background()
+	op, build := interruptedOperationBuild(t, s, ownerID, a)
+	image := ""
+	if status == BuildSucceeded {
+		image = "registry.test/" + ownerID + "-" + a.Name + ":" + revisionFor(op.DeploymentID)
+	}
+	if err := s.finishFencedBuild(ctx, op, build.ID, status, message, image, commit); err != nil {
+		t.Fatalf("finish fenced build: %v", err)
+	}
+	if err := s.reclaimOperations(ctx); err != nil {
+		t.Fatalf("reclaim operation: %v", err)
+	}
+	row, err := s.q.GetDeploymentOperation(ctx, dbgen.GetDeploymentOperationParams{
+		OwnerID: ownerID, ID: op.ID,
+	})
+	if err != nil {
+		t.Fatalf("read reclaimed operation: %v", err)
+	}
+	if row.Status != OperationQueued || row.Checkpoint != OperationBuilding {
+		t.Fatalf("seeded operation = %s at %s, want queued at building", row.Status, row.Checkpoint)
+	}
+	return op, build
+}
+
+// A worker that recorded a successful build and stopped before the release
+// was attached left the operation at building with nothing running. Nothing
+// else will move it: the build is not running, its row is not missing, and
+// admission only claims fresh operations. The reconciler resumes it from the
+// pushed image, and the deploy finishes.
+func TestASucceededBuildWhoseWorkerStoppedIsResumed(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{} // No Job: the build is long over.
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-resume-succeeded-build")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	prior := *a.ActiveReleaseID
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	op, build := settledBuildOperation(t, s, ownerID, a, BuildSucceeded, "", commit)
+	manifests := &recoveryManifests{
+		digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+	}
+	s.manifests = manifests
+
+	if err := s.ReconcileBuilds(ctx); err != nil {
+		t.Fatalf("ReconcileBuilds: %v", err)
+	}
+	finished := waitForOperationStatus(t, s, ownerID, op.ID, OperationSucceeded)
+	if !finished.ReleaseID.Valid {
+		t.Fatal("resumed operation has no release")
+	}
+	wantRef := "registry.test/" + ownerID + "-web:" + revisionFor(op.DeploymentID)
+	release, err := s.ReleaseByID(ctx, ownerID, a.ID, uuid.UUID(finished.ReleaseID.Bytes))
+	if err != nil {
+		t.Fatalf("ReleaseByID: %v", err)
+	}
+	if release.ImageRef != wantRef || release.ImageDigest != manifests.digest {
+		t.Fatalf("resumed release = %#v", release)
+	}
+	if release.SourceRevision != commit {
+		t.Fatalf("resumed release revision = %q, want the built commit", release.SourceRevision)
+	}
+	gotBuild, err := s.q.GetBuild(ctx, dbgen.GetBuildParams{OwnerID: ownerID, ID: build.ID})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if gotBuild.Status != BuildSucceeded || gotBuild.CommitSha != commit || gotBuild.Image != wantRef {
+		t.Fatalf("resumed build was rewritten: %#v", gotBuild)
+	}
+	got, err := s.Get(ctx, ownerID, a.Name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ActiveReleaseID == nil || *got.ActiveReleaseID == prior ||
+		*got.ActiveReleaseID != release.ID {
+		t.Fatal("resumed release did not become active")
+	}
+	if builder.built != 0 {
+		t.Fatalf("resuming built %d more times", builder.built)
+	}
+}
+
+// A worker that recorded a failed build and stopped before failing the
+// operation left the app looking mid-deploy for good, every later deploy
+// refused as in flight, and a build slot taken. The reconciler fails it with
+// the build's own reason.
+func TestAFailedBuildWhoseWorkerStoppedFailsItsOperation(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{}
+	s, _, pool := testService(t, Options{
+		Builder: builder, Images: stubImages{}, MaxConcurrentBuilds: 1,
+	})
+	ownerID := owner(t, s, pool, "owner-settle-failed-build")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	prior := *a.ActiveReleaseID
+	const reason = "the Dockerfile's RUN npm ci exited with 1"
+	op, build := settledBuildOperation(t, s, ownerID, a, BuildFailed, reason, "")
+	manifests := &recoveryManifests{
+		digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+	}
+	s.manifests = manifests
+
+	if err := s.ReconcileBuilds(ctx); err != nil {
+		t.Fatalf("ReconcileBuilds: %v", err)
+	}
+	failed := waitForOperationStatus(t, s, ownerID, op.ID, OperationFailed)
+	if failed.Message != reason {
+		t.Fatalf("failed operation message = %q, want the build's reason", failed.Message)
+	}
+	if len(manifests.refs) != 0 {
+		t.Fatalf("a failed build resolved refs: %v", manifests.refs)
+	}
+	deployment, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{
+		OwnerID: ownerID, ID: op.DeploymentID,
+	})
+	if err != nil {
+		t.Fatalf("GetDeployment: %v", err)
+	}
+	if deployment.Status != DeployFailed || deployment.Message != reason {
+		t.Fatalf("deployment = %s %q, want failed with the build's reason",
+			deployment.Status, deployment.Message)
+	}
+	gotBuild, err := s.q.GetBuild(ctx, dbgen.GetBuildParams{OwnerID: ownerID, ID: build.ID})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if gotBuild.Status != BuildFailed || gotBuild.Message != reason {
+		t.Fatalf("failed build was rewritten: %#v", gotBuild)
+	}
+	got, err := s.Get(ctx, ownerID, a.Name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ActiveReleaseID == nil || *got.ActiveReleaseID != prior {
+		t.Fatal("a failed build moved the active release")
+	}
+
+	// The slot is free again: with a ceiling of one, the next build is
+	// admitted and claimed.
+	if err := s.Redeploy(ctx, ownerID, a.Name); err != nil {
+		t.Fatalf("the next deploy is still refused: %v", err)
+	}
+	next, err := s.ClaimOperation(ctx)
+	if err != nil {
+		t.Fatalf("the next build was not claimed under a ceiling of one: %v", err)
+	}
+	if err := s.CancelOperation(ctx, ownerID, next.ID); err != nil {
+		t.Fatalf("clean next operation: %v", err)
+	}
+}

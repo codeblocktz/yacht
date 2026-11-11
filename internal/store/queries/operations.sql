@@ -137,6 +137,20 @@ WHERE o.owner_id = @owner_id AND o.deployment_id = @deployment_id
   )
 RETURNING o.*;
 
+-- name: ListSettledBuildOperations :many
+-- Operations a worker left at building after their build's result was
+-- written: the build row is terminal and the lease has since expired, so
+-- nothing else will move them. Not owner-scoped, as ListRunningBuilds is not,
+-- and without the log, which nothing here reads.
+SELECT b.id, b.owner_id, b.app_id, b.deployment_id, b.status, b.message,
+       b.image, b.commit_sha, b.job_name, b.started_at
+FROM deployment_operations o
+JOIN builds b ON b.owner_id = o.owner_id AND b.deployment_id = o.deployment_id
+WHERE o.status = 'queued' AND o.checkpoint = 'building'
+  AND b.status IN ('succeeded', 'failed')
+ORDER BY o.stage_started_at, o.id
+LIMIT @result_limit;
+
 -- name: FailQueuedBuildOperation :execrows
 UPDATE deployment_operations
 SET status = 'failed', message = @message, finished_at = now()

@@ -601,6 +601,11 @@ type Querier interface {
 	// than a team reading theirs.
 	ListRunningBuilds(ctx context.Context) ([]Build, error)
 	ListRunningDatabaseBackups(ctx context.Context) ([]ListRunningDatabaseBackupsRow, error)
+	// Operations a worker left at building after their build's result was
+	// written: the build row is terminal and the lease has since expired, so
+	// nothing else will move them. Not owner-scoped, as ListRunningBuilds is not,
+	// and without the log, which nothing here reads.
+	ListSettledBuildOperations(ctx context.Context, resultLimit int32) ([]ListSettledBuildOperationsRow, error)
 	// Awake apps that sleep, by their own setting or their team's. Every team's:
 	// the sleeper runs for the whole install, like the reconciler.
 	ListSleepCandidates(ctx context.Context) ([]ListSleepCandidatesRow, error)
