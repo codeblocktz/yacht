@@ -219,7 +219,7 @@ func (s *Service) resetMissingBuildRow(
 
 // buildRecord is what the reconciler knows of a build: everything but its
 // log, which it never reads and which can run to megabytes. The columns of
-// ListRunningBuilds and ListSettledBuildOperations, which convert to it.
+// ListRunningBuilds, which converts to it, and of ListSettledBuildOperations.
 type buildRecord struct {
 	ID           uuid.UUID
 	OwnerID      string
@@ -233,7 +233,9 @@ type buildRecord struct {
 	StartedAt    time.Time
 }
 
-const settledBuildRecoveryBatch = 100
+// settledBuildRecoveryBatch is a page of ListSettledBuildOperations. A variable
+// so a test can page with less than a hundred stranded operations.
+var settledBuildRecoveryBatch int32 = 100
 
 // settleFinishedBuildOperations finishes operations whose worker wrote the
 // build's result and stopped before advancing them. The build row is
@@ -246,27 +248,46 @@ const settledBuildRecoveryBatch = 100
 // advance the operation itself. Each candidate is decided again under the
 // operation's row lock, as the running-build pass does.
 func (s *Service) settleFinishedBuildOperations(ctx context.Context) (int, error) {
-	rows, err := s.q.ListSettledBuildOperations(ctx, settledBuildRecoveryBatch)
-	if err != nil {
-		return 0, fmt.Errorf("app: list settled build operations: %w", err)
-	}
 	var settled int
-	for _, row := range rows {
-		b := buildRecord(row)
-		var done bool
-		switch b.Status {
-		case BuildSucceeded:
-			done = s.resumePushedBuild(ctx, b)
-		case BuildFailed:
-			// The reason the worker wrote is the one the deploy would have
-			// failed with.
-			done = s.failInterruptedBuild(ctx, b, cmp.Or(b.Message, "the build failed"))
+	// Every page, each after the last row of the one before: a page whose
+	// operations could not be settled this pass is stepped past rather than
+	// read again in place of the ones behind it.
+	var afterStarted time.Time
+	var afterID uuid.UUID
+	for {
+		rows, err := s.q.ListSettledBuildOperations(ctx, dbgen.ListSettledBuildOperationsParams{
+			AfterStartedAt: afterStarted, AfterID: afterID, ResultLimit: settledBuildRecoveryBatch,
+		})
+		if err != nil {
+			return settled, fmt.Errorf("app: list settled build operations: %w", err)
 		}
-		if done {
-			settled++
+		for _, row := range rows {
+			if ctx.Err() != nil {
+				return settled, ctx.Err()
+			}
+			b := buildRecord{
+				ID: row.ID, OwnerID: row.OwnerID, AppID: row.AppID, DeploymentID: row.DeploymentID,
+				Status: row.Status, Message: row.Message, Image: row.Image,
+				CommitSha: row.CommitSha, JobName: row.JobName, StartedAt: row.StartedAt,
+			}
+			var done bool
+			switch b.Status {
+			case BuildSucceeded:
+				done = s.resumePushedBuild(ctx, b)
+			case BuildFailed:
+				// The reason the worker wrote is the one the deploy would
+				// have failed with.
+				done = s.failInterruptedBuild(ctx, b, cmp.Or(b.Message, "the build failed"))
+			}
+			if done {
+				settled++
+			}
+			afterStarted, afterID = row.OperationStageStartedAt, row.OperationID
+		}
+		if len(rows) < int(settledBuildRecoveryBatch) {
+			return settled, nil
 		}
 	}
-	return settled, nil
 }
 
 // settleBuild writes the end of a build the cluster says is over. A failed or
@@ -389,7 +410,14 @@ func (s *Service) recoverPushedBuild(
 			return Operation{}, fmt.Errorf("app: record recovered image: %w", err)
 		}
 	}
-	release, err := s.recordRelease(ctx, q, toApp(lockedApp),
+	// As the worker would have: the release carries every edit saved for
+	// the deploy, and the image's user, which the worker wrote to the app
+	// with the build's result (finishFencedBuild).
+	recovered := toApp(lockedApp)
+	if err := s.commitStaged(ctx, q, &recovered); err != nil {
+		return Operation{}, err
+	}
+	release, err := s.recordRelease(ctx, q, recovered,
 		cmp.Or(row.CommitSha, revisionFor(row.DeploymentID)), digest, "deployment")
 	if err != nil {
 		return Operation{}, err
@@ -487,6 +515,11 @@ func (s *Service) failInterruptedBuild(
 		s.log.Error("commit failed build settlement", "error", err)
 		return false
 	}
+	// Said as the worker would have said it, had it been there to fail the
+	// deploy itself.
+	s.emitDeployFinished(ctx, Operation{
+		OwnerID: row.OwnerID, AppID: row.AppID, DeploymentID: row.DeploymentID,
+	}, errors.New(message))
 	return true
 }
 

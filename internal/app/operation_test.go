@@ -1289,6 +1289,7 @@ type lateCancelBuilder struct {
 	beforeCreate func()
 	mu           sync.Mutex
 	created      bool
+	ranOn        bool
 	deleted      chan string
 }
 
@@ -1302,12 +1303,15 @@ func (b *lateCancelBuilder) Build(
 	if req.Created != nil {
 		req.Created()
 	}
-	select {
-	case <-ctx.Done():
-		return orchestrator.BuildResult{}, ctx.Err()
-	case <-time.After(5 * time.Second):
-		return orchestrator.BuildResult{}, errors.New("the build ran on after its operation was cancelled")
+	// Decided the moment the caller has been told the Job exists, with no
+	// clock: a build still wanted at that point is one that would run on.
+	if err := ctx.Err(); err != nil {
+		return orchestrator.BuildResult{}, err
 	}
+	b.mu.Lock()
+	b.ranOn = true
+	b.mu.Unlock()
+	return orchestrator.BuildResult{}, errors.New("the build ran on after its operation was cancelled")
 }
 func (*lateCancelBuilder) BuildJobName(orchestrator.BuildRequest) string {
 	return "build-late-cancel"
@@ -1346,13 +1350,15 @@ func TestACancelWhileTheBuildJobIsMadeDeletesTheJob(t *testing.T) {
 		}
 	}
 
-	started := time.Now()
 	_, err = s.buildOperation(ctx, &op, a)
+	builder.mu.Lock()
+	ranOn := builder.ranOn
+	builder.mu.Unlock()
+	if ranOn {
+		t.Fatal("the build was left running once its Job existed")
+	}
 	if err == nil {
 		t.Fatal("a cancelled build reported success")
-	}
-	if took := time.Since(started); took > 2*time.Second {
-		t.Fatalf("the cancelled build was waited on for %s", took)
 	}
 	select {
 	case got := <-builder.deleted:

@@ -142,12 +142,18 @@ RETURNING o.*;
 -- written: the build row is terminal and the lease has since expired, so
 -- nothing else will move them. Not owner-scoped, as ListRunningBuilds is not,
 -- and without the log, which nothing here reads.
+--
+-- Paged by key after the last row seen, so a page of operations that could
+-- not be settled this pass (a registry that would not answer) does not hide
+-- the ones behind it.
 SELECT b.id, b.owner_id, b.app_id, b.deployment_id, b.status, b.message,
-       b.image, b.commit_sha, b.job_name, b.started_at
+       b.image, b.commit_sha, b.job_name, b.started_at,
+       o.stage_started_at AS operation_stage_started_at, o.id AS operation_id
 FROM deployment_operations o
 JOIN builds b ON b.owner_id = o.owner_id AND b.deployment_id = o.deployment_id
 WHERE o.status = 'queued' AND o.checkpoint = 'building'
   AND b.status IN ('succeeded', 'failed')
+  AND (o.stage_started_at, o.id) > (@after_started_at::timestamptz, @after_id::uuid)
 ORDER BY o.stage_started_at, o.id
 LIMIT @result_limit;
 

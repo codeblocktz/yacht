@@ -57,6 +57,15 @@ func (l *recordingLogs) BuildForDeployment(
 	return *l.build, nil
 }
 
+// BuildMetaForDeployment is the fake's build without its log.
+func (l *recordingLogs) BuildMetaForDeployment(
+	ctx context.Context, ownerID string, deployID uuid.UUID,
+) (app.Build, error) {
+	b, err := l.BuildForDeployment(ctx, ownerID, deployID)
+	b.Log = ""
+	return b, err
+}
+
 // BuildLogFrom answers from the build this fake was given, as the store does:
 // what follows the offset, counted in characters.
 func (l *recordingLogs) BuildLogFrom(

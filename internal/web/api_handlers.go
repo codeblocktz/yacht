@@ -310,7 +310,7 @@ func (s *Server) apiDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := s.deploymentView(r.Context(), a, d)
-	if b, err := s.logs.BuildForDeployment(r.Context(), a.OwnerID, d.ID); err == nil {
+	if b, err := s.logs.BuildMetaForDeployment(r.Context(), a.OwnerID, d.ID); err == nil {
 		v.Build = &apiBuild{ID: b.ID.String(), Status: b.Status, Commit: b.CommitSHA, Message: b.Message}
 	}
 	writeJSON(w, http.StatusOK, v)

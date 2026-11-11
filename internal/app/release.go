@@ -199,6 +199,29 @@ func pinImage(ref, digest string) string {
 	return ref + "@" + digest
 }
 
+// releaseDigest pins the app's current image for a release. Separate from
+// writing the release, so a caller that writes it under a row lock asks the
+// registry before taking the lock rather than while holding it.
+func (s *Service) releaseDigest(ctx context.Context, a App) (string, error) {
+	// Every path to a deploy passes here, so a bucket stops here whichever
+	// one forgot to ask.
+	if !a.Source.Workload() {
+		return "", ErrNoWorkload
+	}
+	if s.manifests == nil {
+		return "", ErrNoManifestResolver
+	}
+	if a.Image == PendingImage {
+		return "", fmt.Errorf("%w: %s has not produced an image yet",
+			ErrNoManifestResolver, a.Name)
+	}
+	digest, err := s.manifests.ResolveDigest(ctx, a.Image)
+	if err != nil {
+		return "", fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
+	}
+	return digest, nil
+}
+
 // createRelease resolves the current image before writing an immutable row.
 // Callers invoke it before any cluster apply. Configuration may already be
 // saved — a failed release-owned edit remains visible desired state — but a
@@ -206,21 +229,9 @@ func pinImage(ref, digest string) string {
 func (s *Service) createRelease(
 	ctx context.Context, q *dbgen.Queries, a App, sourceRevision string,
 ) (Release, error) {
-	// Every path to a deploy passes here, so a bucket stops here whichever
-	// one forgot to ask.
-	if !a.Source.Workload() {
-		return Release{}, ErrNoWorkload
-	}
-	if s.manifests == nil {
-		return Release{}, ErrNoManifestResolver
-	}
-	if a.Image == PendingImage {
-		return Release{}, fmt.Errorf("%w: %s has not produced an image yet",
-			ErrNoManifestResolver, a.Name)
-	}
-	digest, err := s.manifests.ResolveDigest(ctx, a.Image)
+	digest, err := s.releaseDigest(ctx, a)
 	if err != nil {
-		return Release{}, fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
+		return Release{}, err
 	}
 	// Whatever deploys next carries every edit saved for it: a redeploy or a
 	// push as much as the staged-changes bar. See staged.go.

@@ -44,6 +44,12 @@ type Logger interface {
 		ctx context.Context, ownerID string, deployID uuid.UUID,
 	) (app.Build, error)
 
+	// BuildMetaForDeployment is that build without its log, for a view that
+	// says how the build went rather than what it printed.
+	BuildMetaForDeployment(
+		ctx context.Context, ownerID string, deployID uuid.UUID,
+	) (app.Build, error)
+
 	// BuildLogFrom is that build's log from an offset, for a reader following
 	// it, which is sent what is new rather than the whole log each time.
 	BuildLogFrom(

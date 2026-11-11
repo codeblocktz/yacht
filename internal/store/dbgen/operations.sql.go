@@ -507,34 +507,48 @@ func (q *Queries) ListDeploymentOperations(ctx context.Context, arg ListDeployme
 
 const listSettledBuildOperations = `-- name: ListSettledBuildOperations :many
 SELECT b.id, b.owner_id, b.app_id, b.deployment_id, b.status, b.message,
-       b.image, b.commit_sha, b.job_name, b.started_at
+       b.image, b.commit_sha, b.job_name, b.started_at,
+       o.stage_started_at AS operation_stage_started_at, o.id AS operation_id
 FROM deployment_operations o
 JOIN builds b ON b.owner_id = o.owner_id AND b.deployment_id = o.deployment_id
 WHERE o.status = 'queued' AND o.checkpoint = 'building'
   AND b.status IN ('succeeded', 'failed')
+  AND (o.stage_started_at, o.id) > ($1::timestamptz, $2::uuid)
 ORDER BY o.stage_started_at, o.id
-LIMIT $1
+LIMIT $3
 `
 
+type ListSettledBuildOperationsParams struct {
+	AfterStartedAt time.Time
+	AfterID        uuid.UUID
+	ResultLimit    int32
+}
+
 type ListSettledBuildOperationsRow struct {
-	ID           uuid.UUID
-	OwnerID      string
-	AppID        uuid.UUID
-	DeploymentID uuid.UUID
-	Status       string
-	Message      string
-	Image        string
-	CommitSha    string
-	JobName      string
-	StartedAt    time.Time
+	ID                      uuid.UUID
+	OwnerID                 string
+	AppID                   uuid.UUID
+	DeploymentID            uuid.UUID
+	Status                  string
+	Message                 string
+	Image                   string
+	CommitSha               string
+	JobName                 string
+	StartedAt               time.Time
+	OperationStageStartedAt time.Time
+	OperationID             uuid.UUID
 }
 
 // Operations a worker left at building after their build's result was
 // written: the build row is terminal and the lease has since expired, so
 // nothing else will move them. Not owner-scoped, as ListRunningBuilds is not,
 // and without the log, which nothing here reads.
-func (q *Queries) ListSettledBuildOperations(ctx context.Context, resultLimit int32) ([]ListSettledBuildOperationsRow, error) {
-	rows, err := q.db.Query(ctx, listSettledBuildOperations, resultLimit)
+//
+// Paged by key after the last row seen, so a page of operations that could
+// not be settled this pass (a registry that would not answer) does not hide
+// the ones behind it.
+func (q *Queries) ListSettledBuildOperations(ctx context.Context, arg ListSettledBuildOperationsParams) ([]ListSettledBuildOperationsRow, error) {
+	rows, err := q.db.Query(ctx, listSettledBuildOperations, arg.AfterStartedAt, arg.AfterID, arg.ResultLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -553,6 +567,8 @@ func (q *Queries) ListSettledBuildOperations(ctx context.Context, resultLimit in
 			&i.CommitSha,
 			&i.JobName,
 			&i.StartedAt,
+			&i.OperationStageStartedAt,
+			&i.OperationID,
 		); err != nil {
 			return nil, err
 		}

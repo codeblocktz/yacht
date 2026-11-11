@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -925,7 +926,8 @@ func TestGenuinelyFailedBuildNeverResolvesAStaleManifest(t *testing.T) {
 // stopped before advancing the operation: the build row is terminal, and the
 // operation is back in the queue at its building checkpoint.
 func settledBuildOperation(
-	t *testing.T, s *Service, ownerID string, a App, status, message, commit string,
+	t *testing.T, s *Service, ownerID string, a App, status, message string,
+	result orchestrator.BuildResult,
 ) (Operation, dbgen.Build) {
 	t.Helper()
 	ctx := context.Background()
@@ -934,7 +936,7 @@ func settledBuildOperation(
 	if status == BuildSucceeded {
 		image = "registry.test/" + ownerID + "-" + a.Name + ":" + revisionFor(op.DeploymentID)
 	}
-	if err := s.finishFencedBuild(ctx, op, build.ID, status, message, image, commit); err != nil {
+	if err := s.finishFencedBuild(ctx, op, build.ID, status, message, image, result); err != nil {
 		t.Fatalf("finish fenced build: %v", err)
 	}
 	if err := s.reclaimOperations(ctx); err != nil {
@@ -970,7 +972,15 @@ func TestASucceededBuildWhoseWorkerStoppedIsResumed(t *testing.T) {
 	}
 	prior := *a.ActiveReleaseID
 	const commit = "0123456789abcdef0123456789abcdef01234567"
-	op, build := settledBuildOperation(t, s, ownerID, a, BuildSucceeded, "", commit)
+	op, build := settledBuildOperation(t, s, ownerID, a, BuildSucceeded, "", orchestrator.BuildResult{
+		CommitSHA: commit, RunAsUser: 1001, BuildArgs: []string{"NODE_ENV"},
+	})
+	// Saved for the next deploy while this one was stranded: the resumed
+	// release carries it, as the worker's would have.
+	s.opts.StageChanges = true
+	if err := s.SetVariable(ctx, ownerID, a.Name, VariableInput{Key: "GREETING", Value: "hello"}); err != nil {
+		t.Fatalf("stage a variable: %v", err)
+	}
 	manifests := &recoveryManifests{
 		digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 	}
@@ -994,11 +1004,18 @@ func TestASucceededBuildWhoseWorkerStoppedIsResumed(t *testing.T) {
 	if release.SourceRevision != commit {
 		t.Fatalf("resumed release revision = %q, want the built commit", release.SourceRevision)
 	}
+	if release.RunAsUser != 1001 {
+		t.Fatalf("resumed release runs as %d, want the image's user the worker recorded", release.RunAsUser)
+	}
+	if release.Env["GREETING"] != "hello" {
+		t.Fatalf("resumed release left the staged variable out: %v", release.Env)
+	}
 	gotBuild, err := s.q.GetBuild(ctx, dbgen.GetBuildParams{OwnerID: ownerID, ID: build.ID})
 	if err != nil {
 		t.Fatalf("GetBuild: %v", err)
 	}
-	if gotBuild.Status != BuildSucceeded || gotBuild.CommitSha != commit || gotBuild.Image != wantRef {
+	if gotBuild.Status != BuildSucceeded || gotBuild.CommitSha != commit || gotBuild.Image != wantRef ||
+		!slices.Equal(gotBuild.BuildArgs, []string{"NODE_ENV"}) {
 		t.Fatalf("resumed build was rewritten: %#v", gotBuild)
 	}
 	got, err := s.Get(ctx, ownerID, a.Name)
@@ -1021,8 +1038,9 @@ func TestASucceededBuildWhoseWorkerStoppedIsResumed(t *testing.T) {
 func TestAFailedBuildWhoseWorkerStoppedFailsItsOperation(t *testing.T) {
 	ctx := context.Background()
 	builder := &stubBuilder{}
+	events := &recordedEvents{}
 	s, _, pool := testService(t, Options{
-		Builder: builder, Images: stubImages{}, MaxConcurrentBuilds: 1,
+		Builder: builder, Images: stubImages{}, MaxConcurrentBuilds: 1, Events: events,
 	})
 	ownerID := owner(t, s, pool, "owner-settle-failed-build")
 	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
@@ -1033,7 +1051,7 @@ func TestAFailedBuildWhoseWorkerStoppedFailsItsOperation(t *testing.T) {
 	}
 	prior := *a.ActiveReleaseID
 	const reason = "the Dockerfile's RUN npm ci exited with 1"
-	op, build := settledBuildOperation(t, s, ownerID, a, BuildFailed, reason, "")
+	op, build := settledBuildOperation(t, s, ownerID, a, BuildFailed, reason, orchestrator.BuildResult{})
 	manifests := &recoveryManifests{
 		digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
 	}
@@ -1048,6 +1066,9 @@ func TestAFailedBuildWhoseWorkerStoppedFailsItsOperation(t *testing.T) {
 	}
 	if len(manifests.refs) != 0 {
 		t.Fatalf("a failed build resolved refs: %v", manifests.refs)
+	}
+	if e := events.last(); e.Kind != EventDeployFailed || e.DeploymentID != op.DeploymentID || e.Message != reason {
+		t.Fatalf("settling said %#v, want the deploy failed with the build's reason", e)
 	}
 	deployment, err := s.q.GetDeployment(ctx, dbgen.GetDeploymentParams{
 		OwnerID: ownerID, ID: op.DeploymentID,
@@ -1085,5 +1106,92 @@ func TestAFailedBuildWhoseWorkerStoppedFailsItsOperation(t *testing.T) {
 	}
 	if err := s.CancelOperation(ctx, ownerID, next.ID); err != nil {
 		t.Fatalf("clean next operation: %v", err)
+	}
+}
+
+// Stranded operations are read a page at a time, each page after the last
+// row of the one before. A page that cannot be settled this pass, a pushed
+// build whose registry will not answer, is stepped past, and the failed
+// build behind it is still settled.
+func TestSettlingPagesPastOperationsItCannotSettleYet(t *testing.T) {
+	ctx := context.Background()
+	builder := &stubBuilder{}
+	s, _, pool := testService(t, Options{Builder: builder, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-settle-paging")
+	page := settledBuildRecoveryBatch
+	settledBuildRecoveryBatch = 1
+	t.Cleanup(func() { settledBuildRecoveryBatch = page })
+
+	var apps []App
+	for _, name := range []string{"web-a", "web-b"} {
+		a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+			Name: name, Image: "nginx:alpine", Replicas: 1, Port: 80,
+		})
+		if err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+		apps = append(apps, a)
+	}
+	stuck, _ := settledBuildOperation(t, s, ownerID, apps[0], BuildSucceeded, "",
+		orchestrator.BuildResult{CommitSHA: "aaaaaaaa"})
+	behind, _ := settledBuildOperation(t, s, ownerID, apps[1], BuildFailed, "the build failed here",
+		orchestrator.BuildResult{})
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deployment_operations SET stage_started_at = now() - interval '1 hour'
+		WHERE id = $1`, stuck.ID); err != nil {
+		t.Fatalf("put the unsettleable operation first: %v", err)
+	}
+	s.manifests = &recoveryManifests{err: registry.ErrUnreachable}
+
+	if err := s.ReconcileBuilds(ctx); err != nil {
+		t.Fatalf("ReconcileBuilds: %v", err)
+	}
+	waitForOperationStatus(t, s, ownerID, behind.ID, OperationFailed)
+	row, err := s.q.GetDeploymentOperation(ctx, dbgen.GetDeploymentOperationParams{
+		OwnerID: ownerID, ID: stuck.ID,
+	})
+	if err != nil {
+		t.Fatalf("read stuck operation: %v", err)
+	}
+	if row.Status != OperationQueued || row.Checkpoint != OperationBuilding {
+		t.Fatalf("an unreachable registry settled the pushed build: %s at %s", row.Status, row.Checkpoint)
+	}
+}
+
+// A worker stalled past its lease, with the operation taken from it, makes
+// no release when it wakes: the release is written under the operation's row
+// lock, with the claim checked first, so nothing is left that points nowhere.
+func TestAWorkerThatLostItsClaimMakesNoRelease(t *testing.T) {
+	ctx := context.Background()
+	s, _, pool := testService(t, Options{Builder: &stubBuilder{}, Images: stubImages{}})
+	ownerID := owner(t, s, pool, "owner-stalled-worker-release")
+	a, err := createAndDeploy(t, s, ctx, ownerID, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 80,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stalled, _ := settledBuildOperation(t, s, ownerID, a, BuildSucceeded, "",
+		orchestrator.BuildResult{CommitSHA: "bbbbbbbb"})
+	a, err = s.Get(ctx, ownerID, a.Name)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	countReleases := func() int {
+		var n int
+		if err := s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM app_releases WHERE app_id = $1`, a.ID).Scan(&n); err != nil {
+			t.Fatalf("count releases: %v", err)
+		}
+		return n
+	}
+	before := countReleases()
+
+	if _, err := s.recordBuiltRelease(ctx, &stalled, a, "bbbbbbbb",
+		"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"); !errors.Is(err, ErrOperationClaimLost) {
+		t.Fatalf("stalled worker = %v, want ErrOperationClaimLost", err)
+	}
+	if after := countReleases(); after != before {
+		t.Fatalf("a worker without its claim made %d release(s)", after-before)
 	}
 }
