@@ -21,6 +21,8 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -238,9 +240,13 @@ func (b *budget) cell(raw []byte) (Value, bool) {
 	if raw == nil {
 		return Value{Null: true}, b.used <= b.limits.Bytes
 	}
-	v := Value{Text: string(raw)}
+	// Cut before it is copied: a value is copied into a string once, at the
+	// size it is kept.
+	var v Value
 	if len(raw) > b.limits.Cell {
-		v.Text, v.Cut = cutUTF8(raw, b.limits.Cell), true
+		v = Value{Text: cutUTF8(raw, b.limits.Cell), Cut: true}
+	} else {
+		v = Value{Text: string(raw)}
 	}
 	b.used += len(v.Text)
 	return v, b.used <= b.limits.Bytes
@@ -256,4 +262,42 @@ func cutUTF8(b []byte, n int) string {
 		n--
 	}
 	return string(b[:n])
+}
+
+// rowTooLarge is a row refused at its size, saying how large it was and how
+// large a row may be. Query and Rows each add what to do about it, which is
+// not the same: a query can ask for less, and a page of a table cannot.
+func rowTooLarge(size, limit int) error {
+	return fmt.Errorf("%w — the server sent %s at once, more than the %s it reads",
+		ErrRowTooLarge, megabytes(size), megabytes(limit))
+}
+
+// Advice for a row too large, by where it was met.
+const (
+	queryTooLargeAdvice = "Select fewer columns, or the start of a long one, as in left(body, 1000)."
+	pageTooLargeAdvice  = "This table's rows are too wide to page through here: select some of its columns in a query instead."
+)
+
+// withAdvice adds what to do to a row too large, and leaves any other error be.
+func withAdvice(err error, advice string) error {
+	if errors.Is(err, ErrRowTooLarge) {
+		return fmt.Errorf("%w. %s", err, advice)
+	}
+	return err
+}
+
+// megabytes is a size as a person reads it.
+func megabytes(n int) string {
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+}
+
+// serverMessage is a server's own message, cut to a length a page can show:
+// it can quote the statement, and a statement can be as long as anybody
+// likes.
+func serverMessage(msg string) string {
+	const max = 500
+	if len(msg) <= max {
+		return msg
+	}
+	return cutUTF8([]byte(msg), max) + "…"
 }

@@ -67,3 +67,29 @@ func TestDataBrowserReadsAreBoundedPerTeamAndOverall(t *testing.T) {
 		t.Errorf("%d teams still hold slot state with nothing running", len(gate.teams))
 	}
 }
+
+// A read waiting for a slot ends with its request: a page whose visitor has
+// gone does not sit on the queue for the rest of the wait.
+func TestAReadWaitingForASlotEndsWithItsRequest(t *testing.T) {
+	gate := newBrowseGate(1, 4, time.Minute)
+	release, err := gate.acquire(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	start := time.Now()
+	_, err = gate.acquire(ctx, "a")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled wait gave %v, want context.Canceled", err)
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Errorf("a cancelled wait took %v", waited)
+	}
+	release()
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if len(gate.teams) != 0 {
+		t.Errorf("%d teams still hold slot state", len(gate.teams))
+	}
+}

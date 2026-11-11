@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
@@ -118,5 +119,30 @@ func TestARowLargerThanTheBrowserReadsIsRefusedUnread(t *testing.T) {
 	}
 	if grew := after.TotalAlloc - before.TotalAlloc; grew > 16<<20 {
 		t.Errorf("refusing the row allocated %d MB", grew>>20)
+	}
+}
+
+// A server's message can quote a statement of any length; what a page shows
+// of it is cut, on a whole character.
+func TestAServersMessageIsCutToWhatAPageShows(t *testing.T) {
+	long := strings.Repeat("é", 2000)
+	got := friendly(&pgconn.PgError{Code: "XX000", Message: long}).Error()
+	if len(got) > 510 || !strings.HasSuffix(got, "é…") {
+		t.Errorf("a long message reads %d bytes, ending %q", len(got), got[len(got)-8:])
+	}
+}
+
+// What to do about a row too large depends on where it was met: a query can
+// ask for less, a page of a table cannot.
+func TestARowTooLargeSaysWhatToDoWhereItWasMet(t *testing.T) {
+	err := rowTooLarge(8<<20, 4<<20)
+	if q := withAdvice(err, queryTooLargeAdvice); !errors.Is(q, ErrRowTooLarge) || !strings.Contains(q.Error(), "left(") {
+		t.Errorf("a query's refusal reads %q", q)
+	}
+	if p := withAdvice(err, pageTooLargeAdvice); strings.Contains(p.Error(), "left(") || !strings.Contains(p.Error(), "query") {
+		t.Errorf("a page's refusal reads %q", p)
+	}
+	if other := errors.New("x"); withAdvice(other, pageTooLargeAdvice) != other {
+		t.Error("advice was added to another error")
 	}
 }

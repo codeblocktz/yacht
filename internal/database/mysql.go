@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -30,9 +31,15 @@ type mysqlBrowser struct {
 	limits Limits
 }
 
-func (m *mysqlBrowser) config() *mysql.Config {
+func (m *mysqlBrowser) config(meter *wireMeter) *mysql.Config {
 	c := mysql.NewConfig()
 	c.Net, c.Addr = "tcp", m.target.Addr
+	// Every packet the server sends is metered, so a row too large is
+	// refused before the driver reads it (see mysql_wire.go). Which needs
+	// the connection in the clear: no TLS, as on every connection to an app
+	// on the cluster's network.
+	c.DialFunc = meter.dial(&net.Dialer{Timeout: m.limits.Connect})
+	c.TLS = nil
 	c.User, c.Passwd, c.DBName = m.target.User, m.target.Password, m.target.Database
 	c.Timeout = m.limits.Connect
 	c.MultiStatements = false
@@ -46,8 +53,8 @@ func (m *mysqlBrowser) config() *mysql.Config {
 }
 
 // session opens one connection, made read-only before anything else runs.
-func (m *mysqlBrowser) session(ctx context.Context) (*sql.DB, *sql.Conn, int64, error) {
-	connector, err := mysql.NewConnector(m.config())
+func (m *mysqlBrowser) session(ctx context.Context, meter *wireMeter) (*sql.DB, *sql.Conn, int64, error) {
+	connector, err := mysql.NewConnector(m.config(meter))
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -88,7 +95,8 @@ func (m *mysqlBrowser) session(ctx context.Context) (*sql.DB, *sql.Conn, int64, 
 func (m *mysqlBrowser) readOnly(ctx context.Context, fn func(context.Context, *sql.Conn) error) error {
 	ctx, cancel := context.WithTimeout(ctx, m.limits.Connect+m.limits.Statement*3)
 	defer cancel()
-	db, conn, id, err := m.session(ctx)
+	meter := &wireMeter{limit: m.limits.Message}
+	db, conn, id, err := m.session(ctx, meter)
 	if err != nil {
 		return err
 	}
@@ -98,6 +106,13 @@ func (m *mysqlBrowser) readOnly(ctx context.Context, fn func(context.Context, *s
 		return mysqlFriendly(err)
 	}
 	err = fn(ctx, conn)
+	if tooLarge := meter.tooLarge(); tooLarge != nil {
+		// The driver has closed the connection under the statement; the
+		// server is told to stop sending rather than finding out by failing
+		// to.
+		m.kill(id)
+		return tooLarge
+	}
 	if err != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, errStopped)) {
 		m.kill(id)
 	} else {
@@ -119,7 +134,7 @@ var errStopped = errors.New("database: stopped at the limit")
 func (m *mysqlBrowser) kill(id int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.limits.Connect)
 	defer cancel()
-	connector, err := mysql.NewConnector(m.config())
+	connector, err := mysql.NewConnector(m.config(&wireMeter{limit: m.limits.Message}))
 	if err != nil {
 		return
 	}
@@ -204,8 +219,43 @@ func (m *mysqlBrowser) Rows(ctx context.Context, schema, table string, page int)
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		stmt := "SELECT * FROM " + quoteMySQL(schema) + "." + quoteMySQL(table)
+		// Every column in table order, the long kinds cut on the server to a
+		// little past what a cell keeps: a page of a table that stores files
+		// is still a page, rather than a row too large to read. Only those
+		// kinds, because LEFT renders its argument as a string, and the
+		// others are short and already arrive as the server prints them.
+		rows, err = conn.QueryContext(ctx, `
+			SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+			ORDER BY ORDINAL_POSITION`, schema, table)
+		if err != nil {
+			return err
+		}
+		var cols []string
+		for rows.Next() {
+			var name, kind string
+			if err := rows.Scan(&name, &kind); err != nil {
+				rows.Close()
+				return err
+			}
+			col := "`src`." + quoteMySQL(name)
+			if mysqlLongKinds[strings.ToLower(kind)] {
+				col = fmt.Sprintf("LEFT(%s, %d)", col, m.limits.Cell+1)
+			}
+			cols = append(cols, col+" AS "+quoteMySQL(name))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		stmt := "SELECT " + strings.Join(cols, ", ") + " FROM " +
+			quoteMySQL(schema) + "." + quoteMySQL(table) + " AS `src`"
 		if len(keys) > 0 {
+			// Qualified, so the order is the key's own rather than that of
+			// a select-list column of the same name.
+			for i, k := range keys {
+				keys[i] = "`src`." + k
+			}
 			stmt += " ORDER BY " + strings.Join(keys, ", ")
 		}
 		stmt += fmt.Sprintf(" LIMIT %d OFFSET %d", PageSize+1, page*PageSize)
@@ -221,6 +271,9 @@ func (m *mysqlBrowser) Rows(ctx context.Context, schema, table string, page int)
 	if err != nil {
 		if errors.Is(err, ErrNoSuchTable) {
 			return Result{}, err
+		}
+		if errors.Is(err, ErrRowTooLarge) {
+			return Result{}, withAdvice(err, pageTooLargeAdvice)
 		}
 		return Result{}, fmt.Errorf("database: read %s.%s: %w", schema, table, mysqlFriendly(err))
 	}
@@ -239,9 +292,18 @@ func (m *mysqlBrowser) Query(ctx context.Context, stmt string) (Result, error) {
 		return err
 	})
 	if err != nil {
-		return Result{}, mysqlFriendly(err)
+		return Result{}, withAdvice(mysqlFriendly(err), queryTooLargeAdvice)
 	}
 	return res, nil
+}
+
+// mysqlLongKinds are the column types that can hold more than a cell shows,
+// which a page of a table cuts on the server.
+var mysqlLongKinds = map[string]bool{
+	"char": true, "varchar": true, "binary": true, "varbinary": true,
+	"tinytext": true, "text": true, "mediumtext": true, "longtext": true,
+	"tinyblob": true, "blob": true, "mediumblob": true, "longblob": true,
+	"json": true,
 }
 
 // collect runs one statement through the text protocol — no arguments, so
@@ -286,10 +348,12 @@ func (m *mysqlBrowser) collect(ctx context.Context, conn *sql.Conn, stmt string,
 		full := true
 		for i, v := range raw {
 			var ok bool
+			// RawBytes is the driver's buffer, valid until the next row;
+			// cell copies what it keeps, and only that.
 			if v == nil {
 				row[i], ok = b.cell(nil)
 			} else {
-				row[i], ok = b.cell(append([]byte{}, v...))
+				row[i], ok = b.cell(v)
 			}
 			full = full && ok
 		}
@@ -411,17 +475,17 @@ func mysqlFriendly(err error) error {
 	}
 	switch me.Number {
 	case 1792: // ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION
-		return fmt.Errorf("the data browser only reads — %s", me.Message)
+		return fmt.Errorf("the data browser only reads — %s", serverMessage(me.Message))
 	case 3024, 1317: // max_execution_time exceeded; query interrupted
-		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", me.Message)
+		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", serverMessage(me.Message))
 	case 1205: // lock wait timeout
-		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", me.Message)
+		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", serverMessage(me.Message))
 	case 1045:
-		return fmt.Errorf("the database refused the app's own credentials — %s", me.Message)
+		return fmt.Errorf("the database refused the app's own credentials — %s", serverMessage(me.Message))
 	case 1064:
 		if strings.Contains(me.Message, ";") {
-			return fmt.Errorf("one statement at a time — %s", me.Message)
+			return fmt.Errorf("one statement at a time — %s", serverMessage(me.Message))
 		}
 	}
-	return errors.New(me.Message)
+	return errors.New(serverMessage(me.Message))
 }

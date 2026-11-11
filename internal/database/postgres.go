@@ -313,6 +313,9 @@ func (p *postgres) Rows(ctx context.Context, schema, table string, page int) (Re
 		if errors.Is(err, ErrNoSuchTable) {
 			return Result{}, err
 		}
+		if err := friendly(err); errors.Is(err, ErrRowTooLarge) {
+			return Result{}, withAdvice(err, pageTooLargeAdvice)
+		}
 		return Result{}, fmt.Errorf("database: read %s.%s: %w", schema, table, friendly(err))
 	}
 	return res, nil
@@ -344,7 +347,7 @@ func (p *postgres) Query(ctx context.Context, sql string) (Result, error) {
 		return err
 	})
 	if err != nil {
-		return Result{}, friendly(err)
+		return Result{}, withAdvice(friendly(err), queryTooLargeAdvice)
 	}
 	return res, nil
 }
@@ -515,9 +518,7 @@ func (p *postgres) Config(ctx context.Context) (Config, error) {
 func friendly(err error) error {
 	var tooLarge *pgproto3.ExceededMaxBodyLenErr
 	if errors.As(err, &tooLarge) {
-		return fmt.Errorf("%w — the server sent %s at once, and the browser reads at most %s. "+
-			"Select fewer columns, or the start of a long one, as in left(body, 1000)",
-			ErrRowTooLarge, megabytes(tooLarge.ActualBodyLen), megabytes(tooLarge.MaxExpectedBodyLen))
+		return rowTooLarge(tooLarge.ActualBodyLen, tooLarge.MaxExpectedBodyLen)
 	}
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
@@ -528,22 +529,17 @@ func friendly(err error) error {
 	}
 	switch pgErr.Code {
 	case "25006": // read_only_sql_transaction
-		return fmt.Errorf("the data browser only reads — %s", pgErr.Message)
+		return fmt.Errorf("the data browser only reads — %s", serverMessage(pgErr.Message))
 	case "57014": // query_canceled, which is how statement_timeout ends a query
-		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", pgErr.Message)
+		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", serverMessage(pgErr.Message))
 	case "55P03": // lock_not_available
-		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", pgErr.Message)
+		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", serverMessage(pgErr.Message))
 	case "42601": // syntax_error; "cannot insert multiple commands" lands here
 		if strings.Contains(pgErr.Message, "multiple commands") {
 			return errors.New("one statement at a time — the browser runs a single statement")
 		}
 	case "28P01", "28000":
-		return fmt.Errorf("the database refused the app's own credentials — %s", pgErr.Message)
+		return fmt.Errorf("the database refused the app's own credentials — %s", serverMessage(pgErr.Message))
 	}
-	return fmt.Errorf("%s", pgErr.Message)
-}
-
-// megabytes is a size as a person reads it.
-func megabytes(n int) string {
-	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+	return fmt.Errorf("%s", serverMessage(pgErr.Message))
 }

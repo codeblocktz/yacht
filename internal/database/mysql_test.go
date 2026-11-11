@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -176,5 +178,69 @@ func TestMySQLStopsLongAndLargeResults(t *testing.T) {
 	cfg, err := MySQL(target, Limits{}).Config(ctx)
 	if err != nil || len(cfg.Settings) == 0 || cfg.Settings[0].Name != "max_connections" {
 		t.Errorf("config = %+v, %v", cfg, err)
+	}
+}
+
+// A row bigger than the browser reads is refused before the driver reads it,
+// whatever max_allowed_packet the team's server allows; a page of a table is
+// cut on the server, so a table holding one still pages, in key order.
+func TestMySQLRefusesARowTooLargeAndCutsATablePage(t *testing.T) {
+	target := mysqlScratch(t)
+	ctx := context.Background()
+	c := mysql.NewConfig()
+	c.Net, c.Addr, c.User, c.Passwd, c.DBName = "tcp", target.Addr, target.User, target.Password, target.Database
+	connector, err := mysql.NewConnector(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := sql.OpenDB(connector)
+	defer admin.Close()
+	if _, err := admin.ExecContext(ctx,
+		"CREATE TABLE files (id INT PRIMARY KEY, body LONGTEXT, flag BOOL, n DECIMAL(6,2))"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 12; i >= 2; i-- {
+		if _, err := admin.ExecContext(ctx, "INSERT INTO files VALUES (?, 'small', ?, 1.5)", i, i%2 == 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := admin.ExecContext(ctx,
+		"INSERT INTO files VALUES (1, REPEAT('x', 8 << 20), true, NULL)"); err != nil {
+		t.Skipf("the server will not store an 8 MB value (max_allowed_packet?): %v", err)
+	}
+
+	b := MySQL(target, Limits{})
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err = b.Query(ctx, "SELECT body FROM files WHERE id = 1")
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrRowTooLarge) {
+		t.Fatalf("an 8 MB row gave %v, want ErrRowTooLarge", err)
+	}
+	if grew := after.TotalAlloc - before.TotalAlloc; grew > 6<<20 {
+		t.Errorf("refusing the row allocated %d MB", grew>>20)
+	}
+
+	page, err := b.Rows(ctx, target.Database, "files", 0)
+	if err != nil {
+		t.Fatalf("a table holding an 8 MB value: %v", err)
+	}
+	if strings.Join(page.Columns, ",") != "id,body,flag,n" {
+		t.Errorf("columns = %v", page.Columns)
+	}
+	var ids []string
+	for _, r := range page.Rows {
+		ids = append(ids, r[0].Text)
+	}
+	if got := strings.Join(ids, ","); got != "1,2,3,4,5,6,7,8,9,10,11,12" {
+		t.Errorf("ids in order %s, want the key's numeric order", got)
+	}
+	first := page.Rows[0]
+	if body := first[1]; !body.Cut || len(body.Text) != DefaultLimits.Cell {
+		t.Errorf("the 8 MB value reads %d bytes, cut=%v; want %d and cut", len(body.Text), body.Cut, DefaultLimits.Cell)
+	}
+	if first[2].Text != "1" || first[3] != (Value{Null: true}) || page.Rows[1][3].Text != "1.50" {
+		t.Errorf("flag, NULL and decimal read %+v, %+v, %+v", first[2], first[3], page.Rows[1][3])
 	}
 }
