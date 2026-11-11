@@ -62,6 +62,14 @@ func TestBuildLogLimitDefaultsAndIsBounded(t *testing.T) {
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
 		t.Fatalf("Load accepted a build log limit too small to read: %v", err)
 	}
+
+	// A typo is refused, not read as the default.
+	for _, v := range []string{"4MiB", "4194304x", "99999999999"} {
+		setEnv(t, map[string]string{"YACHT_MAX_BUILD_LOG_BYTES": v})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
+			t.Fatalf("Load accepted YACHT_MAX_BUILD_LOG_BYTES=%q: %v", v, err)
+		}
+	}
 }
 
 func TestAppDomainAndReservedDomainsLoad(t *testing.T) {

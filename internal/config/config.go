@@ -296,7 +296,9 @@ type Config struct {
 	MaxConcurrentBuilds int32
 
 	// MaxBuildLogBytes is how much of one build's output is kept. A build that
-	// prints past it carries on, and its log says where it was cut.
+	// prints past it carries on, and its log says where it was cut and then
+	// why the build failed, if it did. A value that is not a number is refused
+	// rather than read as the default.
 	MaxBuildLogBytes int32
 
 	// GitHubApp* are the install's GitHub App, which teams connect to build
@@ -415,7 +417,7 @@ func Load() (Config, error) {
 		MagicLinkTTL:             envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout:          envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		MaxConcurrentBuilds:      envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
-		MaxBuildLogBytes:         envInt32("YACHT_MAX_BUILD_LOG_BYTES", 4<<20),
+		MaxBuildLogBytes:         envInt32Strict("YACHT_MAX_BUILD_LOG_BYTES", 4<<20),
 		WakerAddr:                strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
 		WakerListen:              strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
 		WakeTimeout:              envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
@@ -912,6 +914,21 @@ func envInt32(key string, fallback int32) int32 {
 	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
 	if err != nil {
 		return fallback
+	}
+	return int32(n)
+}
+
+// envInt32Strict is envInt32 for a setting whose wrong value must not pass for
+// the default: one that is set and is not a number reads as -1, so validation
+// says so rather than the install quietly running on something else.
+func envInt32Strict(key string, fallback int32) int32 {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		return -1
 	}
 	return int32(n)
 }
