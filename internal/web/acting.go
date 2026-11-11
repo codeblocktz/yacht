@@ -23,9 +23,9 @@ import (
 // Three rules hold it together, and each is here because the obvious version
 // of the feature breaks one of them.
 //
-// Only named operators act. With YACHT_OPERATORS empty, the operator is the
-// owner of whichever team a request acts as — so if impersonation were on,
-// every team owner could act as every other team. It is off in that mode, and
+// Only named operators act. With YACHT_OPERATORS empty, the operators are the
+// owners of the install's own team, by no name of theirs; reaching into every
+// other team is kept for people named for it. It is off in that mode, and
 // says so rather than hiding.
 //
 // Authority is re-checked on every request, by the identity provider and by

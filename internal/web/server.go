@@ -728,7 +728,7 @@ func New(opts Options) (*Server, error) {
 // forget, and the forgotten one is the security bug.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, s.securityHeaders, s.csrfProtect)
+	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, s.securityHeaders, s.csrfProtect, memoOperator)
 
 	// A trailing slash is the same page. /apps used to answer it because it was
 	// a mounted subtree; the groups below are flat, so it is stated here instead
@@ -1152,10 +1152,9 @@ func (s *Server) Handler() http.Handler {
 		//
 		// Cluster-wide views read across every team — the pods list is every
 		// namespace's pods — so they are the operator's, not any team's
-		// member's. On an install with one team the operator is that team's
-		// owner, which is the reading everything below had before operators
-		// existed; on one hosting several, YACHT_OPERATORS names them, and a
-		// team's owner can no longer drain the nodes the other teams run on.
+		// member's. YACHT_OPERATORS names them; with nobody named they are the
+		// owners of the install's own team, and never the owner of any other,
+		// who could otherwise drain the nodes every other team runs on.
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireOperator)
 
@@ -1826,7 +1825,7 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 
 	// Shown only to somebody the page behind it would actually admit. A control
 	// that leads to a 403 tells the viewer they have a permission they do not.
-	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+	if s.IsOperator(r) {
 		data.CanAddNode = s.joiner != nil
 		_, data.CanManageNodes = s.nodeManager()
 	}

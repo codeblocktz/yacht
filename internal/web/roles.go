@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/codeblocktz/yacht/internal/account"
 	"github.com/codeblocktz/yacht/internal/identity"
@@ -153,6 +154,36 @@ func (s *Server) IsOperator(r *http.Request) bool {
 		_, ok := identity.FromContext(r.Context())
 		return ok
 	}
+	// Asked by the gate, the chrome and the page on one request, and each
+	// asking resolves the session: answered once per request, when the
+	// router has given it somewhere to keep the answer.
+	if m, ok := r.Context().Value(operatorMemoKey{}).(*operatorMemo); ok {
+		m.once.Do(func() { m.is = s.sessionIsOperator(r) })
+		return m.is
+	}
+	return s.sessionIsOperator(r)
+}
+
+// operatorMemo is one request's answer to IsOperator. It is about the
+// signed-in person and the install's configuration, neither of which a
+// request changes before it is answered.
+type operatorMemo struct {
+	once sync.Once
+	is   bool
+}
+
+type operatorMemoKey struct{}
+
+// memoOperator gives each request somewhere to keep IsOperator's answer.
+func memoOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), operatorMemoKey{}, &operatorMemo{})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// sessionIsOperator is IsOperator for a session cookie, with accounts on.
+func (s *Server) sessionIsOperator(r *http.Request) bool {
 	sess, err := s.accounts.ResolveSession(r.Context(), sessionToken(r))
 	if err != nil {
 		return false
