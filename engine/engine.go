@@ -256,6 +256,15 @@ type (
 	RouteChange       = app.RouteChange
 	RouteChangeKind   = app.RouteChangeKind
 
+	// AdmitFunc is Overrides.Admit: asked before every deploy, it admits
+	// with nil and refuses with an *AdmitRefusal, whose Message the person
+	// or the Git host is shown. AdmitRequest is the deploy asked about, and
+	// AdmitTrigger what is asking for it.
+	AdmitFunc    = app.AdmitFunc
+	AdmitRequest = app.AdmitRequest
+	AdmitTrigger = app.AdmitTrigger
+	AdmitRefusal = app.AdmitRefusal
+
 	// Server is the engine's dashboard.
 	Server = web.Server
 	// Keeper seals secrets at rest.
@@ -308,6 +317,20 @@ const (
 	CapacityWarn    = app.CapacityWarn
 	CapacityFull    = app.CapacityFull
 	CapacityUnknown = app.CapacityUnknown
+
+	// What asks for a deploy, as AdmitRequest.Trigger says it.
+	AdmitCreate      = app.AdmitCreate
+	AdmitRedeploy    = app.AdmitRedeploy
+	AdmitRollback    = app.AdmitRollback
+	AdmitUpload      = app.AdmitUpload
+	AdmitStaged      = app.AdmitStaged
+	AdmitUpdate      = app.AdmitUpdate
+	AdmitScale       = app.AdmitScale
+	AdmitPush        = app.AdmitPush
+	AdmitGitHubPush  = app.AdmitGitHubPush
+	AdmitQueuedPush  = app.AdmitQueuedPush
+	AdmitEnvironment = app.AdmitEnvironment
+	AdmitPullRequest = app.AdmitPullRequest
 
 	// An app's sleep setting: its team's default, or on or off whatever that is.
 	SleepInherit = app.SleepInherit
@@ -517,6 +540,15 @@ type Overrides struct {
 	// at its region's edge. Called after the change commits, off the request
 	// path; a hint, so the wrapper also reconciles from Engine.Routes.
 	Routes RouteObserver
+
+	// Admit is asked before every deploy the engine admits — by a person, a
+	// token, a Git host, a queued push, a pull request's environment, a
+	// template — and before anything is written for it. It returns nil to
+	// admit, or an *AdmitRefusal to refuse with a sentence shown to whoever
+	// asked: on the dashboard, in the API's error, or as "Ignored — …" beside
+	// a Git host's delivery. A refused queued push is dropped. Nil admits
+	// every deploy. See AdmitRequest for what it is told.
+	Admit AdmitFunc
 
 	// Usage prices a project for its settings page: what it has cost this
 	// month and what the month will come to. The engine has no prices, so
@@ -789,6 +821,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		WakeTimeout:         cfg.WakeTimeout,
 		DefaultRegion:       cfg.DefaultRegion,
 		Routes:              ov.Routes,
+		Admit:               ov.Admit,
 		GitHub:              gh,
 		StageChanges:        cfg.StageChanges,
 		// The wrapper's product name, where an app reads what the

@@ -409,6 +409,10 @@ type Options struct {
 	// See platform.go.
 	PlatformVariablePrefix string
 
+	// Admit is asked before every deploy is admitted, and may refuse it.
+	// Nil admits every one. See admit.go.
+	Admit AdmitFunc
+
 	// Events is told when a deploy finishes and when an app is deleted, for
 	// a project's webhooks. Nil tells nobody. See events.go.
 	Events EventSink
@@ -817,6 +821,14 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	} else if unchanged {
 		return a, nil
 	}
+	// A change that will roll out is a deploy, asked about before the change
+	// commits: refused, the settings stay as they were rather than saved
+	// behind a deploy that never ran.
+	if next := toApp(row); RollsOut(a, next) && next.Image != PendingImage && !s.opts.StageChanges {
+		if ctx, err = s.askAdmission(ctx, admitRequest(next, AdmitUpdate)); err != nil {
+			return App{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit update: %w", err)
 	}
@@ -1014,6 +1026,22 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 	if err := in.Validate(); err != nil {
 		return App{}, err
+	}
+
+	// A workload's first deploy is admitted here, before anything is minted
+	// or written. A bucket runs nothing, and an empty service deploys nothing
+	// until its first upload, which is asked about then.
+	if !in.Empty && in.Source.Workload() {
+		if ctx, err = s.askAdmission(ctx, AdmitRequest{
+			OwnerID:     ownerID,
+			App:         in.Name,
+			ProjectID:   in.ProjectID,
+			Environment: cmp.Or(in.Environment, DefaultEnvironment),
+			Trigger:     AdmitCreate,
+			Replicas:    in.Replicas,
+		}); err != nil {
+			return App{}, err
+		}
 	}
 
 	namespace := Namespace(ownerID, in.Name)
@@ -1318,6 +1346,11 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 // transaction is open, and neither an image app nor a Git app can claim
 // success before the stage worker proves its rollout.
 func (s *Service) admitInitialDeploy(ctx context.Context, q *dbgen.Queries, ownerID string, created App) error {
+	// Create asked before its transaction; this is the net for a caller that
+	// did not.
+	if _, err := s.askAdmission(ctx, admitRequest(created, AdmitCreate)); err != nil {
+		return err
+	}
 	var release Release
 	if created.Source != SourceGit {
 		var err error
@@ -2021,6 +2054,12 @@ func (s *Service) endDeployment(
 func (s *Service) deployCurrentRelease(
 	ctx context.Context, ownerID string, a App, trigger string,
 ) error {
+	// Before the release is written: a refused deploy leaves no release
+	// behind it. A caller that asked already has its context say so.
+	ctx, err := s.askAdmission(ctx, admitRequest(a, admitTriggerFor(trigger, "user")))
+	if err != nil {
+		return err
+	}
 	release, err := s.createRelease(ctx, s.q, a, "")
 	if err != nil {
 		return err
@@ -2060,6 +2099,15 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 		return App{}, fmt.Errorf(
 			"app: %s has storage attached, so it runs one replica — "+
 				"detach its volumes to scale it", name)
+	}
+
+	// A scale rolls out like any deploy, and is asked about before the count
+	// is written. The wrapper sees the count asked for, so it can tell a stop
+	// from a start.
+	req := admitRequest(a, AdmitScale)
+	req.Replicas = replicas
+	if ctx, err = s.askAdmission(ctx, req); err != nil {
+		return App{}, err
 	}
 
 	// The quota check and the write share a transaction, so two scales racing
@@ -2107,6 +2155,9 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	}
 	if !a.Source.Workload() {
 		return ErrNoWorkload
+	}
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitRedeploy)); err != nil {
+		return err
 	}
 	// Both source kinds stop at durable admission. The process worker claims
 	// the row independently, so disconnecting this request cannot cancel the
@@ -2352,6 +2403,11 @@ func (s *Service) SetHealth(
 		Port: probe.Port, HealthPath: probe.HealthPath, Liveness: probe.Liveness,
 	}).Validate(); err != nil {
 		return err
+	}
+	if !s.opts.StageChanges {
+		if ctx, err = s.askAdmission(ctx, admitRequest(probe, AdmitUpdate)); err != nil {
+			return err
+		}
 	}
 
 	row, err := s.q.SetAppHealth(ctx, dbgen.SetAppHealthParams{

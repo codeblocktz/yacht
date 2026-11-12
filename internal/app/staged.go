@@ -637,6 +637,11 @@ func (s *Service) DeployStaged(ctx context.Context, ownerID, appName string) err
 		return err
 	}
 	trigger := stagedTrigger(changes)
+	if a.Source.Workload() {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitStaged)); err != nil {
+			return err
+		}
+	}
 
 	// A bucket's edits are kept and nothing is deployed: its variables are
 	// read by the apps that refer to them, at their own next deploy.

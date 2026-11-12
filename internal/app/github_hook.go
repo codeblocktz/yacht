@@ -155,7 +155,7 @@ func (s *Service) gitHubPushTo(ctx context.Context, a App, body []byte) (string,
 	if a.GitHubPaused != "" {
 		return "Ignored — builds are paused. " + GitHubPausedReason(a.GitHubPaused), nil
 	}
-	return s.actOnPush(ctx, a, Push{Event: "push", Body: body})
+	return s.actOnPush(ctx, a, Push{Event: "push", Body: body, via: AdmitGitHubPush})
 }
 
 // gitHubInstallation records the App uninstalled, suspended or unsuspended
@@ -274,6 +274,10 @@ func (s *Service) gitHubPullRequest(ctx context.Context, body []byte) (string, e
 			env, copies, err := s.createEnvironment(ctx, p.OwnerID, p.Slug, slug, DefaultEnvironment,
 				envOptions{pr: number, branch: builds})
 			if err != nil {
+				if refusal := (*AdmitRefusal)(nil); errors.As(err, &refusal) {
+					lines = append(lines, p.OwnerID+"/"+p.Slug+": "+refusedDelivery(refusal))
+					continue
+				}
 				s.log.Error("PR environment", slog.String("project", p.Slug), slog.String("error", err.Error()))
 				lines = append(lines, p.OwnerID+"/"+p.Slug+": could not make "+slug+": "+err.Error())
 				continue

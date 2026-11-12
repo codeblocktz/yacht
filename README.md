@@ -568,6 +568,47 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+To keep some deploys from happening, `Overrides.Admit` is asked before the
+engine admits every one, and before it writes anything for it:
+
+```go
+engine.Overrides{
+	Admit: func(ctx context.Context, r engine.AdmitRequest) error {
+		if r.Trigger == engine.AdmitScale && r.Replicas == 0 {
+			return nil // stopping is always allowed
+		}
+		if held(ctx, r.OwnerID) {
+			return &engine.AdmitRefusal{Message: "Deploys are paused for this team."}
+		}
+		return nil
+	},
+}
+```
+
+`AdmitRequest` names the owner, the app (`AppID` is `uuid.Nil` for one the
+deploy creates), its project and environment, who asked (`ActorKind`: `user`,
+`token`, `webhook`) and what asked (`Trigger`): `AdmitCreate` (a new service,
+from the dashboard, a repository, a database or a template's stack, each app
+of which is asked about before any exists), `AdmitRedeploy`, `AdmitRollback`,
+`AdmitUpload` (the CLI's `up`), `AdmitStaged`, `AdmitUpdate` (a settings
+change or a database update that rolls out), `AdmitScale` (with the count
+asked for in `Replicas`), `AdmitPush` (an app's own webhook), `AdmitGitHubPush`,
+`AdmitQueuedPush` (a push that waited behind a deploy in flight, admitted by
+the engine's own loop), `AdmitEnvironment` and `AdmitPullRequest` (each
+service copied into a new environment, asked about before the environment is
+made). Nil admits every deploy.
+
+An `*engine.AdmitRefusal` is shown as it is: on the dashboard, as the API's
+`refused` error (403), and as `Ignored — <message>` beside a Git host's
+delivery and as the app's last delivery. A refused queued push is dropped,
+not tried again. A GitHub push that reaches several teams is refused only for
+those refused. Any other error fails the deploy without showing it to anyone
+but the log. The hook may run inside the transaction that would write the
+deploy: keep it quick, and don't call back into `Engine.Apps` from it. Not
+asked: waking a sleeping app, which runs the release already admitted (stop
+an app by scaling it to zero, which is asked), and the engine finishing a
+deploy it already admitted, after a restart or a reconcile.
+
 For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
 to the internet in the window — the response bodies the ingress served for it
 and for its waker while it slept, from Traefik's counters read raw, summed over

@@ -169,6 +169,12 @@ func (s *Service) createEnvironment(
 		if !ok {
 			return Environment{}, nil, fmt.Errorf("%w: %s", ErrEnvironmentNotFound, from)
 		}
+		// Each service the copy deploys is asked about before the environment
+		// is written: refused, there is no environment, rather than one with
+		// some of its services and not others.
+		if ctx, err = s.admitCopies(ctx, ownerID, p, from, slug, opts); err != nil {
+			return Environment{}, nil, err
+		}
 	}
 	row, err := s.q.CreateEnvironment(ctx, dbgen.CreateEnvironmentParams{
 		OwnerID: ownerID, ProjectID: p.ID, Slug: slug, Name: name, CopiedFrom: from,
@@ -530,3 +536,34 @@ func (s *Service) SetPREnvironments(ctx context.Context, ownerID, projectSlug st
 
 // prEnvironmentSlug is the environment a pull request gets: pr-<number>.
 func prEnvironmentSlug(number int) string { return fmt.Sprintf("pr-%d", number) }
+
+// admitCopies asks about the deploy of every service a copy of one
+// environment into another would make, and returns the context the copies
+// are then made on.
+func (s *Service) admitCopies(
+	ctx context.Context, ownerID string, p Project, from, to string, opts envOptions,
+) (context.Context, error) {
+	sources, err := s.ListInEnvironment(ctx, ownerID, p, from)
+	if err != nil {
+		return ctx, err
+	}
+	trigger, actor := AdmitEnvironment, ""
+	if opts.pr > 0 {
+		trigger, actor = AdmitPullRequest, "webhook"
+	}
+	asked := ctx
+	for _, src := range sources {
+		if !src.Source.Workload() {
+			continue
+		}
+		c, err := s.askAdmission(ctx, AdmitRequest{
+			OwnerID: ownerID, App: src.ServiceName(), ProjectID: p.ID, Environment: to,
+			Trigger: trigger, ActorKind: actor, Replicas: max(src.Replicas, 1),
+		})
+		if err != nil {
+			return ctx, err
+		}
+		asked = c
+	}
+	return asked, nil
+}

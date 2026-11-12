@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -70,6 +71,10 @@ type Push struct {
 	Token string
 
 	Body []byte
+
+	// via is how the push arrived, for the admission: the app's own webhook
+	// unless the GitHub App's says otherwise.
+	via AdmitTrigger
 }
 
 // GitHook reports an app's webhook.
@@ -276,14 +281,26 @@ func (s *Service) actOnPush(ctx context.Context, a App, p Push) (string, error) 
 	}
 
 	revision := shortRevision(payload.After)
-	// Before admission, and before a push is held behind a deploy in
+	// Asked before the push is skipped, queued or admitted, so a refused one
+	// leaves nothing in the app's history: it is ignored, with the reason,
+	// as a push to another branch is.
+	req := admitRequest(a, cmp.Or(p.via, AdmitPush))
+	req.ActorKind, req.Revision = "webhook", revision
+	ctx, err := s.askAdmission(ctx, req)
+	if refusal := (*AdmitRefusal)(nil); errors.As(err, &refusal) {
+		s.log.Info("push refused", slog.String("app", a.Name), slog.String("revision", revision))
+		return refusedDelivery(refusal), nil
+	} else if err != nil {
+		return "", err
+	}
+	// Before the push is admitted, and before it is held behind a deploy in
 	// flight: a push that changed nothing watched is not one to wait for.
 	if len(a.WatchPaths) > 0 {
 		if files, complete := payload.changedFiles(); complete && !watchedChange(a.WatchPaths, files) {
 			return s.skipPush(ctx, a, revision)
 		}
 	}
-	err := s.admitPush(ctx, a, revision)
+	err = s.admitPush(ctx, a, revision)
 	if errors.Is(err, ErrOperationInFlight) {
 		// Built when the deploy in flight ends, rather than dropped: that build
 		// may already have cloned the commit before this one.
@@ -351,7 +368,20 @@ func (s *Service) admitPendingPushes(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		a := toApp(row.App)
-		err := s.admitPush(ctx, a, row.PendingRevision)
+		// A push refused now is dropped, with the reason as the app's last
+		// delivery: left queued it would be refused again every pass. One the
+		// wrapper could not decide on waits for the next pass.
+		req := admitRequest(a, AdmitQueuedPush)
+		req.ActorKind, req.Revision = "webhook", row.PendingRevision
+		actx, err := s.askAdmission(ctx, req)
+		if refusal := (*AdmitRefusal)(nil); errors.As(err, &refusal) {
+			s.dropQueuedPush(ctx, a, refusedDelivery(refusal))
+			continue
+		} else if err != nil {
+			s.log.Warn("queued push: admission", slog.String("app", a.Name), slog.String("error", err.Error()))
+			continue
+		}
+		err = s.admitPush(actx, a, row.PendingRevision)
 		switch {
 		case errors.Is(err, ErrOperationInFlight):
 			// Somebody deployed in between. Still waiting; next pass.
@@ -384,4 +414,19 @@ func orUnknown(s string) string {
 		return "an unnamed ref"
 	}
 	return s
+}
+
+// dropQueuedPush takes an app's queued push out of its slot without
+// deploying it, and records why as the app's last delivery.
+func (s *Service) dropQueuedPush(ctx context.Context, a App, result string) {
+	if _, err := s.q.TakeHookPending(ctx, a.ID); err != nil {
+		s.log.Error("drop a refused queued push", slog.String("app", a.Name), slog.String("error", err.Error()))
+		return
+	}
+	if err := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
+		AppID: a.ID, OwnerID: a.OwnerID, Result: result,
+	}); err != nil {
+		s.log.Warn("record webhook delivery", slog.String("app", a.Name), slog.String("error", err.Error()))
+	}
+	s.log.Info("queued push refused", slog.String("app", a.Name))
 }

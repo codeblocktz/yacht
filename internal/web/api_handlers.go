@@ -712,7 +712,11 @@ func (s *Server) apiCLILoginPoll(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 	var upErr app.UploadError
 	var rebuild app.UploadRebuildError
+	var refusal *app.AdmitRefusal
 	switch {
+	case errors.As(err, &refusal):
+		// The wrapper's sentence, as it wrote it: it is for the person.
+		writeAPIError(w, http.StatusForbidden, "refused", refusal.Message)
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, app.ErrVariableNotFound),
 		errors.Is(err, app.ErrProjectNotFound):
 		writeAPIError(w, http.StatusNotFound, "not_found", failureReason(err.Error()))

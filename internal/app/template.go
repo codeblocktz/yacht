@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -138,6 +139,25 @@ func (s *Service) DeployTemplateIn(
 	if err := s.stackFits(ctx, ownerID, tmpl, region); err != nil {
 		return Project{}, err
 	}
+
+	// Every app of the stack is asked about before any of it exists, for the
+	// same reason: refused whole, not after its database is up. The
+	// project is made after, so the requests name none.
+	asked := ctx
+	for _, spec := range tmpl.Apps {
+		if !cmp.Or(spec.Source, SourceImage).Workload() {
+			continue
+		}
+		c, err := s.askAdmission(ctx, AdmitRequest{
+			OwnerID: ownerID, App: stack + "-" + spec.Name, Environment: DefaultEnvironment,
+			Trigger: AdmitCreate, Replicas: 1,
+		})
+		if err != nil {
+			return Project{}, err
+		}
+		asked = c
+	}
+	ctx = asked
 
 	project, err := s.CreateProject(ctx, ownerID, stack)
 	if err != nil {
