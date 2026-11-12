@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func setEnv(t *testing.T, kv map[string]string) {
@@ -527,5 +529,36 @@ func TestTurnstileKeysGoTogether(t *testing.T) {
 		if err == nil && c.TurnstileSiteKey != tc.site {
 			t.Errorf("site key = %q, want %q", c.TurnstileSiteKey, tc.site)
 		}
+	}
+}
+
+// Unset is team, and must stay so: an install made before strict was what
+// the installer writes has no line for it, and an upgrade, which never
+// touches the file, would otherwise tighten its network unasked.
+func TestNetworkIsolationUnsetIsTeam(t *testing.T) {
+	setEnv(t, nil)
+	t.Setenv("YACHT_NETWORK_ISOLATION", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	iso, err := c.Isolation()
+	if err != nil {
+		t.Fatalf("Isolation: %v", err)
+	}
+	if iso.Mode != orchestrator.IsolationTeam {
+		t.Errorf("unset YACHT_NETWORK_ISOLATION is %q, want team", iso.Mode)
+	}
+}
+
+// .env.example is where a new install made by hand starts, so it starts
+// strict, as the installer's does.
+func TestEnvExampleStartsStrict(t *testing.T) {
+	example, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	if !regexp.MustCompile(`(?m)^YACHT_NETWORK_ISOLATION=strict$`).Match(example) {
+		t.Error(".env.example does not set YACHT_NETWORK_ISOLATION=strict")
 	}
 }

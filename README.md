@@ -181,7 +181,14 @@ curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
 
 That one only swaps the binary and restarts. If the new version does not come
 up healthy it puts the old one back, so a bad release costs a restart rather
-than an outage.
+than an outage. It never changes `/etc/yacht/yacht.env`.
+
+A new install runs with strict [network isolation](#network-isolation): apps
+and builds cannot reach cloud metadata, the nodes or the LAN. An install made
+before that keeps the `team` isolation it ran on, through the upgrader and
+through re-running the installer, and the upgrader says so each time. Moving
+it to strict is recommended; [Moving an existing install to
+strict](#moving-an-existing-install-to-strict) says what to check first.
 
 | | |
 |---|---|
@@ -498,8 +505,8 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_TURNSTILE_SITE_KEY`, `YACHT_TURNSTILE_SECRET` | — | Cloudflare Turnstile on the sign-in and sign-up forms, one widget per page, checked with siteverify; both or neither. Unset checks nothing |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
-| `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
+| `YACHT_NETWORK_ISOLATION` | `team` (new installs: `strict`) | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses — cloud metadata, the nodes, the LAN; `off` writes no policy. The installer and `.env.example` write `strict` for a new install; unset stays `team` so an existing install is not changed by an upgrade. See [Network isolation](#network-isolation) |
+| `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach: a registry or bucket on the LAN |
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means each team's owner — set it once an install hosts several teams. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
@@ -614,6 +621,89 @@ exception keeps references working: an app in another of the team's projects
 whose variables name this one (`${{db.DATABASE_URL}}`, or its full host) is
 let in too.
 
+`YACHT_NETWORK_ISOLATION=strict` limits the way out as well, and is what a new
+install is given. Apps, and the jobs that back up and restore their databases,
+reach:
+
+- DNS: the cluster's resolver in `kube-system`, port 53 over UDP and TCP;
+- their own team's apps, databases included, in any of its projects (the
+  receiving end still admits only its project and the peers above);
+- public addresses: Git hosts, package mirrors, image and package registries,
+  mail relays, external buckets and APIs;
+- the ingress controller's HTTP and HTTPS entrypoints, and K3s's load
+  balancer in front of them, as the internet does. A request for one of the
+  cluster's own public addresses arrives there by a private one, so without
+  this an app could not call another app's URL, nor reach a bucket or
+  registry the cluster serves under a domain;
+- ranges named in `YACHT_EGRESS_ALLOW`.
+
+Builds reach the same, except any team's apps. Nothing else private is
+reachable: not cloud metadata (`169.254.169.254`), not the nodes' private
+addresses, so not the kubelet, the Kubernetes API, the engine or a Postgres
+listening there, not a Garage admin API on a private address, not anything
+else on the LAN. A node's public address is a public address, and is
+reachable as it is from the internet: firewall what listens on it. The way in
+is the same under both modes, so the ingress controller and the waker reach
+apps as before.
+
+`team` is what an unset `YACHT_NETWORK_ISOLATION` means. That keeps an
+install made before strict was the default — whose settings have no line for
+it — on what it has always run on: the installer writes strict only on a
+machine with no `/etc/yacht/yacht.env` yet, a re-run writes `team` into a file
+without the line, and `upgrade.sh` never touches the file. `off` writes no
+policy at all. Namespaces made before a change of mode are brought into line
+at startup.
+
+#### Moving an existing install to strict
+
+Under `team`, any app or build — and a build runs whatever a repository's
+Dockerfile says — can reach the cloud provider's metadata service (on most
+clouds, the machine's credentials), the kubelet and the Kubernetes API on the
+nodes' addresses, the engine's own port and waker, and every private address
+the machine can, including a Postgres or a Garage admin API listening on one.
+Isolation between teams then rests on those all refusing a stranger.
+`upgrade.sh` says so after each upgrade until the install is strict.
+
+Before switching, check what the install's apps and builds reach on a
+private address, because strict refuses each of them:
+
+- an image registry on the LAN, or one the cluster serves by its Service
+  address rather than through the ingress — builds stop pushing;
+- a backup bucket (`YACHT_BACKUP_S3_ENDPOINT`) or a Garage endpoint
+  (`YACHT_BUCKETS_ENDPOINT`) on a private address — backups and apps stop
+  reaching it;
+- a `YACHT_BASE_URL` or `YACHT_BUILD_SOURCE_URL` that is a private address,
+  not the ingress — `yacht up` builds stop fetching their source;
+- anything else an app talks to on the LAN, or another team's TCP proxy
+  reached through the cluster's own address — the connection arrives at the
+  other team's pod, which strict keeps apps from dialling;
+- IPv6 destinations, on a dual-stack cluster: strict lets out IPv4 only.
+
+Name the first three in `YACHT_EGRESS_ALLOW` as narrowly as possible, a /32
+each. A range that holds the nodes or the Postgres hands that back to every
+app. Then set `YACHT_NETWORK_ISOLATION=strict` in `/etc/yacht/yacht.env`
+(adding the line if it is not there) and restart:
+
+```bash
+sudoedit /etc/yacht/yacht.env    # YACHT_NETWORK_ISOLATION=strict
+sudo systemctl restart yacht
+```
+
+Every namespace's policy is rewritten as the engine starts; the log says
+`network isolation in place mode=strict`. Run one build and check one app
+still reaches its database and the internet; setting `team` again and
+restarting undoes it the same way. Re-running the installer keeps the value.
+
+A wrapping application can change the mode while the engine runs, with
+`Engine.SetNetworkIsolation`: every namespace is rewritten before it
+returns, and a deploy racing the change never leaves one on the old mode.
+The settings are then only where it starts. With several replicas, the
+wrapper keeps the setting where each replica reads it, and calls this on
+every replica.
+
+This needs a network plugin that enforces NetworkPolicy. K3s's does, through
+its embedded policy controller; flannel alone does not.
+
 ### Private networking
 
 Inside a project and environment, a service reaches another by its name, as
@@ -625,28 +715,6 @@ the cluster's CoreDNS, `orchestrator.PrivateDNSRewrite`; on K3s, put it in the
 `coredns-custom` ConfigMap in `kube-system` under a key ending `.override`,
 and CoreDNS loads it within about a minute and a half. The engine keeps the
 aliases in line every ten seconds. Settings › Networking shows the name.
-
-`YACHT_NETWORK_ISOLATION=strict` limits the way out as well: apps and builds
-reach DNS, their own team's apps and public addresses, and no private
-address — not the nodes' network, not cloud metadata, not anything else on
-the LAN — except ranges named in `YACHT_EGRESS_ALLOW`. They do reach the
-ingress controller's HTTP and HTTPS entrypoints (and K3s's load balancer in
-front of them), as the internet does: a request for one of the cluster's own
-public addresses arrives there by a private one, so without it an app could
-not call another app's URL, nor a build push to a registry the cluster
-serves. Use it wherever teams
-are strangers to each other. Namespaces made before a change of mode are
-brought into line at startup.
-
-A wrapping application can change the mode while the engine runs, with
-`Engine.SetNetworkIsolation`: every namespace is rewritten before it
-returns, and a deploy racing the change never leaves one on the old mode.
-The settings are then only where it starts. With several replicas, the
-wrapper keeps the setting where each replica reads it, and calls this on
-every replica.
-
-This needs a network plugin that enforces NetworkPolicy. K3s's does, through
-its embedded policy controller; flannel alone does not.
 
 ### Signing in
 

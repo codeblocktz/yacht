@@ -197,11 +197,15 @@ type Config struct {
 	TCPProxyPorts string
 
 	// NetworkIsolation is how far teams are kept apart on the cluster's
-	// network: "team" (the default) refuses every connection into a team's
-	// workloads from another team's or from a build; "strict" also limits
-	// what workloads and builds may connect out to — DNS, their own team and
-	// public addresses — so the nodes' network and anything else private is
-	// out of reach; "off" writes no policy at all.
+	// network: "team" refuses every connection into a team's workloads from
+	// another team's or from a build; "strict" also limits what workloads
+	// and builds may connect out to — DNS, their own team and public
+	// addresses — so cloud metadata, the nodes' network and anything else
+	// private is out of reach; "off" writes no policy at all.
+	//
+	// Unset is team, and stays so: an install made before the installer
+	// wrote this has no line for it, and an upgrade must not change its
+	// network behind it. The installer writes strict for a new install.
 	NetworkIsolation string
 
 	// EgressAllow are private ranges, as CIDRs, that strict isolation still

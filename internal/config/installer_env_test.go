@@ -137,23 +137,30 @@ func TestInstallerMintsAKeyAndLeavesTheRetiredListEmpty(t *testing.T) {
 // tests.
 func sourceableInstaller(t *testing.T) string {
 	t.Helper()
+	return sourceableScript(t, "install.sh")
+}
+
+// sourceableScript is sourceableInstaller for either root-facing script; the
+// upgrader keeps the same last line for the same reason.
+func sourceableScript(t *testing.T, name string) string {
+	t.Helper()
 
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH to run the installer with")
 	}
 
-	src, err := os.ReadFile("../../install.sh")
+	src, err := os.ReadFile("../../" + name)
 	if err != nil {
-		t.Fatalf("read install.sh: %v", err)
+		t.Fatalf("read %s: %v", name, err)
 	}
 	const entrypoint = "\nmain \"$@\"\n"
 	cut := strings.Index(string(src), entrypoint)
 	if cut == -1 {
-		t.Fatal(`install.sh no longer ends with main "$@" — this test refuses to source it ` +
-			`rather than risk executing the installer`)
+		t.Fatalf(`%s no longer ends with main "$@" — this test refuses to source it `+
+			`rather than risk executing it`, name)
 	}
 
-	lib := filepath.Join(t.TempDir(), "installer.sh")
+	lib := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(lib, src[:cut], 0o600); err != nil {
 		t.Fatalf("write the sourceable installer: %v", err)
 	}
