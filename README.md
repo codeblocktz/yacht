@@ -568,6 +568,22 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+To delete an app's stored data and keep the app — its settings, variables,
+domains, history and the volume's own definition — `Engine.Apps.EraseVolume(ctx,
+team, app, volume)` deletes the claim behind one of its volumes, and the
+provisioner the data with it. The app must be stopped: scaled to zero, not only
+asleep, with no deploy in flight and no pod still mounting the claim, or it is
+refused with `engine.ErrVolumeInUse`. A claim whose volume is kept on deletion
+(reclaim policy `Retain`) is refused with `engine.ErrVolumeRetained`, since
+deleting it would erase nothing. A stopped app is given no new claim; its next
+start is, empty, at the same size and path. Erasing a volume already erased
+does nothing, and every erase is logged at warn. A database is a workload
+with a data volume like any other: its next start initialises an empty
+database with the credentials it had, so what refers to it connects to
+nothing. Its backups are elsewhere and are not erased — `Backups` and
+`DeleteBackup` are for those. Not on the dashboard or the API: there is no
+undo.
+
 For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
 to the internet in the window — the response bodies the ingress served for it
 and for its waker while it slept, from Traefik's counters read raw, summed over

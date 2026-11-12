@@ -372,6 +372,13 @@ var (
 	// ErrMoveHasStorage is Apps.MoveApp refusing an app with a volume — every
 	// database has one — whose data lives on its region's machines.
 	ErrMoveHasStorage = app.ErrMoveHasStorage
+
+	// ErrVolumeInUse is Apps.EraseVolume refusing a volume something still
+	// mounts: stop the app first. ErrVolumeRetained is a cluster whose
+	// storage keeps a volume's data when it is deleted, where erasing would
+	// delete nothing.
+	ErrVolumeInUse    = app.ErrVolumeInUse
+	ErrVolumeRetained = app.ErrVolumeRetained
 	// ErrRegionClosed is a region that cannot take a new app: closed, not
 	// configured, or with no machine ready. ErrNoRegionOpen is an install
 	// with regions where none can; ErrNoSuchRegion a name neither a machine

@@ -35,8 +35,24 @@ func claimName(appName, volumeName string) string {
 // Nothing here deletes. A claim the spec stopped mentioning has been detached,
 // not discarded, and destroying storage as a side effect of an edit is the one
 // mistake in this subsystem that cannot be undone.
+//
+// A workload running no pods — stopped, or asleep — has no claim made for it:
+// one it has is kept and grown, but one it lacks waits for the pods that will
+// mount it. A volume whose data was erased (EraseVolume) is that: made new,
+// and empty, when the app next starts, not straight away for storage nobody
+// uses.
 func (o *Orchestrator) applyVolumes(ctx context.Context, spec orchestrator.AppSpec) error {
 	for _, v := range spec.Volumes {
+		if spec.Replicas == 0 {
+			_, err := o.client.CoreV1().PersistentVolumeClaims(spec.Namespace).
+				Get(ctx, claimName(spec.Name, v.Name), metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("k8s: read volume %s/%s: %w", spec.Ref, v.Name, err)
+			}
+		}
 		size, err := resource.ParseQuantity(fmt.Sprintf("%d", v.SizeBytes))
 		if err != nil {
 			return fmt.Errorf("k8s: volume %s size: %w", v.Name, err)
