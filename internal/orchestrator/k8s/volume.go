@@ -41,17 +41,26 @@ func claimName(appName, volumeName string) string {
 // mount it. A volume whose data was erased (EraseVolume) is that: made new,
 // and empty, when the app next starts, not straight away for storage nobody
 // uses.
+//
+// A claim being deleted is no claim to mount: a pod would wait on it until
+// the deploy's deadline. A workload that would mount one is refused with
+// ErrVolumeDeleting, to be tried again once it is gone and can be made anew.
 func (o *Orchestrator) applyVolumes(ctx context.Context, spec orchestrator.AppSpec) error {
 	for _, v := range spec.Volumes {
-		if spec.Replicas == 0 {
-			_, err := o.client.CoreV1().PersistentVolumeClaims(spec.Namespace).
-				Get(ctx, claimName(spec.Name, v.Name), metav1.GetOptions{})
-			if apierrors.IsNotFound(err) {
+		existing, err := o.client.CoreV1().PersistentVolumeClaims(spec.Namespace).
+			Get(ctx, claimName(spec.Name, v.Name), metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			if spec.Replicas == 0 {
 				continue
 			}
-			if err != nil {
-				return fmt.Errorf("k8s: read volume %s/%s: %w", spec.Ref, v.Name, err)
+		case err != nil:
+			return fmt.Errorf("k8s: read volume %s/%s: %w", spec.Ref, v.Name, err)
+		case existing.DeletionTimestamp != nil:
+			if spec.Replicas == 0 {
+				continue
 			}
+			return fmt.Errorf("%w: %s/%s", orchestrator.ErrVolumeDeleting, spec.Ref, v.Name)
 		}
 		size, err := resource.ParseQuantity(fmt.Sprintf("%d", v.SizeBytes))
 		if err != nil {

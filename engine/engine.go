@@ -379,6 +379,13 @@ var (
 	// delete nothing.
 	ErrVolumeInUse    = app.ErrVolumeInUse
 	ErrVolumeRetained = app.ErrVolumeRetained
+	// ErrVolumeReserved is "backups", the claim a database's backups are
+	// kept on: no volume's name, to attach or to erase.
+	ErrVolumeReserved = app.ErrVolumeReserved
+	// ErrVolumeDeleting is a start refused because a volume's claim is still
+	// being deleted — by EraseVolume, say. Try again once it is gone; a new,
+	// empty one is made then.
+	ErrVolumeDeleting = orchestrator.ErrVolumeDeleting
 	// ErrRegionClosed is a region that cannot take a new app: closed, not
 	// configured, or with no machine ready. ErrNoRegionOpen is an install
 	// with regions where none can; ErrNoSuchRegion a name neither a machine

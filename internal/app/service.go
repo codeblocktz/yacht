@@ -2062,10 +2062,25 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 				"detach its volumes to scale it", name)
 	}
 
-	// The quota check and the write share a transaction, so two scales racing
-	// each other cannot both fit in the room for one. The deploy that follows
-	// is outside it: what the quota counts is the replica count, and that is
-	// committed here.
+	// The image is resolved first, so the registry is not asked with the
+	// team's quota held. An app that has never built has no image to resolve:
+	// its count is saved, for its first build to run.
+	pending := a.Image == PendingImage
+	var digest string
+	if !pending {
+		if s.manifests == nil {
+			return App{}, ErrNoManifestResolver
+		}
+		if digest, err = s.manifests.ResolveDigest(ctx, a.Image); err != nil {
+			return App{}, fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
+		}
+	}
+
+	// The quota check, the count, the release and the deploy's admission
+	// share a transaction: two scales racing each other cannot both fit in
+	// the room for one, and a scale whose deploy is refused — one already in
+	// flight, say — leaves the count as it was rather than saying the app runs
+	// what it does not.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return App{}, fmt.Errorf("app: begin scale: %w", err)
@@ -2087,14 +2102,22 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 		}
 		return App{}, fmt.Errorf("app: scale: %w", err)
 	}
+	updated := toApp(row)
+	if !pending {
+		if err := s.commitStaged(ctx, q, &updated); err != nil {
+			return App{}, err
+		}
+		release, err := s.recordRelease(ctx, q, updated, "", digest, "deployment")
+		if err != nil {
+			return App{}, err
+		}
+		if _, err := s.admitDeploymentTx(ctx, q, ownerID, updated,
+			fmt.Sprintf("scale:%d", replicas), release.ID, false, "user"); err != nil {
+			return App{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit scale: %w", err)
-	}
-
-	updated := toApp(row)
-	err = s.deployCurrentRelease(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
-	if err != nil {
-		return App{}, err
 	}
 	return updated, nil
 }
