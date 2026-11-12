@@ -2152,11 +2152,34 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	updated := toApp(row)
-	err = s.deployCurrentRelease(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas))
-	if err != nil {
+	if err := s.deployScaled(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas)); err != nil {
 		return App{}, err
 	}
 	return updated, nil
+}
+
+// deployScaled rolls out a new replica count and nothing else: the release
+// the app runs, again, with the count changed. Not a release made from the
+// app as it is now, as every other deploy is — that would carry whatever is
+// staged, a scale would deploy changes nobody asked to deploy, and a scale
+// is the one deploy a wrapper may let a team make whatever else it holds
+// (a stop is not even asked about). What is staged stays staged.
+//
+// An app that has never run has no release to scale: the count is saved, and
+// its first deploy runs it.
+func (s *Service) deployScaled(ctx context.Context, ownerID string, a App, trigger string) error {
+	if a.ActiveReleaseID == nil {
+		return nil
+	}
+	active, err := s.ReleaseByID(ctx, ownerID, a.ID, *a.ActiveReleaseID)
+	if err != nil {
+		return err
+	}
+	release, err := s.rescaleRelease(ctx, s.q, active, a.Replicas, a.ConfigVersion)
+	if err != nil {
+		return err
+	}
+	return s.deployReleaseOperation(ctx, ownerID, a, release, trigger)
 }
 
 // Redeploy reapplies the current spec, which restarts the workload's pods.

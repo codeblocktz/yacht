@@ -704,3 +704,50 @@ func (s *Service) pushTriggersOf(t *testing.T, team string) []string {
 	}
 	return out
 }
+
+// A scale changes the replica count and nothing else. With changes staged —
+// a variable, a setting — a scale up, a scale down and a stop each run the
+// release the app was running at the new count, and what is staged stays
+// staged until it is deployed, which is asked about as a staged deploy.
+func TestAScaleDeploysNothingStaged(t *testing.T) {
+	bg := context.Background()
+	s, _, id := stagingService(t, "admit-scale-staged", Options{})
+	if _, err := createAndDeploy(t, s, bg, id, CreateInput{
+		Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080, Env: map[string]string{"MODE": "a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetVariable(bg, id, "web", VariableInput{Key: "MODE", Value: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(bg, id, "web", UpdateInput{Image: "nginx:alpine", Port: 9090}); err != nil {
+		t.Fatal(err)
+	}
+	adm := hooked(s)
+	for _, n := range []int32{3, 2, 0} {
+		if _, err := s.Scale(bg, id, "web", n); err != nil {
+			t.Fatalf("Scale %d: %v", n, err)
+		}
+		mustExecute(t, s, id, "web")
+		a, _ := s.Get(bg, id, "web")
+		rel := activeRelease(t, s, id, "web")
+		if rel.Replicas != n || rel.Env["MODE"] != "a" || rel.Port != 8080 {
+			t.Errorf("after scaling to %d the release runs x%d, MODE=%q, port %d — want x%d, MODE=a, port 8080",
+				n, rel.Replicas, rel.Env["MODE"], rel.Port, n)
+		}
+		if changes, _ := s.stagedChanges(bg, a); len(changes) != 2 {
+			t.Errorf("after scaling to %d, staged: %+v — want MODE and the port still waiting", n, changes)
+		}
+	}
+	adm.reset()
+	if err := s.DeployStaged(bg, id, "web"); err != nil {
+		t.Fatal(err)
+	}
+	if asked := adm.reset(); len(asked) != 1 || asked[0].Trigger != AdmitStaged {
+		t.Errorf("deploying what was staged was asked as %+v", asked)
+	}
+	mustExecute(t, s, id, "web")
+	if rel := activeRelease(t, s, id, "web"); rel.Env["MODE"] != "b" || rel.Port != 9090 || rel.Replicas != 0 {
+		t.Errorf("after deploying what was staged the release runs x%d, MODE=%q, port %d", rel.Replicas, rel.Env["MODE"], rel.Port)
+	}
+}

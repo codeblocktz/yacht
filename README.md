@@ -599,7 +599,9 @@ person's or the token's id when there is one; and what asked, as `Trigger`:
 - `AdmitUpdate`: a change that rolls out when it is saved — settings, a health
   check, a database update, and a variable: set, removed, or a `.env` edit.
 - `AdmitScale`: a new replica count. A scale to zero stops the app and is never
-  asked, nor is a count the app already runs.
+  asked, nor is a count the app already runs. A scale runs the release the app
+  is running at the new count and nothing else: changes staged for the app
+  stay staged until they are deployed.
 - `AdmitVolume` (storage attached or grown) and `AdmitMove` (a move to the
   region `Region` names).
 - `AdmitPush` (an app's own webhook) and `AdmitGitHubPush`. A push that has to

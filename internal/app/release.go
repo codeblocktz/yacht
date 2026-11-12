@@ -369,3 +369,46 @@ func toRelease(row dbgen.AppRelease) Release {
 		Origin: row.Origin,
 	}
 }
+
+// rescaleRelease records a release that is r with another replica count, at
+// the app's current config version: what a scale deploys. Its variables are
+// the app's deployed ones, as every release's are — never the staged ones,
+// which only a deploy of them moves across — and every setting is r's, not
+// the app row's, which holds the staged settings.
+func (s *Service) rescaleRelease(
+	ctx context.Context, q *dbgen.Queries, r Release, replicas int32, configVersion int64,
+) (Release, error) {
+	plain, secretKeys, err := releaseVariables(ctx, q, r.AppID)
+	if err != nil {
+		return Release{}, err
+	}
+	env, err := json.Marshal(plain)
+	if err != nil {
+		return Release{}, fmt.Errorf("app: encode release variables: %w", err)
+	}
+	row, err := q.CreateAppRelease(ctx, dbgen.CreateAppReleaseParams{
+		OwnerID: r.OwnerID, AppID: r.AppID,
+		ImageRef: r.ImageRef, ImageDigest: r.ImageDigest,
+		Source: string(r.Source), SourceRevision: r.SourceRevision,
+		Replicas: replicas, Port: r.Port,
+		CpuRequest: r.CPURequest, CpuLimit: r.CPULimit,
+		MemoryRequest: r.MemoryRequest, MemoryLimit: r.MemoryLimit,
+		Internal:  r.Internal,
+		RunAsUser: r.RunAsUser, FsGroup: r.FSGroup,
+		ScratchPaths:           append([]string{}, r.ScratchPaths...),
+		Args:                   append([]string{}, r.Args...),
+		WritableRootFilesystem: r.WritableRootFilesystem,
+		HealthPath:             r.HealthPath, HealthLiveness: r.Liveness,
+		StartCommand: r.StartCommand, PreDeployCommand: r.PreDeployCommand,
+		CronSchedule:         r.CronSchedule,
+		RestartPolicy:        string(cmp.Or(r.RestartPolicy, orchestrator.RestartOnFailure)),
+		RestartMaxRetries:    r.RestartMaxRetries,
+		HealthTimeoutSeconds: r.HealthTimeoutSeconds,
+		Env:                  env, SecretKeys: append([]string{}, secretKeys...),
+		ConfigVersion: configVersion, Origin: "deployment",
+	})
+	if err != nil {
+		return Release{}, fmt.Errorf("app: record release: %w", err)
+	}
+	return toRelease(row), nil
+}

@@ -32,7 +32,9 @@ import (
 // path to the cluster reads, and moves into variables in the same statement
 // that a release is made from them (createRelease). Any deploy carries
 // everything saved — the bar's, a redeploy, a push — because a release is
-// always made from the app as it is now.
+// made from the app as it is now. Except a scale, which changes only the
+// count of the release the app runs (deployScaled): a wrapper may let a team
+// scale that it lets deploy nothing else, and a stop is never asked about.
 
 // StagedRemoved says a change takes something away; StagedAdded and
 // StagedChanged are in variable.go, because a listed variable carries them.
