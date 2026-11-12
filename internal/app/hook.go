@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -223,7 +224,12 @@ func (s *Service) DeliverPush(ctx context.Context, appID uuid.UUID, p Push) (str
 	a := toApp(row.App)
 
 	result, err := s.actOnPush(ctx, a, p)
-	if err != nil {
+	// Whether the app may deploy could not be checked: said on the app, and
+	// the delivery fails, for the host to show and somebody to send again.
+	unchecked := errors.Is(err, ErrAdmissionUnavailable)
+	if unchecked {
+		result = uncheckedPush
+	} else if err != nil {
 		return "", err
 	}
 	if recErr := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
@@ -231,6 +237,9 @@ func (s *Service) DeliverPush(ctx context.Context, appID uuid.UUID, p Push) (str
 	}); recErr != nil {
 		s.log.Warn("record webhook delivery", slog.String("app", a.Name),
 			slog.String("error", recErr.Error()))
+	}
+	if unchecked {
+		return "", ErrAdmissionUnavailable
 	}
 	return result, nil
 }
@@ -283,11 +292,12 @@ func (s *Service) actOnPush(ctx context.Context, a App, p Push) (string, error) 
 	revision := shortRevision(payload.After)
 	// Asked before the push is skipped, queued or admitted, so a refused one
 	// leaves nothing in the app's history: it is ignored, with the reason,
-	// as a push to another branch is.
+	// as a push to another branch is. A queued push is asked again when its
+	// turn comes.
 	req := admitRequest(a, cmp.Or(p.via, AdmitPush))
 	req.ActorKind, req.Revision = "webhook", revision
 	ctx, err := s.askAdmission(ctx, req)
-	if refusal := (*AdmitRefusal)(nil); errors.As(err, &refusal) {
+	if refusal, ok := isRefusal(err); ok {
 		s.log.Info("push refused", slog.String("app", a.Name), slog.String("revision", revision))
 		return refusedDelivery(refusal), nil
 	} else if err != nil {
@@ -368,19 +378,24 @@ func (s *Service) admitPendingPushes(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		a := toApp(row.App)
+		if s.pushBackoff.waiting(a.ID) {
+			continue
+		}
 		// A push refused now is dropped, with the reason as the app's last
 		// delivery: left queued it would be refused again every pass. One the
-		// wrapper could not decide on waits for the next pass.
+		// wrapper could not decide on waits, longer each time, so a hook that
+		// is down is not asked about it twice a second.
 		req := admitRequest(a, AdmitQueuedPush)
 		req.ActorKind, req.Revision = "webhook", row.PendingRevision
 		actx, err := s.askAdmission(ctx, req)
-		if refusal := (*AdmitRefusal)(nil); errors.As(err, &refusal) {
-			s.dropQueuedPush(ctx, a, refusedDelivery(refusal))
+		if refusal, ok := isRefusal(err); ok {
+			s.dropQueuedPush(ctx, a, row.PendingRevision, refusedDelivery(refusal))
 			continue
 		} else if err != nil {
-			s.log.Warn("queued push: admission", slog.String("app", a.Name), slog.String("error", err.Error()))
+			s.pushBackoff.failed(a.ID)
 			continue
 		}
+		s.pushBackoff.cleared(a.ID)
 		err = s.admitPush(actx, a, row.PendingRevision)
 		switch {
 		case errors.Is(err, ErrOperationInFlight):
@@ -416,11 +431,18 @@ func orUnknown(s string) string {
 	return s
 }
 
-// dropQueuedPush takes an app's queued push out of its slot without
-// deploying it, and records why as the app's last delivery.
-func (s *Service) dropQueuedPush(ctx context.Context, a App, result string) {
-	if _, err := s.q.TakeHookPending(ctx, a.ID); err != nil {
+// dropQueuedPush takes a refused push out of an app's slot without deploying
+// it, and records why as the app's last delivery — only while the slot still
+// holds that push: a newer one queued meanwhile is asked about in its turn.
+func (s *Service) dropQueuedPush(ctx context.Context, a App, revision, result string) {
+	n, err := s.q.DropHookPending(ctx, dbgen.DropHookPendingParams{
+		AppID: a.ID, OwnerID: a.OwnerID, Revision: revision,
+	})
+	if err != nil {
 		s.log.Error("drop a refused queued push", slog.String("app", a.Name), slog.String("error", err.Error()))
+		return
+	}
+	if n == 0 {
 		return
 	}
 	if err := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
@@ -428,5 +450,46 @@ func (s *Service) dropQueuedPush(ctx context.Context, a App, result string) {
 	}); err != nil {
 		s.log.Warn("record webhook delivery", slog.String("app", a.Name), slog.String("error", err.Error()))
 	}
-	s.log.Info("queued push refused", slog.String("app", a.Name))
+	s.log.Info("queued push refused", slog.String("app", a.Name), slog.String("revision", revision))
+}
+
+// pushBackoff is how long each app's queued push waits before the wrapper
+// is asked about it again, after it could not decide: doubling from a few
+// seconds to a few minutes, and forgotten once it answers.
+type pushBackoff struct {
+	mu   sync.Mutex
+	next map[uuid.UUID]backoffState
+}
+
+type backoffState struct {
+	until time.Time
+	wait  time.Duration
+}
+
+const (
+	backoffFirst = 5 * time.Second
+	backoffMost  = 5 * time.Minute
+)
+
+func (b *pushBackoff) waiting(app uuid.UUID) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	st, ok := b.next[app]
+	return ok && time.Now().Before(st.until)
+}
+
+func (b *pushBackoff) failed(app uuid.UUID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.next == nil {
+		b.next = map[uuid.UUID]backoffState{}
+	}
+	wait := min(max(b.next[app].wait*2, backoffFirst), backoffMost)
+	b.next[app] = backoffState{until: time.Now().Add(wait), wait: wait}
+}
+
+func (b *pushBackoff) cleared(app uuid.UUID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.next, app)
 }

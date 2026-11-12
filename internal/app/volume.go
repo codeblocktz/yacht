@@ -95,6 +95,11 @@ func (s *Service) AttachVolume(
 			appName, a.Replicas)
 	}
 
+	// Storage rolls out with the app, so attaching it is asked about first.
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitVolume)); err != nil {
+		return Volume{}, err
+	}
+
 	// Checked and written together, like every change the quota counts.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -152,6 +157,16 @@ func (s *Service) ResizeVolume(
 	a, err := s.Get(ctx, ownerID, appName)
 	if err != nil {
 		return err
+	}
+	// Growing rolls out with the app, so it is asked about first; a size
+	// that is not larger, or a volume that is not there, changes nothing
+	// and is refused below as before.
+	if current, err := s.q.GetVolume(ctx, dbgen.GetVolumeParams{
+		OwnerID: ownerID, AppID: a.ID, Name: volumeName,
+	}); err == nil && sizeBytes > current.SizeBytes {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitVolume)); err != nil {
+			return err
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)

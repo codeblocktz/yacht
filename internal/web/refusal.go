@@ -115,3 +115,14 @@ func savedTo(w http.ResponseWriter, r *http.Request, to string) {
 	}
 	http.Redirect(w, r, to, http.StatusSeeOther)
 }
+
+// logFailed logs an action that failed: as a fault, unless the engine's
+// Admit refused it, which is an answer somebody was given rather than
+// something wrong with the install.
+func (s *Server) logFailed(what string, err error, attrs ...any) {
+	if errors.As(err, new(*app.AdmitRefusal)) {
+		s.log.Info(what+" refused", append(attrs, slog.String("reason", err.Error()))...)
+		return
+	}
+	s.log.Error(what, append(attrs, slog.String("error", err.Error()))...)
+}

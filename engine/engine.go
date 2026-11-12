@@ -326,11 +326,16 @@ const (
 	AdmitStaged      = app.AdmitStaged
 	AdmitUpdate      = app.AdmitUpdate
 	AdmitScale       = app.AdmitScale
+	AdmitVolume      = app.AdmitVolume
+	AdmitMove        = app.AdmitMove
 	AdmitPush        = app.AdmitPush
 	AdmitGitHubPush  = app.AdmitGitHubPush
 	AdmitQueuedPush  = app.AdmitQueuedPush
 	AdmitEnvironment = app.AdmitEnvironment
 	AdmitPullRequest = app.AdmitPullRequest
+
+	// AdmitTimeout is how long Admit has to answer.
+	AdmitTimeout = app.AdmitTimeout
 
 	// An app's sleep setting: its team's default, or on or off whatever that is.
 	SleepInherit = app.SleepInherit
@@ -374,6 +379,11 @@ var (
 	// a team past its quota, for a wrapper that answers it with something of
 	// its own rather than the engine's sentence.
 	ErrQuotaExceeded = app.ErrQuotaExceeded
+
+	// ErrAdmissionUnavailable is a deploy refused because Admit could not
+	// decide: it failed, or took longer than AdmitTimeout. The cause is in
+	// the log, never in what the person is shown.
+	ErrAdmissionUnavailable = app.ErrAdmissionUnavailable
 
 	// ErrCapacityFull is what Apps refuses a change with when the install
 	// enforces its capacity policy and has no room left to sell for it. The
@@ -543,11 +553,14 @@ type Overrides struct {
 
 	// Admit is asked before every deploy the engine admits — by a person, a
 	// token, a Git host, a queued push, a pull request's environment, a
-	// template — and before anything is written for it. It returns nil to
-	// admit, or an *AdmitRefusal to refuse with a sentence shown to whoever
-	// asked: on the dashboard, in the API's error, or as "Ignored — …" beside
-	// a Git host's delivery. A refused queued push is dropped. Nil admits
-	// every deploy. See AdmitRequest for what it is told.
+	// template — before anything is written for it and with no lock held.
+	// It returns nil to admit, or an *AdmitRefusal to refuse with a sentence
+	// shown to whoever asked: on the dashboard, in the API's error, or as
+	// "Ignored — …" beside a Git host's delivery. A refused queued push is
+	// dropped. Any other error, or no answer within AdmitTimeout, fails the
+	// deploy with ErrAdmissionUnavailable and goes only to the log. Nil
+	// admits every deploy. See AdmitRequest for what it is told, and the
+	// README for what is not asked.
 	Admit AdmitFunc
 
 	// Usage prices a project for its settings page: what it has cost this
@@ -1323,4 +1336,12 @@ func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 			"this log, where anyone who can read it can use them")
 		return notify.NewLog(log), nil
 	}
+}
+
+// WithSystemActor marks a context as the wrapper's own doing rather than a
+// person's: a deploy made on it is recorded as the system's, and Admit sees
+// ActorKind "system". For a wrapper's own calls into Engine.Apps — stopping
+// and starting apps, say — so its Admit can tell them from a customer's.
+func WithSystemActor(ctx context.Context) context.Context {
+	return app.WithActor(ctx, app.Actor{Kind: "system"})
 }

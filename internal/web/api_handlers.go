@@ -720,6 +720,8 @@ func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, app.ErrVariableNotFound),
 		errors.Is(err, app.ErrProjectNotFound):
 		writeAPIError(w, http.StatusNotFound, "not_found", failureReason(err.Error()))
+	case errors.Is(err, app.ErrAdmissionUnavailable):
+		writeAPIError(w, http.StatusServiceUnavailable, "admission_unavailable", failureReason(err.Error()))
 	case errors.Is(err, app.ErrOperationInFlight):
 		writeAPIError(w, http.StatusConflict, "deploy_in_flight",
 			"a deploy is already in flight — wait for it to finish, or cancel it")

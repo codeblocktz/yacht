@@ -244,6 +244,10 @@ type Querier interface {
 	// reasonable thing to do. The row it creates is the one CreateTeamRow fills in
 	// later.
 	DismissOnboarding(ctx context.Context, ownerID string) error
+	// A queued push refused when its turn came, taken out only if it is still
+	// the one that was refused: a newer push queued meanwhile stays, to be asked
+	// about in its own turn.
+	DropHookPending(ctx context.Context, arg DropHookPendingParams) (int64, error)
 	// The install's default region gets a row, open, the first time it is named,
 	// so a cluster labelled with one region and YACHT_DEFAULT_REGION set needs
 	// nothing more before apps can be placed. Never overwrites: an operator who

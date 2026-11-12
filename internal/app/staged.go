@@ -929,6 +929,16 @@ func (e StagedErrors) Error() string {
 	return "app: " + strings.Join(parts, "; ")
 }
 
+// Unwrap is each app's error, so errors.Is and errors.As see through to
+// them: a refused deploy among them is still a refusal.
+func (e StagedErrors) Unwrap() []error {
+	out := make([]error, 0, len(e))
+	for _, f := range e {
+		out = append(out, f.Err)
+	}
+	return out
+}
+
 // DeployProjectStaged deploys every app in a project that has changes
 // waiting, and returns the names of those it deployed.
 //

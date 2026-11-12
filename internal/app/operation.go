@@ -128,12 +128,13 @@ func (s *Service) admitDeploymentTx(
 	if requiresBuild && a.Source == SourceGit && !a.Repo.Set() && !strings.HasPrefix(trigger, UploadTriggerPrefix) {
 		return Operation{}, ErrNothingToBuild
 	}
-	// Asked here only when no caller asked before writing anything: the net
-	// under every deploy, so one admitted by a path written later is asked
-	// too. Before the wake and the deployment row, so a refusal writes
-	// nothing on the caller's transaction.
+	// A fallback, not a check: every path that admits a deploy asks before
+	// it takes a lock or writes anything, and marks the context, so this
+	// never asks for those. It is here for a path written later that
+	// forgets to — and then it asks inside the caller's transaction, before
+	// the wake and the deployment row, so a refusal writes nothing.
 	req := admitRequest(a, admitTriggerFor(trigger, actorKind))
-	req.ActorKind, _ = deployActor(ctx, actorKind)
+	req.ActorKind, req.ActorID = deployActor(ctx, actorKind)
 	req.Revision = strings.TrimPrefix(trigger, PushTriggerPrefix)
 	if req.Revision == trigger {
 		req.Revision = ""

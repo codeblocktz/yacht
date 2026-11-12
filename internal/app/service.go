@@ -439,6 +439,10 @@ type Service struct {
 	manifests Manifests
 	buckets   *bucket.Garage
 
+	// pushBackoff spaces out asking about a queued push the wrapper's Admit
+	// could not decide on. See admitPendingPushes.
+	pushBackoff pushBackoff
+
 	// gh is the install's GitHub App, nil when it has none.
 	gh *github.App
 
@@ -754,6 +758,16 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	}
 	sourceChanged := in.Repo.GitHub != a.Repo.GitHub
 
+	// A change that will roll out is a deploy, asked about before the
+	// transaction below takes the team's quota and the app: refused, the
+	// settings stay as they were. What it would roll out is worked out here
+	// from what the write below stores.
+	if next := a.updatedBy(in, image); RollsOut(a, next) && next.Image != PendingImage && !s.opts.StageChanges {
+		if ctx, err = s.askAdmission(ctx, admitRequest(next, AdmitUpdate)); err != nil {
+			return App{}, err
+		}
+	}
+
 	// Limits are what the quota counts, so they are checked and written in one
 	// transaction, the way Scale checks replicas. Only the limits: requests
 	// are what the scheduler reserves, but a limit is what a container may
@@ -820,14 +834,6 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 		}
 	} else if unchanged {
 		return a, nil
-	}
-	// A change that will roll out is a deploy, asked about before the change
-	// commits: refused, the settings stay as they were rather than saved
-	// behind a deploy that never ran.
-	if next := toApp(row); RollsOut(a, next) && next.Image != PendingImage && !s.opts.StageChanges {
-		if ctx, err = s.askAdmission(ctx, admitRequest(next, AdmitUpdate)); err != nil {
-			return App{}, err
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit update: %w", err)
@@ -1037,6 +1043,7 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 			App:         in.Name,
 			ProjectID:   in.ProjectID,
 			Environment: cmp.Or(in.Environment, DefaultEnvironment),
+			Region:      in.Region,
 			Trigger:     AdmitCreate,
 			Replicas:    in.Replicas,
 		}); err != nil {
@@ -2102,12 +2109,17 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	// A scale rolls out like any deploy, and is asked about before the count
-	// is written. The wrapper sees the count asked for, so it can tell a stop
-	// from a start.
-	req := admitRequest(a, AdmitScale)
-	req.Replicas = replicas
-	if ctx, err = s.askAdmission(ctx, req); err != nil {
-		return App{}, err
+	// is written. Not a scale to zero: that stops the app, which nothing
+	// should be able to refuse — it is how a wrapper stops one — and not a
+	// count it already runs, which changes nothing.
+	if replicas != 0 && replicas != a.Replicas {
+		req := admitRequest(a, AdmitScale)
+		req.Replicas = replicas
+		if ctx, err = s.askAdmission(ctx, req); err != nil {
+			return App{}, err
+		}
+	} else if replicas == 0 {
+		ctx = markAdmitted(ctx, ownerID, a.Name)
 	}
 
 	// The quota check and the write share a transaction, so two scales racing
@@ -2395,6 +2407,10 @@ func (s *Service) SetHealth(
 		return err
 	}
 
+	if !a.Source.Workload() {
+		return ErrNoWorkload
+	}
+
 	probe := a
 	probe.HealthPath = strings.TrimSpace(healthPath)
 	probe.Liveness = liveness
@@ -2404,7 +2420,8 @@ func (s *Service) SetHealth(
 	}).Validate(); err != nil {
 		return err
 	}
-	if !s.opts.StageChanges {
+	changed := probe.HealthPath != a.HealthPath || probe.Liveness != a.Liveness
+	if changed && !s.opts.StageChanges {
 		if ctx, err = s.askAdmission(ctx, admitRequest(probe, AdmitUpdate)); err != nil {
 			return err
 		}
@@ -2457,4 +2474,23 @@ func runtimeOf(a App) Blueprint {
 		}
 	}
 	return b
+}
+
+// updatedBy is the app as Update will store it, in the fields RollsOut
+// compares: what decides, before anything is written, whether the update is
+// a deploy to ask about. It must read in as UpdateApp's parameters do.
+func (a App) updatedBy(in UpdateInput, image string) App {
+	next := a
+	next.Image = image
+	next.Port = in.Port
+	next.Internal = in.Internal
+	next.CPURequest, next.CPULimit = in.CPURequest, in.CPULimit
+	next.MemoryRequest, next.MemoryLimit = in.MemoryRequest, in.MemoryLimit
+	next.StartCommand = strings.TrimSpace(in.StartCommand)
+	next.PreDeployCommand = strings.TrimSpace(in.PreDeployCommand)
+	next.CronSchedule = strings.TrimSpace(in.CronSchedule)
+	next.RestartPolicy = cmp.Or(in.RestartPolicy, orchestrator.RestartOnFailure)
+	next.RestartMaxRetries = restartRetriesFor(in.RestartPolicy, in.RestartMaxRetries)
+	next.HealthTimeoutSeconds = in.HealthTimeoutSeconds
+	return next
 }
