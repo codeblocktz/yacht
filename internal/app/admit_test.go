@@ -751,3 +751,47 @@ func TestAScaleDeploysNothingStaged(t *testing.T) {
 		t.Errorf("after deploying what was staged the release runs x%d, MODE=%q, port %d", rel.Replicas, rel.Env["MODE"], rel.Port)
 	}
 }
+
+// A scale is asked about once, before its transaction, and a scale whose
+// deploy is then refused — one already in flight — leaves the count and the
+// releases as they were.
+func TestAScaleRefusedByADeployInFlightKeepsItsCount(t *testing.T) {
+	bg := context.Background()
+	s, _, pool := testService(t, Options{Keeper: testKeeper(t)})
+	id := owner(t, s, pool, "admit-scale-in-flight")
+	web, err := createAndDeploy(t, s, bg, id, CreateInput{Name: "web", Image: "nginx:alpine", Replicas: 1, Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Redeploy(bg, id, "web"); err != nil {
+		t.Fatal(err)
+	}
+	releases := func() int {
+		rs, err := s.Releases(bg, id, web.ID, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(rs)
+	}
+	n := releases()
+	adm := hooked(s)
+	if _, err := s.Scale(bg, id, "web", 3); !errors.Is(err, ErrOperationInFlight) {
+		t.Fatalf("scaling during a deploy: %v, want ErrOperationInFlight", err)
+	}
+	if asked := adm.reset(); len(asked) != 1 || asked[0].Trigger != AdmitScale ||
+		asked[0].Replicas != 3 || asked[0].CurrentReplicas != 1 {
+		t.Errorf("the scale was asked as %+v, want once, as scale 3/1", asked)
+	}
+	if got, _ := s.Get(bg, id, "web"); got.Replicas != 1 || releases() != n {
+		t.Errorf("a refused scale left the app at %d replicas and %d releases, want 1 and %d",
+			got.Replicas, releases(), n)
+	}
+	mustExecute(t, s, id, "web")
+	if _, err := s.Scale(bg, id, "web", 3); err != nil {
+		t.Fatal(err)
+	}
+	mustExecute(t, s, id, "web")
+	if rel := activeRelease(t, s, id, "web"); rel.Replicas != 3 {
+		t.Errorf("after the deploy finished, the scale runs x%d, want x3", rel.Replicas)
+	}
+}

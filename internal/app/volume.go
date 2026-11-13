@@ -54,6 +54,8 @@ func (in VolumeInput) Validate() error {
 	switch {
 	case in.Name == "":
 		return errors.New("a volume needs a name")
+	case in.Name == backupVolume:
+		return errors.New(`"backups" is where a database's backups are kept — give the volume another name`)
 	case len(in.Name) > 40:
 		return errors.New("volume name must be at most 40 characters")
 	case !nameRE.MatchString(in.Name):

@@ -253,3 +253,30 @@ func (n *Noop) Namespace(name string) (NamespaceSpec, bool) {
 	spec, ok := n.namespaces[name]
 	return spec, ok
 }
+
+// Compile-time check that Noop can erase a volume.
+var _ VolumeEraser = (*Noop)(nil)
+
+// EraseVolume has no storage to delete. It refuses a volume the app it was
+// last given still runs, as a cluster would refuse one a pod mounts.
+func (n *Noop) EraseVolume(_ context.Context, ref Ref, volume string) (VolumeErasure, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	erasure := VolumeErasure{Claim: ref.Name + "-" + volume}
+	spec, ok := n.apps[ref.String()]
+	if !ok {
+		return erasure, nil
+	}
+	for _, v := range spec.Volumes {
+		if v.Name == volume {
+			if spec.Replicas > 0 {
+				return erasure, ErrVolumeInUse
+			}
+			erasure.Deleted = true
+		}
+	}
+	return erasure, nil
+}
+
+// WaitVolumeGone has nothing to wait for.
+func (n *Noop) WaitVolumeGone(context.Context, Ref, string) error { return nil }

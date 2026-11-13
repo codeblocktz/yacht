@@ -575,6 +575,43 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+To delete an app's stored data and keep the app — its settings, variables,
+domains, history and the volume's own definition —
+`Engine.Apps.EraseVolume(ctx, team, app, volume)` deletes the claim behind one
+of its volumes; with reclaim policy `Delete`, the storage class then deletes
+the data. The engine can see that the claim is gone, not that the data is:
+local-path storage whose node is down, a statically provisioned volume, or NFS
+with `archiveOnDelete` can keep it, whatever the claim says. A claim whose
+volume is `Retain` is refused with `engine.ErrVolumeRetained`, since deleting
+it would erase nothing.
+
+The app must be stopped: scaled to zero, running a release of zero — a scale to
+zero whose deploy failed is not stopped — not asleep, with no deploy in flight;
+and nothing in the cluster may mount the claim or start something that would:
+a pod short of finished (pending, running, terminating, a Job's retry), the
+app's Deployment at any replicas, its CronJob unless suspended, a Job not yet
+finished. Otherwise it is refused with `engine.ErrVolumeInUse`. A pod that
+starts between the check and the delete leaves the claim Terminating until it
+ends, and the call says so. The check and the delete happen under the app's
+convergence lock; the wait for the claim to go (up to a minute; call again to
+keep waiting) does not, so one slow claim holds up no other app.
+
+A stopped app is given no new claim, and a claim still being deleted is not
+mounted — a start meets it as `ErrVolumeDeleting`, to try again — so the next
+start gets a new, empty one, at the same size and path. Erasing a volume
+already erased does nothing. A volume detached with `DeleteVolume`, whose claim
+was kept, can be erased by its name. `backups` is the claim a database's
+backups are kept on, and no volume's name: it is refused for a new volume, and
+by `EraseVolume`. Each erase is logged at warn before the claim is deleted —
+with the claim's uid and the persistent volume behind it — and again with the
+outcome; a refusal, or nothing to erase, at info.
+
+A database is a workload with a data volume like any other: its next start
+initialises an empty database with the credentials it had, so what refers to
+it connects to nothing. Its backups are elsewhere and are not erased —
+`Backups` and `DeleteBackup` are for those. Not on the dashboard or the API:
+there is no undo.
+
 To keep some deploys from happening, `Overrides.Admit` is asked before the
 engine admits each one — before anything is written for it, and with no lock
 held:

@@ -33,7 +33,7 @@ import (
 // that a release is made from them (createRelease). Any deploy carries
 // everything saved — the bar's, a redeploy, a push — because a release is
 // made from the app as it is now. Except a scale, which changes only the
-// count of the release the app runs (deployScaled): a wrapper may let a team
+// count of the release the app runs (admitScaledTx): a wrapper may let a team
 // scale that it lets deploy nothing else, and a stop is never asked about.
 
 // StagedRemoved says a change takes something away; StagedAdded and

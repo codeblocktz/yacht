@@ -2116,23 +2116,29 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 	}
 
 	// A scale rolls out like any deploy, and is asked about before the count
-	// is written. Not a scale to zero: that stops the app, which nothing
+	// is written — before the transaction below, so a slow hook holds up only
+	// this scale. Not a scale to zero: that stops the app, which nothing
 	// should be able to refuse — it is how a wrapper stops one — and not a
 	// count it already runs, which changes nothing.
-	if replicas != 0 && replicas != a.Replicas {
+	asked := true
+	switch {
+	case replicas == 0:
+		ctx = markAdmitted(ctx, ownerID, a.Name)
+	case replicas != a.Replicas:
 		req := admitRequest(a, AdmitScale)
 		req.Replicas = replicas
 		if ctx, err = s.askAdmission(ctx, req); err != nil {
 			return App{}, err
 		}
-	} else if replicas == 0 {
-		ctx = markAdmitted(ctx, ownerID, a.Name)
+	default:
+		asked = false
 	}
 
-	// The quota check and the write share a transaction, so two scales racing
-	// each other cannot both fit in the room for one. The deploy that follows
-	// is outside it: what the quota counts is the replica count, and that is
-	// committed here.
+	// The quota check, the count, the release and the deploy's admission
+	// share a transaction: two scales racing each other cannot both fit in
+	// the room for one, and a scale whose deploy is refused — one already in
+	// flight, say — leaves the count as it was rather than saying the app runs
+	// what it does not.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return App{}, fmt.Errorf("app: begin scale: %w", err)
@@ -2154,39 +2160,51 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 		}
 		return App{}, fmt.Errorf("app: scale: %w", err)
 	}
+	if !asked {
+		// The count was changed by somebody else after it was read, so this
+		// is a scale after all: start again, to ask about it before any
+		// transaction rather than have the fallback ask inside this one.
+		if err := tx.Rollback(ctx); err != nil {
+			return App{}, fmt.Errorf("app: abandon scale: %w", err)
+		}
+		return s.Scale(ctx, ownerID, name, replicas)
+	}
+	updated := toApp(row)
+	if err := s.admitScaledTx(ctx, q, ownerID, updated, fmt.Sprintf("scale:%d", replicas)); err != nil {
+		return App{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit scale: %w", err)
-	}
-
-	updated := toApp(row)
-	if err := s.deployScaled(ctx, ownerID, updated, fmt.Sprintf("scale:%d", replicas)); err != nil {
-		return App{}, err
 	}
 	return updated, nil
 }
 
-// deployScaled rolls out a new replica count and nothing else: the release
-// the app runs, again, with the count changed. Not a release made from the
-// app as it is now, as every other deploy is — that would carry whatever is
-// staged, a scale would deploy changes nobody asked to deploy, and a scale
-// is the one deploy a wrapper may let a team make whatever else it holds
-// (a stop is not even asked about). What is staged stays staged.
+// admitScaledTx admits the rollout of a new replica count, and nothing else,
+// on Scale's transaction: the release the app runs, again, with the count
+// changed. Not a release made from the app as it is now, as every other
+// deploy is — that would carry whatever is staged, a scale would deploy
+// changes nobody asked to deploy, and a scale is the one deploy a wrapper
+// may let a team make whatever else it holds (a stop is not even asked
+// about). What is staged stays staged.
 //
 // An app that has never run has no release to scale: the count is saved, and
 // its first deploy runs it.
-func (s *Service) deployScaled(ctx context.Context, ownerID string, a App, trigger string) error {
+func (s *Service) admitScaledTx(ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string) error {
 	if a.ActiveReleaseID == nil {
 		return nil
 	}
-	active, err := s.ReleaseByID(ctx, ownerID, a.ID, *a.ActiveReleaseID)
+	row, err := q.GetAppRelease(ctx, dbgen.GetAppReleaseParams{
+		OwnerID: ownerID, AppID: a.ID, ID: *a.ActiveReleaseID,
+	})
+	if err != nil {
+		return fmt.Errorf("app: read the release to scale: %w", err)
+	}
+	release, err := s.rescaleRelease(ctx, q, toRelease(row), a.Replicas, a.ConfigVersion)
 	if err != nil {
 		return err
 	}
-	release, err := s.rescaleRelease(ctx, s.q, active, a.Replicas, a.ConfigVersion)
-	if err != nil {
-		return err
-	}
-	return s.deployReleaseOperation(ctx, ownerID, a, release, trigger)
+	_, err = s.admitDeploymentTx(ctx, q, ownerID, a, trigger, release.ID, false, "user")
+	return err
 }
 
 // Redeploy reapplies the current spec, which restarts the workload's pods.
