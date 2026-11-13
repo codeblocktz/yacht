@@ -60,3 +60,12 @@ LIMIT @result_limit;
 UPDATE app_hooks
 SET pending_at = NULL, pending_revision = ''
 WHERE app_id = @app_id AND pending_at IS NOT NULL;
+
+-- name: DropHookPending :execrows
+-- A queued push refused when its turn came, taken out only if it is still
+-- the one that was refused: a newer push queued meanwhile stays, to be asked
+-- about in its own turn.
+UPDATE app_hooks
+SET pending_at = NULL, pending_revision = ''
+WHERE app_id = @app_id AND owner_id = @owner_id
+  AND pending_at IS NOT NULL AND pending_revision = @revision;

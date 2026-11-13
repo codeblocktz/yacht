@@ -258,6 +258,15 @@ func (s *Service) SetRawVariables(ctx context.Context, ownerID, appName, raw str
 		given[l.Key] = true
 	}
 
+	// Deployed at once, an edit that changes anything is a deploy: asked
+	// about before any of it is staged, so a refused one leaves nothing
+	// waiting either.
+	if !s.opts.StageChanges && a.Source.Workload() && rawEditChanges(current, lines, given) {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitUpdate)); err != nil {
+			return err
+		}
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("app: begin raw edit: %w", err)
@@ -292,4 +301,23 @@ func (s *Service) SetRawVariables(ctx context.Context, ownerID, appName, raw str
 	default:
 		return err
 	}
+}
+
+// rawEditChanges reports whether a .env edit sets or removes anything.
+func rawEditChanges(current []Variable, lines []numberedLine, given map[string]bool) bool {
+	plain := map[string]string{}
+	for _, v := range current {
+		if !v.Secret {
+			plain[v.Key] = v.Value
+			if !given[v.Key] {
+				return true
+			}
+		}
+	}
+	for _, l := range lines {
+		if was, ok := plain[l.Key]; !ok || was != l.Value {
+			return true
+		}
+	}
+	return false
 }

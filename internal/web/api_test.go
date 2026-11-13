@@ -103,6 +103,9 @@ type apiHarness struct {
 	audit    *audit.Log
 	builder  *fetchingBuilder
 	base     string
+
+	// refuse is the teams whose deploys the engine's Admit refuses.
+	refuse sync.Map
 }
 
 // newAPIHarness is the engine assembled over a real database and served on
@@ -144,6 +147,12 @@ func newAPIHarness(t *testing.T) *apiHarness {
 		Manifests: testManifests{}, Images: apiImages{}, Builder: h.builder,
 		SourceFetchURL:      base + APIPrefix + "/build-sources",
 		RolloutPollInterval: 10 * time.Millisecond, RolloutSettle: -1,
+		Admit: func(_ context.Context, r app.AdmitRequest) error {
+			if _, ok := h.refuse.Load(r.OwnerID); ok {
+				return &app.AdmitRefusal{Message: "Deploys are paused for this workspace."}
+			}
+			return nil
+		},
 	})
 	handler := testServer(t, Options{
 		Apps: h.apps, Logs: h.apps, Accounts: h.accounts,
@@ -895,4 +904,28 @@ func keys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// A deploy the engine's Admit refuses is the wrapper's sentence: in the
+// API's error, for the CLI to print, and on the dashboard's form.
+func TestARefusedDeployIsSaidAsTheWrapperSaysIt(t *testing.T) {
+	h := newAPIHarness(t)
+	owner, admin, _ := h.team("web-api-a")
+	h.imageApp("web-api-a", "api", uuid.Nil)
+	tok := h.token("web-api-a", admin, account.RoleAdmin, nil)
+	h.refuse.Store("web-api-a", true)
+	const said = "Deploys are paused for this workspace."
+
+	code, out := h.call(http.MethodPost, "/api/v1/apps/api/redeploy", tok, nil)
+	body, _ := out["error"].(map[string]any)
+	if code != http.StatusForbidden || body["code"] != "refused" || body["message"] != said {
+		t.Errorf("a refused redeploy through the API = %d %v", code, out)
+	}
+	code, page := h.form("/apps/api/scale", h.session(owner, "web-api-a"), url.Values{"replicas": {"3"}})
+	if code != http.StatusUnprocessableEntity || !strings.Contains(page, said) {
+		t.Errorf("a refused scale on the dashboard = %d, saying the reason: %v", code, strings.Contains(page, said))
+	}
+	if a, err := h.apps.Get(context.Background(), "web-api-a", "api"); err != nil || a.Replicas != 1 {
+		t.Errorf("after a refused scale: %+v, %v", a.Replicas, err)
+	}
 }

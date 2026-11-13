@@ -996,6 +996,9 @@ render_env() {
 		region_line="#YACHT_DEFAULT_REGION="
 	fi
 
+	isolation=$(network_isolation)
+	egress_allow=$(env_get YACHT_EGRESS_ALLOW || printf '')
+
 	cat <<-EOF
 		# Written by the Yacht installer. Re-running preserves every value here
 		# except the port and the binary; edit freely and restart the service.
@@ -1033,7 +1036,40 @@ render_env() {
 		# The region new apps are placed in when nobody chooses one: a value of
 		# the topology.kubernetes.io/region label on this cluster's nodes.
 		${region_line}
+
+		# How far apps and builds are kept apart on the cluster's network.
+		# "strict" refuses connections between teams and projects, and lets apps
+		# out only to DNS, their own team, public addresses and this cluster's
+		# ingress, and builds to the same less any team: never cloud metadata,
+		# the nodes or the LAN. "team" limits only what comes in. New installs
+		# are written strict; one made before that is written team, what it
+		# already ran on. Changing it rewrites every namespace's policy at the
+		# next start.
+		YACHT_NETWORK_ISOLATION=${isolation}
+		# Private ranges, as CIDRs, strict still lets apps and builds reach: an
+		# image registry on the LAN, say.
+		YACHT_EGRESS_ALLOW=${egress_allow}
 	EOF
+}
+
+# network_isolation is the isolation mode the environment file is written with.
+#
+# Whatever the file already says is kept, as every other value is. A file with
+# no line for it is an install made before the installer wrote one, which has
+# been running on the engine's unset default, team, all along: it is written
+# team, so a re-run never tightens a working install's network behind its
+# operator's back — builds pushing to a registry on the LAN would stop. Only a
+# machine with no file yet, a new install, starts strict. The engine's own
+# unset default stays team for the same reason: upgrade.sh never touches this
+# file, so an install it upgrades keeps what it had.
+network_isolation() {
+	if iso_mode=$(env_get YACHT_NETWORK_ISOLATION); then
+		printf '%s' "$iso_mode"
+	elif [ -f "$ENV_FILE" ]; then
+		printf 'team'
+	else
+		printf 'strict'
+	fi
 }
 
 configure() {
@@ -1132,6 +1168,26 @@ public_addr() {
 	printf '%s' "$ip"
 }
 
+# isolation_summary says which network isolation the install runs on, and,
+# where it is not strict, what that leaves open and how to close it.
+isolation_summary() {
+	iso_mode=$(env_get YACHT_NETWORK_ISOLATION || printf 'team')
+	case "$iso_mode" in
+		strict)
+			say "Network   strict: apps reach DNS, their own team, public addresses and the ingress; builds the same less any team"
+			say "          A registry or bucket on a private address needs YACHT_EGRESS_ALLOW in ${ENV_FILE}"
+			;;
+		off)
+			warn "network isolation is off: teams' apps can reach each other, cloud metadata and the nodes"
+			;;
+		*)
+			say "Network   ${iso_mode}: apps and builds can still reach cloud metadata, the nodes and the LAN"
+			say "          Set YACHT_NETWORK_ISOLATION=strict in ${ENV_FILE} and restart to close that;"
+			say "          README › Network isolation says what to check first"
+			;;
+	esac
+}
+
 summary() {
 	addr=$(public_addr)
 	cat <<-EOF
@@ -1163,6 +1219,7 @@ summary() {
 	else
 		warn "custom-domain certificates are unavailable; platform wildcard TLS is unchanged"
 	fi
+	isolation_summary
 	if [ "$MULTI_SITE" = "yes" ]; then
 		say "Multi-site: add machines elsewhere with server address https://${PUBLIC_IP:-<public-ip>}:6443"
 		say "Open 6443/tcp to this server, and 51820/udp (51821/udp over IPv6) and 10250/tcp between every machine"
