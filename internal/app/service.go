@@ -409,6 +409,10 @@ type Options struct {
 	// See platform.go.
 	PlatformVariablePrefix string
 
+	// Admit is asked before every deploy is admitted, and may refuse it.
+	// Nil admits every one. See admit.go.
+	Admit AdmitFunc
+
 	// Events is told when a deploy finishes and when an app is deleted, for
 	// a project's webhooks. Nil tells nobody. See events.go.
 	Events EventSink
@@ -434,6 +438,10 @@ type Service struct {
 	images    Images
 	manifests Manifests
 	buckets   *bucket.Garage
+
+	// pushBackoff spaces out asking about a queued push the wrapper's Admit
+	// could not decide on. See admitPendingPushes.
+	pushBackoff pushBackoff
 
 	// gh is the install's GitHub App, nil when it has none.
 	gh *github.App
@@ -750,6 +758,16 @@ func (s *Service) Update(ctx context.Context, ownerID, name string, in UpdateInp
 	}
 	sourceChanged := in.Repo.GitHub != a.Repo.GitHub
 
+	// A change that will roll out is a deploy, asked about before the
+	// transaction below takes the team's quota and the app: refused, the
+	// settings stay as they were. What it would roll out is worked out here
+	// from what the write below stores.
+	if next := a.updatedBy(in, image); RollsOut(a, next) && next.Image != PendingImage && !s.opts.StageChanges {
+		if ctx, err = s.askAdmission(ctx, admitRequest(next, AdmitUpdate)); err != nil {
+			return App{}, err
+		}
+	}
+
 	// Limits are what the quota counts, so they are checked and written in one
 	// transaction, the way Scale checks replicas. Only the limits: requests
 	// are what the scheduler reserves, but a limit is what a container may
@@ -1014,6 +1032,23 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 	}
 	if err := in.Validate(); err != nil {
 		return App{}, err
+	}
+
+	// A workload's first deploy is admitted here, before anything is minted
+	// or written. A bucket runs nothing, and an empty service deploys nothing
+	// until its first upload, which is asked about then.
+	if !in.Empty && in.Source.Workload() {
+		if ctx, err = s.askAdmission(ctx, AdmitRequest{
+			OwnerID:     ownerID,
+			App:         in.Name,
+			ProjectID:   in.ProjectID,
+			Environment: cmp.Or(in.Environment, DefaultEnvironment),
+			Region:      in.Region,
+			Trigger:     AdmitCreate,
+			Replicas:    in.Replicas,
+		}); err != nil {
+			return App{}, err
+		}
 	}
 
 	namespace := Namespace(ownerID, in.Name)
@@ -1318,6 +1353,11 @@ func (s *Service) Create(ctx context.Context, ownerID string, in CreateInput) (A
 // transaction is open, and neither an image app nor a Git app can claim
 // success before the stage worker proves its rollout.
 func (s *Service) admitInitialDeploy(ctx context.Context, q *dbgen.Queries, ownerID string, created App) error {
+	// Create asked before its transaction; this is the net for a caller that
+	// did not.
+	if _, err := s.askAdmission(ctx, admitRequest(created, AdmitCreate)); err != nil {
+		return err
+	}
 	var release Release
 	if created.Source != SourceGit {
 		var err error
@@ -2021,6 +2061,12 @@ func (s *Service) endDeployment(
 func (s *Service) deployCurrentRelease(
 	ctx context.Context, ownerID string, a App, trigger string,
 ) error {
+	// Before the release is written: a refused deploy leaves no release
+	// behind it. A caller that asked already has its context say so.
+	ctx, err := s.askAdmission(ctx, admitRequest(a, admitTriggerFor(trigger, "user")))
+	if err != nil {
+		return err
+	}
 	release, err := s.createRelease(ctx, s.q, a, "")
 	if err != nil {
 		return err
@@ -2062,18 +2108,23 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 				"detach its volumes to scale it", name)
 	}
 
-	// The image is resolved first, so the registry is not asked with the
-	// team's quota held. An app that has never built has no image to resolve:
-	// its count is saved, for its first build to run.
-	pending := a.Image == PendingImage
-	var digest string
-	if !pending {
-		if s.manifests == nil {
-			return App{}, ErrNoManifestResolver
+	// A scale rolls out like any deploy, and is asked about before the count
+	// is written — before the transaction below, so a slow hook holds up only
+	// this scale. Not a scale to zero: that stops the app, which nothing
+	// should be able to refuse — it is how a wrapper stops one — and not a
+	// count it already runs, which changes nothing.
+	asked := true
+	switch {
+	case replicas == 0:
+		ctx = markAdmitted(ctx, ownerID, a.Name)
+	case replicas != a.Replicas:
+		req := admitRequest(a, AdmitScale)
+		req.Replicas = replicas
+		if ctx, err = s.askAdmission(ctx, req); err != nil {
+			return App{}, err
 		}
-		if digest, err = s.manifests.ResolveDigest(ctx, a.Image); err != nil {
-			return App{}, fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
-		}
+	default:
+		asked = false
 	}
 
 	// The quota check, the count, the release and the deploy's admission
@@ -2102,24 +2153,51 @@ func (s *Service) Scale(ctx context.Context, ownerID, name string, replicas int3
 		}
 		return App{}, fmt.Errorf("app: scale: %w", err)
 	}
+	if !asked {
+		// The count was changed by somebody else after it was read, so this
+		// is a scale after all: start again, to ask about it before any
+		// transaction rather than have the fallback ask inside this one.
+		if err := tx.Rollback(ctx); err != nil {
+			return App{}, fmt.Errorf("app: abandon scale: %w", err)
+		}
+		return s.Scale(ctx, ownerID, name, replicas)
+	}
 	updated := toApp(row)
-	if !pending {
-		if err := s.commitStaged(ctx, q, &updated); err != nil {
-			return App{}, err
-		}
-		release, err := s.recordRelease(ctx, q, updated, "", digest, "deployment")
-		if err != nil {
-			return App{}, err
-		}
-		if _, err := s.admitDeploymentTx(ctx, q, ownerID, updated,
-			fmt.Sprintf("scale:%d", replicas), release.ID, false, "user"); err != nil {
-			return App{}, err
-		}
+	if err := s.admitScaledTx(ctx, q, ownerID, updated, fmt.Sprintf("scale:%d", replicas)); err != nil {
+		return App{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return App{}, fmt.Errorf("app: commit scale: %w", err)
 	}
 	return updated, nil
+}
+
+// admitScaledTx admits the rollout of a new replica count, and nothing else,
+// on Scale's transaction: the release the app runs, again, with the count
+// changed. Not a release made from the app as it is now, as every other
+// deploy is — that would carry whatever is staged, a scale would deploy
+// changes nobody asked to deploy, and a scale is the one deploy a wrapper
+// may let a team make whatever else it holds (a stop is not even asked
+// about). What is staged stays staged.
+//
+// An app that has never run has no release to scale: the count is saved, and
+// its first deploy runs it.
+func (s *Service) admitScaledTx(ctx context.Context, q *dbgen.Queries, ownerID string, a App, trigger string) error {
+	if a.ActiveReleaseID == nil {
+		return nil
+	}
+	row, err := q.GetAppRelease(ctx, dbgen.GetAppReleaseParams{
+		OwnerID: ownerID, AppID: a.ID, ID: *a.ActiveReleaseID,
+	})
+	if err != nil {
+		return fmt.Errorf("app: read the release to scale: %w", err)
+	}
+	release, err := s.rescaleRelease(ctx, q, toRelease(row), a.Replicas, a.ConfigVersion)
+	if err != nil {
+		return err
+	}
+	_, err = s.admitDeploymentTx(ctx, q, ownerID, a, trigger, release.ID, false, "user")
+	return err
 }
 
 // Redeploy reapplies the current spec, which restarts the workload's pods.
@@ -2130,6 +2208,9 @@ func (s *Service) Redeploy(ctx context.Context, ownerID, name string) error {
 	}
 	if !a.Source.Workload() {
 		return ErrNoWorkload
+	}
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitRedeploy)); err != nil {
+		return err
 	}
 	// Both source kinds stop at durable admission. The process worker claims
 	// the row independently, so disconnecting this request cannot cancel the
@@ -2367,6 +2448,10 @@ func (s *Service) SetHealth(
 		return err
 	}
 
+	if !a.Source.Workload() {
+		return ErrNoWorkload
+	}
+
 	probe := a
 	probe.HealthPath = strings.TrimSpace(healthPath)
 	probe.Liveness = liveness
@@ -2375,6 +2460,12 @@ func (s *Service) SetHealth(
 		Port: probe.Port, HealthPath: probe.HealthPath, Liveness: probe.Liveness,
 	}).Validate(); err != nil {
 		return err
+	}
+	changed := probe.HealthPath != a.HealthPath || probe.Liveness != a.Liveness
+	if changed && !s.opts.StageChanges {
+		if ctx, err = s.askAdmission(ctx, admitRequest(probe, AdmitUpdate)); err != nil {
+			return err
+		}
 	}
 
 	row, err := s.q.SetAppHealth(ctx, dbgen.SetAppHealthParams{
@@ -2424,4 +2515,23 @@ func runtimeOf(a App) Blueprint {
 		}
 	}
 	return b
+}
+
+// updatedBy is the app as Update will store it, in the fields RollsOut
+// compares: what decides, before anything is written, whether the update is
+// a deploy to ask about. It must read in as UpdateApp's parameters do.
+func (a App) updatedBy(in UpdateInput, image string) App {
+	next := a
+	next.Image = image
+	next.Port = in.Port
+	next.Internal = in.Internal
+	next.CPURequest, next.CPULimit = in.CPURequest, in.CPULimit
+	next.MemoryRequest, next.MemoryLimit = in.MemoryRequest, in.MemoryLimit
+	next.StartCommand = strings.TrimSpace(in.StartCommand)
+	next.PreDeployCommand = strings.TrimSpace(in.PreDeployCommand)
+	next.CronSchedule = strings.TrimSpace(in.CronSchedule)
+	next.RestartPolicy = cmp.Or(in.RestartPolicy, orchestrator.RestartOnFailure)
+	next.RestartMaxRetries = restartRetriesFor(in.RestartPolicy, in.RestartMaxRetries)
+	next.HealthTimeoutSeconds = in.HealthTimeoutSeconds
+	return next
 }

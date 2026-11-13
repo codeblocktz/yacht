@@ -49,7 +49,7 @@ func (s *Server) databaseUpdate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.databaseUpdates().UpdateDatabase(ctx, owner.ID, name, s.actorEmail(r))
 	switch {
 	case err != nil:
-		s.log.Error("database update", slog.String("app", name), slog.String("error", err.Error()))
+		s.logFailed("database update", err, slog.String("app", name))
 		s.flashErr(w, r, databaseSentence(err))
 	case u.Backup:
 		auditDetail(ctx, "to", u.Label)
