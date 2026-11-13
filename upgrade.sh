@@ -228,6 +228,25 @@ check_cert_manager() {
 	say "cert-manager ${cm_existing_version} in ${CERT_MANAGER_NAMESPACE} and ClusterIssuer ${CERT_MANAGER_ISSUER} are ready (${CERT_MANAGER_ACME_ENVIRONMENT}, left unchanged)"
 }
 
+# isolation_note recommends strict network isolation to an install not on it.
+#
+# Read, never written: new installs are written strict, but an install made
+# before that runs on team — the engine's default with the line absent — and
+# switching it can stop builds reaching a registry on the LAN, which is the
+# operator's call to make, not an upgrade's. So the upgrade says what team
+# leaves open and where to change it, and changes nothing.
+isolation_note() {
+	iso_mode=$(env_get YACHT_NETWORK_ISOLATION || printf 'team')
+	case "$iso_mode" in
+		strict|off) return 0 ;;
+	esac
+	say "network isolation is ${iso_mode}: apps and builds can still reach cloud metadata,"
+	say "the nodes and anything else on a private address. New installs start strict."
+	say "To switch: set YACHT_NETWORK_ISOLATION=strict in ${ENV_FILE} (and any private"
+	say "registry or bucket in YACHT_EGRESS_ALLOW), then systemctl restart yacht."
+	say "README › Network isolation says what to check first."
+}
+
 # port reads the listen port out of the config rather than assuming 8080, so an
 # install that moved it is still health-checked on the port it actually serves.
 port() {
@@ -344,6 +363,7 @@ main() {
 		else
 			warn "custom-domain certificates remain unavailable; platform wildcard TLS was not changed"
 		fi
+		isolation_note
 		say "journalctl -u yacht -f"
 		printf '\n'
 	else

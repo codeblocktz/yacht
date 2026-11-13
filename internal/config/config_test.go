@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func setEnv(t *testing.T, kv map[string]string) {
@@ -45,6 +47,30 @@ func TestBuildAdmissionCeilingLoadsAndIsBounded(t *testing.T) {
 	setEnv(t, map[string]string{"YACHT_MAX_CONCURRENT_BUILDS": "0"})
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_CONCURRENT_BUILDS") {
 		t.Fatalf("Load accepted an unbounded-zero build ceiling: %v", err)
+	}
+}
+
+func TestBuildLogLimitDefaultsAndIsBounded(t *testing.T) {
+	setEnv(t, nil)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MaxBuildLogBytes != 4<<20 {
+		t.Fatalf("MaxBuildLogBytes = %d, want 4 MiB by default", c.MaxBuildLogBytes)
+	}
+
+	setEnv(t, map[string]string{"YACHT_MAX_BUILD_LOG_BYTES": "1024"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
+		t.Fatalf("Load accepted a build log limit too small to read: %v", err)
+	}
+
+	// A typo is refused, not read as the default.
+	for _, v := range []string{"4MiB", "4194304x", "99999999999"} {
+		setEnv(t, map[string]string{"YACHT_MAX_BUILD_LOG_BYTES": v})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
+			t.Fatalf("Load accepted YACHT_MAX_BUILD_LOG_BYTES=%q: %v", v, err)
+		}
 	}
 }
 
@@ -553,5 +579,36 @@ func TestTheOutboundListsAreReadAndChecked(t *testing.T) {
 		if _, err := bad.Outbound(); err == nil {
 			t.Errorf("%+v was accepted", bad)
 		}
+	}
+}
+
+// Unset is team, and must stay so: an install made before strict was what
+// the installer writes has no line for it, and an upgrade, which never
+// touches the file, would otherwise tighten its network unasked.
+func TestNetworkIsolationUnsetIsTeam(t *testing.T) {
+	setEnv(t, nil)
+	t.Setenv("YACHT_NETWORK_ISOLATION", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	iso, err := c.Isolation()
+	if err != nil {
+		t.Fatalf("Isolation: %v", err)
+	}
+	if iso.Mode != orchestrator.IsolationTeam {
+		t.Errorf("unset YACHT_NETWORK_ISOLATION is %q, want team", iso.Mode)
+	}
+}
+
+// .env.example is where a new install made by hand starts, so it starts
+// strict, as the installer's does.
+func TestEnvExampleStartsStrict(t *testing.T) {
+	example, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	if !regexp.MustCompile(`(?m)^YACHT_NETWORK_ISOLATION=strict$`).Match(example) {
+		t.Error(".env.example does not set YACHT_NETWORK_ISOLATION=strict")
 	}
 }
