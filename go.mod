@@ -1,6 +1,6 @@
 module github.com/codeblocktz/yacht
 
-go 1.26.10
+go 1.26.11 // cooldown-override: GO-2026-6859 (net/http header race); released 2026-11-10, merge no earlier than 2026-11-13 17:00 UTC
 
 require (
 	github.com/Oudwins/tailwind-merge-go v0.2.3
