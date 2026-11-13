@@ -228,7 +228,7 @@ func (s *Service) preDeploySpec(ctx context.Context, a App, release Release) (or
 // log to add to, and its output reaches the deployment only through the
 // failure message, which carries the end of it.
 func (s *Service) preDeployLog(ctx context.Context, op Operation) func(string) {
-	build, err := s.q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
+	build, err := s.q.GetBuildMetaForDeployment(ctx, dbgen.GetBuildMetaForDeploymentParams{
 		OwnerID: op.OwnerID, DeploymentID: op.DeploymentID,
 	})
 	if err != nil {
@@ -238,7 +238,7 @@ func (s *Service) preDeployLog(ctx context.Context, op Operation) func(string) {
 		}
 		return func(string) {}
 	}
-	return s.buildLogger(ctx, build.ID)
+	return s.buildLogTail(ctx, build.ID)
 }
 
 // keepPreDeployLog stores what a pre-deploy run printed with its deployment,
