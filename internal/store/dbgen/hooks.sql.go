@@ -30,12 +30,14 @@ func (q *Queries) DeleteAppHook(ctx context.Context, arg DeleteAppHookParams) (i
 
 const dropHookPending = `-- name: DropHookPending :execrows
 UPDATE app_hooks
-SET pending_at = NULL, pending_revision = ''
-WHERE app_id = $1 AND owner_id = $2
-  AND pending_at IS NOT NULL AND pending_revision = $3
+SET pending_at = NULL, pending_revision = '',
+    last_delivery_at = now(), last_delivery = $1
+WHERE app_id = $2 AND owner_id = $3
+  AND pending_at IS NOT NULL AND pending_revision = $4
 `
 
 type DropHookPendingParams struct {
+	Result   string
 	AppID    uuid.UUID
 	OwnerID  string
 	Revision string
@@ -43,9 +45,15 @@ type DropHookPendingParams struct {
 
 // A queued push refused when its turn came, taken out only if it is still
 // the one that was refused: a newer push queued meanwhile stays, to be asked
-// about in its own turn.
+// about in its own turn. Why it was refused becomes the last delivery in the
+// same write, so nobody reads the slot empty with no reason given.
 func (q *Queries) DropHookPending(ctx context.Context, arg DropHookPendingParams) (int64, error) {
-	result, err := q.db.Exec(ctx, dropHookPending, arg.AppID, arg.OwnerID, arg.Revision)
+	result, err := q.db.Exec(ctx, dropHookPending,
+		arg.Result,
+		arg.AppID,
+		arg.OwnerID,
+		arg.Revision,
+	)
 	if err != nil {
 		return 0, err
 	}

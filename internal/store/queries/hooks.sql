@@ -64,8 +64,10 @@ WHERE app_id = @app_id AND pending_at IS NOT NULL;
 -- name: DropHookPending :execrows
 -- A queued push refused when its turn came, taken out only if it is still
 -- the one that was refused: a newer push queued meanwhile stays, to be asked
--- about in its own turn.
+-- about in its own turn. Why it was refused becomes the last delivery in the
+-- same write, so nobody reads the slot empty with no reason given.
 UPDATE app_hooks
-SET pending_at = NULL, pending_revision = ''
+SET pending_at = NULL, pending_revision = '',
+    last_delivery_at = now(), last_delivery = @result
 WHERE app_id = @app_id AND owner_id = @owner_id
   AND pending_at IS NOT NULL AND pending_revision = @revision;

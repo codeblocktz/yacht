@@ -258,7 +258,8 @@ type Querier interface {
 	DismissOnboarding(ctx context.Context, ownerID string) error
 	// A queued push refused when its turn came, taken out only if it is still
 	// the one that was refused: a newer push queued meanwhile stays, to be asked
-	// about in its own turn.
+	// about in its own turn. Why it was refused becomes the last delivery in the
+	// same write, so nobody reads the slot empty with no reason given.
 	DropHookPending(ctx context.Context, arg DropHookPendingParams) (int64, error)
 	// The install's default region gets a row, open, the first time it is named,
 	// so a cluster labelled with one region and YACHT_DEFAULT_REGION set needs
