@@ -57,6 +57,30 @@ func (l *recordingLogs) BuildForDeployment(
 	return *l.build, nil
 }
 
+// BuildMetaForDeployment is the fake's build without its log.
+func (l *recordingLogs) BuildMetaForDeployment(
+	ctx context.Context, ownerID string, deployID uuid.UUID,
+) (app.Build, error) {
+	b, err := l.BuildForDeployment(ctx, ownerID, deployID)
+	b.Log = ""
+	return b, err
+}
+
+// BuildLogFrom answers from the build this fake was given, as the store does:
+// what follows the offset, counted in characters.
+func (l *recordingLogs) BuildLogFrom(
+	_ context.Context, _ string, _ uuid.UUID, from int,
+) (app.BuildLogPart, error) {
+	if l.build == nil {
+		return app.BuildLogPart{}, app.ErrNotFound
+	}
+	log := []rune(l.build.Log)
+	from = min(max(from, 0), len(log))
+	return app.BuildLogPart{
+		Text: string(log[from:]), Next: len(log), Running: l.build.Running(),
+	}, nil
+}
+
 // DeploymentHTTPLogs answers with whatever the test set, so the HTTP tab can
 // be driven without an ingress controller.
 func (l *recordingLogs) DeploymentHTTPLogs(

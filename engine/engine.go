@@ -821,6 +821,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Manifests:           manifests,
 		DatabaseReleases:    &dbrelease.Postgres{},
 		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
+		MaxBuildLogBytes:    cfg.MaxBuildLogBytes,
 		AppDomain:           cfg.AppDomain,
 		WildcardTLS:         cfg.WildcardTLS,
 		CertIssuer:          cfg.CertIssuer,

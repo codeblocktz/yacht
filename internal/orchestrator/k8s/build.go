@@ -152,6 +152,9 @@ func (o *Orchestrator) Build(
 			o.ownBuildSecret(ctx, s, created)
 		}
 	}
+	if req.Created != nil {
+		req.Created()
+	}
 	redact := append([]string{credential}, req.Redact...)
 	req.Log = redactingLog(req.Log, redact...)
 
