@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -72,6 +73,11 @@ type Checker struct {
 	router Router
 	log    *slog.Logger
 
+	// reserved reads the names no app may bring, once a pass. Read rather
+	// than held, because some of them — the CNAME target, a region's edge,
+	// the registry — are settings an operator changes while this runs.
+	reserved func(context.Context) (Reservations, error)
+
 	// now is injected so the schedule can be tested without waiting for it.
 	now func() time.Time
 }
@@ -87,6 +93,13 @@ func NewChecker(
 		log = slog.Default()
 	}
 	return &Checker{pool: pool, res: res, router: router, log: log, now: time.Now}
+}
+
+// Reserving has every pass refuse the names read gives, as AddCustom does.
+// Without it only the CNAME target a domain was claimed against is refused.
+func (c *Checker) Reserving(read func(context.Context) (Reservations, error)) *Checker {
+	c.reserved = read
+	return c
 }
 
 // Run checks domains until the context is cancelled.
@@ -122,6 +135,17 @@ func (c *Checker) Run(ctx context.Context) {
 func (c *Checker) Pass(ctx context.Context) error {
 	now := c.now()
 
+	// Read before anything is claimed. A pass that cannot say what is
+	// reserved checks nothing, rather than proving a name it should refuse;
+	// the rows stay due and the next pass has them.
+	var reserved Reservations
+	if c.reserved != nil {
+		var err error
+		if reserved, err = c.reserved(ctx); err != nil {
+			return fmt.Errorf("domain: read reserved names: %w", err)
+		}
+	}
+
 	q := dbgen.New(c.pool)
 	rows, err := q.ClaimDomainsDueForCheck(ctx, dbgen.ClaimDomainsDueForCheckParams{
 		DueBefore:  now,
@@ -136,7 +160,7 @@ func (c *Checker) Pass(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		c.checkOne(ctx, q, row, now)
+		c.checkOne(ctx, q, reserved, row, now)
 	}
 	return nil
 }
@@ -147,12 +171,12 @@ func (c *Checker) Pass(ctx context.Context) error {
 // be written is not a reason to abandon the rest of the batch, and every one of
 // them will be tried again on its own schedule.
 func (c *Checker) checkOne(
-	ctx context.Context, q *dbgen.Queries, row dbgen.Domain, now time.Time,
+	ctx context.Context, q *dbgen.Queries, reserved Reservations, row dbgen.Domain, now time.Time,
 ) {
 	previous := State(row.State)
 
 	lookup, cancel := context.WithTimeout(ctx, lookupTimeout)
-	state, err := Check(lookup, q, c.res, row, now)
+	state, err := Check(lookup, q, c.res, reserved, row, now)
 	cancel()
 	if err != nil {
 		c.log.Warn("could not record a domain check",
@@ -176,10 +200,13 @@ func (c *Checker) checkOne(
 	switch {
 	case state == StateVerified:
 		c.route(ctx, row)
-	case previous == StateRouted && state != StateRouted:
-		// Fell out of routing. The Ingress is rebuilt from the routable-hosts
-		// query, so re-applying is what drops the host — there is nothing to
-		// withdraw by name.
+	case Transition{From: previous, To: state}.Withdrew():
+		// Fell out of routing. The app's config version moved in the same
+		// statement as the state (RecordDomainCheck), and the app reconciler
+		// applies every version it has not seen until the cluster carries it,
+		// so the host comes off the Ingress whether or not this succeeds — a
+		// failure here costs the notice, never the withdrawal. Verified counts:
+		// the routable-hosts query carries it too.
 		c.apply(ctx, row, "withdraw")
 	}
 }

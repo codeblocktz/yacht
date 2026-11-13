@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -834,6 +835,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		sourceFetch = base + web.APIPrefix + "/build-sources"
 	}
 
+	platformZones, platformNames := cfg.PlatformHosts()
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
 		Outbound:            outbound,
 		BackupS3:            backups,
@@ -853,6 +855,9 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		TCPProxyPortLast:    proxyLast,
 		Keeper:              e.Keeper,
 		ReservedDomains:     cfg.ReservedDomains,
+		PlatformZones:       platformZones,
+		PlatformNames:       platformNames,
+		AllowedDomains:      cfg.ReservedDomainsAllow,
 		Resolver:            e.resolver,
 		Waker:               waker,
 		WakeTimeout:         cfg.WakeTimeout,
@@ -980,6 +985,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		}
 		opts.RequestAccessURL = cfg.RequestAccessURL
 		opts.SignUpLead, opts.SignUpNext = ov.SignUpLead, ov.SignUpNext
+		warnNobodyRunsTheInstall(ctx, cfg, e.Accounts, log)
 	}
 
 	logs, metrics, err := attachObserve(&opts, cfg, log)
@@ -1110,7 +1116,8 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.
-	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
+	go domain.NewChecker(e.Pool, e.resolver, apps, log).
+		Reserving(apps.CustomDomainReservations).Run(ctx)
 
 	// Gives each app its siblings' private names, and isolates its namespace
 	// to its project. Every replica may run it: what it writes is the same
@@ -1264,6 +1271,38 @@ func wakerEndpoint(cfg Config, log *slog.Logger) (*orchestrator.WakerEndpoint, e
 	return &orchestrator.WakerEndpoint{IP: ip, Port: port}, nil
 }
 
+// warnNobodyRunsTheInstall says so at startup when the install's operators
+// could be nobody. With YACHT_OPERATORS empty they are the owners of the
+// install's own team, and that team gets its owner only from
+// YACHT_OWNER_EMAIL: with neither, or with the team unowned, no page an
+// operator needs can be reached, and nothing else would say why.
+func warnNobodyRunsTheInstall(ctx context.Context, cfg Config, accounts *Accounts, log *slog.Logger) {
+	if len(cfg.Operators) > 0 || accounts == nil {
+		return
+	}
+	members, err := accounts.ListMembers(ctx, cfg.OwnerID)
+	if err != nil {
+		log.Warn("could not check who runs the install", slog.String("error", err.Error()))
+		return
+	}
+	owned := slices.ContainsFunc(members, func(m account.Member) bool { return m.Role == account.RoleOwner })
+	switch {
+	case !owned && cfg.OwnerEmail == "":
+		log.Warn("nobody runs this install: YACHT_OPERATORS is empty, so its operators are the "+
+			"owners of its own team, which has none, and YACHT_OWNER_EMAIL is empty, so nobody "+
+			"can become one — set YACHT_OPERATORS, or YACHT_OWNER_EMAIL and sign in as it",
+			slog.String("team", cfg.OwnerID))
+	case !owned:
+		log.Warn("nobody runs this install yet: YACHT_OPERATORS is empty, so its operators are "+
+			"the owners of its own team, which has none until YACHT_OWNER_EMAIL signs in",
+			slog.String("team", cfg.OwnerID), slog.String("owner_email", cfg.OwnerEmail))
+	case cfg.OwnerEmail == "":
+		log.Warn("YACHT_OPERATORS and YACHT_OWNER_EMAIL are both empty: the install's operators are "+
+			"its own team's owners, and if that team loses them nobody can be made one — "+
+			"set YACHT_OPERATORS", slog.String("team", cfg.OwnerID))
+	}
+}
+
 // gitHubApp is the install's GitHub App, nil when it has none — and then a
 // repository is a pasted URL, which is said once here.
 func gitHubApp(cfg Config, log *slog.Logger) (*github.App, error) {
@@ -1303,8 +1342,9 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 				"YACHT_RESEND_API_KEY or YACHT_CLOUDFLARE_EMAIL_TOKEN to deliver them")
 		}
 		// Operators may act as a team for support only where they are named.
-		// With none named every team's owner reads as an operator, and any of
-		// them could act as every other team — so the check approves nobody.
+		// With none named the install's own team's owners read as operators,
+		// but acting reaches into every team and is kept for people named for
+		// it — so the check approves nobody.
 		if len(cfg.Operators) == 0 {
 			log.Info("acting as a team is off — name the install's operators in " +
 				"YACHT_OPERATORS to let them act as a team for support")

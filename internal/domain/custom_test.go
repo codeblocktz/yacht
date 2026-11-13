@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestAnUnverifiedDomainIsNotRouted(t *testing.T) {
 		t.Fatalf("EnsureManaged: %v", err)
 	}
 	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.customer.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"shop.customer.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
@@ -77,13 +78,13 @@ func TestAVerifiedDomainIsRouted(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.verified.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.verified.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
 	res := fakeResolver{cname: map[string]string{"shop.verified.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, res, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 
@@ -111,7 +112,7 @@ func TestADomainPointingElsewhereIsRefused(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.wrong.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.wrong.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestADomainPointingElsewhereIsRefused(t *testing.T) {
 			"edge.domain.test": {"198.51.100.1"},
 		},
 	}
-	if err := Verify(ctx, q, res, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
 		t.Fatalf("Verify = %v, want ErrNotVerified", err)
 	}
 }
@@ -138,7 +139,7 @@ func TestAnApexVerifiesByAddress(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"apex.test", "edge.domain.test", "apps.domain.test", nil)
+		"apex.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestAnApexVerifiesByAddress(t *testing.T) {
 			"edge.domain.test": {"198.51.100.1"},
 		},
 	}
-	if err := Verify(ctx, q, res, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, res, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("a flattened apex was refused: %v", err)
 	}
 }
@@ -164,11 +165,11 @@ func TestAHostnameCannotBeClaimedTwice(t *testing.T) {
 	q := dbgen.New(pool)
 
 	if _, err := AddCustom(ctx, q, first.OwnerID, first.ID,
-		"contested.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"contested.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
 	_, err := AddCustom(ctx, q, second.OwnerID, second.ID,
-		"contested.test", "edge.domain.test", "apps.domain.test", nil)
+		"contested.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if !errors.Is(err, ErrHostTaken) {
 		t.Fatalf("second claim = %v, want ErrHostTaken", err)
 	}
@@ -185,7 +186,7 @@ func TestThePlatformDomainCannotBeClaimed(t *testing.T) {
 	q := dbgen.New(pool)
 
 	_, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"free.apps.domain.test", "edge.domain.test", "apps.domain.test", nil)
+		"free.apps.domain.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if !errors.Is(err, ErrHostReserved) {
 		t.Fatalf("claiming a name under the platform domain = %v, want ErrHostReserved", err)
 	}
@@ -199,7 +200,7 @@ func TestASchemeIsStrippedRatherThanRefused(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"https://Pasted.Example.Test/", "edge.domain.test", "apps.domain.test", nil)
+		"https://Pasted.Example.Test/", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -279,13 +280,13 @@ func TestALiveDomainThatStopsResolvingDrifts(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.drift.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.drift.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
 	working := fakeResolver{cname: map[string]string{"shop.drift.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, working, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
@@ -307,7 +308,7 @@ func TestALiveDomainThatStopsResolvingDrifts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCustomDomain: %v", err)
 	}
-	state, err := Check(ctx, q, deleted, row, time.Now())
+	state, err := Check(ctx, q, deleted, Reservations{}, row, time.Now())
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -334,13 +335,13 @@ func TestAResolverOutageDoesNotDriftEveryDomain(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.outage.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.outage.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
 	working := fakeResolver{cname: map[string]string{"shop.outage.test": "edge.domain.test."}}
-	if err := Verify(ctx, q, working, a.OwnerID, c.ID); err != nil {
+	if _, err := Verify(ctx, q, working, Reservations{}, a.OwnerID, c.ID); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
@@ -351,7 +352,7 @@ func TestAResolverOutageDoesNotDriftEveryDomain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCustomDomain: %v", err)
 	}
-	state, err := Check(ctx, q, fakeResolver{}, row, time.Now())
+	state, err := Check(ctx, q, fakeResolver{}, Reservations{}, row, time.Now())
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -381,7 +382,7 @@ func TestTheRoutingGateAgreesWithTheState(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.gate.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.gate.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -425,7 +426,7 @@ func TestAnUnknownStateIsRefused(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.badstate.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.badstate.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -458,4 +459,95 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// The install's own names are not anybody's to bring. Each one verifies the
+// moment it is claimed — it resolves to the platform because it is the
+// platform — so refusing it at the claim is the whole of the protection, and
+// the CNAME target needs no configuration to be refused: it always verifies
+// against itself.
+func TestTheInstallsOwnNamesCannotBeClaimed(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-custom-own", "web", "ns-test-custom-own")
+	q := dbgen.New(pool)
+
+	reserved := Reservations{
+		AppDomain: "apps.domain.test",
+		Zones:     []string{"yacht.domain.test"},
+		Names:     []string{"registry.domain.test"},
+	}
+	for _, host := range []string{
+		"edge.domain.test", "EDGE.domain.test.",
+		"yacht.domain.test", "https://yacht.domain.test/", "x.yacht.domain.test",
+		"registry.domain.test",
+	} {
+		if _, err := AddCustom(ctx, q, a.OwnerID, a.ID, host, "edge.domain.test", reserved); !errors.Is(err, ErrHostReserved) {
+			t.Errorf("AddCustom(%q) = %v, want ErrHostReserved", host, err)
+		}
+	}
+	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
+		"x.registry.domain.test", "edge.domain.test", reserved); err != nil {
+		t.Errorf("a name under a reserved name, not a zone, was refused: %v", err)
+	}
+}
+
+// A claim made before a name was the install's — the registry moved onto it,
+// or a release that did not reserve the install's own names — is withdrawn by
+// the next check, whatever DNS says, and never routed again.
+func TestAClaimOnTheInstallsOwnNameIsWithdrawn(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-custom-withdraw", "web", "ns-test-custom-withdraw")
+	q := dbgen.New(pool)
+
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
+		"registry.domain.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
+	if err != nil {
+		t.Fatalf("AddCustom before the name was reserved: %v", err)
+	}
+	here := fakeResolver{cname: map[string]string{"registry.domain.test": "edge.domain.test."}}
+	if _, err := Verify(ctx, q, here, Reservations{}, a.OwnerID, c.ID); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if _, err := q.MarkDomainRouted(ctx, c.ID); err != nil {
+		t.Fatalf("MarkDomainRouted: %v", err)
+	}
+
+	reserved := Reservations{Names: []string{"registry.domain.test"}}
+	row, err := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
+	if err != nil {
+		t.Fatalf("GetCustomDomain: %v", err)
+	}
+	state, err := Check(ctx, q, here, reserved, row, time.Now())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if state.Routable() {
+		t.Fatalf("a routed claim on a reserved name is %q after a check, want it withdrawn", state)
+	}
+	if hosts, _ := RoutableHosts(ctx, q, a.ID); hasHost(hosts, "registry.domain.test") {
+		t.Fatalf("a reserved name is still routed — hosts were %v", hosts)
+	}
+	if _, err := Verify(ctx, q, here, reserved, a.OwnerID, c.ID); !errors.Is(err, ErrNotVerified) {
+		t.Fatalf("Verify of a reserved name = %v, want ErrNotVerified", err)
+	}
+
+	// Verify reports a withdrawal it makes, for the caller to pass on; the
+	// app's config version has already moved with it.
+	if _, err := pool.Exec(ctx, `UPDATE domains SET state = 'routed' WHERE id = $1`, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	before := configVersion(t, pool, a.ID)
+	tr, err := Verify(ctx, q, here, reserved, a.OwnerID, c.ID)
+	if !errors.Is(err, ErrNotVerified) || !tr.Withdrew() {
+		t.Fatalf("Verify of a routed reserved name = %+v, %v; want a withdrawal and ErrNotVerified", tr, err)
+	}
+	if after := configVersion(t, pool, a.ID); after != before+1 {
+		t.Errorf("config version %d → %d; want the withdrawal to move it", before, after)
+	}
+	got, _ := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
+	if !strings.Contains(got.LastError, "own names") {
+		t.Errorf("the refusal says %q, which does not say why", got.LastError)
+	}
 }

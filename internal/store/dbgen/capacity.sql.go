@@ -103,23 +103,32 @@ func (q *Queries) ListCapacityRefusalsSince(ctx context.Context, arg ListCapacit
 }
 
 const listInstallFootprints = `-- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep, region
-FROM apps
+SELECT a.id, a.replicas, a.cpu_limit, a.memory_limit,
+       (a.sleep_state = 'asleep')::boolean AS asleep, a.region,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id
 `
 
 type ListInstallFootprintsRow struct {
-	ID          uuid.UUID
-	Replicas    int32
-	CpuLimit    string
-	MemoryLimit string
-	Asleep      bool
-	Region      *string
+	ID                 uuid.UUID
+	Replicas           int32
+	CpuLimit           string
+	MemoryLimit        string
+	Asleep             bool
+	Region             *string
+	RunningReplicas    *int32
+	RunningCpuLimit    *string
+	RunningMemoryLimit *string
 }
 
 // Every app on the install, with its id so a change to one can be counted in
 // place. What the admission check totals; see ListAppFootprints for why the
 // arithmetic is in Go. Asleep is whether the app is counted at the wake
 // reserve rather than in full: a waking app's pods are already asked for.
+// The running release rides along for the reason ListAppFootprints gives.
 func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error) {
 	rows, err := q.db.Query(ctx, listInstallFootprints)
 	if err != nil {
@@ -136,6 +145,9 @@ func (q *Queries) ListInstallFootprints(ctx context.Context) ([]ListInstallFootp
 			&i.MemoryLimit,
 			&i.Asleep,
 			&i.Region,
+			&i.RunningReplicas,
+			&i.RunningCpuLimit,
+			&i.RunningMemoryLimit,
 		); err != nil {
 			return nil, err
 		}

@@ -518,6 +518,10 @@ type Querier interface {
 	// Every team's, newest first, with the team's name: Admin › Impersonations,
 	// the operators' own record of where they went.
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
+	// Each app as it is saved and, beside it, as the release it is running: with
+	// changes staged rather than deployed the two differ, and the running one is
+	// what the cluster holds. Counting only the saved row let a team stage a
+	// smaller limit, spend what that freed on another app, and discard the stage.
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	// Every app's namespace, for metering what each sent from a store that knows
@@ -602,6 +606,7 @@ type Querier interface {
 	// place. What the admission check totals; see ListAppFootprints for why the
 	// arithmetic is in Go. Asleep is whether the app is counted at the wake
 	// reserve rather than in full: a waking app's pods are already asked for.
+	// The running release rides along for the reason ListAppFootprints gives.
 	ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
@@ -771,6 +776,16 @@ type Querier interface {
 	//
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
+	//
+	// A domain leaving a routable state takes its app's config version up in the
+	// same statement. The routable-hosts query no longer carries the name, and the
+	// app reconciler applies every version it has not seen until the cluster
+	// carries it, so the withdrawal is as durable as the state: neither is
+	// written without the other, and nothing after this has to remember to ask.
+	//
+	// before is not FOR UPDATE: a row locked in a WITH and updated by the same
+	// statement leaves the WITH's join seeing nothing, and the version unmoved.
+	// Two checks racing on one row at worst both move it, which costs an apply.
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
 	// Zero rows is a delivery already acted on.
 	RecordGitHubDelivery(ctx context.Context, arg RecordGitHubDeliveryParams) (int64, error)
@@ -821,6 +836,9 @@ type Querier interface {
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	// RoutableHostsForApp, with when the app came to hold each: what an app's
+	// HTTP log is bounded by, so it never shows a previous holder's requests.
+	RoutableHostsHeldByApp(ctx context.Context, appID uuid.UUID) ([]RoutableHostsHeldByAppRow, error)
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
 	// Where an app made by Create belongs, written in Create's transaction.
 	SetAppEnvironment(ctx context.Context, arg SetAppEnvironmentParams) error

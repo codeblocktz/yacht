@@ -246,3 +246,139 @@ func TestCheckCustomHost(t *testing.T) {
 		}
 	}
 }
+
+// The install's own names, refused as custom domains: a zone with every name
+// under it, a name alone. A name is not a suffix — the registry may be
+// ghcr.io, and nothing under it is anybody's to refuse.
+func TestReservationsRefuseTheInstallsOwnNames(t *testing.T) {
+	r := Reservations{
+		AppDomain: "apps.example.com",
+		Zones:     []string{"yacht.example.com"},
+		Names:     []string{"registry.example.com", "edge.example.com"},
+	}
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"web.apps.example.com", true},
+		{"yacht.example.com", true},
+		{"YACHT.example.com.", true},
+		{"evil.yacht.example.com", true},
+		{"notyacht.example.com", false},
+		{"registry.example.com", true},
+		{"edge.example.com", true},
+		{"x.registry.example.com", false},
+		{"shop.customer.test", false},
+		{"", false},
+	} {
+		if got := r.Refuses(tc.host); got != tc.want {
+			t.Errorf("Refuses(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
+// Every shape an install's own address is configured in comes down to the
+// hostname somebody would type as a custom domain.
+func TestHostOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Yacht.Example.com":        "yacht.example.com",
+		"https://yacht.example.com:8443/x": "yacht.example.com",
+		"http://garage.internal:3900":      "garage.internal",
+		"registry.example.com:5000":        "registry.example.com",
+		"registry.example.com/team/app":    "registry.example.com",
+		"tcp.example.com.":                 "tcp.example.com",
+		" edge.example.com ":               "edge.example.com",
+		"10.0.0.5:5000":                    "",
+		"https://[2001:db8::1]:443":        "",
+		"203.0.113.7":                      "",
+		"":                                 "",
+	} {
+		if got := HostOf(in); got != want {
+			t.Errorf("HostOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A registrable domain configured as a zone is refused alone: a dashboard at
+// example.com must not take every name the company has from every team. The
+// allow list frees the install's own names and nothing the operator chose.
+func TestReservationsSpareAnApexAndWhatIsAllowed(t *testing.T) {
+	r := Reservations{
+		AppDomain: "apps.example.com",
+		Reserved:  []string{"internal.example.com"},
+		Zones:     []string{"example.com", "yacht.example.co.uk", "s3.example.org"},
+		Names:     []string{"registry.example.net"},
+		Allowed:   []string{"shop.s3.example.org", "internal.example.com", "registry.example.net"},
+	}
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"example.com", true},
+		{"www.example.com", false},
+		{"yacht.example.co.uk", true},
+		{"x.yacht.example.co.uk", true},
+		{"bucket.s3.example.org", true},
+		{"shop.s3.example.org", false},
+		{"a.shop.s3.example.org", false},
+		{"registry.example.net", false},
+		{"x.internal.example.com", true},
+		{"web.apps.example.com", true},
+	} {
+		if got := r.Refuses(tc.host); got != tc.want {
+			t.Errorf("Refuses(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
+// What the platform issues is checked against the install's own names as
+// names alone, never against the app domain: a dashboard at the app domain's
+// apex must not refuse every hostname under it.
+func TestIssuableRefusesOnlyTheInstallsOwnNames(t *testing.T) {
+	r := Reservations{
+		AppDomain: "apps.example.com",
+		Reserved:  []string{"admin.apps.example.com"},
+		Zones:     []string{"apps.example.com"},
+		Names:     []string{"tcp.up.apps.example.com"},
+	}
+	for host, want := range map[string]bool{
+		"web.up.apps.example.com":  true,
+		"tcp.up.apps.example.com":  false,
+		"apps.example.com":         false,
+		"admin.apps.example.com":   false,
+		"x.admin.apps.example.com": false,
+		"other.apps.example.com":   true,
+	} {
+		if got := r.Issuable(host); got != want {
+			t.Errorf("Issuable(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// The install's addresses as configured, read as the ASCII hostname a custom
+// domain is spelled as; a *. prefix means everything under the name; a value
+// that is not a host is an error, not nothing.
+func TestPlatformHost(t *testing.T) {
+	for _, tc := range []struct {
+		in       string
+		host     string
+		wildcard bool
+		bad      bool
+	}{
+		{in: "https://Bücher.example", host: "xn--bcher-kva.example"},
+		{in: "*.example.com", host: "example.com", wildcard: true},
+		{in: "https://*.example.com", host: "example.com", wildcard: true},
+		{in: "10.0.0.5:5000"},
+		{in: ""},
+		{in: "https://", bad: true},
+		{in: "http://exa mple.com", bad: true},
+		{in: "not a host", bad: true},
+		{in: "-bad-.example.com", bad: true},
+	} {
+		host, wildcard, err := PlatformHost(tc.in)
+		if (err != nil) != tc.bad || host != tc.host || wildcard != tc.wildcard {
+			t.Errorf("PlatformHost(%q) = %q, %v, %v; want %q, %v, error %v",
+				tc.in, host, wildcard, err, tc.host, tc.wildcard, tc.bad)
+		}
+	}
+}

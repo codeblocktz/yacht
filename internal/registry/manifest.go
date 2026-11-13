@@ -201,6 +201,11 @@ type manifestClient struct {
 	// policy is the operator's allowed and refused addresses on top of that
 	// rule; nil is the rule alone.
 	policy *egress.Policy
+
+	// actions is what a token is asked for when the registry's challenge
+	// does not say: "pull" when empty, which is all resolving needs, and
+	// "pull,push" for a push.
+	actions string
 }
 
 // manifestTypes is what Yacht can be handed back, and the only thing it will
@@ -651,7 +656,11 @@ func (m manifestClient) bearerToken(
 	}
 	scope := params["scope"]
 	if scope == "" {
-		scope = "repository:" + ref.name + ":pull"
+		actions := m.actions
+		if actions == "" {
+			actions = "pull"
+		}
+		scope = "repository:" + ref.name + ":" + actions
 	}
 	query.Set("scope", scope)
 	u.RawQuery = query.Encode()

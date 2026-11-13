@@ -582,6 +582,81 @@ func TestTheOutboundListsAreReadAndChecked(t *testing.T) {
 	}
 }
 
+// Every address in the config the install is reached at is offered for
+// reserving, as it is configured; the domain package reduces each to a host.
+func TestPlatformHostsNameTheInstallsOwnAddresses(t *testing.T) {
+	c := Config{
+		BaseURL: "https://yacht.example.com", BuildSourceURL: "https://build.example.com",
+		BucketsEndpoint: "https://s3.example.com", TCPProxyHost: "tcp.example.com",
+		BucketsS3URL: "http://garage:3900", BucketsAdminURL: "http://garage:3903",
+		BackupS3Endpoint: "https://backups.example.com", LogsURL: "http://logs.example.com",
+		MetricsURL: "http://metrics.example.com", MailWebsite: "https://example.com",
+	}
+	zones, names := c.PlatformHosts()
+	all := strings.Join(append(zones, names...), " ")
+	for _, want := range []string{
+		"yacht.example.com", "build.example.com", "s3.example.com", "tcp.example.com",
+		"garage:3900", "garage:3903", "backups.example.com", "logs.example.com", "metrics.example.com",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("PlatformHosts leaves out %s: zones %v, names %v", want, zones, names)
+		}
+	}
+	// The operator's own site may be an app on the install.
+	if strings.Contains(all, "https://example.com") {
+		t.Errorf("PlatformHosts reserves the operator's website: %v %v", zones, names)
+	}
+	if !strings.Contains(strings.Join(zones, " "), "yacht.example.com") {
+		t.Errorf("the dashboard is not a zone: %v", zones)
+	}
+}
+
+// An address that cannot be read as a host would be dropped from what is
+// reserved, silently; it is refused at startup instead, naming the variable.
+// An IP address is fine: it is not a name anybody could bring.
+func TestAnUnreadablePlatformAddressIsRefused(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "http://"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_METRICS_URL") {
+		t.Fatalf("Load = %v, want YACHT_METRICS_URL refused", err)
+	}
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "", "YACHT_TCP_PROXY_HOST": "203.0.113.7",
+		"YACHT_LOGS_URL": "http://10.0.0.5:9428"})
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load with IP addresses: %v", err)
+	}
+	setEnv(t, map[string]string{"YACHT_TCP_PROXY_HOST": "", "YACHT_LOGS_URL": "", "YACHT_METRICS_URL": "",
+		"YACHT_RESERVED_DOMAINS_ALLOW": "shop.example.com"})
+	c, err := Load()
+	if err != nil || len(c.ReservedDomainsAllow) != 1 {
+		t.Fatalf("Load with an allow list = %+v, %v", c.ReservedDomainsAllow, err)
+	}
+}
+
+// The owner's address is compared with the address somebody signs in as, and
+// the owner id with the team's id, both of which are bare. Kept as written, a
+// display name or a stray space would make an owner nobody can ever be.
+func TestTheOwnerIsReadBare(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_OWNER_EMAIL": " The Founder <founder@example.test> ",
+		"YACHT_OWNER_ID":    " owner-local ",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OwnerEmail != "founder@example.test" {
+		t.Errorf("OwnerEmail = %q, want founder@example.test", c.OwnerEmail)
+	}
+	if c.OwnerID != "owner-local" {
+		t.Errorf("OwnerID = %q, want owner-local", c.OwnerID)
+	}
+
+	setEnv(t, map[string]string{"YACHT_OWNER_EMAIL": "not an address"})
+	if _, err := Load(); err == nil {
+		t.Error("an owner address that is not one was accepted")
+	}
+}
+
 // Unset is team, and must stay so: an install made before strict was what
 // the installer writes has no line for it, and an upgrade, which never
 // touches the file, would otherwise tighten its network unasked.

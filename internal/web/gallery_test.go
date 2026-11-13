@@ -686,6 +686,10 @@ func galleryPages() []galleryPage {
 					)),
 				section("Check your mail", "the same page whether or not the address is registered",
 					CheckMail(false, "/sign-in")),
+				section("Not on a team",
+					"a proven person on no team, while accounts are by invitation — removed from "+
+						"theirs, or invited and signed in without the invitation's link",
+					NoTeam("https://example.com/request-access")),
 			),
 		},
 		{

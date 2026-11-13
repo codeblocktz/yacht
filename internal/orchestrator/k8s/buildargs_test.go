@@ -242,23 +242,23 @@ func TestTheBuildArgsMarkerIsReadAndKeptOutOfTheLog(t *testing.T) {
 	}
 }
 
-// The buildpack step gives every variable to the lifecycle and says so.
+// The detect step gives every variable to the lifecycle and says so.
 func TestBuildpacksGetEveryVariableAsPlatformEnv(t *testing.T) {
-	script := buildpackStep(orchestrator.BuildRequest{Image: "r/x:1"}, true).Args[0]
+	script := detectStep(orchestrator.BuildRequest{Image: "r/x:1"}, true).Args[0]
 	for _, want := range []string{
 		`for f in "$BUILD_ARGS"/*; do`,
-		`> "/workspace/platform/env/${f##*/}"`,
+		`> "/workspace/platform/env/$name"`,
 		buildArgsMarker + orchestrator.BuildArgsAll,
 		"-platform=/workspace/platform",
 	} {
 		if !strings.Contains(script, want) {
-			t.Errorf("the buildpack step does not have %q", want)
+			t.Errorf("the detect step does not have %q", want)
 		}
 	}
 	// After the check that a Dockerfile already built, so a Dockerfile
 	// build is not reported as one given everything.
 	if strings.Index(script, buildArgsMarker) < strings.Index(script, dockerfileMarker) {
-		t.Error("the buildpack step reports its arguments before it knows it is the one building")
+		t.Error("the detect step reports its arguments before it knows it is the one building")
 	}
 }
 
@@ -266,7 +266,7 @@ const testSecretValue = "s3cr3t-p4ssw0rd-VALUE"
 
 // The variables reach the build as files from a Secret of the build's own,
 // which goes with it: no value is in the Job, its env or its arguments, and
-// the clone does not mount them.
+// only the two steps that read them mount them.
 func TestBuildVariablesReachTheBuildThroughASecret(t *testing.T) {
 	o, client := testOrchestrator(t)
 	var job *batchv1.Job
@@ -329,8 +329,9 @@ func TestBuildVariablesReachTheBuildThroughASecret(t *testing.T) {
 				mounted = m.ReadOnly && m.MountPath == buildArgsPath
 			}
 		}
-		if (c.Name != cloneContainer) != mounted {
-			t.Errorf("%s mounts the variables: %t — only the two build steps may, read-only", c.Name, mounted)
+		reads := c.Name == dockerfileContainer || c.Name == detectContainer
+		if reads != mounted {
+			t.Errorf("%s mounts the variables: %t — only the Dockerfile and detect steps may, read-only", c.Name, mounted)
 		}
 	}
 

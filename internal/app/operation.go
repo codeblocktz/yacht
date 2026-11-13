@@ -768,7 +768,8 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		Insecure:   s.images.Insecure(ctx), RegistryAuth: auth,
 		RepoToken: repoToken,
 		Variables: vars, Redact: redact,
-		Log: s.buildLogger(ctx, row.ID),
+		Log:        s.buildLogger(ctx, row.ID),
+		PushLayout: s.layoutPush(),
 	}
 	if uploaded {
 		// The archive is the directory `up` was run in, which is the

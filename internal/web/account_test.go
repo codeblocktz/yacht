@@ -15,7 +15,7 @@ import (
 // from the resolved cookie, so a route that answered without one would be
 // rendering somebody — and the only question would be who.
 func TestAccountPageNeedsASessionAndShowsTheViewersOwn(t *testing.T) {
-	h := newLiveHarness(t, "web-account")
+	h := newLiveHarnessOwnedBy(t, "web-account", "account@web.test")
 	h.user(t, "account@web.test")
 
 	if got := h.getAs(t, "/account", nil).Code; got != http.StatusSeeOther {
@@ -46,7 +46,7 @@ func TestAccountPageNeedsASessionAndShowsTheViewersOwn(t *testing.T) {
 // because what is being proved is that the two ways in produce the same session
 // — and no fake can say that.
 func TestAPasswordAddedFromTheAccountPageSignsYouIn(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-flow")
+	h := newLiveHarnessOwnedBy(t, "web-pw-flow", "flow@web.test")
 	const email = "flow@web.test"
 	const password = "a perfectly good passphrase"
 	h.user(t, email)
@@ -125,7 +125,7 @@ func TestPasswordSignInIsRefusedWhenNoPasswordIsSet(t *testing.T) {
 // would pass against a handler that wrote first and complained after, so the
 // database is checked as well.
 func TestAddingAPasswordNeedsARecentSignIn(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-stale")
+	h := newLiveHarnessOwnedBy(t, "web-pw-stale", "stale@web.test")
 	const email = "stale@web.test"
 	u := h.user(t, email)
 	c := sessionCookie(h.signIn(t, email))
@@ -161,7 +161,7 @@ func TestAddingAPasswordNeedsARecentSignIn(t *testing.T) {
 
 // Two boxes that do not match must not write either of them.
 func TestAMistypedConfirmationDoesNotSetAPassword(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-typo")
+	h := newLiveHarnessOwnedBy(t, "web-pw-typo", "typo@web.test")
 	const email = "typo@web.test"
 	u := h.user(t, email)
 	c := sessionCookie(h.signIn(t, email))
@@ -189,7 +189,7 @@ func TestAMistypedConfirmationDoesNotSetAPassword(t *testing.T) {
 // Gaining a way in is not a change of trust, and revoking here reads as the
 // feature having broken the sessions somebody already had.
 func TestAddingAFirstPasswordKeepsOtherSessions(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-keep")
+	h := newLiveHarnessOwnedBy(t, "web-pw-keep", "keep@web.test")
 	const email = "keep@web.test"
 	h.user(t, email)
 
@@ -210,7 +210,7 @@ func TestAddingAFirstPasswordKeepsOtherSessions(t *testing.T) {
 
 // The policy is the service's, and the page says what it refused.
 func TestTheAccountPageExplainsARefusedPassword(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-policy")
+	h := newLiveHarnessOwnedBy(t, "web-pw-policy", "policy@web.test")
 	const email = "policy@web.test"
 	h.user(t, email)
 	c := sessionCookie(h.signIn(t, email))
@@ -234,7 +234,7 @@ func TestTheAccountPageExplainsARefusedPassword(t *testing.T) {
 // browser they are looking at, which reads as the change having failed rather
 // than having worked.
 func TestChangingAPasswordSignsOutOtherBrowsersButNotThisOne(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-revoke")
+	h := newLiveHarnessOwnedBy(t, "web-pw-revoke", "revoke@web.test")
 	const email = "revoke@web.test"
 	h.user(t, email)
 
@@ -271,7 +271,7 @@ func TestChangingAPasswordSignsOutOtherBrowsersButNotThisOne(t *testing.T) {
 // emailed link never stopped working. If it did, this would be a way to lock
 // yourself out with one click.
 func TestRemovingAPasswordGoesBackToLinksAndStillLetsYouIn(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-remove")
+	h := newLiveHarnessOwnedBy(t, "web-pw-remove", "remove@web.test")
 	const email = "remove@web.test"
 	const password = "a perfectly good passphrase"
 	h.user(t, email)
@@ -313,7 +313,7 @@ func TestRemovingAPasswordGoesBackToLinksAndStillLetsYouIn(t *testing.T) {
 
 // An old session must produce the current password to remove one.
 func TestRemovingAPasswordFromAnOldSessionNeedsTheCurrentOne(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-rm-stale")
+	h := newLiveHarnessOwnedBy(t, "web-pw-rm-stale", "rmstale@web.test")
 	const email = "rmstale@web.test"
 	const password = "a perfectly good passphrase"
 	u := h.user(t, email)
@@ -363,7 +363,7 @@ func TestRemovingAPasswordFromAnOldSessionNeedsTheCurrentOne(t *testing.T) {
 // If this ever stops passing, the argument for having no reset token stops
 // holding, and the missing subsystem has to come back.
 func TestAForgottenPasswordIsReplacedByAskingForALink(t *testing.T) {
-	h := newLiveHarness(t, "web-pw-forgot")
+	h := newLiveHarnessOwnedBy(t, "web-pw-forgot", "forgot@web.test")
 	const email = "forgot@web.test"
 	h.user(t, email)
 
@@ -413,7 +413,7 @@ func TestAForgottenPasswordIsReplacedByAskingForALink(t *testing.T) {
 // overrides it is the asset one. This pins that for a page where getting it
 // wrong leaves an account behind on a shared machine.
 func TestAccountPageStaysOutOfCaches(t *testing.T) {
-	h := newLiveHarness(t, "web-acct-cache")
+	h := newLiveHarnessOwnedBy(t, "web-acct-cache", "cache@web.test")
 	h.user(t, "cache@web.test")
 	c := sessionCookie(h.signIn(t, "cache@web.test"))
 

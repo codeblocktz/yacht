@@ -23,9 +23,9 @@ import (
 // Three rules hold it together, and each is here because the obvious version
 // of the feature breaks one of them.
 //
-// Only named operators act. With YACHT_OPERATORS empty, the operator is the
-// owner of whichever team a request acts as — so if impersonation were on,
-// every team owner could act as every other team. It is off in that mode, and
+// Only named operators act. With YACHT_OPERATORS empty, the operators are the
+// owners of the install's own team, by no name of theirs; reaching into every
+// other team is kept for people named for it. It is off in that mode, and
 // says so rather than hiding.
 //
 // Authority is re-checked on every request, by the identity provider and by
@@ -107,12 +107,11 @@ func (s *Server) adminTeamAct(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if !s.impersonation() {
 		// Refused plainly rather than left unmounted, so the person who tries
-		// learns what would make it work. With nobody named, every team owner
-		// passes the operator gate — and every one of them could act as every
-		// other team.
+		// learns what would make it work. Acting is the one power that reaches
+		// into every team, so it goes only to people named for it, never to
+		// whoever the unnamed reading of the operator gate lets through.
 		http.Error(w, "forbidden — acting as a team needs the install's operators named in "+
-			"YACHT_OPERATORS. With none named, every team's owner counts as an operator, "+
-			"and any of them could act as every other team.", http.StatusForbidden)
+			"YACHT_OPERATORS.", http.StatusForbidden)
 		return
 	}
 

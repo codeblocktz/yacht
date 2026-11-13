@@ -267,7 +267,11 @@ func (s *Service) issueSuggested(ctx context.Context, a App) (string, error) {
 	base := suggestedLabel(a)
 	label := base
 	for range 5 {
-		host, err := domain.IssueGenerated(ctx, s.q, s.generateInput(a, label))
+		in, err := s.generateInput(ctx, a, label)
+		if err != nil {
+			return "", err
+		}
+		host, err := domain.IssueGenerated(ctx, s.q, in)
 		if !errors.Is(err, domain.ErrHostTaken) {
 			return host, err
 		}
@@ -276,12 +280,19 @@ func (s *Service) issueSuggested(ctx context.Context, a App) (string, error) {
 	return "", fmt.Errorf("%w: no free name like %s", domain.ErrHostTaken, base)
 }
 
-func (s *Service) generateInput(a App, label string) domain.GenerateInput {
+// generateInput describes the generated hostname label names. An error when
+// the install's own addresses cannot be read: somebody is choosing a name,
+// and one that lands on the TCP proxy's or the registry's must be refused.
+func (s *Service) generateInput(ctx context.Context, a App, label string) (domain.GenerateInput, error) {
+	reserved, err := s.CustomDomainReservations(ctx)
+	if err != nil {
+		return domain.GenerateInput{}, err
+	}
 	return domain.GenerateInput{
 		OwnerID: a.OwnerID, AppID: a.ID, Label: label,
 		AppDomain: s.opts.AppDomain, TLS: s.opts.WildcardTLS,
-		Reserved: s.opts.ReservedDomains,
-	}
+		Reserved: reserved,
+	}, nil
 }
 
 // randomSuffix is four lowercase letters and digits, as Railway adds to a
@@ -329,7 +340,11 @@ func (s *Service) SetPublicDomain(ctx context.Context, ownerID, name, label stri
 	if strings.ToLower(strings.TrimSpace(label)) == held.Label {
 		return nil
 	}
-	host, err := domain.IssueGenerated(ctx, s.q, s.generateInput(a, label))
+	in, err := s.generateInput(ctx, a, label)
+	if err != nil {
+		return err
+	}
+	host, err := domain.IssueGenerated(ctx, s.q, in)
 	if err != nil {
 		return err
 	}

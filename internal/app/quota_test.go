@@ -399,3 +399,75 @@ func TestResourcesPastWhatOneReplicaMayHaveAreRefusedWhenSaved(t *testing.T) {
 		})
 	}
 }
+
+// A staged change has not reached the cluster: the app still runs what it
+// ran. Counted at the saved row alone, staging a smaller limit freed quota the
+// running app was still using — enough to admit another app — and discarding
+// the stage then put the larger limit back with nothing checking it.
+func TestAStagedChangeDoesNotFreeQuotaTheRunningAppStillUses(t *testing.T) {
+	ctx := context.Background()
+	s, _, id := stagingService(t, "svc-quota-staged", Options{})
+	if _, err := createAndDeploy(t, s, ctx, id, CreateInput{
+		Name: "big", Image: "nginx:1.27", Replicas: 1, Port: 8080, CPULimit: "2",
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	setQuota(t, s, id, Quota{CPUMillis: 2500})
+
+	if _, err := s.Update(ctx, id, "big", UpdateInput{Image: "nginx:1.27", Port: 8080, CPULimit: "100m"}); err != nil {
+		t.Fatalf("staging a lower limit: %v", err)
+	}
+	if u, _ := s.TeamUsage(ctx, id); u.Usage.CPUMillis != 2000 {
+		t.Fatalf("with 100m staged over a running 2 vCPU, usage is %dm; want the 2000m still running",
+			u.Usage.CPUMillis)
+	}
+	_, err := s.Create(ctx, id, CreateInput{Name: "second", Image: "nginx:1.27", Replicas: 1, CPULimit: "1"})
+	wantQuotaRefusal(t, "a second app paid for with a staged, undeployed cut", err, "CPU")
+
+	// Discarding goes back to what is running, which was counted all along.
+	if _, err := s.DiscardStaged(ctx, id, "big"); err != nil {
+		t.Fatalf("DiscardStaged: %v", err)
+	}
+	if a, _ := s.Get(ctx, id, "big"); a.CPULimit != "2" {
+		t.Fatalf("after discarding, the limit is %q, want the running 2", a.CPULimit)
+	}
+
+	// Deployed, the cut is real, and the room it frees is the team's to use.
+	if _, err := s.Update(ctx, id, "big", UpdateInput{Image: "nginx:1.27", Port: 8080, CPULimit: "100m"}); err != nil {
+		t.Fatalf("staging a lower limit again: %v", err)
+	}
+	if err := s.DeployStaged(ctx, id, "big"); err != nil {
+		t.Fatalf("DeployStaged: %v", err)
+	}
+	mustExecute(t, s, id, "big")
+	if u, _ := s.TeamUsage(ctx, id); u.Usage.CPUMillis != 100 {
+		t.Fatalf("after deploying the cut, usage is %dm, want 100m", u.Usage.CPUMillis)
+	}
+	if _, err := s.Create(ctx, id, CreateInput{Name: "second", Image: "nginx:1.27", Replicas: 1, CPULimit: "1"}); err != nil {
+		t.Fatalf("a second app in room a deployed cut freed: %v", err)
+	}
+}
+
+// The larger of saved and running, resource by resource: a staged raise is
+// counted before it deploys, a staged cut only once it has.
+func TestAnAppCommitsTheLargerOfWhatItIsSavedAsAndWhatItRuns(t *testing.T) {
+	running := &shape{Replicas: 2, CPULimit: "1", MemoryLimit: "256Mi"}
+	for _, tc := range []struct {
+		name     string
+		saved    shape
+		running  *shape
+		cpu, mem int64
+	}{
+		{"nothing running", shape{Replicas: 1, CPULimit: "100m", MemoryLimit: "1Gi"}, nil, 100, 1 << 30},
+		{"a staged cut", shape{Replicas: 2, CPULimit: "100m", MemoryLimit: "128Mi"}, running, 2000, 512 << 20},
+		{"a staged raise", shape{Replicas: 3, CPULimit: "1", MemoryLimit: "256Mi"}, running, 3000, 768 << 20},
+		{"one up, one down", shape{Replicas: 2, CPULimit: "2", MemoryLimit: "64Mi"}, running, 4000, 512 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cpu, mem := footprint{shape: tc.saved, Running: tc.running}.cost()
+			if cpu != tc.cpu || mem != tc.mem {
+				t.Fatalf("cost = %dm, %d bytes; want %dm, %d bytes", cpu, mem, tc.cpu, tc.mem)
+			}
+		})
+	}
+}
