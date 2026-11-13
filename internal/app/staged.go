@@ -32,7 +32,9 @@ import (
 // path to the cluster reads, and moves into variables in the same statement
 // that a release is made from them (createRelease). Any deploy carries
 // everything saved — the bar's, a redeploy, a push — because a release is
-// always made from the app as it is now.
+// made from the app as it is now. Except a scale, which changes only the
+// count of the release the app runs (admitScaledTx): a wrapper may let a team
+// scale that it lets deploy nothing else, and a stop is never asked about.
 
 // StagedRemoved says a change takes something away; StagedAdded and
 // StagedChanged are in variable.go, because a listed variable carries them.
@@ -637,6 +639,11 @@ func (s *Service) DeployStaged(ctx context.Context, ownerID, appName string) err
 		return err
 	}
 	trigger := stagedTrigger(changes)
+	if a.Source.Workload() {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitStaged)); err != nil {
+			return err
+		}
+	}
 
 	// A bucket's edits are kept and nothing is deployed: its variables are
 	// read by the apps that refer to them, at their own next deploy.
@@ -938,6 +945,16 @@ func (e StagedErrors) Error() string {
 		parts = append(parts, f.App+": "+strings.TrimPrefix(f.Err.Error(), "app: "))
 	}
 	return "app: " + strings.Join(parts, "; ")
+}
+
+// Unwrap is each app's error, so errors.Is and errors.As see through to
+// them: a refused deploy among them is still a refusal.
+func (e StagedErrors) Unwrap() []error {
+	out := make([]error, 0, len(e))
+	for _, f := range e {
+		out = append(out, f.Err)
+	}
+	return out
 }
 
 // DeployProjectStaged deploys every app in a project that has changes

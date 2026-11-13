@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -81,10 +82,15 @@ func (s *Service) ReconcileBuilds(ctx context.Context) error {
 			continue
 		}
 
-		if s.settleBuild(ctx, row, state) {
+		if s.settleBuild(ctx, buildRecord(row), state) {
 			settled++
 		}
 	}
+	n, err := s.settleFinishedBuildOperations(ctx)
+	if err != nil {
+		return err
+	}
+	settled += n
 
 	if settled > 0 {
 		s.log.Info("settled builds that were no longer running",
@@ -211,34 +217,89 @@ func (s *Service) resetMissingBuildRow(
 	return nil
 }
 
+// buildRecord is what the reconciler knows of a build: everything but its
+// log, which it never reads and which can run to megabytes. The columns of
+// ListRunningBuilds, which converts to it, and of ListSettledBuildOperations.
+type buildRecord struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	Status       string
+	Message      string
+	Image        string
+	CommitSha    string
+	JobName      string
+	StartedAt    time.Time
+}
+
+// settledBuildRecoveryBatch is a page of ListSettledBuildOperations. A variable
+// so a test can page with less than a hundred stranded operations.
+var settledBuildRecoveryBatch int32 = 100
+
+// settleFinishedBuildOperations finishes operations whose worker wrote the
+// build's result and stopped before advancing them. The build row is
+// terminal, so the running-build pass never sees it; it exists, so the
+// missing-row pass skips it; and admission claims only fresh operations. Left
+// alone, such an operation holds its app in flight and a build slot for good.
+//
+// Only a queued operation is a candidate: queued at building is proof the
+// worker's lease expired, and a worker that has lost its lease can no longer
+// advance the operation itself. Each candidate is decided again under the
+// operation's row lock, as the running-build pass does.
+func (s *Service) settleFinishedBuildOperations(ctx context.Context) (int, error) {
+	var settled int
+	// Every page, each after the last row of the one before: a page whose
+	// operations could not be settled this pass is stepped past rather than
+	// read again in place of the ones behind it.
+	var afterStarted time.Time
+	var afterID uuid.UUID
+	for {
+		rows, err := s.q.ListSettledBuildOperations(ctx, dbgen.ListSettledBuildOperationsParams{
+			AfterStartedAt: afterStarted, AfterID: afterID, ResultLimit: settledBuildRecoveryBatch,
+		})
+		if err != nil {
+			return settled, fmt.Errorf("app: list settled build operations: %w", err)
+		}
+		for _, row := range rows {
+			if ctx.Err() != nil {
+				return settled, ctx.Err()
+			}
+			b := buildRecord{
+				ID: row.ID, OwnerID: row.OwnerID, AppID: row.AppID, DeploymentID: row.DeploymentID,
+				Status: row.Status, Message: row.Message, Image: row.Image,
+				CommitSha: row.CommitSha, JobName: row.JobName, StartedAt: row.StartedAt,
+			}
+			var done bool
+			switch b.Status {
+			case BuildSucceeded:
+				done = s.resumePushedBuild(ctx, b)
+			case BuildFailed:
+				// The reason the worker wrote is the one the deploy would
+				// have failed with.
+				done = s.failInterruptedBuild(ctx, b, cmp.Or(b.Message, "the build failed"))
+			}
+			if done {
+				settled++
+			}
+			afterStarted, afterID = row.OperationStageStartedAt, row.OperationID
+		}
+		if len(rows) < int(settledBuildRecoveryBatch) {
+			return settled, nil
+		}
+	}
+}
+
 // settleBuild writes the end of a build the cluster says is over. A failed or
 // vanished Job is still a failed attempt. A clean Job is different now: the
 // deployment-derived tag makes its pushed image discoverable, and manifest
 // resolution turns that tag into the digest the old implementation correctly
 // said it did not otherwise know.
 func (s *Service) settleBuild(
-	ctx context.Context, row dbgen.Build, state orchestrator.BuildState,
+	ctx context.Context, row buildRecord, state orchestrator.BuildState,
 ) bool {
 	if state.Found && state.Done && !state.Failed {
-		op, err := s.recoverPushedBuild(ctx, row)
-		switch {
-		case err == nil:
-			s.startRecoveredBuildOperation(ctx, op)
-			return true
-		case errors.Is(err, registry.ErrManifestNotFound):
-			message := "the build finished but its deployment-specific image is " +
-				"absent from the registry — deploy again to rebuild it"
-			return s.failInterruptedBuild(ctx, row, message)
-		case errors.Is(err, ErrOperationRecoveryPending):
-			return false
-		default:
-			// Authentication, transport, and cancellation failures say nothing
-			// about whether the pushed image exists. Keep both rows recoverable;
-			// the next pass uses the same stable tag.
-			s.log.Warn("could not resolve a finished build",
-				"deployment_id", row.DeploymentID, "error", err)
-			return false
-		}
+		return s.resumePushedBuild(ctx, row)
 	}
 
 	message := ""
@@ -252,25 +313,57 @@ func (s *Service) settleBuild(
 	return s.failInterruptedBuild(ctx, row, message)
 }
 
+// resumePushedBuild records a pushed build's release and starts its operation
+// applying, or fails the attempt when the image it pushed is gone.
+func (s *Service) resumePushedBuild(ctx context.Context, row buildRecord) bool {
+	op, err := s.recoverPushedBuild(ctx, row)
+	switch {
+	case err == nil:
+		s.startRecoveredBuildOperation(ctx, op)
+		return true
+	case errors.Is(err, registry.ErrManifestNotFound):
+		message := "the build finished but its deployment-specific image is " +
+			"absent from the registry — deploy again to rebuild it"
+		return s.failInterruptedBuild(ctx, row, message)
+	case errors.Is(err, ErrOperationRecoveryPending):
+		return false
+	default:
+		// Authentication, transport, and cancellation failures say nothing
+		// about whether the pushed image exists. Keep both rows recoverable;
+		// the next pass uses the same stable tag.
+		s.log.Warn("could not resolve a finished build",
+			"deployment_id", row.DeploymentID, "error", err)
+		return false
+	}
+}
+
 // recoverPushedBuild reverses settleBuild's old constraint: the result is
 // knowable because the per-deployment tag is stable and the registry can name
 // its digest. Registry resolution happens before the transaction; the
 // operation row is then locked so only one reconciler records and resumes it.
+//
+// A build row already marked succeeded is a worker that got as far as
+// recording its result: what it wrote is kept, and its commit names the
+// release, as it would have had the worker carried on.
 func (s *Service) recoverPushedBuild(
-	ctx context.Context, row dbgen.Build,
+	ctx context.Context, row buildRecord,
 ) (Operation, error) {
 	if s.images == nil || s.manifests == nil {
 		return Operation{}, ErrNoManifestResolver
 	}
-	appRow, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
-		OwnerID: row.OwnerID, ID: row.AppID,
-	})
-	if err != nil {
-		return Operation{}, fmt.Errorf("app: read build recovery app: %w", err)
-	}
-	image, err := s.images.ImageFor(ctx, row.OwnerID, appRow.Name, revisionFor(row.DeploymentID))
-	if err != nil {
-		return Operation{}, fmt.Errorf("app: name recovered build image: %w", err)
+	finished := row.Status == BuildSucceeded
+	image := row.Image
+	if !finished || image == "" {
+		appRow, err := s.q.GetAppByID(ctx, dbgen.GetAppByIDParams{
+			OwnerID: row.OwnerID, ID: row.AppID,
+		})
+		if err != nil {
+			return Operation{}, fmt.Errorf("app: read build recovery app: %w", err)
+		}
+		image, err = s.images.ImageFor(ctx, row.OwnerID, appRow.Name, revisionFor(row.DeploymentID))
+		if err != nil {
+			return Operation{}, fmt.Errorf("app: name recovered build image: %w", err)
+		}
 	}
 	digest, err := s.manifests.ResolveDigest(ctx, image)
 	if err != nil {
@@ -290,6 +383,11 @@ func (s *Service) recoverPushedBuild(
 	legacy := errors.Is(operationErr, pgx.ErrNoRows)
 	if operationErr != nil && !legacy {
 		return Operation{}, fmt.Errorf("app: lock build recovery operation: %w", operationErr)
+	}
+	if legacy && finished {
+		// A finished build with no operation is history, not a deploy to
+		// resume.
+		return Operation{}, ErrOperationRecoveryPending
 	}
 	if !legacy {
 		if lockedOperation.Status != OperationQueued ||
@@ -312,8 +410,15 @@ func (s *Service) recoverPushedBuild(
 			return Operation{}, fmt.Errorf("app: record recovered image: %w", err)
 		}
 	}
-	release, err := s.recordRelease(ctx, q, toApp(lockedApp),
-		revisionFor(row.DeploymentID), digest, "deployment")
+	// As the worker would have: the release carries every edit saved for
+	// the deploy, and the image's user, which the worker wrote to the app
+	// with the build's result (finishFencedBuild).
+	recovered := toApp(lockedApp)
+	if err := s.commitStaged(ctx, q, &recovered); err != nil {
+		return Operation{}, err
+	}
+	release, err := s.recordRelease(ctx, q, recovered,
+		cmp.Or(row.CommitSha, revisionFor(row.DeploymentID)), digest, "deployment")
 	if err != nil {
 		return Operation{}, err
 	}
@@ -332,10 +437,12 @@ func (s *Service) recoverPushedBuild(
 		}
 		return Operation{}, fmt.Errorf("app: link recovered release: %w", err)
 	}
-	if _, err := q.FinishBuild(ctx, dbgen.FinishBuildParams{
-		ID: row.ID, Status: BuildSucceeded, Image: image,
-	}); err != nil {
-		return Operation{}, fmt.Errorf("app: record recovered build: %w", err)
+	if !finished {
+		if _, err := q.FinishBuild(ctx, dbgen.FinishBuildParams{
+			ID: row.ID, Status: BuildSucceeded, Image: image,
+		}); err != nil {
+			return Operation{}, fmt.Errorf("app: record recovered build: %w", err)
+		}
 	}
 	opRow, err := q.RecoverBuiltDeploymentOperation(ctx,
 		dbgen.RecoverBuiltDeploymentOperationParams{
@@ -354,8 +461,11 @@ func (s *Service) recoverPushedBuild(
 	return toOperation(opRow), nil
 }
 
+// failInterruptedBuild fails a build's deployment and its operation. A build
+// row that is still running is failed with them; one already terminal keeps
+// what its worker wrote, which is the record of what the build did.
 func (s *Service) failInterruptedBuild(
-	ctx context.Context, row dbgen.Build, message string,
+	ctx context.Context, row buildRecord, message string,
 ) bool {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -375,10 +485,15 @@ func (s *Service) failInterruptedBuild(
 		return false
 	}
 
-	if _, err := q.FinishBuild(ctx, dbgen.FinishBuildParams{
-		ID: row.ID, Status: BuildFailed, Message: message,
-	}); err != nil {
-		s.log.Error("settle build", slog.String("error", err.Error()))
+	if row.Status == BuildRunning {
+		if _, err := q.FinishBuild(ctx, dbgen.FinishBuildParams{
+			ID: row.ID, Status: BuildFailed, Message: message,
+		}); err != nil {
+			s.log.Error("settle build", slog.String("error", err.Error()))
+			return false
+		}
+	} else if opErr != nil {
+		// A finished build with no operation has nothing left to settle.
 		return false
 	}
 	if opErr == nil {
@@ -400,6 +515,11 @@ func (s *Service) failInterruptedBuild(
 		s.log.Error("commit failed build settlement", "error", err)
 		return false
 	}
+	// Said as the worker would have said it, had it been there to fail the
+	// deploy itself.
+	s.emitDeployFinished(ctx, Operation{
+		OwnerID: row.OwnerID, AppID: row.AppID, DeploymentID: row.DeploymentID,
+	}, errors.New(message))
 	return true
 }
 

@@ -204,6 +204,7 @@ type Build struct {
 	FinishedAt   pgtype.Timestamptz
 	JobName      string
 	BuildArgs    []string
+	LogTruncated bool
 }
 
 type CapacityPolicy struct {

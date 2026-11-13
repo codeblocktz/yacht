@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -127,6 +128,20 @@ func (s *Service) admitDeploymentTx(
 	// own source.
 	if requiresBuild && a.Source == SourceGit && !a.Repo.Set() && !strings.HasPrefix(trigger, UploadTriggerPrefix) {
 		return Operation{}, ErrNothingToBuild
+	}
+	// A fallback, not a check: every path that admits a deploy asks before
+	// it takes a lock or writes anything, and marks the context, so this
+	// never asks for those. It is here for a path written later that
+	// forgets to — and then it asks inside the caller's transaction, before
+	// the wake and the deployment row, so a refusal writes nothing.
+	req := admitRequest(a, admitTriggerFor(trigger, actorKind))
+	req.ActorKind, req.ActorID = deployActor(ctx, actorKind)
+	req.Revision = strings.TrimPrefix(trigger, PushTriggerPrefix)
+	if req.Revision == trigger {
+		req.Revision = ""
+	}
+	if _, err := s.askAdmission(ctx, req); err != nil {
+		return Operation{}, err
 	}
 	if err := s.wakeForDeploy(ctx, q, ownerID, a.ID); err != nil {
 		return Operation{}, err
@@ -343,9 +358,9 @@ func (s *Service) CancelOperation(ctx context.Context, ownerID string, id uuid.U
 	}); err != nil {
 		return fmt.Errorf("app: record cancelled deployment: %w", err)
 	}
-	var cancelledBuild *dbgen.Build
+	var cancelledBuild *dbgen.GetBuildMetaForDeploymentRow
 	if row.RequiresBuild {
-		build, readErr := q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
+		build, readErr := q.GetBuildMetaForDeployment(ctx, dbgen.GetBuildMetaForDeploymentParams{
 			OwnerID: ownerID, DeploymentID: row.DeploymentID,
 		})
 		if readErr != nil && !errors.Is(readErr, pgx.ErrNoRows) {
@@ -360,7 +375,8 @@ func (s *Service) CancelOperation(ctx context.Context, ownerID string, id uuid.U
 				if finishErr != nil {
 					return fmt.Errorf("app: record cancelled build: %w", finishErr)
 				}
-				cancelledBuild = &finished
+				meta := dbgen.GetBuildMetaForDeploymentRow(finished)
+				cancelledBuild = &meta
 			}
 		}
 	}
@@ -465,15 +481,32 @@ func (s *Service) operationRelease(ctx context.Context, op Operation) (Release, 
 	return toRelease(row), nil
 }
 
+// recordBuiltRelease writes the built release and advances the operation to
+// applying in one transaction, under the operation's row lock. The release is
+// made here rather than before, so a worker that has lost its claim (stalled
+// past its lease while another process took the operation over) makes no
+// release at all, rather than one nothing points at. The digest is resolved
+// by the caller, outside the lock, because it asks the registry.
 func (s *Service) recordBuiltRelease(
-	ctx context.Context, op *Operation, release Release,
-) error {
+	ctx context.Context, op *Operation, a App, sourceRevision, digest string,
+) (App, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("app: begin built release checkpoint: %w", err)
+		return a, fmt.Errorf("app: begin built release checkpoint: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fencedBuildingOperation(ctx, tx, *op); err != nil {
+		return a, err
+	}
 	q := s.q.WithTx(tx)
+	// What deploys next carries every edit saved for it; see createRelease.
+	if err := s.commitStaged(ctx, q, &a); err != nil {
+		return a, err
+	}
+	release, err := s.recordRelease(ctx, q, a, sourceRevision, digest, "deployment")
+	if err != nil {
+		return a, err
+	}
 	if n, err := q.SetDeploymentRelease(ctx, dbgen.SetDeploymentReleaseParams{
 		OwnerID: op.OwnerID, DeploymentID: op.DeploymentID,
 		ReleaseID: pgUUID(release.ID),
@@ -481,20 +514,17 @@ func (s *Service) recordBuiltRelease(
 		if err == nil {
 			err = fmt.Errorf("updated %d rows", n)
 		}
-		return fmt.Errorf("app: link built release: %w", err)
-	}
-	if op.ClaimToken == nil {
-		return ErrOperationClaimLost
+		return a, fmt.Errorf("app: link built release: %w", err)
 	}
 	n, err := q.SetClaimedOperationRelease(ctx, dbgen.SetClaimedOperationReleaseParams{
 		ReleaseID: pgUUID(release.ID), OwnerID: op.OwnerID, ID: op.ID,
 		ExpectedStatus: OperationBuilding, ClaimToken: pgUUID(*op.ClaimToken),
 	})
 	if err != nil {
-		return fmt.Errorf("app: attach built release: %w", err)
+		return a, fmt.Errorf("app: attach built release: %w", err)
 	}
 	if n != 1 {
-		return ErrOperationClaimLost
+		return a, ErrOperationClaimLost
 	}
 	row, err := q.TransitionDeploymentOperation(ctx,
 		dbgen.TransitionDeploymentOperationParams{
@@ -503,15 +533,15 @@ func (s *Service) recordBuiltRelease(
 		})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrOperationClaimLost
+			return a, ErrOperationClaimLost
 		}
-		return fmt.Errorf("app: advance built release to apply: %w", err)
+		return a, fmt.Errorf("app: advance built release to apply: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("app: commit built release checkpoint: %w", err)
+		return a, fmt.Errorf("app: commit built release checkpoint: %w", err)
 	}
 	*op = toOperation(row)
-	return nil
+	return a, nil
 }
 
 func fencedBuildingOperation(ctx context.Context, tx pgx.Tx, op Operation) error {
@@ -552,7 +582,7 @@ func (s *Service) createFencedBuild(
 		return dbgen.Build{}, err
 	}
 	q := s.q.WithTx(tx)
-	if _, err := q.GetBuildForDeployment(ctx, dbgen.GetBuildForDeploymentParams{
+	if _, err := q.GetBuildMetaForDeployment(ctx, dbgen.GetBuildMetaForDeploymentParams{
 		OwnerID: op.OwnerID, DeploymentID: op.DeploymentID,
 	}); err == nil {
 		return dbgen.Build{}, ErrOperationRecoveryPending
@@ -594,9 +624,16 @@ func (s *Service) setFencedBuildJob(
 	return nil
 }
 
+// finishFencedBuild records a build's result under the operation's row lock.
+// A build that pushed also leaves, in the same transaction, everything the
+// release after it is made from: the app's new image, the user the image
+// runs as, and the names its Dockerfile declares. A process that stops after
+// this commit leaves them for the reconciler, which resumes from them; one
+// that wrote them after it would leave a release made without the user, which
+// an image whose USER is a name cannot start under.
 func (s *Service) finishFencedBuild(
 	ctx context.Context, op Operation, buildID uuid.UUID,
-	status, message, image, commit string,
+	status, message, image string, result orchestrator.BuildResult,
 ) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -606,15 +643,63 @@ func (s *Service) finishFencedBuild(
 	if err := fencedBuildingOperation(ctx, tx, op); err != nil {
 		return err
 	}
-	if _, err := s.q.WithTx(tx).FinishBuild(ctx, dbgen.FinishBuildParams{
-		ID: buildID, Status: status, Message: message, Image: image, CommitSha: commit,
+	q := s.q.WithTx(tx)
+	if _, err := q.FinishBuild(ctx, dbgen.FinishBuildParams{
+		ID: buildID, Status: status, Message: message, Image: image, CommitSha: result.CommitSHA,
 	}); err != nil {
 		return fmt.Errorf("app: record fenced build result: %w", err)
+	}
+	if status == BuildSucceeded {
+		if result.BuildArgs != nil {
+			if err := q.SetBuildArgs(ctx, dbgen.SetBuildArgsParams{
+				ID: buildID, BuildArgs: result.BuildArgs,
+			}); err != nil {
+				return fmt.Errorf("app: record the build's arguments: %w", err)
+			}
+		}
+		if result.RunAsUser > 0 {
+			if err := q.SetAppRunAsUser(ctx, dbgen.SetAppRunAsUserParams{
+				OwnerID: op.OwnerID, ID: op.AppID, RunAsUser: result.RunAsUser,
+			}); err != nil {
+				return fmt.Errorf("app: record the image's user: %w", err)
+			}
+		}
+		if _, err := q.SetAppImage(ctx, dbgen.SetAppImageParams{
+			OwnerID: op.OwnerID, ID: op.AppID, Image: image,
+		}); err != nil {
+			return fmt.Errorf("app: record built image: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("app: commit fenced build result: %w", err)
 	}
 	return nil
+}
+
+// stopOrphanedBuild runs once a build's Job exists and stops it if the
+// operation it was for is no longer this worker's. The job's name is recorded
+// before the Job is made, so a cancellation landing between the two finds a
+// name and nothing to delete under it; without this look the build would run
+// on until the next lease renewal noticed. A cancellation after this look
+// finds the Job and deletes it itself. A store that cannot be read is not
+// evidence of either, and is left to the lease.
+func (s *Service) stopOrphanedBuild(
+	ctx context.Context, stop context.CancelFunc, op Operation, jobName string,
+) {
+	err := s.checkOperationClaim(ctx, op)
+	if !errors.Is(err, ErrOperationClaimLost) && !errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
+	stop()
+	// Bounded, because this runs inside the build: a cluster that does not
+	// answer must not hold the worker past the deletion the build makes of
+	// its own Job on the way out.
+	del, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.builder.CancelBuild(del, jobName); err != nil {
+		s.log.Warn("delete a build whose operation was lost",
+			"operation_id", op.ID, "job", jobName, "error", err)
+	}
 }
 
 func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App, error) {
@@ -670,7 +755,8 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		vars, redact, err = s.buildVariables(ctx, op.OwnerID, a)
 	}
 	if err != nil {
-		if finErr := s.finishFencedBuild(ctx, *op, row.ID, BuildFailed, err.Error(), "", ""); finErr != nil {
+		if finErr := s.finishFencedBuild(ctx, *op, row.ID, BuildFailed, err.Error(), "",
+			orchestrator.BuildResult{}); finErr != nil {
 			return a, finErr
 		}
 		return a, err
@@ -690,54 +776,34 @@ func (s *Service) buildOperation(ctx context.Context, op *Operation, a App) (App
 		req.RepoURL, req.Ref, req.Subdir = "", "", ""
 		req.SourceURL, req.SourceToken = sourceURL, sourceToken
 	}
-	if err := s.setFencedBuildJob(ctx, *op, row.ID, s.builder.BuildJobName(req)); err != nil {
+	jobName := s.builder.BuildJobName(req)
+	if err := s.setFencedBuildJob(ctx, *op, row.ID, jobName); err != nil {
 		return a, err
 	}
-	result, buildErr := s.builder.Build(ctx, req)
+	buildCtx, stopBuild := context.WithCancel(ctx)
+	defer stopBuild()
+	req.Created = func() { s.stopOrphanedBuild(buildCtx, stopBuild, *op, jobName) }
+	result, buildErr := s.builder.Build(buildCtx, req)
 	status, message, pushed := BuildSucceeded, "", image
 	if buildErr != nil {
 		status, message, pushed = BuildFailed, buildErr.Error(), ""
 	}
-	if err := s.finishFencedBuild(ctx, *op, row.ID,
-		status, message, pushed, result.CommitSHA); err != nil {
+	if err := s.finishFencedBuild(ctx, *op, row.ID, status, message, pushed, result); err != nil {
 		return a, err
 	}
 	if buildErr != nil {
 		return a, buildErr
 	}
-	s.recordBuildArgs(ctx, row.ID, result)
-	if result.RunAsUser > 0 {
-		if err := s.q.SetAppRunAsUser(ctx, dbgen.SetAppRunAsUserParams{
-			OwnerID: op.OwnerID, ID: a.ID, RunAsUser: result.RunAsUser,
-		}); err != nil {
-			s.log.Warn("record the image's user", "error", err)
-		}
-	}
-	if _, err := s.q.SetAppImage(ctx, dbgen.SetAppImageParams{
-		OwnerID: op.OwnerID, ID: a.ID, Image: image,
-	}); err != nil {
-		return a, fmt.Errorf("app: record built image: %w", err)
-	}
 	a.Image = image
 	if fresh, readErr := s.Get(ctx, op.OwnerID, a.Name); readErr == nil {
 		a = fresh
 	}
-	built := a
-	sourceRevision := revisionFor(op.DeploymentID)
-	if build, buildErr := s.q.GetBuildForDeployment(ctx,
-		dbgen.GetBuildForDeploymentParams{
-			OwnerID: op.OwnerID, DeploymentID: op.DeploymentID,
-		}); buildErr == nil && build.CommitSha != "" {
-		sourceRevision = build.CommitSha
-	}
-	release, err := s.createRelease(ctx, s.q, built, sourceRevision)
+	digest, err := s.releaseDigest(ctx, a)
 	if err != nil {
-		return built, err
+		return a, err
 	}
-	if err := s.recordBuiltRelease(ctx, op, release); err != nil {
-		return built, err
-	}
-	return built, nil
+	return s.recordBuiltRelease(ctx, op, a,
+		cmp.Or(result.CommitSHA, revisionFor(op.DeploymentID)), digest)
 }
 
 func rolloutHealthy(status orchestrator.AppStatus) bool {

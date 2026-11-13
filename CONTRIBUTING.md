@@ -94,6 +94,13 @@ locally and exist because each catches a class of bug that otherwise ships:
    artifact so visual states do not silently rot.
 6. **Every Go package compiles without CGO.** Release builds add the supported
    Linux architecture builds after this shared verification succeeds.
+7. **No known vulnerability the code reaches, once its fix may be adopted.**
+   A release is taken only after it has been out 7 days (a new minor, 14; 3
+   with a `cooldown-override` for a CVE), so `make vulncheck` warns and passes
+   while a fix is younger than that, and fails once it is not. A
+   vulnerability with no fix, or a fix whose release date can't be found from
+   the Go module proxy, fails. `make vulncheck-raw` is govulncheck alone;
+   `VULNGATE_NOW=2026-11-18 make vulncheck` tries another day.
 
 ## Things this codebase cares about
 

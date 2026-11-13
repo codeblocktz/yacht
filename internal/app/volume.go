@@ -54,6 +54,8 @@ func (in VolumeInput) Validate() error {
 	switch {
 	case in.Name == "":
 		return errors.New("a volume needs a name")
+	case in.Name == backupVolume:
+		return errors.New(`"backups" is where a database's backups are kept — give the volume another name`)
 	case len(in.Name) > 40:
 		return errors.New("volume name must be at most 40 characters")
 	case !nameRE.MatchString(in.Name):
@@ -93,6 +95,11 @@ func (s *Service) AttachVolume(
 			"app: %s runs %d replicas — scale it to one before attaching storage, "+
 				"because a volume can only be mounted by one pod at a time",
 			appName, a.Replicas)
+	}
+
+	// Storage rolls out with the app, so attaching it is asked about first.
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitVolume)); err != nil {
+		return Volume{}, err
 	}
 
 	// Checked and written together, like every change the quota counts.
@@ -152,6 +159,16 @@ func (s *Service) ResizeVolume(
 	a, err := s.Get(ctx, ownerID, appName)
 	if err != nil {
 		return err
+	}
+	// Growing rolls out with the app, so it is asked about first; a size
+	// that is not larger, or a volume that is not there, changes nothing
+	// and is refused below as before.
+	if current, err := s.q.GetVolume(ctx, dbgen.GetVolumeParams{
+		OwnerID: ownerID, AppID: a.ID, Name: volumeName,
+	}); err == nil && sizeBytes > current.SizeBytes {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitVolume)); err != nil {
+			return err
+		}
 	}
 
 	tx, err := s.pool.Begin(ctx)
