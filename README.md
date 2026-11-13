@@ -568,6 +568,78 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+To keep some deploys from happening, `Overrides.Admit` is asked before the
+engine admits each one — before anything is written for it, and with no lock
+held:
+
+```go
+engine.Overrides{
+	Admit: func(ctx context.Context, r engine.AdmitRequest) error {
+		if r.ActorKind == "system" {
+			return nil // the wrapper's own calls, made on engine.WithSystemActor(ctx)
+		}
+		if held(ctx, r.OwnerID) {
+			return &engine.AdmitRefusal{Message: "Deploys are paused for this team."}
+		}
+		return nil
+	},
+}
+```
+
+`AdmitRequest` names the owner; the app (`AppID` is `uuid.Nil` for one the
+deploy creates, and `App` the name it will have); its project, environment and
+region; `Replicas` the deploy runs and `CurrentReplicas` the app runs now; who
+asked — `ActorKind` `user`, `token`, `webhook` or `system`, and `ActorID`, the
+person's or the token's id when there is one; and what asked, as `Trigger`:
+
+- `AdmitCreate`: a new service, from the dashboard, a repository, a database,
+  or a template's stack, each app of which is asked about before any exists.
+- `AdmitRedeploy`, `AdmitRollback`, `AdmitUpload` (the CLI's `up`) and
+  `AdmitStaged` (deploying the changes an app has waiting).
+- `AdmitUpdate`: a change that rolls out when it is saved — settings, a health
+  check, a database update, and a variable: set, removed, or a `.env` edit.
+- `AdmitScale`: a new replica count. A scale to zero stops the app and is never
+  asked, nor is a count the app already runs. A scale runs the release the app
+  is running at the new count and nothing else: changes staged for the app
+  stay staged until they are deployed.
+- `AdmitVolume` (storage attached or grown) and `AdmitMove` (a move to the
+  region `Region` names).
+- `AdmitPush` (an app's own webhook) and `AdmitGitHubPush`. A push that has to
+  wait behind a deploy in flight is asked about when it arrives and again, as
+  `AdmitQueuedPush`, when the engine's own loop admits it.
+- `AdmitEnvironment` and `AdmitPullRequest`: each service copied into a new
+  environment, asked about before the environment is made.
+
+An `*engine.AdmitRefusal` is shown as it is — a plain sentence when its
+`Message` is empty: on the dashboard, as the API's `refused` error (403),
+and as `Ignored — <message>` beside a Git host's delivery and as the app's
+last delivery. A refused queued push is dropped, not tried again. A GitHub push
+that reaches several teams is refused only for those refused.
+
+Any other error, or no answer within `engine.AdmitTimeout` (5 seconds), fails
+the deploy with `engine.ErrAdmissionUnavailable` — "deploys can't be checked
+right now" — and the error itself goes only to the log, since it may name the
+wrapper's own systems. The API answers it 503. A push it happens to is
+recorded on the app as one that could not be checked, and its delivery fails
+so it can be sent again; a GitHub delivery sent again reaches only the apps
+that could not be checked, not those that took it the first time. A queued push it happens to stays queued,
+and the engine waits longer each time before asking about it again.
+
+Each path asks before its transaction, so a slow hook holds up only the
+deploy it is asked about. Two places also ask as a fallback, for a path added
+later that forgets to: where a deployment row is written, and a new app's
+first deploy. None of the paths above reaches them unasked; if one did, the
+hook would run inside that transaction, holding the app's row and, for a new
+app, its owner's quota row and the install's capacity policy row — so it
+should never call back into `Engine.Apps`.
+
+Not asked: a secret variable set or removed, which the running release does
+not hold and the next deploy reads; an empty service, which deploys nothing
+until its first upload, and a bucket, which never deploys; waking a sleeping
+app, which runs the release already admitted (stop an app by scaling it to
+zero); and the engine finishing a deploy it already admitted, after a restart,
+or converging an app on what it was already admitted with.
+
 For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
 to the internet in the window — the response bodies the ingress served for it
 and for its waker while it slept, from Traefik's counters read raw, summed over

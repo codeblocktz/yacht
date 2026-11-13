@@ -664,6 +664,19 @@ func (s *Service) MoveApp(ctx context.Context, ownerID, name, region string) err
 		return ErrNoWorkload
 	}
 
+	// A move is a redeploy in the other region, asked about before the
+	// transaction below takes the region's room. Read outside it, so a
+	// region view changing in between is asked about as the move it was;
+	// everything else is decided again inside.
+	if v, err := s.regionView(ctx, s.q); err == nil && v.inUse() && len(a.Volumes) == 0 &&
+		region != v.effective(regionPtr(a.Region)) {
+		req := admitRequest(a, AdmitMove)
+		req.Region = region
+		if ctx, err = s.askAdmission(ctx, req); err != nil {
+			return err
+		}
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("app: begin region move: %w", err)

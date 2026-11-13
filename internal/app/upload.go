@@ -144,6 +144,9 @@ func (s *Service) DeployUpload(
 		return Deployment{}, Upload{}, err
 	}
 	sum := sha256.Sum256(archive)
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitUpload)); err != nil {
+		return Deployment{}, Upload{}, err
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
