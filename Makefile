@@ -192,8 +192,18 @@ build-check: ## Compile every Go package without CGO
 # Only reports what the code actually reaches, so a finding here is a fix to
 # make, not noise to triage. The go directive in go.mod is the toolchain CI and
 # releases build with: a standard-library finding means raising it.
+#
+# A fix is adopted only once it has been out 7 days (a new minor, 14; 3 with
+# a cooldown-override), so a finding whose fix is younger than that warns
+# and passes, and fails the day the fix has waited long enough. A finding
+# with no fix, or a fix whose release date can't be found, fails. The rules
+# are in internal/tools/vulngate; vulncheck-raw is govulncheck alone.
 .PHONY: vulncheck
-vulncheck: ## Fail on known vulnerabilities reachable from the code
+vulncheck: ## Fail on reachable vulnerabilities whose fix has cleared its cooldown
+	$(GO) run ./internal/tools/vulngate -go "$(GO)" ./...
+
+.PHONY: vulncheck-raw
+vulncheck-raw: ## govulncheck alone: every reachable vulnerability, cooldown or not
 	$(GO) tool govulncheck ./...
 
 # Keep these dependency graphs serial even when a caller has MAKEFLAGS=-j.
