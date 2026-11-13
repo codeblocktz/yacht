@@ -432,10 +432,12 @@ func (s *Server) signInCallback(w http.ResponseWriter, r *http.Request) {
 // looks like a sign-in that succeeded and landed on a dashboard with nothing
 // on it.
 //
-// It picks the team itself rather than taking one, deliberately. Somebody whose
-// only membership was removed, and the configured owner of an install signing in
-// for the first time, both need BootstrapOwner — and that is a thing only this
-// function knows to ask for.
+// It picks the team itself rather than taking one, deliberately. The configured
+// owner of an install signing in for the first time needs BootstrapOwner, and
+// so does anybody with no team while sign-up is open; anybody else with no
+// team must get none — and telling those apart is a thing only this function
+// knows to do. The second kind is answered with a page saying so, and no
+// session.
 //
 // Reports whether it succeeded, having already rendered the failure. The caller
 // redirects on true and returns on false.
@@ -464,6 +466,15 @@ func (s *Server) startSessionIn(
 	}
 
 	team, err := s.activeTeam(ctx, user)
+	if errors.Is(err, errNoTeam) {
+		// Said plainly: the person has just proved who they are, so that they
+		// belong to no team here is theirs to know, and a generic failure would
+		// have them ask for link after link.
+		s.log.Info("sign-in refused: on no team",
+			slog.String("user", user.ID.String()), slog.String("method", string(method)))
+		s.renderSignedOut(w, r, http.StatusForbidden, "Not on a team", NoTeam(s.requestAccess))
+		return false
+	}
 	if err != nil {
 		return failed("find a team to sign in to", err)
 	}
@@ -590,26 +601,46 @@ func sessionToken(r *http.Request) string {
 	return c.Value
 }
 
+// errNoTeam is a proven person with no team to act as, on an install that
+// does not hand them one: sign-up is closed and they are neither its
+// configured owner nor one of its named operators.
+var errNoTeam = errors.New("web: the person is on no team")
+
 // activeTeam picks the team a new session acts as.
 //
 // Someone with no team at all is the case the bootstrap exists for: on an
-// install that has just switched accounts on they are the first person in, and
-// the team the install was already running as is theirs to inherit. Without it
-// they would sign in successfully and resolve to no owner, which every page
-// reads as not being signed in at all.
+// install that has just switched accounts on, its configured owner is the
+// first person in, and the team the install was already running as is theirs
+// to inherit. Without it they would sign in successfully and resolve to no
+// owner, which every page reads as not being signed in at all.
+//
+// A named operator with no team is given one of their own: the install is
+// theirs to run by name, whichever team they own, and without a team they
+// could not sign in to run it.
+//
+// Nobody else is given a team unless sign-up is open. While it is closed,
+// somebody with no team got an account some other way — they were removed
+// from the team they had, or opened an invitation and then signed in without
+// it — and minting them a team would make them the owner of one. They get
+// errNoTeam instead.
 func (s *Server) activeTeam(ctx context.Context, user account.User) (string, error) {
 	teams, err := s.accounts.TeamsFor(ctx, user.ID)
 	if err != nil {
 		return "", err
 	}
 	if len(teams) == 0 {
-		// With sign-up open anybody can arrive here with no team, so the team
-		// the install runs as goes only to the address configured to own it.
-		// Everyone else gets one of their own, which BootstrapOwner gives for
-		// an empty id.
+		// The team the install runs as goes only to the address configured to
+		// own it — or to a team of its own, which BootstrapOwner gives when the
+		// install's is taken. A named operator, and with sign-up open everybody
+		// else, gets one of their own, which BootstrapOwner gives for an empty
+		// id; with sign-up closed anybody else gets nothing.
 		teamID, teamName := s.bootstrapID, s.bootstrapName
-		if s.openSignup && !strings.EqualFold(user.Email, s.bootstrapEmail) {
+		switch {
+		case s.isBootstrapEmail(user.Email):
+		case s.operators[strings.ToLower(strings.TrimSpace(user.Email))], s.openSignup:
 			teamID, teamName = "", ""
+		default:
+			return "", errNoTeam
 		}
 		if err := s.accounts.BootstrapOwner(
 			ctx, teamID, teamName, user); err != nil {
@@ -782,11 +813,39 @@ func newAttemptLimiter(window time.Duration) *attemptLimiter {
 // allow records an attempt against key and reports whether it is within limit.
 func (l *attemptLimiter) allow(key string, limit int) bool {
 	now := time.Now()
-	cutoff := now.Add(-l.window)
-
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	ts := l.recentLocked(key, now)
+	if len(ts) >= limit {
+		return false
+	}
+	l.hits[key] = append(ts, now)
+	return true
+}
+
+// spent reports whether key has used its limit, recording nothing: for a
+// caller that may only count an attempt once it knows the attempt was one
+// it would have carried out (see record).
+func (l *attemptLimiter) spent(key string, limit int) bool {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.recentLocked(key, now)) >= limit
+}
+
+// record counts an attempt against key without asking whether it fits.
+func (l *attemptLimiter) record(key string) {
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hits[key] = append(l.recentLocked(key, now), now)
+}
+
+// recentLocked sweeps when due and returns key's attempts still in the
+// window, storing the trimmed slice back. l.mu must be held.
+func (l *attemptLimiter) recentLocked(key string, now time.Time) []time.Time {
+	cutoff := now.Add(-l.window)
 	if now.Sub(l.swept) >= l.window || len(l.hits) > maxTrackedKeys {
 		for k, ts := range l.hits {
 			if kept := recent(ts, cutoff); len(kept) == 0 {
@@ -797,14 +856,13 @@ func (l *attemptLimiter) allow(key string, limit int) bool {
 		}
 		l.swept = now
 	}
-
 	ts := recent(l.hits[key], cutoff)
-	if len(ts) >= limit {
-		l.hits[key] = ts
-		return false
+	if len(ts) == 0 {
+		delete(l.hits, key)
+		return nil
 	}
-	l.hits[key] = append(ts, now)
-	return true
+	l.hits[key] = ts
+	return ts
 }
 
 // recent drops the attempts that have fallen out of the window. The slice is
@@ -854,6 +912,16 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	inv, err := s.accounts.InvitationFor(ctx, token)
 	if err != nil {
 		s.invitationFailed(w, r, err)
+		return
+	}
+
+	// Anybody holding the link can open it, unauthenticated, as often as they
+	// like, and each opening mails the address. Counted per address, as the
+	// invitations it is sent are, and answered alike when over: the page says
+	// to check the mail either way, and the links already sent still work.
+	if !s.inviteLimit.allow("open:"+strings.ToLower(inv.Email), invitesPerAddress) {
+		s.log.Info("invitation opened again too often; no mail sent")
+		s.renderSignedOut(w, r, http.StatusOK, "Check your mail", CheckMail(s.openSignup, "/sign-in"))
 		return
 	}
 
@@ -972,7 +1040,7 @@ func (s *Server) signInRedirect(next http.Handler) http.Handler {
 // happened here, and an error that changed the response would say whether the
 // address is the configured one.
 func (s *Server) bootstrapAccount(ctx context.Context, email string) {
-	if s.bootstrapEmail == "" || !strings.EqualFold(email, s.bootstrapEmail) {
+	if !s.isBootstrapEmail(email) {
 		return
 	}
 	created, err := s.accounts.EnsureUser(ctx, email, "")
@@ -983,4 +1051,22 @@ func (s *Server) bootstrapAccount(ctx context.Context, email string) {
 	}
 	s.log.Info("created the configured owner on first sign-in",
 		slog.String("user", created.ID.String()))
+}
+
+// bareAddress is raw as one bare address, "Name <a@b>" read as "a@b", or raw
+// trimmed if it is not one. The configured owner's address is compared with
+// the address a person signs in as, which is always bare: kept as given, a
+// display name would make it an address nobody can ever sign in as.
+func bareAddress(raw string) string {
+	if addr, err := parseEmail(raw); err == nil {
+		return addr
+	}
+	return strings.TrimSpace(raw)
+}
+
+// isBootstrapEmail reports whether email is the address configured to own the
+// install. An install that names none has no such address, so an empty one
+// never matches.
+func (s *Server) isBootstrapEmail(email string) bool {
+	return s.bootstrapEmail != "" && strings.EqualFold(strings.TrimSpace(email), s.bootstrapEmail)
 }

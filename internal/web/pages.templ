@@ -2422,7 +2422,8 @@ type SettingsData struct {
 	SessionTTL    string
 
 	// Operators are the addresses YACHT_OPERATORS names, for an install with
-	// accounts. None named means each team's owner is one; see IsOperator.
+	// accounts. None named means the owners of the install's own team are;
+	// see IsOperator.
 	Operators []string
 
 	// Mail is the record of what was sent and what failed, nil without one;
@@ -2471,9 +2472,9 @@ templ Settings(d SettingsData) {
 						if len(d.Operators) > 0 {
 							<span class="mono">{ strings.Join(d.Operators, ", ") }</span>
 						} else {
-							@statusDot("Each team's owner", "status-warn")
+							@statusDot("Owners of the install's own team", "status-warn")
 							<span class="ml-1 text-muted-foreground">
-								set <code class="mono">YACHT_OPERATORS</code> before opening sign-up, or every customer is one.
+								the team <code class="mono">YACHT_OWNER_ID</code> names. Name them in <code class="mono">YACHT_OPERATORS</code> to let them act as a team for support.
 							</span>
 						}
 					</dd>

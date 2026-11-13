@@ -264,7 +264,7 @@ func TestSignedOutPagesHaveNoDashboardChrome(t *testing.T) {
 // layout would take the navigation off every page in the product, which is a
 // much louder failure but exactly as easy to introduce.
 func TestSignedInPagesKeepTheirChrome(t *testing.T) {
-	h := newLiveHarness(t, "web-chrome")
+	h := newLiveHarnessOwnedBy(t, "web-chrome", "chrome@web.test")
 	h.user(t, "chrome@web.test")
 	c := sessionCookie(h.signIn(t, "chrome@web.test"))
 

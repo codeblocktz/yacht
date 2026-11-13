@@ -3,6 +3,8 @@ package k8s
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +70,15 @@ const (
 // deployment that is waiting on it, and "still building" after an hour is not
 // a state anybody should have to interpret.
 const buildTimeout = 30 * time.Minute
+
+// pushTimeout caps the engine's push of a Dockerfile build's image, waiting
+// for its turn included; finishTimeout is what is left for the build to end
+// once it is pushed. The push step waits for the engine for buildTimeout,
+// which is longer than both together.
+const (
+	pushTimeout   = 20 * time.Minute
+	finishTimeout = 2 * time.Minute
+)
 
 // Build runs one build to completion and returns what it produced.
 //
@@ -155,9 +166,10 @@ func (o *Orchestrator) Build(
 	if req.Created != nil {
 		req.Created()
 	}
-	redact := append([]string{credential}, req.Redact...)
+	redact := buildRedactions(req, credential)
 	req.Log = redactingLog(req.Log, redact...)
 
+	outer := ctx
 	ctx, cancel := context.WithTimeout(ctx, buildTimeout)
 	defer cancel()
 
@@ -169,7 +181,36 @@ func (o *Orchestrator) Build(
 	// Streamed rather than fetched at the end: this is the several minutes
 	// somebody is actually watching, and a log that arrives afterwards is a
 	// post-mortem rather than progress.
-	result, seen := o.streamBuildLog(ctx, pod, req.Log)
+	//
+	// Every step but the push, which waits for the engine to collect the
+	// image the Dockerfile step built: its log ends only once that is done.
+	var (
+		result orchestrator.BuildResult
+		seen   markersSeen
+	)
+	steps := buildSteps[:len(buildSteps)-1]
+	o.streamBuildLog(ctx, pod, req.Log, steps, &result, &seen)
+	if seen.image == "" {
+		// A Dockerfile build whose log was cut before it said what it built
+		// would otherwise be taken for a buildpacks build, and its image
+		// left unpushed.
+		o.recoverBuildMarkers(ctx, pod, &result, &seen, req.Log)
+	}
+	if seen.image != "" {
+		// The push has a clock of its own rather than what is left of the
+		// build's, so a build that took most of its half hour is not pushed
+		// in a hurry; and so does what follows it, the push step's exit.
+		pushCtx, cancelPush := context.WithTimeout(outer, pushTimeout)
+		err := o.pushBuiltImage(pushCtx, pod, req, seen.image)
+		cancelPush()
+		if err != nil {
+			return result, redactError(err, redact...)
+		}
+		var cancelFinish context.CancelFunc
+		ctx, cancelFinish = context.WithTimeout(outer, finishTimeout)
+		defer cancelFinish()
+	}
+	o.streamBuildLog(ctx, pod, req.Log, []string{pushContainer}, &result, &seen)
 
 	if err := o.waitForBuildResult(ctx, name); err != nil {
 		return result, redactError(err, redact...)
@@ -188,16 +229,36 @@ func (o *Orchestrator) Build(
 	return result, nil
 }
 
-// markersSeen records which of the build's markers the log has shown.
-type markersSeen struct{ commit, uid, args bool }
+// markersSeen records which of the build's markers the log has shown, and
+// the digest of the image a Dockerfile build made, empty when it made none.
+type markersSeen struct {
+	commit, uid, args bool
+	image             string
+}
 
 // scanBuildLog reads one container's log: the markers into result, every
 // other line to logf when it is given.
 func scanBuildLog(r io.Reader, logf func(string), result *orchestrator.BuildResult, seen *markersSeen) {
+	scanStepLog("", r, logf, result, seen)
+}
+
+// scanStepLog is scanBuildLog for a named step. The image marker is taken
+// from the Dockerfile step alone: a buildpacks build runs the repository's
+// build scripts, which can print anything, and a line naming an image there
+// would have the engine wait to push one that does not exist.
+func scanStepLog(step string, r io.Reader, logf func(string), result *orchestrator.BuildResult, seen *markersSeen) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
+		if step == dockerfileContainer {
+			if digest, ok := strings.CutPrefix(line, imageMarker); ok {
+				if digest = strings.TrimSpace(digest); imageDigestRE.MatchString(digest) {
+					seen.image = digest
+				}
+				continue
+			}
+		}
 		if sha, ok := strings.CutPrefix(line, commitMarker); ok {
 			result.CommitSHA = strings.TrimSpace(sha)
 			seen.commit = true
@@ -226,15 +287,15 @@ func scanBuildLog(r io.Reader, logf func(string), result *orchestrator.BuildResu
 // recoverBuildMarkers reads the finished build's logs without following
 // them, which needs nothing of the kubelet but the file, for the markers the
 // live log did not show. A buildpack build prints no uid, and finds none.
-// Only the buildpack step says what a buildpacks build was given, so it is
-// read when that is what is missing.
+// Only the detect step says what a buildpacks build was given, so it is read
+// when that is what is missing.
 func (o *Orchestrator) recoverBuildMarkers(
 	ctx context.Context, pod string, result *orchestrator.BuildResult, seen *markersSeen, logf func(string),
 ) {
 	before := *seen
 	containers := []string{cloneContainer, dockerfileContainer}
 	if !seen.args {
-		containers = append(containers, buildpackContainer)
+		containers = append(containers, detectContainer)
 	}
 	for _, c := range containers {
 		stream, err := o.client.CoreV1().Pods(BuildNamespace).GetLogs(pod,
@@ -242,7 +303,7 @@ func (o *Orchestrator) recoverBuildMarkers(
 		if err != nil {
 			continue
 		}
-		scanBuildLog(stream, nil, result, seen)
+		scanStepLog(c, stream, nil, result, seen)
 		_ = stream.Close()
 	}
 	if *seen != before {
@@ -319,6 +380,50 @@ func (o *Orchestrator) deleteBuildSecret(ctx context.Context, name string) error
 		return err
 	}
 	return nil
+}
+
+// buildRedactions is every secret a build's log and error are kept clear of:
+// the source credential, the app's secret variables, and the registry
+// credential.
+//
+// The registry credential is not mounted by any step that runs the
+// repository's code, so nothing should be able to print it. It is here
+// anyway, for the day a tool in one of the steps that does hold it prints
+// what it was given.
+func buildRedactions(req orchestrator.BuildRequest, credential string) []string {
+	redact := append([]string{credential}, req.Redact...)
+	return append(redact, registrySecrets(req.RegistryAuth)...)
+}
+
+// registrySecrets is the secret part of a docker config.json: each
+// registry's password, the base64 of user:password that docker writes
+// beside it, and any token. The username is not secret, and hiding it would
+// hide every mention of the account rather than the credential.
+//
+// A config that does not parse gives nothing, rather than failing a build
+// over its log.
+func registrySecrets(dockerConfig []byte) []string {
+	var cfg struct {
+		Auths map[string]struct {
+			Password      string `json:"password"`
+			Auth          string `json:"auth"`
+			IdentityToken string `json:"identitytoken"`
+			RegistryToken string `json:"registrytoken"`
+		} `json:"auths"`
+	}
+	if len(dockerConfig) == 0 || json.Unmarshal(dockerConfig, &cfg) != nil {
+		return nil
+	}
+	var out []string
+	for _, a := range cfg.Auths {
+		out = append(out, a.Password, a.Auth, a.IdentityToken, a.RegistryToken)
+		if raw, err := base64.StdEncoding.DecodeString(a.Auth); err == nil {
+			if _, password, ok := strings.Cut(string(raw), ":"); ok {
+				out = append(out, password)
+			}
+		}
+	}
+	return out
 }
 
 // redactingLog keeps a token out of the build log. Nothing in the clone
@@ -606,13 +711,10 @@ func startedAnyContainer(p corev1.Pod) bool {
 // clone's ends — and skipping on the first error drops the one log somebody
 // opened this to read.
 func (o *Orchestrator) streamBuildLog(
-	ctx context.Context, pod string, logf func(string),
-) (orchestrator.BuildResult, markersSeen) {
-	var (
-		result orchestrator.BuildResult
-		seen   markersSeen
-	)
-	for _, c := range []string{cloneContainer, dockerfileContainer, buildpackContainer} {
+	ctx context.Context, pod string, logf func(string), steps []string,
+	result *orchestrator.BuildResult, seen *markersSeen,
+) {
+	for _, c := range steps {
 		stream, err := o.openContainerLog(ctx, pod, c)
 		if err != nil {
 			// Genuinely nothing to read: the pod finished without reaching
@@ -620,10 +722,9 @@ func (o *Orchestrator) streamBuildLog(
 			// strategy was not used.
 			continue
 		}
-		scanBuildLog(stream, logf, &result, &seen)
+		scanStepLog(c, stream, logf, result, seen)
 		_ = stream.Close()
 	}
-	return result, seen
 }
 
 // openContainerLog waits until a container has output, or until it is clear it

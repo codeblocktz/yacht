@@ -95,6 +95,12 @@ type Store struct {
 	// connection and then says nothing would otherwise hold a deploy open for
 	// as long as the process lives.
 	http *http.Client
+
+	// pushes bounds how many Dockerfile images this process pushes at once.
+	// Each one streams an image through the apiserver and this process, and
+	// builds are admitted install-wide rather than per engine, so the bound
+	// on what one engine carries at a time is here.
+	pushes chan struct{}
 }
 
 // New returns a Store. keeper may be nil, in which case storing a password is
@@ -105,7 +111,8 @@ func New(pool *pgxpool.Pool, keeper *secret.Keeper, log *slog.Logger) *Store {
 	}
 	return &Store{
 		pool: pool, q: dbgen.New(pool), keeper: keeper, log: log,
-		http: &http.Client{Timeout: 30 * time.Second},
+		http:   &http.Client{Timeout: 30 * time.Second},
+		pushes: make(chan struct{}, concurrentPushes),
 	}
 }
 
