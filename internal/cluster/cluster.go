@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -105,8 +106,8 @@ func (j *Joiner) SetJoin(ctx context.Context, serverURL, token string, by uuid.U
 	if err := ValidateServerURL(serverURL); err != nil {
 		return err
 	}
-	if token == "" {
-		return errors.New("a join token is required")
+	if err := ValidateToken(token); err != nil {
+		return err
 	}
 	if !j.keeper.Configured() {
 		return ErrNoSecretKey
@@ -207,6 +208,11 @@ func (j *Joiner) Command(ctx context.Context, m Machine) (string, error) {
 		// this install no longer holds or the stored value was altered.
 		return "", fmt.Errorf("cluster: opening the join token: %w", err)
 	}
+	if err := ValidateToken(token); err != nil {
+		// Stored before the rule existed. Said without the token, which is
+		// still a credential however malformed.
+		return "", fmt.Errorf("cluster: stored join token is not usable, save it again: %w", err)
+	}
 
 	return BuildCommand(row.ServerUrl, token, m), nil
 }
@@ -224,12 +230,16 @@ func (j *Joiner) Command(ctx context.Context, m Machine) (string, error) {
 // except the apps that tolerate the taint — those of teams placed on the pool.
 // Dedicated means nothing without a pool, and is ignored there.
 //
-// Every value goes in unquoted, the pool twice when dedicated, and that is
-// safe only because Validate has refused anything a shell would read as more
-// than one word. Command checks it; a caller building the line itself must too.
+// Every machine value goes in unquoted, the pool twice when dedicated, and
+// that is safe only because Validate has refused anything a shell would read
+// as more than one word. Command checks it; a caller building the line itself
+// must too. The token is the one value here whose alphabet nobody chose — a
+// cluster's --token can be anything — so it is single-quoted instead, which
+// leaves the shell nothing to act on in it; ValidateToken refuses the single
+// quote and the whitespace that quoting cannot carry safely.
 func BuildCommand(serverURL, token string, m Machine) string {
 	cmd := "curl -sfL https://get.k3s.io | K3S_URL=" + serverURL +
-		" K3S_TOKEN=" + token + " sh -s -"
+		" K3S_TOKEN=" + shellQuote(token) + " sh -s -"
 	if m.Pool != "" {
 		cmd += " --node-label " + PoolLabel + "=" + m.Pool
 		if m.Dedicated {
@@ -279,6 +289,49 @@ func ValidateServerURL(raw string) error {
 		return errors.New("server address contains characters a shell would act on")
 	}
 	return nil
+}
+
+// ValidateToken checks a join token before it is stored or put in a command.
+//
+// K3s writes the secure form in its node-token file: "K10", the hex digest of
+// the cluster's CA, "::", and a credential — "server:<password>",
+// "node:<password>", or a bootstrap token "<id>.<secret>". A cluster started
+// with --token can have any password at all, so a bare token is held only to
+// what the command can carry: printable ASCII, with no whitespace to split it
+// and no single quote to end the quoting BuildCommand puts round it. A token
+// that starts like the secure form must be one, which catches a node-token
+// file pasted with a piece missing.
+func ValidateToken(token string) error {
+	if token == "" {
+		return errors.New("a join token is required")
+	}
+	if len(token) > maxTokenLen {
+		return errors.New("that join token is too long to be one — paste the contents of the node-token file")
+	}
+	for i := 0; i < len(token); i++ {
+		if c := token[i]; c <= ' ' || c > '~' || c == '\'' {
+			return errors.New("a join token has no spaces, single quotes or characters outside ASCII — " +
+				"paste the contents of the node-token file as they are")
+		}
+	}
+	if strings.HasPrefix(token, "K10") && strings.Contains(token, "::") && !secureToken.MatchString(token) {
+		return errors.New("that join token is not in the form K10<hex>::<user>:<password> — " +
+			"paste the contents of the node-token file as they are")
+	}
+	return nil
+}
+
+// maxTokenLen is far above any token K3s makes (a secure one is about 110
+// characters) and far below anything that is not one.
+const maxTokenLen = 512
+
+// secureToken is K10<CA digest>::<credential>.
+var secureToken = regexp.MustCompile(`^K10[0-9a-fA-F]+::.+$`)
+
+// shellQuote wraps s in single quotes for a POSIX shell, inside which nothing
+// is special but the quote itself, which is closed, escaped and reopened.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ValidatePool checks a pool name.

@@ -29,7 +29,7 @@ import (
 // The queries are scoped by owner_id; this proves it through HTTP.
 func TestIsolationCrossTeamMemberRemoval(t *testing.T) {
 	ctx := context.Background()
-	h := newLiveHarness(t, "web-adv-a")
+	h := newLiveHarnessOwnedBy(t, "web-adv-a", "attacker-adv@web.test")
 
 	// Team A, where the attacker is owner.
 	h.user(t, "attacker-adv@web.test")
@@ -57,7 +57,7 @@ func TestIsolationCrossTeamMemberRemoval(t *testing.T) {
 // cross-team invitation revocation by id.
 func TestIsolationCrossTeamInvitationRevoke(t *testing.T) {
 	ctx := context.Background()
-	h := newLiveHarness(t, "web-adv2-a")
+	h := newLiveHarnessOwnedBy(t, "web-adv2-a", "attacker2-adv@web.test")
 
 	attacker := h.user(t, "attacker2-adv@web.test")
 	_ = attacker
@@ -93,7 +93,7 @@ func TestIsolationCrossTeamInvitationRevoke(t *testing.T) {
 // After switching to B they must lose admin powers, not carry A's role over.
 func TestIsolationRoleFollowsTheTeamSwitch(t *testing.T) {
 	ctx := context.Background()
-	h := newLiveHarness(t, "web-adv3-a")
+	h := newLiveHarnessOwnedBy(t, "web-adv3-a", "dual-adv@web.test")
 
 	person := h.user(t, "dual-adv@web.test")
 	cookie := sessionCookie(h.signIn(t, "dual-adv@web.test"))
@@ -133,7 +133,7 @@ func TestIsolationRoleFollowsTheTeamSwitch(t *testing.T) {
 // the team page must show only your own team's people.
 func TestIsolationTeamPageDoesNotLeakAnotherTeam(t *testing.T) {
 	ctx := context.Background()
-	h := newLiveHarness(t, "web-adv4-a")
+	h := newLiveHarnessOwnedBy(t, "web-adv4-a", "a4-owner-adv@web.test")
 
 	h.user(t, "a4-owner-adv@web.test")
 	cookie := sessionCookie(h.signIn(t, "a4-owner-adv@web.test"))
@@ -153,7 +153,7 @@ func TestIsolationTeamPageDoesNotLeakAnotherTeam(t *testing.T) {
 // presented. A server that reuses a presented value lets an attacker fix a
 // session id in advance and then wait for the victim to authenticate it.
 func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
-	h := newLiveHarness(t, "web-iso5")
+	h := newLiveHarnessOwnedBy(t, "web-iso5", "fixation-iso@web.test")
 	h.user(t, "fixation-iso@web.test")
 
 	planted := &http.Cookie{Name: SessionCookie, Value: "attacker-chosen-token-value"}
@@ -187,7 +187,7 @@ func TestIsolationSignInDoesNotAdoptAPresentedToken(t *testing.T) {
 // advertised — a page nobody can navigate to is one only its author knows
 // about, which is how team management shipped and stayed invisible.
 func TestEveryPageIsReachableByClicking(t *testing.T) {
-	h := newLiveHarness(t, "web-nav")
+	h := newLiveHarnessOwnedBy(t, "web-nav", "nav@web.test")
 	h.user(t, "nav@web.test")
 	c := sessionCookie(h.signIn(t, "nav@web.test"))
 

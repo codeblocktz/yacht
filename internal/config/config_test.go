@@ -556,6 +556,31 @@ func TestTurnstileKeysGoTogether(t *testing.T) {
 	}
 }
 
+// The owner's address is compared with the address somebody signs in as, and
+// the owner id with the team's id, both of which are bare. Kept as written, a
+// display name or a stray space would make an owner nobody can ever be.
+func TestTheOwnerIsReadBare(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_OWNER_EMAIL": " The Founder <founder@example.test> ",
+		"YACHT_OWNER_ID":    " owner-local ",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OwnerEmail != "founder@example.test" {
+		t.Errorf("OwnerEmail = %q, want founder@example.test", c.OwnerEmail)
+	}
+	if c.OwnerID != "owner-local" {
+		t.Errorf("OwnerID = %q, want owner-local", c.OwnerID)
+	}
+
+	setEnv(t, map[string]string{"YACHT_OWNER_EMAIL": "not an address"})
+	if _, err := Load(); err == nil {
+		t.Error("an owner address that is not one was accepted")
+	}
+}
+
 // Unset is team, and must stay so: an install made before strict was what
 // the installer writes has no line for it, and an upgrade, which never
 // touches the file, would otherwise tighten its network unasked.

@@ -110,10 +110,10 @@ type Config struct {
 	// team on it: nodes, the registry, DNS, every team's quota. Email
 	// addresses, matched case-insensitively against the signed-in person.
 	//
-	// Empty keeps the single-team reading — the owner of the team a request
-	// acts as is the operator — which is right for an install with one team
-	// and wrong for one hosting several: there, every team's owner would be
-	// able to drain the nodes every other team runs on.
+	// Empty means the owners of the install's own team, the one OwnerID
+	// names — never the owner of any other team, who would otherwise be able
+	// to drain the nodes every other team runs on. Acting as a team for
+	// support needs operators named.
 	Operators []string
 
 	// SecretKey seals secret environment variables, base64 of 32 bytes.
@@ -383,9 +383,9 @@ func Load() (Config, error) {
 		Kubeconfig:               env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
 		KubeInCluster:            envBool("YACHT_KUBE_IN_CLUSTER", false),
 		AuthToken:                env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:                  env("YACHT_OWNER_ID", "owner-local"),
+		OwnerID:                  strings.TrimSpace(env("YACHT_OWNER_ID", "owner-local")),
 		OwnerName:                env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		OwnerEmail:               bareAddress(env("YACHT_OWNER_EMAIL", "")),
 		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
 		RequestAccessURL:         strings.TrimSpace(env("YACHT_REQUEST_ACCESS_URL", "")),
 		TurnstileSiteKey:         strings.TrimSpace(env("YACHT_TURNSTILE_SITE_KEY", "")),
@@ -456,6 +456,21 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// bareAddress is raw as one bare address — "Name <a@b>" read as "a@b" — or
+// raw trimmed when it is not one, for validate to refuse. It is compared with
+// the address somebody signs in as, which is always bare, so a display name
+// kept would be an owner nobody could ever sign in as.
+func bareAddress(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if addr, err := mail.ParseAddress(raw); err == nil && addr.Address != "" {
+		return addr.Address
+	}
+	return raw
 }
 
 func (c Config) validate() error {
@@ -729,13 +744,13 @@ func (c Config) signupFaults() []error {
 		return nil
 	}
 	var errs []error
-	// With no operators named, the owner of whichever team a request acts as
-	// is the operator — and every stranger who signs up owns a team, so every
-	// one of them would have the Admin area: every team, every node.
+	// An install that takes in strangers names the people who run it, rather
+	// than leaving it to whoever owns the install's own team — and naming them
+	// is what lets them act as a customer's team to help it.
 	if len(c.Operators) == 0 {
 		errs = append(errs, errors.New(
-			"YACHT_OPEN_SIGNUP requires YACHT_OPERATORS — without it everybody who signs up "+
-				"owns a team, and so runs the install"))
+			"YACHT_OPEN_SIGNUP requires YACHT_OPERATORS — an install open to anybody names "+
+				"the people who run it"))
 	}
 	// The team the install runs as goes to the configured owner only. With no
 	// owner named it goes to nobody, and its apps with it.

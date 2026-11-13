@@ -121,10 +121,10 @@ func TestClusterPagesListEveryTeamForTheOperator(t *testing.T) {
 	}
 }
 
-// With no operators named, the operator is whichever team's owner is looking,
-// and on an install with several teams that is a customer. They are listed
-// their own team's pods and claims and nothing else, and the header counts
-// those rather than the cluster's.
+// With no operators named, the operator is the install's own team's owner, and
+// they are listed the team's pods and claims and nothing else — another
+// team's stay behind a name in YACHT_OPERATORS — and the header counts those
+// rather than the cluster's.
 func TestClusterPagesAreOneTeamsWithoutNamedOperators(t *testing.T) {
 	const theirs = "web-cluster-theirs-2"
 	rt := newRoleTeamWith(t, "web-cluster-own", "cluster-own-app", nil,

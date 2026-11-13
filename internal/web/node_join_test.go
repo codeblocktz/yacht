@@ -134,7 +134,7 @@ func TestTheTokenAppearsOnlyInTheCommand(t *testing.T) {
 	}
 	// And where it appears is the command, not some other field that happens
 	// to hold it.
-	if !strings.Contains(body, "K3S_TOKEN="+probeToken) {
+	if !strings.Contains(body, "K3S_TOKEN=&#39;"+probeToken+"&#39;") {
 		t.Error("the token is on the page somewhere other than the join command")
 	}
 	// The page has to warn what the command is, because it looks like a URL.
@@ -180,7 +180,7 @@ func TestAnUnreachableClusterStillYieldsACommand(t *testing.T) {
 
 	body := do(s.Handler(), signedIn(http.MethodGet, "/cluster/nodes/add")).Body.String()
 
-	if !strings.Contains(body, "K3S_TOKEN="+probeToken) {
+	if !strings.Contains(body, "K3S_TOKEN=&#39;"+probeToken+"&#39;") {
 		t.Error("an unreachable cluster took the join command away")
 	}
 	// And it says which of the two things is wrong. "No node yet" and "the
