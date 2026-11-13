@@ -432,11 +432,12 @@ func orUnknown(s string) string {
 }
 
 // dropQueuedPush takes a refused push out of an app's slot without deploying
-// it, and records why as the app's last delivery — only while the slot still
-// holds that push: a newer one queued meanwhile is asked about in its turn.
+// it, and records why as the app's last delivery, in one write — only while
+// the slot still holds that push: a newer one queued meanwhile is asked about
+// in its turn.
 func (s *Service) dropQueuedPush(ctx context.Context, a App, revision, result string) {
 	n, err := s.q.DropHookPending(ctx, dbgen.DropHookPendingParams{
-		AppID: a.ID, OwnerID: a.OwnerID, Revision: revision,
+		AppID: a.ID, OwnerID: a.OwnerID, Revision: revision, Result: result,
 	})
 	if err != nil {
 		s.log.Error("drop a refused queued push", slog.String("app", a.Name), slog.String("error", err.Error()))
@@ -444,11 +445,6 @@ func (s *Service) dropQueuedPush(ctx context.Context, a App, revision, result st
 	}
 	if n == 0 {
 		return
-	}
-	if err := s.q.RecordHookDelivery(ctx, dbgen.RecordHookDeliveryParams{
-		AppID: a.ID, OwnerID: a.OwnerID, Result: result,
-	}); err != nil {
-		s.log.Warn("record webhook delivery", slog.String("app", a.Name), slog.String("error", err.Error()))
 	}
 	s.log.Info("queued push refused", slog.String("app", a.Name), slog.String("revision", revision))
 }
