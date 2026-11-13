@@ -1609,7 +1609,7 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 		// change had been made.
 		err = errors.New("replicas must be a whole number between 0 and 50")
 	} else if _, err = s.apps.Scale(r.Context(), owner.ID, name, int32(replicas)); err != nil {
-		s.log.Error("scale", slog.String("app", name), slog.String("error", err.Error()))
+		s.logFailed("scale", err, slog.String("app", name))
 	}
 	if err != nil {
 		s.settingsRefused(w, r, name, "settings", settingsFormReplicas, http.StatusUnprocessableEntity, err)
@@ -1633,7 +1633,7 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 			// canvas sheet — so a failure used to answer by moving somebody
 			// somewhere else, which reads as the click having navigated rather
 			// than failed.
-			s.log.Error("redeploy", slog.String("app", name), slog.String("error", err.Error()))
+			s.logFailed("redeploy", err, slog.String("app", name))
 			s.flashErr(w, r, err.Error())
 			http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 			return
@@ -1670,7 +1670,7 @@ func (s *Server) appRollback(w http.ResponseWriter, r *http.Request) {
 			// The person's to fix, not the install's: said plainly, not logged.
 			s.flashErr(w, r, strings.TrimPrefix(err.Error(), "app: "))
 		case err != nil:
-			s.log.Error("rollback", slog.String("app", name), slog.String("error", err.Error()))
+			s.logFailed("rollback", err, slog.String("app", name))
 			s.flashErr(w, r, err.Error())
 		default:
 			s.flashOK(w, r, "Rolling "+name+" back.")

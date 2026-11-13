@@ -161,6 +161,7 @@ func (s *Service) createEnvironment(
 	case slug == DefaultEnvironment:
 		return Environment{}, nil, errors.New("every project already has production")
 	}
+	var plan copyPlan
 	if from != "" {
 		ok, err := s.HasEnvironment(ctx, ownerID, p, from)
 		if err != nil {
@@ -168,6 +169,17 @@ func (s *Service) createEnvironment(
 		}
 		if !ok {
 			return Environment{}, nil, fmt.Errorf("%w: %s", ErrEnvironmentNotFound, from)
+		}
+		// Each service the copy deploys is asked about before the environment
+		// is written: refused, there is no environment, rather than one with
+		// some of its services and not others.
+		// The copies are planned once, here, and exactly those are asked
+		// about and made: a service added meanwhile is not copied unasked.
+		if plan, err = s.planCopies(ctx, ownerID, p, from, slug); err != nil {
+			return Environment{}, nil, err
+		}
+		if ctx, err = s.admitCopies(ctx, ownerID, p, slug, plan, opts); err != nil {
+			return Environment{}, nil, err
 		}
 	}
 	row, err := s.q.CreateEnvironment(ctx, dbgen.CreateEnvironmentParams{
@@ -191,7 +203,7 @@ func (s *Service) createEnvironment(
 	if from == "" {
 		return env, nil, nil
 	}
-	copies, err := s.copyEnvironment(ctx, ownerID, p, from, slug, opts)
+	copies, err := s.copyEnvironment(ctx, ownerID, p, slug, plan, opts)
 	env.Apps = 0
 	for _, c := range copies {
 		if c.Err == nil {
@@ -201,13 +213,18 @@ func (s *Service) createEnvironment(
 	return env, copies, err
 }
 
-// copyEnvironment copies every service of one environment into another.
-func (s *Service) copyEnvironment(
-	ctx context.Context, ownerID string, p Project, from, to string, opts envOptions,
-) ([]EnvironmentCopy, error) {
+// copyPlan is the services one environment's copy is made of, databases
+// first, and the name each copy will have.
+type copyPlan struct {
+	sources []App
+	names   map[string]string
+}
+
+// planCopies decides what copying one environment into another makes.
+func (s *Service) planCopies(ctx context.Context, ownerID string, p Project, from, to string) (copyPlan, error) {
 	sources, err := s.ListInEnvironment(ctx, ownerID, p, from)
 	if err != nil {
-		return nil, err
+		return copyPlan{}, err
 	}
 	// Databases first: the services that use them are written as references
 	// to them, and a reference is to an app that exists.
@@ -222,10 +239,18 @@ func (s *Service) copyEnvironment(
 	for _, src := range sources {
 		name, err := s.freeName(ctx, ownerID, copyName(src.ServiceName(), to, taken))
 		if err != nil {
-			return nil, err
+			return copyPlan{}, err
 		}
 		names[src.Name], taken[name] = name, true
 	}
+	return copyPlan{sources: sources, names: names}, nil
+}
+
+// copyEnvironment makes the copies a plan names, in the environment to.
+func (s *Service) copyEnvironment(
+	ctx context.Context, ownerID string, p Project, to string, plan copyPlan, opts envOptions,
+) ([]EnvironmentCopy, error) {
+	sources, names := plan.sources, plan.names
 
 	// The addresses to rewrite, and the connection strings that become
 	// references: an exact copy of a database's own URL is that database,
@@ -530,3 +555,30 @@ func (s *Service) SetPREnvironments(ctx context.Context, ownerID, projectSlug st
 
 // prEnvironmentSlug is the environment a pull request gets: pr-<number>.
 func prEnvironmentSlug(number int) string { return fmt.Sprintf("pr-%d", number) }
+
+// admitCopies asks about the deploy of every copy a plan makes, by the
+// name the copy will have, and returns the context the copies are then made
+// on. A bucket runs nothing, and an empty service's copy starts as empty as
+// it is: neither deploys, and neither is asked about.
+func (s *Service) admitCopies(
+	ctx context.Context, ownerID string, p Project, to string, plan copyPlan, opts envOptions,
+) (context.Context, error) {
+	trigger, actor := AdmitEnvironment, ""
+	if opts.pr > 0 {
+		trigger, actor = AdmitPullRequest, "webhook"
+	}
+	for _, src := range plan.sources {
+		if !src.Source.Workload() || (src.Source == SourceGit && !src.Repo.Set()) {
+			continue
+		}
+		var err error
+		if ctx, err = s.askAdmission(ctx, AdmitRequest{
+			OwnerID: ownerID, App: plan.names[src.Name], ProjectID: p.ID,
+			Environment: to, Region: src.Region, Trigger: trigger, ActorKind: actor,
+			Replicas: max(src.Replicas, 1),
+		}); err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}

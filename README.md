@@ -181,7 +181,14 @@ curl -sSL https://codeblocktz.github.io/yacht/upgrade.sh | sudo sh
 
 That one only swaps the binary and restarts. If the new version does not come
 up healthy it puts the old one back, so a bad release costs a restart rather
-than an outage.
+than an outage. It never changes `/etc/yacht/yacht.env`.
+
+A new install runs with strict [network isolation](#network-isolation): apps
+and builds cannot reach cloud metadata, the nodes or the LAN. An install made
+before that keeps the `team` isolation it ran on, through the upgrader and
+through re-running the installer, and the upgrader says so each time. Moving
+it to strict is recommended; [Moving an existing install to
+strict](#moving-an-existing-install-to-strict) says what to check first.
 
 > [!IMPORTANT]
 > **Upgrading an install with accounts on and `YACHT_OPERATORS` empty.** The
@@ -512,8 +519,8 @@ checks apply, and settings that have not changed are not written again.
 | `YACHT_TURNSTILE_SITE_KEY`, `YACHT_TURNSTILE_SECRET` | — | Cloudflare Turnstile on the sign-in and sign-up forms, one widget per page, checked with siteverify; both or neither. Unset checks nothing |
 | `YACHT_APP_DOMAIN` | — | Apps get `<name>.<this>`. Point `*.<this>` at the cluster |
 | `YACHT_WILDCARD_TLS` | `false` | Serve those hostnames from the controller's default certificate |
-| `YACHT_NETWORK_ISOLATION` | `team` | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses; `off` writes no policy |
-| `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach |
+| `YACHT_NETWORK_ISOLATION` | `team` (new installs: `strict`) | Keep teams and projects apart on the network: `team` refuses connections between projects' and teams' apps; `strict` also keeps apps and builds off private addresses — cloud metadata, the nodes, the LAN; `off` writes no policy. The installer and `.env.example` write `strict` for a new install; unset stays `team` so an existing install is not changed by an upgrade. See [Network isolation](#network-isolation) |
+| `YACHT_EGRESS_ALLOW` | | Private ranges, as CIDRs, strict isolation still lets apps and builds reach: a registry or bucket on the LAN |
 | `YACHT_OPERATORS` | — | Emails of the people who run the install — the Admin area: teams and their quotas, capacity, nodes, cross-team views, registry, DNS. Empty means the owners of the install's own team (`YACHT_OWNER_ID`), never another team's owner. A named operator on no team is given one of their own when they sign in. Only named operators may act as a team for support; taking an address off the list ends that person's impersonation on their next request |
 | `YACHT_CERT_ISSUER` | — | cert-manager ClusterIssuer that gives each custom domain its own certificate. The installer sets `yacht-acme` |
 | `YACHT_BASE_URL` | — | Public URL. **Setting it switches sign-in on** |
@@ -582,6 +589,115 @@ machines and apps, `SetRegion(ctx, engine.Region{…})` configures one,
 `Engine.Routes(ctx)` is every hostname with its region and edge, and
 `Overrides.Routes` takes an `engine.RouteObserver` told when they change.
 
+To delete an app's stored data and keep the app — its settings, variables,
+domains, history and the volume's own definition —
+`Engine.Apps.EraseVolume(ctx, team, app, volume)` deletes the claim behind one
+of its volumes; with reclaim policy `Delete`, the storage class then deletes
+the data. The engine can see that the claim is gone, not that the data is:
+local-path storage whose node is down, a statically provisioned volume, or NFS
+with `archiveOnDelete` can keep it, whatever the claim says. A claim whose
+volume is `Retain` is refused with `engine.ErrVolumeRetained`, since deleting
+it would erase nothing.
+
+The app must be stopped: scaled to zero, running a release of zero — a scale to
+zero whose deploy failed is not stopped — not asleep, with no deploy in flight;
+and nothing in the cluster may mount the claim or start something that would:
+a pod short of finished (pending, running, terminating, a Job's retry), the
+app's Deployment at any replicas, its CronJob unless suspended, a Job not yet
+finished. Otherwise it is refused with `engine.ErrVolumeInUse`. A pod that
+starts between the check and the delete leaves the claim Terminating until it
+ends, and the call says so. The check and the delete happen under the app's
+convergence lock; the wait for the claim to go (up to a minute; call again to
+keep waiting) does not, so one slow claim holds up no other app.
+
+A stopped app is given no new claim, and a claim still being deleted is not
+mounted — a start meets it as `ErrVolumeDeleting`, to try again — so the next
+start gets a new, empty one, at the same size and path. Erasing a volume
+already erased does nothing. A volume detached with `DeleteVolume`, whose claim
+was kept, can be erased by its name. `backups` is the claim a database's
+backups are kept on, and no volume's name: it is refused for a new volume, and
+by `EraseVolume`. Each erase is logged at warn before the claim is deleted —
+with the claim's uid and the persistent volume behind it — and again with the
+outcome; a refusal, or nothing to erase, at info.
+
+A database is a workload with a data volume like any other: its next start
+initialises an empty database with the credentials it had, so what refers to
+it connects to nothing. Its backups are elsewhere and are not erased —
+`Backups` and `DeleteBackup` are for those. Not on the dashboard or the API:
+there is no undo.
+
+To keep some deploys from happening, `Overrides.Admit` is asked before the
+engine admits each one — before anything is written for it, and with no lock
+held:
+
+```go
+engine.Overrides{
+	Admit: func(ctx context.Context, r engine.AdmitRequest) error {
+		if r.ActorKind == "system" {
+			return nil // the wrapper's own calls, made on engine.WithSystemActor(ctx)
+		}
+		if held(ctx, r.OwnerID) {
+			return &engine.AdmitRefusal{Message: "Deploys are paused for this team."}
+		}
+		return nil
+	},
+}
+```
+
+`AdmitRequest` names the owner; the app (`AppID` is `uuid.Nil` for one the
+deploy creates, and `App` the name it will have); its project, environment and
+region; `Replicas` the deploy runs and `CurrentReplicas` the app runs now; who
+asked — `ActorKind` `user`, `token`, `webhook` or `system`, and `ActorID`, the
+person's or the token's id when there is one; and what asked, as `Trigger`:
+
+- `AdmitCreate`: a new service, from the dashboard, a repository, a database,
+  or a template's stack, each app of which is asked about before any exists.
+- `AdmitRedeploy`, `AdmitRollback`, `AdmitUpload` (the CLI's `up`) and
+  `AdmitStaged` (deploying the changes an app has waiting).
+- `AdmitUpdate`: a change that rolls out when it is saved — settings, a health
+  check, a database update, and a variable: set, removed, or a `.env` edit.
+- `AdmitScale`: a new replica count. A scale to zero stops the app and is never
+  asked, nor is a count the app already runs. A scale runs the release the app
+  is running at the new count and nothing else: changes staged for the app
+  stay staged until they are deployed.
+- `AdmitVolume` (storage attached or grown) and `AdmitMove` (a move to the
+  region `Region` names).
+- `AdmitPush` (an app's own webhook) and `AdmitGitHubPush`. A push that has to
+  wait behind a deploy in flight is asked about when it arrives and again, as
+  `AdmitQueuedPush`, when the engine's own loop admits it.
+- `AdmitEnvironment` and `AdmitPullRequest`: each service copied into a new
+  environment, asked about before the environment is made.
+
+An `*engine.AdmitRefusal` is shown as it is — a plain sentence when its
+`Message` is empty: on the dashboard, as the API's `refused` error (403),
+and as `Ignored — <message>` beside a Git host's delivery and as the app's
+last delivery. A refused queued push is dropped, not tried again. A GitHub push
+that reaches several teams is refused only for those refused.
+
+Any other error, or no answer within `engine.AdmitTimeout` (5 seconds), fails
+the deploy with `engine.ErrAdmissionUnavailable` — "deploys can't be checked
+right now" — and the error itself goes only to the log, since it may name the
+wrapper's own systems. The API answers it 503. A push it happens to is
+recorded on the app as one that could not be checked, and its delivery fails
+so it can be sent again; a GitHub delivery sent again reaches only the apps
+that could not be checked, not those that took it the first time. A queued push it happens to stays queued,
+and the engine waits longer each time before asking about it again.
+
+Each path asks before its transaction, so a slow hook holds up only the
+deploy it is asked about. Two places also ask as a fallback, for a path added
+later that forgets to: where a deployment row is written, and a new app's
+first deploy. None of the paths above reaches them unasked; if one did, the
+hook would run inside that transaction, holding the app's row and, for a new
+app, its owner's quota row and the install's capacity policy row — so it
+should never call back into `Engine.Apps`.
+
+Not asked: a secret variable set or removed, which the running release does
+not hold and the next deploy reads; an empty service, which deploys nothing
+until its first upload, and a bucket, which never deploys; waking a sleeping
+app, which runs the release already admitted (stop an app by scaling it to
+zero); and the engine finishing a deploy it already admitted, after a restart,
+or converging an app on what it was already admitted with.
+
 For charging egress, `Engine.Egress(ctx, from, to)` is the bytes each app sent
 to the internet in the window — the response bodies the ingress served for it
 and for its waker while it slept, from Traefik's counters read raw, summed over
@@ -628,6 +744,89 @@ exception keeps references working: an app in another of the team's projects
 whose variables name this one (`${{db.DATABASE_URL}}`, or its full host) is
 let in too.
 
+`YACHT_NETWORK_ISOLATION=strict` limits the way out as well, and is what a new
+install is given. Apps, and the jobs that back up and restore their databases,
+reach:
+
+- DNS: the cluster's resolver in `kube-system`, port 53 over UDP and TCP;
+- their own team's apps, databases included, in any of its projects (the
+  receiving end still admits only its project and the peers above);
+- public addresses: Git hosts, package mirrors, image and package registries,
+  mail relays, external buckets and APIs;
+- the ingress controller's HTTP and HTTPS entrypoints, and K3s's load
+  balancer in front of them, as the internet does. A request for one of the
+  cluster's own public addresses arrives there by a private one, so without
+  this an app could not call another app's URL, nor reach a bucket or
+  registry the cluster serves under a domain;
+- ranges named in `YACHT_EGRESS_ALLOW`.
+
+Builds reach the same, except any team's apps. Nothing else private is
+reachable: not cloud metadata (`169.254.169.254`), not the nodes' private
+addresses, so not the kubelet, the Kubernetes API, the engine or a Postgres
+listening there, not a Garage admin API on a private address, not anything
+else on the LAN. A node's public address is a public address, and is
+reachable as it is from the internet: firewall what listens on it. The way in
+is the same under both modes, so the ingress controller and the waker reach
+apps as before.
+
+`team` is what an unset `YACHT_NETWORK_ISOLATION` means. That keeps an
+install made before strict was the default — whose settings have no line for
+it — on what it has always run on: the installer writes strict only on a
+machine with no `/etc/yacht/yacht.env` yet, a re-run writes `team` into a file
+without the line, and `upgrade.sh` never touches the file. `off` writes no
+policy at all. Namespaces made before a change of mode are brought into line
+at startup.
+
+#### Moving an existing install to strict
+
+Under `team`, any app or build — and a build runs whatever a repository's
+Dockerfile says — can reach the cloud provider's metadata service (on most
+clouds, the machine's credentials), the kubelet and the Kubernetes API on the
+nodes' addresses, the engine's own port and waker, and every private address
+the machine can, including a Postgres or a Garage admin API listening on one.
+Isolation between teams then rests on those all refusing a stranger.
+`upgrade.sh` says so after each upgrade until the install is strict.
+
+Before switching, check what the install's apps and builds reach on a
+private address, because strict refuses each of them:
+
+- an image registry on the LAN, or one the cluster serves by its Service
+  address rather than through the ingress — builds stop pushing;
+- a backup bucket (`YACHT_BACKUP_S3_ENDPOINT`) or a Garage endpoint
+  (`YACHT_BUCKETS_ENDPOINT`) on a private address — backups and apps stop
+  reaching it;
+- a `YACHT_BASE_URL` or `YACHT_BUILD_SOURCE_URL` that is a private address,
+  not the ingress — `yacht up` builds stop fetching their source;
+- anything else an app talks to on the LAN, or another team's TCP proxy
+  reached through the cluster's own address — the connection arrives at the
+  other team's pod, which strict keeps apps from dialling;
+- IPv6 destinations, on a dual-stack cluster: strict lets out IPv4 only.
+
+Name the first three in `YACHT_EGRESS_ALLOW` as narrowly as possible, a /32
+each. A range that holds the nodes or the Postgres hands that back to every
+app. Then set `YACHT_NETWORK_ISOLATION=strict` in `/etc/yacht/yacht.env`
+(adding the line if it is not there) and restart:
+
+```bash
+sudoedit /etc/yacht/yacht.env    # YACHT_NETWORK_ISOLATION=strict
+sudo systemctl restart yacht
+```
+
+Every namespace's policy is rewritten as the engine starts; the log says
+`network isolation in place mode=strict`. Run one build and check one app
+still reaches its database and the internet; setting `team` again and
+restarting undoes it the same way. Re-running the installer keeps the value.
+
+A wrapping application can change the mode while the engine runs, with
+`Engine.SetNetworkIsolation`: every namespace is rewritten before it
+returns, and a deploy racing the change never leaves one on the old mode.
+The settings are then only where it starts. With several replicas, the
+wrapper keeps the setting where each replica reads it, and calls this on
+every replica.
+
+This needs a network plugin that enforces NetworkPolicy. K3s's does, through
+its embedded policy controller; flannel alone does not.
+
 ### Private networking
 
 Inside a project and environment, a service reaches another by its name, as
@@ -639,28 +838,6 @@ the cluster's CoreDNS, `orchestrator.PrivateDNSRewrite`; on K3s, put it in the
 `coredns-custom` ConfigMap in `kube-system` under a key ending `.override`,
 and CoreDNS loads it within about a minute and a half. The engine keeps the
 aliases in line every ten seconds. Settings › Networking shows the name.
-
-`YACHT_NETWORK_ISOLATION=strict` limits the way out as well: apps and builds
-reach DNS, their own team's apps and public addresses, and no private
-address — not the nodes' network, not cloud metadata, not anything else on
-the LAN — except ranges named in `YACHT_EGRESS_ALLOW`. They do reach the
-ingress controller's HTTP and HTTPS entrypoints (and K3s's load balancer in
-front of them), as the internet does: a request for one of the cluster's own
-public addresses arrives there by a private one, so without it an app could
-not call another app's URL, nor a build push to a registry the cluster
-serves. Use it wherever teams
-are strangers to each other. Namespaces made before a change of mode are
-brought into line at startup.
-
-A wrapping application can change the mode while the engine runs, with
-`Engine.SetNetworkIsolation`: every namespace is rewritten before it
-returns, and a deploy racing the change never leaves one on the old mode.
-The settings are then only where it starts. With several replicas, the
-wrapper keeps the setting where each replica reads it, and calls this on
-every replica.
-
-This needs a network plugin that enforces NetworkPolicy. K3s's does, through
-its embedded policy controller; flannel alone does not.
 
 ### Signing in
 

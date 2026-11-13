@@ -7,25 +7,68 @@ package dbgen
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const appendBuildLog = `-- name: AppendBuildLog :exec
 UPDATE builds
-SET log = log || $1::text
-WHERE id = $2
+SET log = CASE
+        WHEN octet_length(log) + octet_length($1::text) <= $2::bigint
+            THEN log || $1::text
+        ELSE log || $3::text
+    END,
+    log_truncated = octet_length(log) + octet_length($1::text) > $2::bigint
+WHERE id = $4 AND NOT log_truncated
 `
 
 type AppendBuildLogParams struct {
-	Chunk string
-	ID    uuid.UUID
+	Chunk    string
+	MaxBytes int64
+	Marker   string
+	ID       uuid.UUID
 }
 
 // Appended rather than replaced, so a build streaming its output does not have
 // to hold the whole log in memory to write any of it.
+//
+// Up to max_bytes, and then the marker once in place of the chunk that would
+// have crossed it, and nothing after. A build that prints without end would
+// otherwise grow one row without end, rewriting all of it on every line.
+// Decided in the statement, under the row lock, so two writers cannot both
+// fit a chunk the limit had room for only once, nor both write the marker.
 func (q *Queries) AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error {
-	_, err := q.db.Exec(ctx, appendBuildLog, arg.Chunk, arg.ID)
+	_, err := q.db.Exec(ctx, appendBuildLog,
+		arg.Chunk,
+		arg.MaxBytes,
+		arg.Marker,
+		arg.ID,
+	)
+	return err
+}
+
+const appendBuildLogTail = `-- name: AppendBuildLogTail :exec
+UPDATE builds
+SET log = log || $1::text
+WHERE id = $2
+  AND octet_length(log) + octet_length($1::text) <= $3::bigint
+`
+
+type AppendBuildLogTailParams struct {
+	Chunk    string
+	ID       uuid.UUID
+	MaxBytes int64
+}
+
+// Output written after the build, the pre-deploy command's, into a reserve
+// beyond the build's own limit: max_bytes here is that limit and the
+// reserve together. A build that filled its log still shows what ran after
+// it, and a chunk the reserve has no room for is dropped, the command's
+// output being kept whole with its deployment besides.
+func (q *Queries) AppendBuildLogTail(ctx context.Context, arg AppendBuildLogTailParams) error {
+	_, err := q.db.Exec(ctx, appendBuildLogTail, arg.Chunk, arg.ID, arg.MaxBytes)
 	return err
 }
 
@@ -33,7 +76,7 @@ const createBuild = `-- name: CreateBuild :one
 
 INSERT INTO builds (owner_id, app_id, deployment_id, repo_url, repo_ref)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args, log_truncated
 `
 
 type CreateBuildParams struct {
@@ -72,6 +115,7 @@ func (q *Queries) CreateBuild(ctx context.Context, arg CreateBuildParams) (Build
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
@@ -82,9 +126,15 @@ SET status      = $1,
     message     = $2,
     image       = $3,
     commit_sha  = $4,
-    finished_at = now()
+    finished_at = now(),
+    log = CASE
+        WHEN log_truncated AND $2::text <> '' THEN log || $2::text || E'\n'
+        ELSE log
+    END
 WHERE id = $5
-RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args
+RETURNING id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha,
+          image, status, message, started_at, finished_at, job_name,
+          build_args, log_truncated
 `
 
 type FinishBuildParams struct {
@@ -95,7 +145,29 @@ type FinishBuildParams struct {
 	ID        uuid.UUID
 }
 
-func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error) {
+type FinishBuildRow struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	RepoUrl      string
+	RepoRef      string
+	CommitSha    string
+	Image        string
+	Status       string
+	Message      string
+	StartedAt    time.Time
+	FinishedAt   pgtype.Timestamptz
+	JobName      string
+	BuildArgs    []string
+	LogTruncated bool
+}
+
+// A log cut at its limit ends with the marker and lost the build's last
+// lines, which are usually why it failed: the message, which says so, is
+// written after the marker. Returns the build without its log, which no
+// caller of this reads.
+func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (FinishBuildRow, error) {
 	row := q.db.QueryRow(ctx, finishBuild,
 		arg.Status,
 		arg.Message,
@@ -103,7 +175,7 @@ func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build
 		arg.CommitSha,
 		arg.ID,
 	)
-	var i Build
+	var i FinishBuildRow
 	err := row.Scan(
 		&i.ID,
 		&i.OwnerID,
@@ -115,17 +187,17 @@ func (q *Queries) FinishBuild(ctx context.Context, arg FinishBuildParams) (Build
 		&i.Image,
 		&i.Status,
 		&i.Message,
-		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
 
 const getBuild = `-- name: GetBuild :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args, log_truncated FROM builds
 WHERE owner_id = $1 AND id = $2
 `
 
@@ -153,12 +225,13 @@ func (q *Queries) GetBuild(ctx context.Context, arg GetBuildParams) (Build, erro
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
 
 const getBuildForDeployment = `-- name: GetBuildForDeployment :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args, log_truncated FROM builds
 WHERE owner_id = $1 AND deployment_id = $2
 `
 
@@ -167,6 +240,7 @@ type GetBuildForDeploymentParams struct {
 	DeploymentID uuid.UUID
 }
 
+// The build with its log, for the page that shows the log.
 func (q *Queries) GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error) {
 	row := q.db.QueryRow(ctx, getBuildForDeployment, arg.OwnerID, arg.DeploymentID)
 	var i Build
@@ -186,12 +260,99 @@ func (q *Queries) GetBuildForDeployment(ctx context.Context, arg GetBuildForDepl
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
+	)
+	return i, err
+}
+
+const getBuildLogFrom = `-- name: GetBuildLogFrom :one
+SELECT CAST(substr(log, $1::int + 1) AS text) AS chunk,
+       char_length(log)::int AS length,
+       status
+FROM builds
+WHERE owner_id = $2 AND deployment_id = $3
+`
+
+type GetBuildLogFromParams struct {
+	OffsetChars  int32
+	OwnerID      string
+	DeploymentID uuid.UUID
+}
+
+type GetBuildLogFromRow struct {
+	Chunk  string
+	Length int32
+	Status string
+}
+
+// A build log from a character offset, with where it ends and whether the
+// build still runs, for a reader following it: each poll sends what is new
+// rather than the whole log again.
+func (q *Queries) GetBuildLogFrom(ctx context.Context, arg GetBuildLogFromParams) (GetBuildLogFromRow, error) {
+	row := q.db.QueryRow(ctx, getBuildLogFrom, arg.OffsetChars, arg.OwnerID, arg.DeploymentID)
+	var i GetBuildLogFromRow
+	err := row.Scan(&i.Chunk, &i.Length, &i.Status)
+	return i, err
+}
+
+const getBuildMetaForDeployment = `-- name: GetBuildMetaForDeployment :one
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha,
+       image, status, message, started_at, finished_at, job_name,
+       build_args, log_truncated
+FROM builds
+WHERE owner_id = $1 AND deployment_id = $2
+`
+
+type GetBuildMetaForDeploymentParams struct {
+	OwnerID      string
+	DeploymentID uuid.UUID
+}
+
+type GetBuildMetaForDeploymentRow struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	RepoUrl      string
+	RepoRef      string
+	CommitSha    string
+	Image        string
+	Status       string
+	Message      string
+	StartedAt    time.Time
+	FinishedAt   pgtype.Timestamptz
+	JobName      string
+	BuildArgs    []string
+	LogTruncated bool
+}
+
+// The build without its log, for everything that asks about a build rather
+// than reading what it printed. The same columns FinishBuild returns.
+func (q *Queries) GetBuildMetaForDeployment(ctx context.Context, arg GetBuildMetaForDeploymentParams) (GetBuildMetaForDeploymentRow, error) {
+	row := q.db.QueryRow(ctx, getBuildMetaForDeployment, arg.OwnerID, arg.DeploymentID)
+	var i GetBuildMetaForDeploymentRow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.AppID,
+		&i.DeploymentID,
+		&i.RepoUrl,
+		&i.RepoRef,
+		&i.CommitSha,
+		&i.Image,
+		&i.Status,
+		&i.Message,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.JobName,
+		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
 
 const getLatestSuccessfulBuildForApp = `-- name: GetLatestSuccessfulBuildForApp :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args, log_truncated FROM builds
 WHERE owner_id = $1 AND app_id = $2
   AND status = 'succeeded' AND commit_sha <> ''
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
@@ -222,12 +383,16 @@ func (q *Queries) GetLatestSuccessfulBuildForApp(ctx context.Context, arg GetLat
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
 
 const getSuccessfulBuildForImage = `-- name: GetSuccessfulBuildForImage :one
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds
+SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha,
+       image, status, message, started_at, finished_at, job_name,
+       build_args, log_truncated
+FROM builds
 WHERE owner_id = $1 AND app_id = $2
   AND status = 'succeeded' AND image = $3
 ORDER BY finished_at DESC NULLS LAST, started_at DESC, id DESC
@@ -240,12 +405,30 @@ type GetSuccessfulBuildForImageParams struct {
 	Image   string
 }
 
+type GetSuccessfulBuildForImageRow struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	RepoUrl      string
+	RepoRef      string
+	CommitSha    string
+	Image        string
+	Status       string
+	Message      string
+	StartedAt    time.Time
+	FinishedAt   pgtype.Timestamptz
+	JobName      string
+	BuildArgs    []string
+	LogTruncated bool
+}
+
 // The build that made an image, an upload's as well as a clone's: an upload
 // has no commit, and what it declared still decides whether a changed
-// variable is in the image.
-func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error) {
+// variable is in the image. Read on every release, so without the log.
+func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (GetSuccessfulBuildForImageRow, error) {
 	row := q.db.QueryRow(ctx, getSuccessfulBuildForImage, arg.OwnerID, arg.AppID, arg.Image)
-	var i Build
+	var i GetSuccessfulBuildForImageRow
 	err := row.Scan(
 		&i.ID,
 		&i.OwnerID,
@@ -257,47 +440,59 @@ func (q *Queries) GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccess
 		&i.Image,
 		&i.Status,
 		&i.Message,
-		&i.Log,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.JobName,
 		&i.BuildArgs,
+		&i.LogTruncated,
 	)
 	return i, err
 }
 
 const listRunningBuilds = `-- name: ListRunningBuilds :many
-SELECT id, owner_id, app_id, deployment_id, repo_url, repo_ref, commit_sha, image, status, message, log, started_at, finished_at, job_name, build_args FROM builds WHERE status = 'running' ORDER BY started_at
+SELECT id, owner_id, app_id, deployment_id, status, message,
+       image, commit_sha, job_name, started_at
+FROM builds WHERE status = 'running' ORDER BY started_at
 `
+
+type ListRunningBuildsRow struct {
+	ID           uuid.UUID
+	OwnerID      string
+	AppID        uuid.UUID
+	DeploymentID uuid.UUID
+	Status       string
+	Message      string
+	Image        string
+	CommitSha    string
+	JobName      string
+	StartedAt    time.Time
+}
 
 // Every build still claiming to run, oldest first. Not owner-scoped: this
 // feeds the reconciler, which is the platform settling its own records rather
-// than a team reading theirs.
-func (q *Queries) ListRunningBuilds(ctx context.Context) ([]Build, error) {
+// than a team reading theirs. Without the log, which the reconciler never
+// reads and which would otherwise come along for every running build on
+// every pass.
+func (q *Queries) ListRunningBuilds(ctx context.Context) ([]ListRunningBuildsRow, error) {
 	rows, err := q.db.Query(ctx, listRunningBuilds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Build{}
+	items := []ListRunningBuildsRow{}
 	for rows.Next() {
-		var i Build
+		var i ListRunningBuildsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OwnerID,
 			&i.AppID,
 			&i.DeploymentID,
-			&i.RepoUrl,
-			&i.RepoRef,
-			&i.CommitSha,
-			&i.Image,
 			&i.Status,
 			&i.Message,
-			&i.Log,
-			&i.StartedAt,
-			&i.FinishedAt,
+			&i.Image,
+			&i.CommitSha,
 			&i.JobName,
-			&i.BuildArgs,
+			&i.StartedAt,
 		); err != nil {
 			return nil, err
 		}

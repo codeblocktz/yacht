@@ -100,6 +100,11 @@ func (s *Service) Rollback(ctx context.Context, ownerID, name string, releaseID 
 	if err := s.checkReleaseSecrets(ctx, a, release); err != nil {
 		return err
 	}
+	req := admitRequest(a, AdmitRollback)
+	req.Replicas = release.Replicas
+	if ctx, err = s.askAdmission(ctx, req); err != nil {
+		return err
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

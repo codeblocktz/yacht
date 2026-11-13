@@ -153,6 +153,19 @@ func (s *Service) setVariableNow(
 		}
 	}
 
+	// Plain environment is release-owned. Changing a plain value into a secret
+	// also removes it from the immutable environment, so that transition gets a
+	// release even though its new value lives only in the current overlay.
+	releaseOwned := !in.Secret || (exists && !existing.Secret)
+	// A change that rolls out is a deploy, asked about before it is saved.
+	// A bucket's variables are what apps read through references; there is
+	// nothing of its own to deploy them to.
+	if releaseOwned && a.Source.Workload() {
+		if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitUpdate)); err != nil {
+			return err
+		}
+	}
+
 	params := dbgen.UpsertVariableAndBumpParams{
 		OwnerID: ownerID, AppID: a.ID, Key: in.Key, Secret: in.Secret,
 	}
@@ -178,12 +191,6 @@ func (s *Service) setVariableNow(
 		return err
 	}
 
-	// Plain environment is release-owned. Changing a plain value into a secret
-	// also removes it from the immutable environment, so that transition gets a
-	// release even though its new value lives only in the current overlay.
-	releaseOwned := !in.Secret || (exists && !existing.Secret)
-	// A bucket's variables are what apps read through references; there is
-	// nothing of its own to deploy them to.
 	if releaseOwned && a.Source.Workload() {
 		release, err := s.createRelease(ctx, s.q, a, "")
 		if err != nil {
@@ -215,6 +222,21 @@ func (s *Service) DeleteVariable(ctx context.Context, ownerID, appName, key stri
 	}
 	if s.opts.StageChanges {
 		return s.stageRemoval(ctx, s.q, a, key)
+	}
+	// A plain variable is in the release, so removing it rolls out: asked
+	// about before it is removed.
+	if a.Source.Workload() {
+		existing, err := s.q.GetVariable(ctx, dbgen.GetVariableParams{OwnerID: ownerID, AppID: a.ID, Key: key})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVariableNotFound
+		} else if err != nil {
+			return fmt.Errorf("app: read variable: %w", err)
+		}
+		if !existing.Secret {
+			if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitUpdate)); err != nil {
+				return err
+			}
+		}
 	}
 
 	row, err := s.q.DeleteVariableAndBump(ctx, dbgen.DeleteVariableAndBumpParams{
