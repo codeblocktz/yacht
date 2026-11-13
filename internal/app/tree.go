@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 )
@@ -20,9 +19,16 @@ import (
 // GitHub only, which is stated rather than hidden — a field that silently stops
 // helping on GitLab would be worse than one that says why.
 //
-// Public repositories need no credential. GITHUB_TOKEN is used when set, which
-// is what a private repository and a busy install both need: unauthenticated
-// requests are limited to sixty an hour per address.
+// Anonymous, always. The repository is whatever somebody typed, so a credential
+// sent with it would be lent to them: an operator's GITHUB_TOKEN attached here
+// would let any member list the directories of any private repository that
+// token can read. A private repository is browsed through the GitHub App
+// instead (GitHubDirectories), with the installation the team connected and
+// only the repositories it granted.
+
+// gitHubAPI is GitHub's REST API. A variable so a test can stand a server in
+// for it.
+var gitHubAPI = "https://api.github.com"
 
 // ErrTreeUnsupported means the host is not one whose tree can be read.
 var ErrTreeUnsupported = fmt.Errorf("app: only GitHub repositories can be browsed")
@@ -51,10 +57,18 @@ func (s *Service) Directories(ctx context.Context, repoURL, path string) ([]stri
 	ctx, cancel := context.WithTimeout(ctx, branchTimeout)
 	defer cancel()
 
-	endpoint := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" +
+	endpoint := gitHubAPI + "/repos/" + url.PathEscape(owner) + "/" +
 		url.PathEscape(repo) + "/contents"
 	if path != "" {
-		endpoint += "/" + path
+		// Each segment escaped on its own: the path is typed, and unescaped a
+		// "?" or "#" in it would end the path and start a query of the
+		// typist's choosing.
+		for _, seg := range strings.Split(path, "/") {
+			if seg == "" || seg == "." {
+				return nil, fmt.Errorf("app: %q is not a path inside the repository", path)
+			}
+			endpoint += "/" + url.PathEscape(seg)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -62,12 +76,6 @@ func (s *Service) Directories(ctx context.Context, repoURL, path string) ([]stri
 		return nil, fmt.Errorf("%w: %s", ErrRepoUnreachable, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	// Optional. Set it for a private repository, or to lift the sixty-an-hour
-	// limit that unauthenticated requests share across everything on this
-	// address.
-	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

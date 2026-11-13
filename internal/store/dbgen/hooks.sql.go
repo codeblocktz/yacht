@@ -28,6 +28,30 @@ func (q *Queries) DeleteAppHook(ctx context.Context, arg DeleteAppHookParams) (i
 	return result.RowsAffected(), nil
 }
 
+const dropHookPending = `-- name: DropHookPending :execrows
+UPDATE app_hooks
+SET pending_at = NULL, pending_revision = ''
+WHERE app_id = $1 AND owner_id = $2
+  AND pending_at IS NOT NULL AND pending_revision = $3
+`
+
+type DropHookPendingParams struct {
+	AppID    uuid.UUID
+	OwnerID  string
+	Revision string
+}
+
+// A queued push refused when its turn came, taken out only if it is still
+// the one that was refused: a newer push queued meanwhile stays, to be asked
+// about in its own turn.
+func (q *Queries) DropHookPending(ctx context.Context, arg DropHookPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, dropHookPending, arg.AppID, arg.OwnerID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAppHook = `-- name: GetAppHook :one
 SELECT app_id, owner_id, secret, created_at, pending_at, pending_revision, last_delivery_at, last_delivery FROM app_hooks WHERE owner_id = $1 AND app_id = $2
 `

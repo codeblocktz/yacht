@@ -28,10 +28,18 @@ SET max_apps      = excluded.max_apps,
     updated_at    = now()
 RETURNING *;
 
+-- Each app as it is saved and, beside it, as the release it is running: with
+-- changes staged rather than deployed the two differ, and the running one is
+-- what the cluster holds. Counting only the saved row let a team stage a
+-- smaller limit, spend what that freed on another app, and discard the stage.
 -- name: ListAppFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit
-FROM apps
-WHERE owner_id = @owner_id;
+SELECT a.id, a.replicas, a.cpu_limit, a.memory_limit,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id
+WHERE a.owner_id = @owner_id;
 
 -- name: SumVolumeBytes :one
 SELECT coalesce(sum(size_bytes), 0)::bigint AS total
@@ -45,9 +53,13 @@ WHERE owner_id = @owner_id;
 -- way the cluster's pod list is. One query rather than one per team, because
 -- an install hosting many teams is exactly the install this page is for.
 -- name: ListAllAppFootprints :many
-SELECT owner_id, replicas, cpu_limit, memory_limit
-FROM apps
-ORDER BY owner_id;
+SELECT a.owner_id, a.replicas, a.cpu_limit, a.memory_limit,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id
+ORDER BY a.owner_id;
 
 -- Every team with its quota, its pool, its storage and how many people are in
 -- it. The operator's list; see ListAllAppFootprints for why it crosses teams.

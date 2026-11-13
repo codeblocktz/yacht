@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
 
 func setEnv(t *testing.T, kv map[string]string) {
@@ -45,6 +47,30 @@ func TestBuildAdmissionCeilingLoadsAndIsBounded(t *testing.T) {
 	setEnv(t, map[string]string{"YACHT_MAX_CONCURRENT_BUILDS": "0"})
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_CONCURRENT_BUILDS") {
 		t.Fatalf("Load accepted an unbounded-zero build ceiling: %v", err)
+	}
+}
+
+func TestBuildLogLimitDefaultsAndIsBounded(t *testing.T) {
+	setEnv(t, nil)
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.MaxBuildLogBytes != 4<<20 {
+		t.Fatalf("MaxBuildLogBytes = %d, want 4 MiB by default", c.MaxBuildLogBytes)
+	}
+
+	setEnv(t, map[string]string{"YACHT_MAX_BUILD_LOG_BYTES": "1024"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
+		t.Fatalf("Load accepted a build log limit too small to read: %v", err)
+	}
+
+	// A typo is refused, not read as the default.
+	for _, v := range []string{"4MiB", "4194304x", "99999999999"} {
+		setEnv(t, map[string]string{"YACHT_MAX_BUILD_LOG_BYTES": v})
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_MAX_BUILD_LOG_BYTES") {
+			t.Fatalf("Load accepted YACHT_MAX_BUILD_LOG_BYTES=%q: %v", v, err)
+		}
 	}
 }
 
@@ -527,5 +553,137 @@ func TestTurnstileKeysGoTogether(t *testing.T) {
 		if err == nil && c.TurnstileSiteKey != tc.site {
 			t.Errorf("site key = %q, want %q", c.TurnstileSiteKey, tc.site)
 		}
+	}
+}
+
+// The engine's outbound lists are read and checked at start, so a typo in
+// one stops the engine rather than silently allowing nothing — or refusing
+// a range somebody meant to refuse.
+func TestTheOutboundListsAreReadAndChecked(t *testing.T) {
+	t.Setenv("YACHT_OUTBOUND_ALLOW", " registry.lan:5000, 100.64.0.0/10 ,")
+	t.Setenv("YACHT_OUTBOUND_DENY", "203.0.113.0/24")
+	c := Config{
+		OutboundAllow: envList("YACHT_OUTBOUND_ALLOW"),
+		OutboundDeny:  envList("YACHT_OUTBOUND_DENY"),
+	}
+	if len(c.OutboundAllow) != 2 || c.OutboundAllow[1] != "100.64.0.0/10" {
+		t.Errorf("allow = %q", c.OutboundAllow)
+	}
+	if _, err := c.Outbound(); err != nil {
+		t.Errorf("valid lists: %v", err)
+	}
+	for _, bad := range []Config{
+		{OutboundAllow: []string{"https://registry.lan"}},
+		{OutboundDeny: []string{"registry.lan"}},
+	} {
+		if _, err := bad.Outbound(); err == nil {
+			t.Errorf("%+v was accepted", bad)
+		}
+	}
+}
+
+// Every address in the config the install is reached at is offered for
+// reserving, as it is configured; the domain package reduces each to a host.
+func TestPlatformHostsNameTheInstallsOwnAddresses(t *testing.T) {
+	c := Config{
+		BaseURL: "https://yacht.example.com", BuildSourceURL: "https://build.example.com",
+		BucketsEndpoint: "https://s3.example.com", TCPProxyHost: "tcp.example.com",
+		BucketsS3URL: "http://garage:3900", BucketsAdminURL: "http://garage:3903",
+		BackupS3Endpoint: "https://backups.example.com", LogsURL: "http://logs.example.com",
+		MetricsURL: "http://metrics.example.com", MailWebsite: "https://example.com",
+	}
+	zones, names := c.PlatformHosts()
+	all := strings.Join(append(zones, names...), " ")
+	for _, want := range []string{
+		"yacht.example.com", "build.example.com", "s3.example.com", "tcp.example.com",
+		"garage:3900", "garage:3903", "backups.example.com", "logs.example.com", "metrics.example.com",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("PlatformHosts leaves out %s: zones %v, names %v", want, zones, names)
+		}
+	}
+	// The operator's own site may be an app on the install.
+	if strings.Contains(all, "https://example.com") {
+		t.Errorf("PlatformHosts reserves the operator's website: %v %v", zones, names)
+	}
+	if !strings.Contains(strings.Join(zones, " "), "yacht.example.com") {
+		t.Errorf("the dashboard is not a zone: %v", zones)
+	}
+}
+
+// An address that cannot be read as a host would be dropped from what is
+// reserved, silently; it is refused at startup instead, naming the variable.
+// An IP address is fine: it is not a name anybody could bring.
+func TestAnUnreadablePlatformAddressIsRefused(t *testing.T) {
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "http://"})
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "YACHT_METRICS_URL") {
+		t.Fatalf("Load = %v, want YACHT_METRICS_URL refused", err)
+	}
+	setEnv(t, map[string]string{"YACHT_METRICS_URL": "", "YACHT_TCP_PROXY_HOST": "203.0.113.7",
+		"YACHT_LOGS_URL": "http://10.0.0.5:9428"})
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load with IP addresses: %v", err)
+	}
+	setEnv(t, map[string]string{"YACHT_TCP_PROXY_HOST": "", "YACHT_LOGS_URL": "", "YACHT_METRICS_URL": "",
+		"YACHT_RESERVED_DOMAINS_ALLOW": "shop.example.com"})
+	c, err := Load()
+	if err != nil || len(c.ReservedDomainsAllow) != 1 {
+		t.Fatalf("Load with an allow list = %+v, %v", c.ReservedDomainsAllow, err)
+	}
+}
+
+// The owner's address is compared with the address somebody signs in as, and
+// the owner id with the team's id, both of which are bare. Kept as written, a
+// display name or a stray space would make an owner nobody can ever be.
+func TestTheOwnerIsReadBare(t *testing.T) {
+	setEnv(t, map[string]string{
+		"YACHT_OWNER_EMAIL": " The Founder <founder@example.test> ",
+		"YACHT_OWNER_ID":    " owner-local ",
+	})
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OwnerEmail != "founder@example.test" {
+		t.Errorf("OwnerEmail = %q, want founder@example.test", c.OwnerEmail)
+	}
+	if c.OwnerID != "owner-local" {
+		t.Errorf("OwnerID = %q, want owner-local", c.OwnerID)
+	}
+
+	setEnv(t, map[string]string{"YACHT_OWNER_EMAIL": "not an address"})
+	if _, err := Load(); err == nil {
+		t.Error("an owner address that is not one was accepted")
+	}
+}
+
+// Unset is team, and must stay so: an install made before strict was what
+// the installer writes has no line for it, and an upgrade, which never
+// touches the file, would otherwise tighten its network unasked.
+func TestNetworkIsolationUnsetIsTeam(t *testing.T) {
+	setEnv(t, nil)
+	t.Setenv("YACHT_NETWORK_ISOLATION", "")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	iso, err := c.Isolation()
+	if err != nil {
+		t.Fatalf("Isolation: %v", err)
+	}
+	if iso.Mode != orchestrator.IsolationTeam {
+		t.Errorf("unset YACHT_NETWORK_ISOLATION is %q, want team", iso.Mode)
+	}
+}
+
+// .env.example is where a new install made by hand starts, so it starts
+// strict, as the installer's does.
+func TestEnvExampleStartsStrict(t *testing.T) {
+	example, err := os.ReadFile("../../.env.example")
+	if err != nil {
+		t.Fatalf("read .env.example: %v", err)
+	}
+	if !regexp.MustCompile(`(?m)^YACHT_NETWORK_ISOLATION=strict$`).Match(example) {
+		t.Error(".env.example does not set YACHT_NETWORK_ISOLATION=strict")
 	}
 }

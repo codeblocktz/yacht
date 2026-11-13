@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -60,6 +62,11 @@ func (s *Service) DeliverGitHub(ctx context.Context, d GitHubDelivery) (string, 
 		return "", fmt.Errorf("app: record GitHub delivery: %w", err)
 	}
 	if n == 0 {
+		// A push some of whose apps could not be checked is kept, and sent
+		// again it reaches only those: the others took it the first time.
+		if strings.EqualFold(strings.TrimSpace(d.Event), "push") {
+			return s.gitHubPush(ctx, d.Body, true)
+		}
 		return "Already handled this delivery.", nil
 	}
 	if _, err := s.q.PruneGitHubDeliveries(ctx); err != nil {
@@ -67,6 +74,9 @@ func (s *Service) DeliverGitHub(ctx context.Context, d GitHubDelivery) (string, 
 	}
 
 	result, err := s.actOnGitHub(ctx, d)
+	if errors.Is(err, errPushUnchecked) {
+		return "", err
+	}
 	if err != nil {
 		if fErr := s.q.ForgetGitHubDelivery(context.WithoutCancel(ctx), d.ID); fErr != nil {
 			s.log.Warn("forget failed GitHub delivery", slog.String("error", fErr.Error()))
@@ -81,7 +91,7 @@ func (s *Service) actOnGitHub(ctx context.Context, d GitHubDelivery) (string, er
 	case "ping":
 		return "Webhook connected.", nil
 	case "push":
-		return s.gitHubPush(ctx, d.Body)
+		return s.gitHubPush(ctx, d.Body, false)
 	case "pull_request":
 		return s.gitHubPullRequest(ctx, d.Body)
 	case "installation":
@@ -94,7 +104,7 @@ func (s *Service) actOnGitHub(ctx context.Context, d GitHubDelivery) (string, er
 
 // gitHubPush deploys every app built from the pushed repository, through its
 // installation, in a team still connected to it.
-func (s *Service) gitHubPush(ctx context.Context, body []byte) (string, error) {
+func (s *Service) gitHubPush(ctx context.Context, body []byte, again bool) (string, error) {
 	var ev github.PushEvent
 	if err := json.Unmarshal(body, &ev); err != nil {
 		return "", fmt.Errorf("app: read push payload: %w", err)
@@ -124,11 +134,28 @@ func (s *Service) gitHubPush(ctx context.Context, body []byte) (string, error) {
 	if len(rows) == 0 {
 		return "No app builds from " + orUnknown(ev.Repository.FullName) + ".", nil
 	}
+	if again {
+		if rows, err = s.uncheckedOnly(ctx, rows); err != nil {
+			return "", err
+		}
+		if len(rows) == 0 {
+			return "Already handled this delivery.", nil
+		}
+	}
 
 	var lines []string
+	unchecked := false
 	for _, row := range rows {
 		a := toApp(row)
 		result, err := s.gitHubPushTo(ctx, a, body)
+		if errors.Is(err, ErrAdmissionUnavailable) {
+			// The wrapper could not say whether this app may deploy. Said on
+			// the app, and the delivery fails, to be sent again: kept as
+			// handled, so sent again it reaches only the apps that say so.
+			s.log.Warn("GitHub push: admission could not be checked",
+				slog.String("team", a.OwnerID), slog.String("app", a.Name))
+			result, err, unchecked = uncheckedPush, nil, true
+		}
 		if err != nil {
 			// One app's failure is said and logged rather than failing the
 			// delivery: GitHub's redelivery would deploy every other app
@@ -145,8 +172,20 @@ func (s *Service) gitHubPush(ctx context.Context, body []byte) (string, error) {
 		}
 		lines = append(lines, a.OwnerID+"/"+a.Name+": "+result)
 	}
+	if unchecked {
+		return "", errPushUnchecked
+	}
 	return strings.Join(lines, "\n"), nil
 }
+
+// uncheckedPush is an app's last delivery when whether it may deploy could
+// not be checked.
+const uncheckedPush = "Could not check this deploy right now; push again or redeploy."
+
+// errPushUnchecked fails a GitHub delivery some of whose apps could not be
+// checked, so it shows as failed and can be sent again. Unlike any other
+// failure the delivery stays recorded: see DeliverGitHub.
+var errPushUnchecked = errors.New("app: whether some apps may deploy could not be checked — send the delivery again")
 
 func (s *Service) gitHubPushTo(ctx context.Context, a App, body []byte) (string, error) {
 	if a.Source != SourceGit {
@@ -155,7 +194,7 @@ func (s *Service) gitHubPushTo(ctx context.Context, a App, body []byte) (string,
 	if a.GitHubPaused != "" {
 		return "Ignored — builds are paused. " + GitHubPausedReason(a.GitHubPaused), nil
 	}
-	return s.actOnPush(ctx, a, Push{Event: "push", Body: body})
+	return s.actOnPush(ctx, a, Push{Event: "push", Body: body, via: AdmitGitHubPush})
 }
 
 // gitHubInstallation records the App uninstalled, suspended or unsuspended
@@ -274,6 +313,10 @@ func (s *Service) gitHubPullRequest(ctx context.Context, body []byte) (string, e
 			env, copies, err := s.createEnvironment(ctx, p.OwnerID, p.Slug, slug, DefaultEnvironment,
 				envOptions{pr: number, branch: builds})
 			if err != nil {
+				if refusal, ok := isRefusal(err); ok {
+					lines = append(lines, p.OwnerID+"/"+p.Slug+": "+refusedDelivery(refusal))
+					continue
+				}
 				s.log.Error("PR environment", slog.String("project", p.Slug), slog.String("error", err.Error()))
 				lines = append(lines, p.OwnerID+"/"+p.Slug+": could not make "+slug+": "+err.Error())
 				continue
@@ -296,4 +339,23 @@ func (s *Service) gitHubPullRequest(ctx context.Context, body []byte) (string, e
 		return fmt.Sprintf("Nothing to do for pull request #%d %s.", number, ev.Action), nil
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// uncheckedOnly is the apps a push reaches whose last delivery says it
+// could not be checked: what a push sent again acts on.
+func (s *Service) uncheckedOnly(ctx context.Context, rows []dbgen.App) ([]dbgen.App, error) {
+	var out []dbgen.App
+	for _, row := range rows {
+		hook, err := s.q.GetAppHook(ctx, dbgen.GetAppHookParams{OwnerID: row.OwnerID, AppID: row.ID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("app: read webhook: %w", err)
+		}
+		if hook.LastDelivery == uncheckedPush {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }

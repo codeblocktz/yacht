@@ -17,6 +17,8 @@ import (
 
 	"github.com/codeblocktz/yacht/internal/backup"
 	"github.com/codeblocktz/yacht/internal/bucket"
+	"github.com/codeblocktz/yacht/internal/domain"
+	"github.com/codeblocktz/yacht/internal/egress"
 	"github.com/codeblocktz/yacht/internal/github"
 	"github.com/codeblocktz/yacht/internal/orchestrator"
 )
@@ -110,10 +112,10 @@ type Config struct {
 	// team on it: nodes, the registry, DNS, every team's quota. Email
 	// addresses, matched case-insensitively against the signed-in person.
 	//
-	// Empty keeps the single-team reading — the owner of the team a request
-	// acts as is the operator — which is right for an install with one team
-	// and wrong for one hosting several: there, every team's owner would be
-	// able to drain the nodes every other team runs on.
+	// Empty means the owners of the install's own team, the one OwnerID
+	// names — never the owner of any other team, who would otherwise be able
+	// to drain the nodes every other team runs on. Acting as a team for
+	// support needs operators named.
 	Operators []string
 
 	// SecretKey seals secret environment variables, base64 of 32 bytes.
@@ -162,6 +164,13 @@ type Config struct {
 	// is always reserved whether or not it appears here.
 	ReservedDomains []string
 
+	// ReservedDomainsAllow are names, each with everything under it, that
+	// the install's own addresses (PlatformHosts) do not take from custom
+	// domains. For an install whose dashboard or other address shares a
+	// domain teams legitimately bring. Never frees AppDomain or
+	// ReservedDomains, which the operator chose.
+	ReservedDomainsAllow []string
+
 	// DNSResolver pins custom-domain lookups to one nameserver, as host or
 	// host:port — "1.1.1.1" or "10.0.0.53:53".
 	//
@@ -197,16 +206,34 @@ type Config struct {
 	TCPProxyPorts string
 
 	// NetworkIsolation is how far teams are kept apart on the cluster's
-	// network: "team" (the default) refuses every connection into a team's
-	// workloads from another team's or from a build; "strict" also limits
-	// what workloads and builds may connect out to — DNS, their own team and
-	// public addresses — so the nodes' network and anything else private is
-	// out of reach; "off" writes no policy at all.
+	// network: "team" refuses every connection into a team's workloads from
+	// another team's or from a build; "strict" also limits what workloads
+	// and builds may connect out to — DNS, their own team and public
+	// addresses — so cloud metadata, the nodes' network and anything else
+	// private is out of reach; "off" writes no policy at all.
+	//
+	// Unset is team, and stays so: an install made before the installer
+	// wrote this has no line for it, and an upgrade must not change its
+	// network behind it. The installer writes strict for a new install.
 	NetworkIsolation string
 
 	// EgressAllow are private ranges, as CIDRs, that strict isolation still
 	// lets workloads and builds reach: an image registry on the LAN, say.
 	EgressAllow string
+
+	// OutboundAllow are what the engine itself may reach on a tenant's
+	// behalf although it is private: hosts, host:ports, addresses and CIDRs.
+	// The engine resolves image references, lists repositories' branches and
+	// sends webhooks, all to addresses somebody typed, and refuses private
+	// ones; a registry on the LAN or a tailnet that apps deploy from is the
+	// usual entry. Distinct from EgressAllow, which is the apps' and builds'
+	// own network policy.
+	OutboundAllow []string
+
+	// OutboundDeny are addresses and CIDRs the engine refuses on a tenant's
+	// behalf besides the private ranges: a pod or service network outside
+	// them, for one.
+	OutboundDeny []string
 
 	// BaseURL is the public URL the dashboard is reached at, such as
 	// https://yacht.example.com. It is what a sign-in link is built from, and
@@ -295,6 +322,12 @@ type Config struct {
 	// a bounded amount of node capacity rather than an arbitrary pod count.
 	MaxConcurrentBuilds int32
 
+	// MaxBuildLogBytes is how much of one build's output is kept. A build that
+	// prints past it carries on, and its log says where it was cut and then
+	// why the build failed, if it did. A value that is not a number is refused
+	// rather than read as the default.
+	MaxBuildLogBytes int32
+
 	// GitHubApp* are the install's GitHub App, which teams connect to build
 	// private repositories and deploy on push without a webhook of their own.
 	// All unset, there is no GitHub App and a repository is a pasted URL,
@@ -365,6 +398,49 @@ type Config struct {
 	Debug bool
 }
 
+// PlatformHosts are the addresses the install itself is reached at, as they
+// are configured — URLs or hostnames — for refusing them as custom domains.
+//
+// Zones are refused with every name under them. The dashboard and the build
+// source are the engine, and a sibling of the dashboard can set cookies its
+// pages are sent; buckets are addressed as subdomains of their endpoint.
+// Names are refused alone: the TCP proxy's host is any name that reaches the
+// machines, and the rest are endpoints the engine talks to, which may be
+// another provider's whose subdomains are nobody's here to refuse.
+//
+// MailWebsite is not here. It is the operator's public site, and an operator
+// may well host that on the install as an app with a custom domain.
+func (c Config) PlatformHosts() (zones, names []string) {
+	for _, a := range c.platformAddresses() {
+		if a.zone {
+			zones = append(zones, a.value)
+		} else {
+			names = append(names, a.value)
+		}
+	}
+	return zones, names
+}
+
+// platformAddress is one of PlatformHosts, with the variable it is set by.
+type platformAddress struct {
+	env, value string
+	zone       bool
+}
+
+func (c Config) platformAddresses() []platformAddress {
+	return []platformAddress{
+		{"YACHT_BASE_URL", c.BaseURL, true},
+		{"YACHT_BUILD_SOURCE_URL", c.BuildSourceURL, true},
+		{"YACHT_BUCKETS_ENDPOINT", c.BucketsEndpoint, true},
+		{"YACHT_TCP_PROXY_HOST", c.TCPProxyHost, false},
+		{"YACHT_BUCKETS_S3_URL", c.BucketsS3URL, false},
+		{"YACHT_BUCKETS_ADMIN_URL", c.BucketsAdminURL, false},
+		{"YACHT_BACKUP_S3_ENDPOINT", c.BackupS3Endpoint, false},
+		{"YACHT_LOGS_URL", c.LogsURL, false},
+		{"YACHT_METRICS_URL", c.MetricsURL, false},
+	}
+}
+
 // Load reads configuration from the environment and validates it.
 func Load() (Config, error) {
 	c := Config{
@@ -373,9 +449,9 @@ func Load() (Config, error) {
 		Kubeconfig:               env("YACHT_KUBECONFIG", os.Getenv("KUBECONFIG")),
 		KubeInCluster:            envBool("YACHT_KUBE_IN_CLUSTER", false),
 		AuthToken:                env("YACHT_AUTH_TOKEN", ""),
-		OwnerID:                  env("YACHT_OWNER_ID", "owner-local"),
+		OwnerID:                  strings.TrimSpace(env("YACHT_OWNER_ID", "owner-local")),
 		OwnerName:                env("YACHT_OWNER_NAME", "Local"),
-		OwnerEmail:               strings.TrimSpace(env("YACHT_OWNER_EMAIL", "")),
+		OwnerEmail:               bareAddress(env("YACHT_OWNER_EMAIL", "")),
 		OpenSignup:               envBool("YACHT_OPEN_SIGNUP", false),
 		RequestAccessURL:         strings.TrimSpace(env("YACHT_REQUEST_ACCESS_URL", "")),
 		TurnstileSiteKey:         strings.TrimSpace(env("YACHT_TURNSTILE_SITE_KEY", "")),
@@ -390,7 +466,10 @@ func Load() (Config, error) {
 		TCPProxyPorts:            strings.TrimSpace(env("YACHT_TCP_PROXY_PORTS", defaultTCPProxyPorts)),
 		NetworkIsolation:         env("YACHT_NETWORK_ISOLATION", ""),
 		EgressAllow:              env("YACHT_EGRESS_ALLOW", ""),
+		OutboundAllow:            envList("YACHT_OUTBOUND_ALLOW"),
+		OutboundDeny:             envList("YACHT_OUTBOUND_DENY"),
 		ReservedDomains:          envList("YACHT_RESERVED_DOMAINS"),
+		ReservedDomainsAllow:     envList("YACHT_RESERVED_DOMAINS_ALLOW"),
 		Operators:                envList("YACHT_OPERATORS"),
 		BaseURL:                  strings.TrimRight(env("YACHT_BASE_URL", ""), "/"),
 		BuildSourceURL:           strings.TrimRight(env("YACHT_BUILD_SOURCE_URL", ""), "/"),
@@ -411,6 +490,7 @@ func Load() (Config, error) {
 		MagicLinkTTL:             envDuration("YACHT_MAGIC_LINK_TTL", 15*time.Minute),
 		ShutdownTimeout:          envDuration("YACHT_SHUTDOWN_TIMEOUT", 15*time.Second),
 		MaxConcurrentBuilds:      envInt32("YACHT_MAX_CONCURRENT_BUILDS", 2),
+		MaxBuildLogBytes:         envInt32Strict("YACHT_MAX_BUILD_LOG_BYTES", 4<<20),
 		WakerAddr:                strings.TrimSpace(env("YACHT_WAKER_ADDR", "")),
 		WakerListen:              strings.TrimSpace(env("YACHT_WAKER_LISTEN", "")),
 		WakeTimeout:              envDuration("YACHT_WAKE_TIMEOUT", 60*time.Second),
@@ -447,6 +527,21 @@ func Load() (Config, error) {
 	return c, nil
 }
 
+// bareAddress is raw as one bare address — "Name <a@b>" read as "a@b" — or
+// raw trimmed when it is not one, for validate to refuse. It is compared with
+// the address somebody signs in as, which is always bare, so a display name
+// kept would be an owner nobody could ever sign in as.
+func bareAddress(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if addr, err := mail.ParseAddress(raw); err == nil && addr.Address != "" {
+		return addr.Address
+	}
+	return raw
+}
+
 func (c Config) validate() error {
 	var errs []error
 
@@ -469,6 +564,10 @@ func (c Config) validate() error {
 	if c.MaxConcurrentBuilds < 1 || c.MaxConcurrentBuilds > 16 {
 		errs = append(errs, errors.New(
 			"YACHT_MAX_CONCURRENT_BUILDS must be between 1 and 16"))
+	}
+	if c.MaxBuildLogBytes < 64<<10 || c.MaxBuildLogBytes > 256<<20 {
+		errs = append(errs, errors.New(
+			"YACHT_MAX_BUILD_LOG_BYTES must be between 65536 (64 KiB) and 268435456 (256 MiB)"))
 	}
 	errs = append(errs, c.tcpProxyFaults()...)
 	// A short shared secret is worse than none, because it invites exposing
@@ -495,6 +594,20 @@ func (c Config) validate() error {
 	for _, d := range c.ReservedDomains {
 		if fault := domainFault(d); fault != "" {
 			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS entry %q %s", d, fault))
+		}
+	}
+	for _, d := range c.ReservedDomainsAllow {
+		if fault := domainFault(d); fault != "" {
+			errs = append(errs, fmt.Errorf("YACHT_RESERVED_DOMAINS_ALLOW entry %q %s", d, fault))
+		}
+	}
+	// Each of the install's own addresses is refused as a custom domain. One
+	// that cannot be read as a host would be dropped from that, silently,
+	// and the name it was meant to be could be claimed.
+	for _, a := range c.platformAddresses() {
+		if _, _, err := domain.PlatformHost(a.value); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w — it is refused as a custom domain, "+
+				"and a value that is not a host would refuse nothing", a.env, err))
 		}
 	}
 	// Written into an annotation cert-manager resolves by name. A value that
@@ -533,6 +646,9 @@ func (c Config) validate() error {
 		errs = append(errs, err)
 	}
 	errs = append(errs, c.observeFaults()...)
+	if _, err := c.Outbound(); err != nil {
+		errs = append(errs, err)
+	}
 
 	return errors.Join(errs...)
 }
@@ -714,13 +830,13 @@ func (c Config) signupFaults() []error {
 		return nil
 	}
 	var errs []error
-	// With no operators named, the owner of whichever team a request acts as
-	// is the operator — and every stranger who signs up owns a team, so every
-	// one of them would have the Admin area: every team, every node.
+	// An install that takes in strangers names the people who run it, rather
+	// than leaving it to whoever owns the install's own team — and naming them
+	// is what lets them act as a customer's team to help it.
 	if len(c.Operators) == 0 {
 		errs = append(errs, errors.New(
-			"YACHT_OPEN_SIGNUP requires YACHT_OPERATORS — without it everybody who signs up "+
-				"owns a team, and so runs the install"))
+			"YACHT_OPEN_SIGNUP requires YACHT_OPERATORS — an install open to anybody names "+
+				"the people who run it"))
 	}
 	// The team the install runs as goes to the configured owner only. With no
 	// owner named it goes to nobody, and its apps with it.
@@ -907,7 +1023,32 @@ func envInt32(key string, fallback int32) int32 {
 	return int32(n)
 }
 
+// envInt32Strict is envInt32 for a setting whose wrong value must not pass for
+// the default: one that is set and is not a number reads as -1, so validation
+// says so rather than the install quietly running on something else.
+func envInt32Strict(key string, fallback int32) int32 {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		return -1
+	}
+	return int32(n)
+}
+
 // String redacts secrets so a Config can be logged safely.
+// Outbound is what the engine may and may not reach on a tenant's behalf,
+// from YACHT_OUTBOUND_ALLOW and YACHT_OUTBOUND_DENY.
+func (c Config) Outbound() (*egress.Policy, error) {
+	p, err := egress.ParsePolicy(c.OutboundAllow, c.OutboundDeny)
+	if err != nil {
+		return nil, fmt.Errorf("YACHT_OUTBOUND_ALLOW or YACHT_OUTBOUND_DENY: %w", err)
+	}
+	return p, nil
+}
+
 // Isolation is the network isolation the settings ask for.
 func (c Config) Isolation() (orchestrator.Isolation, error) {
 	return orchestrator.ParseIsolation(c.NetworkIsolation, c.EgressAllow)

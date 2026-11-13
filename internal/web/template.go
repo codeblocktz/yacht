@@ -57,8 +57,7 @@ func (s *Server) templateDeploy(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Re-rendered with what was typed, so a refused name can be corrected
 		// rather than typed again from nothing.
-		s.log.Error("deploy template",
-			slog.String("template", slug), slog.String("error", err.Error()))
+		s.logFailed("deploy template", err, slog.String("template", slug))
 		data := TemplateListData{
 			Templates: app.Templates(), Stack: stack, Slug: slug, Error: err.Error(),
 			RoomShort: s.roomShort(ctx), Regions: s.regionChoice(ctx), Region: region,

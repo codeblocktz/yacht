@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 )
@@ -61,6 +63,47 @@ func TestATraversalPathIsRefused(t *testing.T) {
 	}
 	if errors.Is(err, ErrTreeUnsupported) {
 		t.Errorf("err = %v, want the path itself refused", err)
+	}
+}
+
+// The repository is whatever somebody typed, so nothing of the operator's
+// goes with the request: a GITHUB_TOKEN in the engine's environment attached
+// here would let any member list any private repository it can read. And the
+// typed path is a path, escaped segment by segment, so a "?" in it cannot end
+// the path and start a query of the typist's choosing.
+func TestABrowsedRepositoryIsAskedAboutAnonymouslyAndByPath(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_operators_own_token")
+	type seen struct{ auth, uri string }
+	got := make(chan seen, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- seen{auth: r.Header.Get("Authorization"), uri: r.RequestURI}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"name":"web","type":"dir"},{"name":"go.mod","type":"file"}]`))
+	}))
+	t.Cleanup(srv.Close)
+	defer func(old string) { gitHubAPI = old }(gitHubAPI)
+	gitHubAPI = srv.URL
+
+	for path, wantURI := range map[string]string{
+		"":              "/repos/acme/private/contents",
+		"src?ref=x":     "/repos/acme/private/contents/src%3Fref=x",
+		"apps/my app#x": "/repos/acme/private/contents/apps/my%20app%23x",
+	} {
+		dirs, err := (&Service{}).Directories(context.Background(),
+			"https://github.com/acme/private", path)
+		if err != nil {
+			t.Fatalf("%q: %v", path, err)
+		}
+		if len(dirs) != 1 || dirs[0] != "web" {
+			t.Errorf("%q: dirs = %v, want [web]", path, dirs)
+		}
+		s := <-got
+		if s.auth != "" {
+			t.Errorf("%q: the request carried Authorization %q", path, s.auth)
+		}
+		if s.uri != wantURI {
+			t.Errorf("%q: asked for %s, want %s", path, s.uri, wantURI)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,13 +82,14 @@ func (h *liveHarness) team(t *testing.T, id, name string, owner account.User, ap
 // The one that matters: switching is an authorization decision, not a
 // preference. A crafted POST must not move a session into someone else's team.
 func TestCannotSwitchIntoATeamYouAreNotIn(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-outsider")
+	h := newLiveHarnessOwnedBy(t, "web-switch-outsider", "insider@web.test")
 	h.installedApp(t, "insider-app")
 	h.user(t, "insider@web.test")
-	h.user(t, "outsider@web.test")
+	// The insider takes the configured team, and the outsider is in one of
+	// their own — which is the position anyone signed in to a running install
+	// is in.
+	h.team(t, "web-switch-outsider-own", "Outsider", h.user(t, "outsider@web.test"), "")
 
-	// The insider takes the configured team, so the outsider gets one of their
-	// own — which is the position anyone signing in to a running install is in.
 	if code := h.signIn(t, "insider@web.test").Code; code != http.StatusSeeOther {
 		t.Fatalf("the insider's sign-in = %d, want 303", code)
 	}
@@ -122,7 +124,7 @@ func TestCannotSwitchIntoATeamYouAreNotIn(t *testing.T) {
 // The end-to-end proof that owner_id scoping follows the session: the same
 // cookie, the same person, and a different set of apps on the page.
 func TestSwitchingChangesWhichAppsAreVisible(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-apps")
+	h := newLiveHarnessOwnedBy(t, "web-switch-apps", "both@web.test")
 	h.installedApp(t, "first-app")
 	u := h.user(t, "both@web.test")
 
@@ -164,7 +166,7 @@ func TestSwitchingChangesWhichAppsAreVisible(t *testing.T) {
 // A switcher offering a team you are not in is either a broken control or an
 // invitation to try the request the test above forbids.
 func TestSwitcherListsOnlyYourTeams(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-list")
+	h := newLiveHarnessOwnedBy(t, "web-switch-list", "lister@web.test")
 	h.installedApp(t, "list-app")
 	u := h.user(t, "lister@web.test")
 	stranger := h.user(t, "stranger@web.test")
@@ -205,7 +207,7 @@ func TestSwitcherListsOnlyYourTeams(t *testing.T) {
 // landing in another team without asking is both confusing and a way to make
 // somebody act in a team they did not choose.
 func TestSwitchRejectsGET(t *testing.T) {
-	h := newLiveHarness(t, "web-switch-get")
+	h := newLiveHarnessOwnedBy(t, "web-switch-get", "getter@web.test")
 	h.installedApp(t, "get-app")
 	u := h.user(t, "getter@web.test")
 
@@ -566,7 +568,7 @@ func TestPendingInvitationDoesNotLeakItsToken(t *testing.T) {
 // TestAcceptingAnInvitationWhileSignedInAddsTheTeam is the straightforward
 // path: the person is already known, so the token only has to be spent.
 func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-signedin")
+	h := newLiveHarnessOwnedBy(t, "web-inv-signedin", "owner-inv-in@web.test")
 	owner := h.user(t, "owner-inv-in@web.test")
 	h.team(t, "web-inv-signedin", "Team", owner, "")
 
@@ -578,8 +580,9 @@ func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
 	}
 	token := invitationToken(t, h.lastMail(t, before))
 
-	// The invited person signs in first, on their own address.
-	h.user(t, "joiner-in@web.test")
+	// The invited person signs in first, on their own address, to the team
+	// they already have.
+	h.team(t, "web-inv-signedin-own", "Their own", h.user(t, "joiner-in@web.test"), "")
 	joinerCookie := sessionCookie(h.signIn(t, "joiner-in@web.test"))
 
 	rec := httptest.NewRecorder()
@@ -612,7 +615,7 @@ func TestAcceptingAnInvitationWhileSignedInAddsTheTeam(t *testing.T) {
 // a sign-in link to the invited address — which means an intercepted or
 // forwarded invitation is useless to anyone who cannot read that mailbox.
 func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-signedout")
+	h := newLiveHarnessOwnedBy(t, "web-inv-signedout", "owner-inv-out@web.test")
 	owner := h.user(t, "owner-inv-out@web.test")
 	h.team(t, "web-inv-signedout", "Team", owner, "")
 
@@ -648,7 +651,7 @@ func TestAcceptingAnInvitationWhileSignedOutProvesTheAddressFirst(t *testing.T) 
 // invitation too. Before, it only signed them in, onto an empty team of their
 // own, and the invitation waited to be opened a second time.
 func TestASignedOutInviteeJoinsWithTheOneSignInLink(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-onelink")
+	h := newLiveHarnessOwnedBy(t, "web-inv-onelink", "owner-inv-one@web.test")
 	owner := h.user(t, "owner-inv-one@web.test")
 	h.team(t, "web-inv-onelink", "Kibo", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-one@web.test"))
@@ -693,7 +696,7 @@ func TestASignedOutInviteeJoinsWithTheOneSignInLink(t *testing.T) {
 // is said on the page. A team made by signing up is named after its email
 // address until somebody does.
 func TestAnOwnerRenamesTheTeam(t *testing.T) {
-	h := newLiveHarness(t, "web-rename")
+	h := newLiveHarnessOwnedBy(t, "web-rename", "owner-rename@web.test")
 	owner := h.user(t, "owner-rename@web.test")
 	h.team(t, "web-rename", "amina@kibo.test", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-rename@web.test"))
@@ -723,7 +726,7 @@ func TestAnOwnerRenamesTheTeam(t *testing.T) {
 // A stranger who gets hold of the link cannot use it, because acceptance is
 // bound to the invited address rather than to whoever presents the token.
 func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-stranger")
+	h := newLiveHarnessOwnedBy(t, "web-inv-stranger", "owner-inv-str@web.test")
 	owner := h.user(t, "owner-inv-str@web.test")
 	h.team(t, "web-inv-stranger", "Team", owner, "")
 
@@ -733,7 +736,7 @@ func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
 	h.invite(t, ownerCookie, "intended-str@web.test", "admin")
 	token := invitationToken(t, h.lastMail(t, before))
 
-	h.user(t, "stranger-str@web.test")
+	h.team(t, "web-inv-stranger-own", "Stranger", h.user(t, "stranger-str@web.test"), "")
 	strangerCookie := sessionCookie(h.signIn(t, "stranger-str@web.test"))
 
 	rec := httptest.NewRecorder()
@@ -755,7 +758,7 @@ func TestAStrangerCannotSpendSomebodyElsesInvitation(t *testing.T) {
 // invitation live, and opening it again signed out mails the invited
 // address its sign-in link.
 func TestOpeningSomebodyElsesInvitationOffersToSwitch(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-switch")
+	h := newLiveHarnessOwnedBy(t, "web-inv-switch", "owner-inv-sw@web.test")
 	owner := h.user(t, "owner-inv-sw@web.test")
 	h.team(t, "web-inv-switch", "Team", owner, "")
 	ownerCookie := sessionCookie(h.signIn(t, "owner-inv-sw@web.test"))
@@ -813,7 +816,7 @@ func TestAnUnusableInvitationSaysWhatToDo(t *testing.T) {
 // A spent invitation is spent. Otherwise the link in a mailbox stays a way in
 // long after it was used.
 func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-replay")
+	h := newLiveHarnessOwnedBy(t, "web-inv-replay", "owner-inv-rep@web.test")
 	owner := h.user(t, "owner-inv-rep@web.test")
 	h.team(t, "web-inv-replay", "Team", owner, "")
 
@@ -823,7 +826,7 @@ func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
 	h.invite(t, ownerCookie, "joiner-rep@web.test", "member")
 	token := invitationToken(t, h.lastMail(t, before))
 
-	h.user(t, "joiner-rep@web.test")
+	h.team(t, "web-inv-replay-own", "Their own", h.user(t, "joiner-rep@web.test"), "")
 	joinerCookie := sessionCookie(h.signIn(t, "joiner-rep@web.test"))
 
 	accept := func() int {
@@ -846,7 +849,7 @@ func TestAcceptedInvitationCannotBeReplayed(t *testing.T) {
 // adversarial review: an admin who is removed from a team left behind live
 // invitations for any address they controlled — a self-service way back in.
 func TestInvitationsDieWithTheirInviter(t *testing.T) {
-	h := newLiveHarness(t, "web-inv-inviter")
+	h := newLiveHarnessOwnedBy(t, "web-inv-inviter", "admin-inv-inv@web.test")
 	ctx := context.Background()
 
 	owner := h.user(t, "owner-inv-inv@web.test")
@@ -870,7 +873,7 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 	}
 
 	// Their outstanding invitation must have gone with them.
-	h.user(t, "accomplice@web.test")
+	h.team(t, "web-inv-inviter-accomplice", "Accomplice", h.user(t, "accomplice@web.test"), "")
 	accompliceCookie := sessionCookie(h.signIn(t, "accomplice@web.test"))
 
 	rec := httptest.NewRecorder()
@@ -882,4 +885,162 @@ func TestInvitationsDieWithTheirInviter(t *testing.T) {
 	if _, err := h.accounts.RoleIn(ctx, accomplice.ID, "web-inv-inviter"); !errors.Is(err, account.ErrNotAMember) {
 		t.Fatal("an invitation issued by a since-removed admin was still redeemable")
 	}
+}
+
+// ------------------------------------------------- invitations as a relay
+//
+// An invitation is a mail this install sends to an address a team chose, and
+// opening one is a mail anybody holding the link can trigger. Neither may be
+// a way to have the install mail somebody without end.
+
+// One address is invited by one team a few times — to fix a mistake — and
+// then refused, with nothing written and nothing mailed; and one team is
+// refused past its own budget, whoever it invites.
+func TestInvitationsAreRateLimited(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-limit", "inv-limit-app")
+
+	for i := range invitesPerAddress {
+		before := len(rt.mailer.messages())
+		rec := rt.invite(t, rt.owner, "pestered@web.test", "member")
+		if rec.Code != http.StatusSeeOther || strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Fatalf("invitation %d = %d → %q, want 303 → /team", i+1, rec.Code, rec.Header().Get("Location"))
+		}
+		rt.lastMail(t, before)
+	}
+	before := len(rt.mailer.messages())
+	rec := rt.invite(t, rt.owner, "Pestered@Web.test", "member")
+	if !strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("invitation %d to one address = %d → %q, want refused",
+			invitesPerAddress+1, rec.Code, rec.Header().Get("Location"))
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatalf("a refused invitation was mailed (%d mails, want %d)", n, before)
+	}
+
+	// The team's budget, spent on addresses that are each new. The refused
+	// attempt above spent none of it.
+	for i := invitesPerAddress + 1; i <= invitesPerTeam; i++ {
+		rec := rt.invite(t, rt.owner, fmt.Sprintf("guest-%d@web.test", i), "member")
+		if strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Fatalf("invitation %d from the team was refused, want accepted", i)
+		}
+	}
+	before = len(rt.mailer.messages())
+	rec = rt.invite(t, rt.owner, "one-too-many@web.test", "member")
+	if !strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("invitation %d from one team = %d → %q, want refused",
+			invitesPerTeam+1, rec.Code, rec.Header().Get("Location"))
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatal("an invitation over the team's budget was mailed")
+	}
+}
+
+// The address is parsed as the sign-in form parses it: something that is not
+// one is refused before anything is written, and a display name is dropped,
+// so the mail goes to one bare address.
+func TestAnInvitationIsToOneAddress(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-parse", "inv-parse-app")
+
+	before := len(rt.mailer.messages())
+	for _, bad := range []string{"not an address", "a@web.test, b@web.test", ""} {
+		rec := rt.invite(t, rt.owner, bad, "member")
+		if !strings.Contains(rec.Header().Get("Location"), "error=") {
+			t.Errorf("an invitation to %q = %d → %q, want refused", bad, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatalf("a malformed address was mailed (%d mails, want %d)", n, before)
+	}
+
+	rec := rt.invite(t, rt.owner, "Juma <juma-bare@web.test>", "member")
+	if strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("an address with a display name was refused: %q", rec.Header().Get("Location"))
+	}
+	sent := rt.mailer.messages()
+	if len(sent) != before+1 || sent[len(sent)-1].To != "juma-bare@web.test" {
+		t.Fatalf("the invitation went to %+v, want juma-bare@web.test alone", sent[before:])
+	}
+}
+
+// Opening an invitation signed out mails the address a link, and the open
+// page is anybody's who holds the token: past a few, it mails nothing more,
+// and says the same thing it always does.
+func TestOpeningAnInvitationMailsAFewTimesOnly(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-reopen", "inv-reopen-app")
+
+	before := len(rt.mailer.messages())
+	rt.invite(t, rt.owner, "reopen@web.test", "member")
+	token := invitationToken(t, rt.lastMail(t, before))
+
+	for i := range invitesPerAddress {
+		before := len(rt.mailer.messages())
+		if code := rt.follow(t, "/invitations/"+token).Code; code != http.StatusOK {
+			t.Fatalf("opening %d = %d, want 200", i+1, code)
+		}
+		rt.lastMail(t, before)
+	}
+	before = len(rt.mailer.messages())
+	rec := rt.follow(t, "/invitations/"+token)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Check your mail") {
+		t.Fatalf("opening once too often = %d, want the same Check your mail page", rec.Code)
+	}
+	if n := len(rt.mailer.messages()); n != before {
+		t.Fatal("opening the invitation once too often mailed the address again")
+	}
+}
+
+// One team spends only its own share of an address's invitations: another
+// team can still invite it, until every team together reaches the looser cap
+// across all of them.
+func TestOneTeamCannotUseUpAnAddressForAnother(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-share", "inv-share-app")
+	const target = "shared-target@web.test"
+	refused := func(c *http.Cookie) bool {
+		t.Helper()
+		return strings.Contains(rt.invite(t, c, target, "member").Header().Get("Location"), "error=")
+	}
+
+	owners := []*http.Cookie{rt.owner}
+	for i := 1; len(owners)*invitesPerAddress < invitesPerAddressAnywhere+invitesPerAddress; i++ {
+		email := fmt.Sprintf("share-owner-%d@web.test", i)
+		rt.team(t, fmt.Sprintf("web-inv-share-%d", i), "Team", rt.user(t, email), "")
+		owners = append(owners, sessionCookie(rt.signIn(t, email)))
+	}
+
+	sent := 0
+	for n, c := range owners {
+		for i := range invitesPerAddress {
+			want := sent < invitesPerAddressAnywhere
+			if got := !refused(c); got != want {
+				t.Fatalf("team %d's invitation %d with %d sent everywhere: accepted = %v, want %v",
+					n+1, i+1, sent, got, want)
+			}
+			if want {
+				sent++
+			}
+		}
+		if sent < invitesPerAddressAnywhere && !refused(c) {
+			t.Fatalf("team %d invited one address more than %d times", n+1, invitesPerAddress)
+		}
+	}
+}
+
+// An invitation refused for the role or the inviter's authority was never
+// going to be sent, so it spends nobody's budget: an admin trying again and
+// again to invite an owner does not stop the address being invited.
+func TestARefusedInvitationSpendsNothing(t *testing.T) {
+	rt := newRoleTeam(t, "web-inv-unspent", "inv-unspent-app")
+
+	for i := range invitesPerAddress + 2 {
+		if code := rt.invite(t, rt.admin, "unspent@web.test", "owner").Code; code != http.StatusForbidden {
+			t.Fatalf("an admin inviting an owner, attempt %d = %d, want 403", i+1, code)
+		}
+	}
+	before := len(rt.mailer.messages())
+	rec := rt.invite(t, rt.owner, "unspent@web.test", "member")
+	if strings.Contains(rec.Header().Get("Location"), "error=") {
+		t.Fatalf("refused attempts used up the address: %q", rec.Header().Get("Location"))
+	}
+	rt.lastMail(t, before)
 }

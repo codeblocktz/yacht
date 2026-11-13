@@ -18,7 +18,19 @@ type Querier interface {
 	AcceptInvitation(ctx context.Context, tokenHash []byte) (AcceptInvitationRow, error)
 	// Appended rather than replaced, so a build streaming its output does not have
 	// to hold the whole log in memory to write any of it.
+	//
+	// Up to max_bytes, and then the marker once in place of the chunk that would
+	// have crossed it, and nothing after. A build that prints without end would
+	// otherwise grow one row without end, rewriting all of it on every line.
+	// Decided in the statement, under the row lock, so two writers cannot both
+	// fit a chunk the limit had room for only once, nor both write the marker.
 	AppendBuildLog(ctx context.Context, arg AppendBuildLogParams) error
+	// Output written after the build, the pre-deploy command's, into a reserve
+	// beyond the build's own limit: max_bytes here is that limit and the
+	// reserve together. A build that filled its log still shows what ran after
+	// it, and a chunk the reserve has no room for is dropped, the command's
+	// output being kept whole with its deployment besides.
+	AppendBuildLogTail(ctx context.Context, arg AppendBuildLogTailParams) error
 	// A deployment's pre-deploy transcript, owner-scoped like the deployment.
 	// Appended rather than replaced: a run retried after its worker went away
 	// adds to what the first attempt printed, which is history too.
@@ -244,13 +256,21 @@ type Querier interface {
 	// reasonable thing to do. The row it creates is the one CreateTeamRow fills in
 	// later.
 	DismissOnboarding(ctx context.Context, ownerID string) error
+	// A queued push refused when its turn came, taken out only if it is still
+	// the one that was refused: a newer push queued meanwhile stays, to be asked
+	// about in its own turn.
+	DropHookPending(ctx context.Context, arg DropHookPendingParams) (int64, error)
 	// The install's default region gets a row, open, the first time it is named,
 	// so a cluster labelled with one region and YACHT_DEFAULT_REGION set needs
 	// nothing more before apps can be placed. Never overwrites: an operator who
 	// closed it, or named it, keeps that.
 	EnsureRegion(ctx context.Context, name string) error
 	FailQueuedBuildOperation(ctx context.Context, arg FailQueuedBuildOperationParams) (int64, error)
-	FinishBuild(ctx context.Context, arg FinishBuildParams) (Build, error)
+	// A log cut at its limit ends with the marker and lost the build's last
+	// lines, which are usually why it failed: the message, which says so, is
+	// written after the marker. Returns the build without its log, which no
+	// caller of this reads.
+	FinishBuild(ctx context.Context, arg FinishBuildParams) (FinishBuildRow, error)
 	// Only from running, so two engine processes settling the same Job agree on
 	// one outcome and the second changes nothing.
 	FinishDatabaseBackup(ctx context.Context, arg FinishDatabaseBackupParams) (int64, error)
@@ -275,7 +295,15 @@ type Querier interface {
 	GetAppRelease(ctx context.Context, arg GetAppReleaseParams) (AppRelease, error)
 	GetBucket(ctx context.Context, arg GetBucketParams) (Bucket, error)
 	GetBuild(ctx context.Context, arg GetBuildParams) (Build, error)
+	// The build with its log, for the page that shows the log.
 	GetBuildForDeployment(ctx context.Context, arg GetBuildForDeploymentParams) (Build, error)
+	// A build log from a character offset, with where it ends and whether the
+	// build still runs, for a reader following it: each poll sends what is new
+	// rather than the whole log again.
+	GetBuildLogFrom(ctx context.Context, arg GetBuildLogFromParams) (GetBuildLogFromRow, error)
+	// The build without its log, for everything that asks about a build rather
+	// than reading what it printed. The same columns FinishBuild returns.
+	GetBuildMetaForDeployment(ctx context.Context, arg GetBuildMetaForDeploymentParams) (GetBuildMetaForDeploymentRow, error)
 	GetBuildRecoveryOperation(ctx context.Context, arg GetBuildRecoveryOperationParams) (DeploymentOperation, error)
 	GetCLILoginByUserCode(ctx context.Context, userCode string) (CliLogin, error)
 	// The install's capacity policy and the changes refused for it.
@@ -405,8 +433,8 @@ type Querier interface {
 	GetStagedVariable(ctx context.Context, arg GetStagedVariableParams) (StagedVariable, error)
 	// The build that made an image, an upload's as well as a clone's: an upload
 	// has no commit, and what it declared still decides whether a changed
-	// variable is in the image.
-	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (Build, error)
+	// variable is in the image. Read on every release, so without the log.
+	GetSuccessfulBuildForImage(ctx context.Context, arg GetSuccessfulBuildForImageParams) (GetSuccessfulBuildForImageRow, error)
 	GetTCPProxy(ctx context.Context, arg GetTCPProxyParams) (TcpProxy, error)
 	// Read by the apply, which has the app and not always its owner's scope in
 	// hand separately; the app id is unique on its own.
@@ -490,6 +518,10 @@ type Querier interface {
 	// Every team's, newest first, with the team's name: Admin › Impersonations,
 	// the operators' own record of where they went.
 	ListAllImpersonationEvents(ctx context.Context, maxRows int32) ([]ListAllImpersonationEventsRow, error)
+	// Each app as it is saved and, beside it, as the release it is running: with
+	// changes staged rather than deployed the two differ, and the running one is
+	// what the cluster holds. Counting only the saved row let a team stage a
+	// smaller limit, spend what that freed on another app, and discard the stage.
 	ListAppFootprints(ctx context.Context, ownerID string) ([]ListAppFootprintsRow, error)
 	ListAppLinks(ctx context.Context, ownerID string) ([]ListAppLinksRow, error)
 	// Every app's namespace, for metering what each sent from a store that knows
@@ -574,6 +606,7 @@ type Querier interface {
 	// place. What the admission check totals; see ListAppFootprints for why the
 	// arithmetic is in Go. Asleep is whether the app is counted at the wake
 	// reserve rather than in full: a waking app's pods are already asked for.
+	// The running release rides along for the reason ListAppFootprints gives.
 	ListInstallFootprints(ctx context.Context) ([]ListInstallFootprintsRow, error)
 	ListMembersOfTeam(ctx context.Context, ownerID string) ([]ListMembersOfTeamRow, error)
 	ListMembershipsForUser(ctx context.Context, userID uuid.UUID) ([]ListMembershipsForUserRow, error)
@@ -598,9 +631,20 @@ type Querier interface {
 	ListRoutes(ctx context.Context) ([]ListRoutesRow, error)
 	// Every build still claiming to run, oldest first. Not owner-scoped: this
 	// feeds the reconciler, which is the platform settling its own records rather
-	// than a team reading theirs.
-	ListRunningBuilds(ctx context.Context) ([]Build, error)
+	// than a team reading theirs. Without the log, which the reconciler never
+	// reads and which would otherwise come along for every running build on
+	// every pass.
+	ListRunningBuilds(ctx context.Context) ([]ListRunningBuildsRow, error)
 	ListRunningDatabaseBackups(ctx context.Context) ([]ListRunningDatabaseBackupsRow, error)
+	// Operations a worker left at building after their build's result was
+	// written: the build row is terminal and the lease has since expired, so
+	// nothing else will move them. Not owner-scoped, as ListRunningBuilds is not,
+	// and without the log, which nothing here reads.
+	//
+	// Paged by key after the last row seen, so a page of operations that could
+	// not be settled this pass (a registry that would not answer) does not hide
+	// the ones behind it.
+	ListSettledBuildOperations(ctx context.Context, arg ListSettledBuildOperationsParams) ([]ListSettledBuildOperationsRow, error)
 	// Awake apps that sleep, by their own setting or their team's. Every team's:
 	// the sleeper runs for the whole install, like the reconciler.
 	ListSleepCandidates(ctx context.Context) ([]ListSleepCandidatesRow, error)
@@ -732,6 +776,16 @@ type Querier interface {
 	//
 	// The schedule arrives already computed rather than being worked out in SQL, so
 	// the backoff can be tested against an injected clock instead of against now().
+	//
+	// A domain leaving a routable state takes its app's config version up in the
+	// same statement. The routable-hosts query no longer carries the name, and the
+	// app reconciler applies every version it has not seen until the cluster
+	// carries it, so the withdrawal is as durable as the state: neither is
+	// written without the other, and nothing after this has to remember to ask.
+	//
+	// before is not FOR UPDATE: a row locked in a WITH and updated by the same
+	// statement leaves the WITH's join seeing nothing, and the version unmoved.
+	// Two checks racing on one row at worst both move it, which costs an apply.
 	RecordDomainCheck(ctx context.Context, arg RecordDomainCheckParams) (int64, error)
 	// Zero rows is a delivery already acted on.
 	RecordGitHubDelivery(ctx context.Context, arg RecordGitHubDeliveryParams) (int64, error)
@@ -782,6 +836,9 @@ type Querier interface {
 	// once it is proven. This is the query the Ingress is built from, so the gate
 	// lives here rather than in a caller that might forget it.
 	RoutableHostsForApp(ctx context.Context, appID uuid.UUID) ([]string, error)
+	// RoutableHostsForApp, with when the app came to hold each: what an app's
+	// HTTP log is bounded by, so it never shows a previous holder's requests.
+	RoutableHostsHeldByApp(ctx context.Context, appID uuid.UUID) ([]RoutableHostsHeldByAppRow, error)
 	SetActiveRelease(ctx context.Context, arg SetActiveReleaseParams) (int64, error)
 	// Where an app made by Create belongs, written in Create's transaction.
 	SetAppEnvironment(ctx context.Context, arg SetAppEnvironmentParams) error

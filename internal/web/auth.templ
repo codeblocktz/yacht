@@ -276,6 +276,23 @@ templ InvitationInvalid() {
 	}
 }
 
+// NoTeam answers somebody who proved who they are but belongs to no team, on
+// an install whose accounts are by invitation: removed from the team they had,
+// or invited and signed in without the invitation's link. requestAccess is the
+// install's page for asking, linked when there is one.
+templ NoTeam(requestAccess string) {
+	@authCard("You're not on a team", "Your account isn't a member of any team here, and accounts are by invitation. Ask a team's owner to invite you. If you've been invited, open the link in the invitation mail: following it adds you to the team.") {
+		if requestAccess != "" {
+			<p class="text-[12.5px]">
+				<a class="text-foreground underline" href={ templ.SafeURL(requestAccess) }>Request access</a>
+			</p>
+		}
+		<p class="mt-4 text-[12.5px]">
+			<a class="text-muted-foreground hover:text-foreground" href="/sign-in">Go to sign in</a>
+		</p>
+	}
+}
+
 // authCard is the frame the signed-out pages share: centred, narrow, and
 // without the chrome of a dashboard nobody has been let into yet.
 templ authCard(title, subtitle string) {

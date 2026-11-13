@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -256,6 +257,15 @@ type (
 	RouteChange       = app.RouteChange
 	RouteChangeKind   = app.RouteChangeKind
 
+	// AdmitFunc is Overrides.Admit: asked before every deploy, it admits
+	// with nil and refuses with an *AdmitRefusal, whose Message the person
+	// or the Git host is shown. AdmitRequest is the deploy asked about, and
+	// AdmitTrigger what is asking for it.
+	AdmitFunc    = app.AdmitFunc
+	AdmitRequest = app.AdmitRequest
+	AdmitTrigger = app.AdmitTrigger
+	AdmitRefusal = app.AdmitRefusal
+
 	// Server is the engine's dashboard.
 	Server = web.Server
 	// Keeper seals secrets at rest.
@@ -309,6 +319,25 @@ const (
 	CapacityFull    = app.CapacityFull
 	CapacityUnknown = app.CapacityUnknown
 
+	// What asks for a deploy, as AdmitRequest.Trigger says it.
+	AdmitCreate      = app.AdmitCreate
+	AdmitRedeploy    = app.AdmitRedeploy
+	AdmitRollback    = app.AdmitRollback
+	AdmitUpload      = app.AdmitUpload
+	AdmitStaged      = app.AdmitStaged
+	AdmitUpdate      = app.AdmitUpdate
+	AdmitScale       = app.AdmitScale
+	AdmitVolume      = app.AdmitVolume
+	AdmitMove        = app.AdmitMove
+	AdmitPush        = app.AdmitPush
+	AdmitGitHubPush  = app.AdmitGitHubPush
+	AdmitQueuedPush  = app.AdmitQueuedPush
+	AdmitEnvironment = app.AdmitEnvironment
+	AdmitPullRequest = app.AdmitPullRequest
+
+	// AdmitTimeout is how long Admit has to answer.
+	AdmitTimeout = app.AdmitTimeout
+
 	// An app's sleep setting: its team's default, or on or off whatever that is.
 	SleepInherit = app.SleepInherit
 	SleepOn      = app.SleepOn
@@ -352,6 +381,11 @@ var (
 	// its own rather than the engine's sentence.
 	ErrQuotaExceeded = app.ErrQuotaExceeded
 
+	// ErrAdmissionUnavailable is a deploy refused because Admit could not
+	// decide: it failed, or took longer than AdmitTimeout. The cause is in
+	// the log, never in what the person is shown.
+	ErrAdmissionUnavailable = app.ErrAdmissionUnavailable
+
 	// ErrCapacityFull is what Apps refuses a change with when the install
 	// enforces its capacity policy and has no room left to sell for it. The
 	// engine's sentence says how much more was needed and nothing about any
@@ -372,6 +406,20 @@ var (
 	// ErrMoveHasStorage is Apps.MoveApp refusing an app with a volume — every
 	// database has one — whose data lives on its region's machines.
 	ErrMoveHasStorage = app.ErrMoveHasStorage
+
+	// ErrVolumeInUse is Apps.EraseVolume refusing a volume something still
+	// mounts: stop the app first. ErrVolumeRetained is a cluster whose
+	// storage keeps a volume's data when it is deleted, where erasing would
+	// delete nothing.
+	ErrVolumeInUse    = app.ErrVolumeInUse
+	ErrVolumeRetained = app.ErrVolumeRetained
+	// ErrVolumeReserved is "backups", the claim a database's backups are
+	// kept on: no volume's name, to attach or to erase.
+	ErrVolumeReserved = app.ErrVolumeReserved
+	// ErrVolumeDeleting is a start refused because a volume's claim is still
+	// being deleted — by EraseVolume, say. Try again once it is gone; a new,
+	// empty one is made then.
+	ErrVolumeDeleting = orchestrator.ErrVolumeDeleting
 	// ErrRegionClosed is a region that cannot take a new app: closed, not
 	// configured, or with no machine ready. ErrNoRegionOpen is an install
 	// with regions where none can; ErrNoSuchRegion a name neither a machine
@@ -517,6 +565,18 @@ type Overrides struct {
 	// at its region's edge. Called after the change commits, off the request
 	// path; a hint, so the wrapper also reconciles from Engine.Routes.
 	Routes RouteObserver
+
+	// Admit is asked before every deploy the engine admits — by a person, a
+	// token, a Git host, a queued push, a pull request's environment, a
+	// template — before anything is written for it and with no lock held.
+	// It returns nil to admit, or an *AdmitRefusal to refuse with a sentence
+	// shown to whoever asked: on the dashboard, in the API's error, or as
+	// "Ignored — …" beside a Git host's delivery. A refused queued push is
+	// dropped. Any other error, or no answer within AdmitTimeout, fails the
+	// deploy with ErrAdmissionUnavailable and goes only to the log. Nil
+	// admits every deploy. See AdmitRequest for what it is told, and the
+	// README for what is not asked.
+	Admit AdmitFunc
 
 	// Usage prices a project for its settings page: what it has cost this
 	// month and what the month will come to. The engine has no prices, so
@@ -698,7 +758,14 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	var images app.Images
 	var manifests app.Manifests
 	var builder app.Builder
+	// What the engine reaches on a team's behalf: validated at Load, read
+	// again here for the policy itself.
+	outbound, err := cfg.Outbound()
+	if err != nil {
+		return err
+	}
 	registryStore := registry.New(e.Pool, e.Keeper, log)
+	registryStore.SetOutbound(outbound)
 	e.registry = registryStore
 	manifests = registryStore
 	if e.Keeper.Configured() {
@@ -757,6 +824,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 	if e.Keeper.Configured() {
 		e.Webhooks = webhook.New(e.Pool, e.Keeper, e.Orchestrator, log, webhook.Options{
 			BaseURL: cfg.BaseURL, Brand: cmp.Or(ov.WakerBrand, web.DefaultBrandName),
+			Outbound: outbound,
 		})
 		events = e.Webhooks
 	}
@@ -767,7 +835,9 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		sourceFetch = base + web.APIPrefix + "/build-sources"
 	}
 
+	platformZones, platformNames := cfg.PlatformHosts()
 	e.Apps = app.NewService(e.Pool, e.Orchestrator, log, app.Options{
+		Outbound:            outbound,
 		BackupS3:            backups,
 		Buckets:             buckets,
 		BackupToolImage:     cfg.BackupToolImage,
@@ -776,6 +846,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		Manifests:           manifests,
 		DatabaseReleases:    &dbrelease.Postgres{},
 		MaxConcurrentBuilds: cfg.MaxConcurrentBuilds,
+		MaxBuildLogBytes:    cfg.MaxBuildLogBytes,
 		AppDomain:           cfg.AppDomain,
 		WildcardTLS:         cfg.WildcardTLS,
 		CertIssuer:          cfg.CertIssuer,
@@ -784,11 +855,15 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		TCPProxyPortLast:    proxyLast,
 		Keeper:              e.Keeper,
 		ReservedDomains:     cfg.ReservedDomains,
+		PlatformZones:       platformZones,
+		PlatformNames:       platformNames,
+		AllowedDomains:      cfg.ReservedDomainsAllow,
 		Resolver:            e.resolver,
 		Waker:               waker,
 		WakeTimeout:         cfg.WakeTimeout,
 		DefaultRegion:       cfg.DefaultRegion,
 		Routes:              ov.Routes,
+		Admit:               ov.Admit,
 		GitHub:              gh,
 		StageChanges:        cfg.StageChanges,
 		// The wrapper's product name, where an app reads what the
@@ -910,6 +985,7 @@ func (e *Engine) compose(ctx context.Context, ov Overrides, version string) erro
 		}
 		opts.RequestAccessURL = cfg.RequestAccessURL
 		opts.SignUpLead, opts.SignUpNext = ov.SignUpLead, ov.SignUpNext
+		warnNobodyRunsTheInstall(ctx, cfg, e.Accounts, log)
 	}
 
 	logs, metrics, err := attachObserve(&opts, cfg, log)
@@ -1040,7 +1116,8 @@ func (e *Engine) Start(ctx context.Context) {
 
 	// Proves claimed custom domains without anybody pressing anything. What a
 	// name resolves to is a fact any replica can look up.
-	go domain.NewChecker(e.Pool, e.resolver, apps, log).Run(ctx)
+	go domain.NewChecker(e.Pool, e.resolver, apps, log).
+		Reserving(apps.CustomDomainReservations).Run(ctx)
 
 	// Gives each app its siblings' private names, and isolates its namespace
 	// to its project. Every replica may run it: what it writes is the same
@@ -1194,6 +1271,38 @@ func wakerEndpoint(cfg Config, log *slog.Logger) (*orchestrator.WakerEndpoint, e
 	return &orchestrator.WakerEndpoint{IP: ip, Port: port}, nil
 }
 
+// warnNobodyRunsTheInstall says so at startup when the install's operators
+// could be nobody. With YACHT_OPERATORS empty they are the owners of the
+// install's own team, and that team gets its owner only from
+// YACHT_OWNER_EMAIL: with neither, or with the team unowned, no page an
+// operator needs can be reached, and nothing else would say why.
+func warnNobodyRunsTheInstall(ctx context.Context, cfg Config, accounts *Accounts, log *slog.Logger) {
+	if len(cfg.Operators) > 0 || accounts == nil {
+		return
+	}
+	members, err := accounts.ListMembers(ctx, cfg.OwnerID)
+	if err != nil {
+		log.Warn("could not check who runs the install", slog.String("error", err.Error()))
+		return
+	}
+	owned := slices.ContainsFunc(members, func(m account.Member) bool { return m.Role == account.RoleOwner })
+	switch {
+	case !owned && cfg.OwnerEmail == "":
+		log.Warn("nobody runs this install: YACHT_OPERATORS is empty, so its operators are the "+
+			"owners of its own team, which has none, and YACHT_OWNER_EMAIL is empty, so nobody "+
+			"can become one — set YACHT_OPERATORS, or YACHT_OWNER_EMAIL and sign in as it",
+			slog.String("team", cfg.OwnerID))
+	case !owned:
+		log.Warn("nobody runs this install yet: YACHT_OPERATORS is empty, so its operators are "+
+			"the owners of its own team, which has none until YACHT_OWNER_EMAIL signs in",
+			slog.String("team", cfg.OwnerID), slog.String("owner_email", cfg.OwnerEmail))
+	case cfg.OwnerEmail == "":
+		log.Warn("YACHT_OPERATORS and YACHT_OWNER_EMAIL are both empty: the install's operators are "+
+			"its own team's owners, and if that team loses them nobody can be made one — "+
+			"set YACHT_OPERATORS", slog.String("team", cfg.OwnerID))
+	}
+}
+
 // gitHubApp is the install's GitHub App, nil when it has none — and then a
 // repository is a pasted URL, which is said once here.
 func gitHubApp(cfg Config, log *slog.Logger) (*github.App, error) {
@@ -1233,8 +1342,9 @@ func newIdentity(cfg Config, accounts *Accounts, log *slog.Logger) (IdentityProv
 				"YACHT_RESEND_API_KEY or YACHT_CLOUDFLARE_EMAIL_TOKEN to deliver them")
 		}
 		// Operators may act as a team for support only where they are named.
-		// With none named every team's owner reads as an operator, and any of
-		// them could act as every other team — so the check approves nobody.
+		// With none named the install's own team's owners read as operators,
+		// but acting reaches into every team and is kept for people named for
+		// it — so the check approves nobody.
 		if len(cfg.Operators) == 0 {
 			log.Info("acting as a team is off — name the install's operators in " +
 				"YACHT_OPERATORS to let them act as a team for support")
@@ -1290,4 +1400,12 @@ func newMailer(cfg Config, log *slog.Logger) (Mailer, error) {
 			"this log, where anyone who can read it can use them")
 		return notify.NewLog(log), nil
 	}
+}
+
+// WithSystemActor marks a context as the wrapper's own doing rather than a
+// person's: a deploy made on it is recorded as the system's, and Admit sees
+// ActorKind "system". For a wrapper's own calls into Engine.Apps — stopping
+// and starting apps, say — so its Admit can tell them from a customer's.
+func WithSystemActor(ctx context.Context) context.Context {
+	return app.WithActor(ctx, app.Actor{Kind: "system"})
 }

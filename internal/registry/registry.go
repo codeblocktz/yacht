@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/codeblocktz/yacht/internal/egress"
 	"github.com/codeblocktz/yacht/internal/secret"
 	"github.com/codeblocktz/yacht/internal/store/dbgen"
 )
@@ -95,7 +96,23 @@ type Store struct {
 	// connection and then says nothing would otherwise hold a deploy open for
 	// as long as the process lives.
 	http *http.Client
+
+	// outbound is the operator's allowed and refused addresses for what
+	// manifest resolution may reach on a tenant's behalf; nil is the rule
+	// alone (see package egress).
+	outbound *egress.Policy
+
+	// pushes bounds how many Dockerfile images this process pushes at once.
+	// Each one streams an image through the apiserver and this process, and
+	// builds are admitted install-wide rather than per engine, so the bound
+	// on what one engine carries at a time is here.
+	pushes chan struct{}
 }
+
+// SetOutbound sets the operator's allowed and refused addresses for manifest
+// resolution: a registry on the LAN that apps deploy from, say. Called once,
+// at start, before anything resolves.
+func (s *Store) SetOutbound(p *egress.Policy) { s.outbound = p }
 
 // New returns a Store. keeper may be nil, in which case storing a password is
 // refused rather than done unsafely.
@@ -105,7 +122,8 @@ func New(pool *pgxpool.Pool, keeper *secret.Keeper, log *slog.Logger) *Store {
 	}
 	return &Store{
 		pool: pool, q: dbgen.New(pool), keeper: keeper, log: log,
-		http: &http.Client{Timeout: 30 * time.Second},
+		http:   &http.Client{Timeout: 30 * time.Second},
+		pushes: make(chan struct{}, concurrentPushes),
 	}
 }
 

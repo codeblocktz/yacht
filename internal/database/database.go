@@ -21,6 +21,8 @@ package database
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -34,6 +36,22 @@ var ErrNoBrowser = errors.New("database: no data browser for this engine")
 // catalog before it is quoted into a statement, so a name that is not there
 // is refused rather than tried.
 var ErrNoSuchTable = errors.New("database: no such table")
+
+// ErrRowTooLarge is a row bigger than the browser will read. A row arrives
+// from the server as one message and is read whole before any of it can be
+// cut to Cell or Bytes, so a row past Limits.Message is refused instead of
+// read: one "SELECT repeat('x', 1000000000)" would otherwise be a gigabyte of
+// the engine's memory, which every team shares.
+var ErrRowTooLarge = errors.New("database: a row is larger than the browser will read")
+
+// ErrResultTooLarge is an answer the browser stopped reading: more from the
+// server over one connection than Limits.Wire, or more columns than a result
+// can have.
+var ErrResultTooLarge = errors.New("database: the server's answer is larger than the browser will read")
+
+// maxMessage is the largest Limits.Message: one byte under MySQL's largest
+// packet.
+const maxMessage = 0xffffff - 1
 
 // Target is where a database is and how to sign in to it.
 type Target struct {
@@ -72,6 +90,18 @@ type Limits struct {
 	// number of rows, so a wide table of large values cannot hold megabytes
 	// of somebody else's data in the engine's memory per request.
 	Bytes int
+
+	// Message is the most bytes of one message read off the wire. Cell and
+	// Bytes are applied to a row once it has been read, and a row is read
+	// whole; this is what bounds the row itself, by refusing it unread. A
+	// page of a table is cut on the server first (see Rows), so it is a
+	// query asking for a huge value that meets it.
+	Message int
+
+	// Wire is the most bytes read from the server over one connection,
+	// whatever they are: a flood of small rows, of column definitions, of
+	// session parameters is bounded here, where no one message is large.
+	Wire int
 }
 
 // DefaultLimits are the browser's bounds.
@@ -82,6 +112,8 @@ var DefaultLimits = Limits{
 	Rows:      200,
 	Cell:      1000,
 	Bytes:     1 << 20,
+	Message:   4 << 20,
+	Wire:      64 << 20,
 }
 
 // PageSize is how many rows a page of a table shows.
@@ -106,6 +138,15 @@ func (l Limits) orDefault() Limits {
 	}
 	if l.Bytes > 0 {
 		d.Bytes = l.Bytes
+	}
+	if l.Message > 0 {
+		d.Message = l.Message
+	}
+	// Below MySQL's largest packet, so a row that spans packets — which
+	// starts with one of the largest size — is always over it.
+	d.Message = min(d.Message, maxMessage)
+	if l.Wire > 0 {
+		d.Wire = l.Wire
 	}
 	return d
 }
@@ -220,9 +261,13 @@ func (b *budget) cell(raw []byte) (Value, bool) {
 	if raw == nil {
 		return Value{Null: true}, b.used <= b.limits.Bytes
 	}
-	v := Value{Text: string(raw)}
+	// Cut before it is copied: a value is copied into a string once, at the
+	// size it is kept.
+	var v Value
 	if len(raw) > b.limits.Cell {
-		v.Text, v.Cut = cutUTF8(raw, b.limits.Cell), true
+		v = Value{Text: cutUTF8(raw, b.limits.Cell), Cut: true}
+	} else {
+		v = Value{Text: string(raw)}
 	}
 	b.used += len(v.Text)
 	return v, b.used <= b.limits.Bytes
@@ -238,4 +283,42 @@ func cutUTF8(b []byte, n int) string {
 		n--
 	}
 	return string(b[:n])
+}
+
+// rowTooLarge is a row refused at its size, saying how large it was and how
+// large a row may be. Query and Rows each add what to do about it, which is
+// not the same: a query can ask for less, and a page of a table cannot.
+func rowTooLarge(size, limit int) error {
+	return fmt.Errorf("%w — the server sent %s at once, more than the %s it reads",
+		ErrRowTooLarge, megabytes(size), megabytes(limit))
+}
+
+// Advice for a row too large, by where it was met.
+const (
+	queryTooLargeAdvice = "Select fewer columns, or the start of a long one, as in left(body, 1000)."
+	pageTooLargeAdvice  = "This table's rows are too wide to page through here: select some of its columns in a query instead."
+)
+
+// withAdvice adds what to do to a row too large, and leaves any other error be.
+func withAdvice(err error, advice string) error {
+	if errors.Is(err, ErrRowTooLarge) {
+		return fmt.Errorf("%w. %s", err, advice)
+	}
+	return err
+}
+
+// megabytes is a size as a person reads it.
+func megabytes(n int) string {
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+}
+
+// serverMessage is a server's own message, cut to a length a page can show:
+// it can quote the statement, and a statement can be as long as anybody
+// likes.
+func serverMessage(msg string) string {
+	const max = 500
+	if len(msg) <= max {
+		return msg
+	}
+	return cutUTF8([]byte(msg), max) + "…"
 }

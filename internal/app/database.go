@@ -121,6 +121,9 @@ func (s *Service) databaseCredentials(ctx context.Context, a App) (DatabaseCrede
 //
 // Postgres and MySQL. Redis and MongoDB have no tables, and say so rather
 // than showing an empty list.
+//
+// Each read takes a slot first (see browseSlots), so how much of other
+// people's data the engine holds at once is bounded by more than each read.
 func (s *Service) DatabaseBrowser(ctx context.Context, ownerID, name string) (database.Browser, error) {
 	a, err := s.Get(ctx, ownerID, name)
 	if err != nil {
@@ -141,9 +144,10 @@ func (s *Service) DatabaseBrowser(ctx context.Context, ownerID, name string) (da
 	if err != nil {
 		return nil, err
 	}
-	return open(database.Target{
+	b := open(database.Target{
 		Addr: addr, User: creds.User, Password: creds.Password, Database: creds.Database,
-	}, database.Limits{}), nil
+	}, database.Limits{})
+	return gatedBrowser{b: b, gate: browseSlots, ownerID: ownerID}, nil
 }
 
 // browsers are the engines with a data browser.

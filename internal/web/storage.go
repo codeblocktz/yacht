@@ -560,7 +560,7 @@ func (s *Server) appRuntime(w http.ResponseWriter, r *http.Request) {
 		// reachable as a dialog over the canvas, and re-rendering the
 		// standalone settings page would answer a failed save by moving
 		// somebody somewhere else.
-		s.log.Error("update runtime", slog.String("app", name), slog.String("error", err.Error()))
+		s.logFailed("update runtime", err, slog.String("app", name))
 		s.flashErr(w, r, err.Error())
 		http.Redirect(w, r, "/apps/"+name+"/settings", http.StatusSeeOther)
 		return

@@ -37,9 +37,15 @@ RETURNING *;
 -- place. What the admission check totals; see ListAppFootprints for why the
 -- arithmetic is in Go. Asleep is whether the app is counted at the wake
 -- reserve rather than in full: a waking app's pods are already asked for.
+-- The running release rides along for the reason ListAppFootprints gives.
 -- name: ListInstallFootprints :many
-SELECT id, replicas, cpu_limit, memory_limit, (sleep_state = 'asleep')::boolean AS asleep, region
-FROM apps;
+SELECT a.id, a.replicas, a.cpu_limit, a.memory_limit,
+       (a.sleep_state = 'asleep')::boolean AS asleep, a.region,
+       r.replicas     AS running_replicas,
+       r.cpu_limit    AS running_cpu_limit,
+       r.memory_limit AS running_memory_limit
+FROM apps a
+LEFT JOIN app_releases r ON r.id = a.active_release_id AND r.owner_id = a.owner_id;
 
 -- Volume bytes by the region of the app holding them, for the capacity page's
 -- regions. Null is the apps not placed in a region yet.

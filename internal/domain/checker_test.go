@@ -71,7 +71,7 @@ func TestAClaimProvesItselfWithoutBeingAsked(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.auto.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.auto.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestAClaimWithNoRecordSettlesIntoWaiting(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.wait.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.wait.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestAMisdirectedDomainRecordsWhereItPoints(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.mis.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.mis.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestADomainIsNotCalledRoutedUntilTheApplyTakes(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.noapply.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.noapply.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestTheCheckerWithdrawsADomainThatDrifts(t *testing.T) {
 	q := dbgen.New(pool)
 
 	c, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.checkdrift.test", "edge.domain.test", "apps.domain.test", nil)
+		"shop.checkdrift.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"})
 	if err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestASettledDomainIsNotRecheckedImmediately(t *testing.T) {
 	q := dbgen.New(pool)
 
 	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.settled.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"shop.settled.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestClaimingLeasesARowAwayFromOtherCheckers(t *testing.T) {
 	q := dbgen.New(pool)
 
 	if _, err := AddCustom(ctx, q, a.OwnerID, a.ID,
-		"shop.lease.test", "edge.domain.test", "apps.domain.test", nil); err != nil {
+		"shop.lease.test", "edge.domain.test", Reservations{AppDomain: "apps.domain.test"}); err != nil {
 		t.Fatalf("AddCustom: %v", err)
 	}
 
@@ -374,4 +374,92 @@ func mustHosts(t *testing.T, ctx context.Context, q *dbgen.Queries, appID uuid.U
 		t.Fatalf("RoutableHosts: %v", err)
 	}
 	return hosts
+}
+
+// configVersion is the app's, which the app reconciler converges the cluster
+// to: a version it has not seen is an apply it still owes.
+func configVersion(t *testing.T, pool *pgxpool.Pool, appID uuid.UUID) int64 {
+	t.Helper()
+	var v int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT config_version FROM apps WHERE id = $1`, appID).Scan(&v); err != nil {
+		t.Fatalf("read config version: %v", err)
+	}
+	return v
+}
+
+// routedClaim is a custom domain claimed and routed before host was reserved.
+func routedClaim(t *testing.T, pool *pgxpool.Pool, a dbgen.App, host string) Custom {
+	t.Helper()
+	ctx := context.Background()
+	q := dbgen.New(pool)
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID, host, "edge.domain.test", Reservations{})
+	if err != nil {
+		t.Fatalf("AddCustom: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE domains SET state = 'routed', next_check_at = now() WHERE id = $1`, c.ID); err != nil {
+		t.Fatalf("route the claim: %v", err)
+	}
+	return c
+}
+
+// A routed claim on a name that has become reserved is withdrawn by the
+// checker, and the withdrawal is carried by the app's config version, which
+// moves with the state: a router that fails to hear about it costs the
+// notice, not the withdrawal, and nothing has to remember to ask again.
+func TestTheCheckerWithdrawsAReservedNameEvenWhenTheRouterFails(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-check-reserved", "web", "ns-test-check-reserved")
+	q := dbgen.New(pool)
+	c := routedClaim(t, pool, a, "registry.checkreserved.test")
+	before := configVersion(t, pool, a.ID)
+
+	here := fakeResolver{cname: map[string]string{"registry.checkreserved.test": "edge.domain.test."}}
+	router := &fakeRouter{fail: true}
+	checker := checkerFor(t, here, router, dbNow(t, pool).Add(time.Second)).
+		Reserving(func(context.Context) (Reservations, error) {
+			return Reservations{Names: []string{"registry.checkreserved.test"}}, nil
+		})
+	if err := checker.Pass(ctx); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+
+	row, _ := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
+	if State(row.State).Routable() {
+		t.Fatalf("a reserved name is %q after a pass, want it withdrawn", row.State)
+	}
+	if hasHost(mustHosts(t, ctx, q, a.ID), "registry.checkreserved.test") {
+		t.Error("a reserved name is still among the app's routable hosts")
+	}
+	if after := configVersion(t, pool, a.ID); after != before+1 {
+		t.Errorf("config version %d → %d with the router failing; want it moved, so the "+
+			"reconciler takes the name off the Ingress regardless", before, after)
+	}
+}
+
+// A pass that cannot say what is reserved checks nothing: proving a name it
+// should have refused is worse than a pass that waits for the next.
+func TestAPassThatCannotReadTheReservationsChecksNothing(t *testing.T) {
+	ctx := context.Background()
+	pool := testPool(t)
+	a := seedApp(t, pool, "test-check-noreserve", "web", "ns-test-check-noreserve")
+	q := dbgen.New(pool)
+	c, err := AddCustom(ctx, q, a.OwnerID, a.ID, "shop.noreserve.test", "edge.domain.test", Reservations{})
+	if err != nil {
+		t.Fatalf("AddCustom: %v", err)
+	}
+
+	here := fakeResolver{cname: map[string]string{"shop.noreserve.test": "edge.domain.test."}}
+	checker := checkerFor(t, here, &fakeRouter{}, dbNow(t, pool).Add(time.Second)).
+		Reserving(func(context.Context) (Reservations, error) {
+			return Reservations{}, context.DeadlineExceeded
+		})
+	if err := checker.Pass(ctx); err == nil {
+		t.Fatal("Pass succeeded without knowing what is reserved")
+	}
+	row, _ := q.GetCustomDomain(ctx, dbgen.GetCustomDomainParams{OwnerID: a.OwnerID, ID: c.ID})
+	if State(row.State) != StatePending || row.LastCheckedAt.Valid {
+		t.Errorf("the claim was checked anyway: state %q, last checked %v", row.State, row.LastCheckedAt)
+	}
 }

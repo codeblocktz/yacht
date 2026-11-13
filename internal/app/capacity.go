@@ -477,10 +477,11 @@ func installFootprints(ctx context.Context, q *dbgen.Queries) ([]footprint, int6
 	apps := make([]footprint, len(rows))
 	for i, a := range rows {
 		apps[i] = footprint{
-			ID:     a.ID,
-			shape:  shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
-			Asleep: a.Asleep,
-			Region: a.Region,
+			ID:      a.ID,
+			shape:   shape{Replicas: a.Replicas, CPULimit: a.CpuLimit, MemoryLimit: a.MemoryLimit},
+			Running: runningShape(a.RunningReplicas, a.RunningCpuLimit, a.RunningMemoryLimit),
+			Asleep:  a.Asleep,
+			Region:  a.Region,
 		}
 	}
 	return apps, storage, nil

@@ -277,8 +277,8 @@ type Options struct {
 
 	// Operators are the email addresses of the people who run the install:
 	// the only ones who reach cluster-wide pages and actions. Empty means the
-	// owner of the team a request acts as, which is right for one team and
-	// wrong for many. See config.Config.Operators.
+	// owners of the install's own team, BootstrapTeamID. See
+	// config.Config.Operators and Server.IsOperator.
 	Operators []string
 
 	// Authenticated reports whether a credential is required, purely so the
@@ -569,6 +569,9 @@ type Server struct {
 	// strangerLimit spaces the mail an unknown address is sent while sign-up
 	// is closed: one per address per strangerMailEvery.
 	strangerLimit *attemptLimiter
+	// inviteLimit counts the invitation mail a team sends and an address is
+	// sent, and the mail opening an invitation sends, per inviteWindow.
+	inviteLimit *attemptLimiter
 
 	// flashKey authenticates the one-shot message a redirect carries.
 	// Options.FlashKey, or a key of this process's own; see newFlashKey.
@@ -694,9 +697,9 @@ func New(opts Options) (*Server, error) {
 		baseURL:        strings.TrimRight(opts.BaseURL, "/"),
 		magicTTL:       opts.MagicLinkTTL,
 		sessionTTL:     opts.SessionTTL,
-		bootstrapID:    opts.BootstrapTeamID,
+		bootstrapID:    strings.TrimSpace(opts.BootstrapTeamID),
 		bootstrapName:  opts.BootstrapTeamName,
-		bootstrapEmail: strings.TrimSpace(opts.BootstrapEmail),
+		bootstrapEmail: bareAddress(opts.BootstrapEmail),
 		openSignup:     opts.OpenSignup,
 		turnstile:      opts.Turnstile,
 		requestAccess:  opts.RequestAccessURL,
@@ -706,6 +709,7 @@ func New(opts Options) (*Server, error) {
 		mailStatus:     opts.MailStatus,
 		signInLimit:    newAttemptLimiter(signInWindow),
 		strangerLimit:  newAttemptLimiter(strangerMailEvery),
+		inviteLimit:    newAttemptLimiter(inviteWindow),
 		flashKey:       flashKey,
 		tokens:         opts.Tokens,
 		audit:          opts.Audit,
@@ -724,7 +728,7 @@ func New(opts Options) (*Server, error) {
 // forget, and the forgotten one is the security bug.
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, s.securityHeaders, s.csrfProtect)
+	r.Use(chimw.RequestID, chimw.RealIP, chimw.Recoverer, s.securityHeaders, s.csrfProtect, memoOperator)
 
 	// A trailing slash is the same page. /apps used to answer it because it was
 	// a mounted subtree; the groups below are flat, so it is stated here instead
@@ -1148,10 +1152,9 @@ func (s *Server) Handler() http.Handler {
 		//
 		// Cluster-wide views read across every team — the pods list is every
 		// namespace's pods — so they are the operator's, not any team's
-		// member's. On an install with one team the operator is that team's
-		// owner, which is the reading everything below had before operators
-		// existed; on one hosting several, YACHT_OPERATORS names them, and a
-		// team's owner can no longer drain the nodes the other teams run on.
+		// member's. YACHT_OPERATORS names them; with nobody named they are the
+		// owners of the install's own team, and never the owner of any other,
+		// who could otherwise drain the nodes every other team runs on.
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireOperator)
 
@@ -1606,7 +1609,7 @@ func (s *Server) appScale(w http.ResponseWriter, r *http.Request) {
 		// change had been made.
 		err = errors.New("replicas must be a whole number between 0 and 50")
 	} else if _, err = s.apps.Scale(r.Context(), owner.ID, name, int32(replicas)); err != nil {
-		s.log.Error("scale", slog.String("app", name), slog.String("error", err.Error()))
+		s.logFailed("scale", err, slog.String("app", name))
 	}
 	if err != nil {
 		s.settingsRefused(w, r, name, "settings", settingsFormReplicas, http.StatusUnprocessableEntity, err)
@@ -1630,7 +1633,7 @@ func (s *Server) appRedeploy(w http.ResponseWriter, r *http.Request) {
 			// canvas sheet — so a failure used to answer by moving somebody
 			// somewhere else, which reads as the click having navigated rather
 			// than failed.
-			s.log.Error("redeploy", slog.String("app", name), slog.String("error", err.Error()))
+			s.logFailed("redeploy", err, slog.String("app", name))
 			s.flashErr(w, r, err.Error())
 			http.Redirect(w, r, "/apps/"+name, http.StatusSeeOther)
 			return
@@ -1667,7 +1670,7 @@ func (s *Server) appRollback(w http.ResponseWriter, r *http.Request) {
 			// The person's to fix, not the install's: said plainly, not logged.
 			s.flashErr(w, r, strings.TrimPrefix(err.Error(), "app: "))
 		case err != nil:
-			s.log.Error("rollback", slog.String("app", name), slog.String("error", err.Error()))
+			s.logFailed("rollback", err, slog.String("app", name))
 			s.flashErr(w, r, err.Error())
 		default:
 			s.flashOK(w, r, "Rolling "+name+" back.")
@@ -1822,7 +1825,7 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 
 	// Shown only to somebody the page behind it would actually admit. A control
 	// that leads to a 403 tells the viewer they have a permission they do not.
-	if role, ok := s.roleOf(r); ok && role.AtLeast(account.RoleOwner) {
+	if s.IsOperator(r) {
 		data.CanAddNode = s.joiner != nil
 		_, data.CanManageNodes = s.nodeManager()
 	}
@@ -1878,10 +1881,11 @@ func (s *Server) renderCluster(w http.ResponseWriter, r *http.Request, tab strin
 // of the machine from the person responsible for it. A named operator is that
 // person, and so is the one principal of an install without accounts.
 //
-// With accounts on and no operators named, the operator is whichever team's
-// owner is looking (see IsOperator). On an install hosting several teams that
-// is a customer, so they are listed their own team's and nobody else's —
-// which is what these pages did for everybody before operators existed.
+// With accounts on and no operators named, the operator is an owner of the
+// install's own team (see IsOperator), and they are listed the team they are
+// looking at and nobody else's — which is what these pages did for everybody
+// before operators existed, and keeps another team's workloads behind a name
+// in YACHT_OPERATORS.
 func (s *Server) clusterOwner(r *http.Request) orchestrator.OwnerID {
 	if s.IsOperator(r) && (s.accounts == nil || len(s.operators) > 0) {
 		return ""

@@ -301,14 +301,44 @@ func (s *Server) teamInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email := strings.TrimSpace(r.FormValue("email"))
+	// Parsed as the sign-in form parses it, so what is stored and mailed is
+	// one bare address — never a display name, or a list, riding along.
+	email, err := parseEmail(r.FormValue("email"))
+	if err != nil {
+		http.Redirect(w, r, "/team?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
 	role := account.Role(strings.TrimSpace(r.FormValue("role")))
+
+	// Every invitation is a mail this install sends to an address a team
+	// chose, under a subject carrying the team's name, which the team also
+	// chose. Without a limit that is a relay.
+	//
+	// The team's own budget is asked first, and a team over it spends nothing
+	// else. An address is counted per team, so one team cannot use up an
+	// address's invitations from every other, with a looser cap across all of
+	// them. Each is asked before the invitation is written, so a refused one
+	// leaves nothing behind, and counted only once Invite has accepted the
+	// role and the inviter's authority: an attempt that was never going to be
+	// sent costs nobody anything.
+	addr := strings.ToLower(email)
+	teamKey, toKey, anyKey := "team:"+owner.ID, "to:"+owner.ID+":"+addr, "to:"+addr
+	if s.inviteLimit.spent(teamKey, invitesPerTeam) ||
+		s.inviteLimit.spent(toKey, invitesPerAddress) ||
+		s.inviteLimit.spent(anyKey, invitesPerAddressAnywhere) {
+		http.Redirect(w, r, "/team?error="+url.QueryEscape(
+			"Too many invitations sent. Try again in an hour."), http.StatusSeeOther)
+		return
+	}
 
 	raw, err := s.accounts.Invite(ctx, sess.UserID, owner.ID, email, role, s.inviteTTL())
 	if err != nil {
 		s.teamActionFailed(w, r, err, "invite")
 		return
 	}
+	s.inviteLimit.record(teamKey)
+	s.inviteLimit.record(toKey)
+	s.inviteLimit.record(anyKey)
 
 	// Mailed after the row is written, so a delivery failure leaves an
 	// invitation the page can offer to revoke rather than a token nobody holds.
@@ -457,6 +487,18 @@ func (s *Server) teamActionFailed(
 		http.Error(w, "could not "+what, http.StatusInternalServerError)
 	}
 }
+
+// How many invitations go out per inviteWindow: from one team, to one
+// address from one team, and to one address from every team together — and,
+// separately, how many sign-in links opening an invitation mails one address.
+// Generous for a team adding its people, and an address is invited again only
+// to fix a mistake, while a relay needs far more than any of them.
+const (
+	inviteWindow              = time.Hour
+	invitesPerTeam            = 30
+	invitesPerAddress         = 3
+	invitesPerAddressAnywhere = 10
+)
 
 // inviteTTL is how long an invitation stays redeemable.
 //

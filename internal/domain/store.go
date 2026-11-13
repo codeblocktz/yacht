@@ -36,9 +36,10 @@ type ManagedInput struct {
 	AppDomain string
 	TLS       bool
 
-	// Reserved are the operator's additional reserved suffixes. An app name
-	// that would claim one of them is refused rather than issued.
-	Reserved []string
+	// Reserved is what may not be issued: the operator's reserved suffixes,
+	// and the install's own addresses, which a name the platform issues must
+	// not land on either. See Reservations.Issuable.
+	Reserved Reservations
 }
 
 // EnsureManaged issues the app's platform hostname, or moves it if the app
@@ -65,12 +66,12 @@ func EnsureManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (stri
 		return "", err
 	}
 
-	// Checked against the operator's list only, with the app domain left out
-	// on purpose. Reserved treats everything under the app domain as reserved
-	// — correct when asking whether a tenant may bring a name, and useless
-	// here, where every issued host is under it by construction. What an
-	// operator reserves are particular names within it, like admin.apps.example.com.
-	if Reserved(host, "", in.Reserved) {
+	// Issuable rather than Refuses: the app domain is left out on purpose.
+	// Refuses treats everything under it as reserved — correct when asking
+	// whether a team may bring a name, and useless here, where every issued
+	// host is under it by construction. What an operator reserves are
+	// particular names within it, like admin.apps.example.com.
+	if !in.Reserved.Issuable(host) {
 		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 
@@ -155,7 +156,7 @@ func ReconcileManaged(ctx context.Context, q *dbgen.Queries, in ManagedInput) (s
 	if len(host) > maxHostname {
 		return "", fmt.Errorf("domain: hostname %q exceeds %d characters", host, maxHostname)
 	}
-	if Reserved(host, "", in.Reserved) {
+	if !in.Reserved.Issuable(host) {
 		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 	return upsertManaged(ctx, q, in.OwnerID, in.AppID, host, in.TLS, held.Generated)
@@ -168,7 +169,7 @@ type GenerateInput struct {
 	Label     string
 	AppDomain string
 	TLS       bool
-	Reserved  []string
+	Reserved  Reservations
 }
 
 // IssueGenerated gives an app the generated hostname named by in.Label,
@@ -192,7 +193,7 @@ func IssueGenerated(ctx context.Context, q *dbgen.Queries, in GenerateInput) (st
 	if len(host) > maxHostname {
 		return "", fmt.Errorf("domain: hostname %q exceeds %d characters", host, maxHostname)
 	}
-	if Reserved(host, "", in.Reserved) {
+	if !in.Reserved.Issuable(host) {
 		return "", fmt.Errorf("%w: %s", ErrHostReserved, host)
 	}
 	return upsertManaged(ctx, q, in.OwnerID, in.AppID, host, in.TLS, true)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgconn/ctxwatch"
+	"github.com/jackc/pgx/v5/pgproto3"
 )
 
 // Postgres browses a Postgres database.
@@ -35,7 +37,7 @@ type postgres struct {
 // The client's deadline is the second line, and cancelling it sends the
 // server a cancel request rather than only dropping the socket — a backend
 // whose client has gone carries on with a query until it next writes to it.
-func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
+func (p *postgres) connect(ctx context.Context, meter *wireMeter) (*pgx.Conn, error) {
 	host, port, err := net.SplitHostPort(p.target.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("database: address %q: %w", p.target.Addr, err)
@@ -66,6 +68,26 @@ func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
 	// query box that accepted "SELECT 1; SET TRANSACTION READ WRITE; ..." would
 	// be a read-only guard that lasted one statement.
 	cfg.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec
+	// A row is one protocol message, and pgx reads a message whole before
+	// handing any of it over; the default ceiling is the server's own, about a
+	// gigabyte. Lowered here, a row past Limits.Message is refused at its
+	// header, before its body is read or a buffer for it is made.
+	maxMessage := p.limits.Message
+	cfg.BuildFrontend = func(r io.Reader, w io.Writer) *pgproto3.Frontend {
+		f := pgproto3.NewFrontend(r, w)
+		f.SetMaxBodyLen(maxMessage)
+		return f
+	}
+	// And everything read on the connection together, past which it ends:
+	// see countedConn.
+	dial := cfg.DialFunc
+	cfg.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &countedConn{Conn: conn, meter: meter}, nil
+	}
 	cfg.BuildContextWatcherHandler = func(c *pgconn.PgConn) ctxwatch.Handler {
 		return &pgconn.CancelRequestContextWatcherHandler{
 			Conn: c, CancelRequestDelay: 0, DeadlineDelay: time.Second,
@@ -76,6 +98,9 @@ func (p *postgres) connect(ctx context.Context) (*pgx.Conn, error) {
 	defer cancel()
 	conn, err := pgx.ConnectConfig(dialCtx, cfg)
 	if err != nil {
+		if refused := meter.refusal(); refused != nil {
+			return nil, refused
+		}
 		return nil, fmt.Errorf("database: connect: %w", friendly(err))
 	}
 	return conn, nil
@@ -96,14 +121,22 @@ func closeConn(conn *pgx.Conn) {
 // snapshot, after which Postgres refuses to turn read-only off for the rest
 // of it — SET TRANSACTION READ WRITE and set_config both. And it ends in
 // ROLLBACK, never COMMIT, so a write that got past both would still not land.
-func (p *postgres) readOnly(ctx context.Context, fn func(context.Context, *pgx.Conn) error) error {
+func (p *postgres) readOnly(ctx context.Context, fn func(context.Context, *pgx.Conn) error) (err error) {
 	ctx, cancel := context.WithTimeout(ctx, p.limits.Connect+p.limits.Statement*3)
 	defer cancel()
-	conn, err := p.connect(ctx)
+	meter := newWireMeter(p.limits)
+	conn, err := p.connect(ctx, meter)
 	if err != nil {
 		return err
 	}
 	defer closeConn(conn)
+	// Cut off past Limits.Wire: the reason is the meter's, whatever pgx
+	// made of the read that failed.
+	defer func() {
+		if refused := meter.refusal(); refused != nil {
+			err = refused
+		}
+	}()
 
 	if _, err := conn.Exec(ctx, "BEGIN TRANSACTION READ ONLY"); err != nil {
 		return fmt.Errorf("database: begin: %w", friendly(err))
@@ -251,8 +284,37 @@ func (p *postgres) Rows(ctx context.Context, schema, table string, page int) (Re
 			return err
 		}
 
-		sql := "SELECT * FROM " + ident
+		// Every column, in the order SELECT * gives them, each cut on the
+		// server to a little past what a cell keeps: a page of a table that
+		// stores files is still a page, rather than a row too large to read.
+		var cols []string
+		rows, err = conn.Query(ctx, `
+			SELECT attname FROM pg_attribute
+			WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped
+			ORDER BY attnum`, ident)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				rows.Close()
+				return err
+			}
+			cols = append(cols, cutOnServer(pgx.Identifier{c}.Sanitize(), p.limits.Cell))
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		sql := "SELECT " + strings.Join(cols, ", ") + " FROM " + ident + " AS src"
 		if len(keys) > 0 {
+			// Qualified, so the order is the key's own and not the text the
+			// select list renders it as: a bare name would sort by the
+			// output column, and 10 would come before 9.
+			for i, k := range keys {
+				keys[i] = "src." + k
+			}
 			sql += " ORDER BY " + strings.Join(keys, ", ")
 		}
 		// One more than a page, to know whether there is a next one without
@@ -272,9 +334,25 @@ func (p *postgres) Rows(ctx context.Context, schema, table string, page int) (Re
 		if errors.Is(err, ErrNoSuchTable) {
 			return Result{}, err
 		}
+		if err := friendly(err); errors.Is(err, ErrRowTooLarge) {
+			return Result{}, withAdvice(err, pageTooLargeAdvice)
+		}
 		return Result{}, fmt.Errorf("database: read %s.%s: %w", schema, table, friendly(err))
 	}
 	return res, nil
+}
+
+// cutOnServer is a column as the server renders it, cut to one character past
+// cell so the value is marked cut when it was longer.
+//
+// format's %s is the type's own output function — what a text-format result
+// carries, so a boolean is still t and an inet still has no mask, where a
+// cast to text would change both. It turns NULL into an empty string, so
+// NULL is kept apart first; num_nulls tests the value itself, where IS NULL
+// would call a composite of NULL fields null too.
+func cutOnServer(col string, cell int) string {
+	return fmt.Sprintf("CASE WHEN num_nulls(src.%[1]s) = 1 THEN NULL "+
+		"ELSE left(format('%%s', src.%[1]s), %[2]d) END AS %[1]s", col, cell+1)
 }
 
 // Query runs one statement read-only.
@@ -290,7 +368,7 @@ func (p *postgres) Query(ctx context.Context, sql string) (Result, error) {
 		return err
 	})
 	if err != nil {
-		return Result{}, friendly(err)
+		return Result{}, withAdvice(friendly(err), queryTooLargeAdvice)
 	}
 	return res, nil
 }
@@ -459,6 +537,10 @@ func (p *postgres) Config(ctx context.Context) (Config, error) {
 // Postgres's own message is kept, because it names what was refused; the
 // SQLSTATE decides which explanation goes in front of it.
 func friendly(err error) error {
+	var tooLarge *pgproto3.ExceededMaxBodyLenErr
+	if errors.As(err, &tooLarge) {
+		return rowTooLarge(tooLarge.ActualBodyLen, tooLarge.MaxExpectedBodyLen)
+	}
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -468,17 +550,17 @@ func friendly(err error) error {
 	}
 	switch pgErr.Code {
 	case "25006": // read_only_sql_transaction
-		return fmt.Errorf("the data browser only reads — %s", pgErr.Message)
+		return fmt.Errorf("the data browser only reads — %s", serverMessage(pgErr.Message))
 	case "57014": // query_canceled, which is how statement_timeout ends a query
-		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", pgErr.Message)
+		return fmt.Errorf("the query ran for longer than the browser allows and was cancelled — %s", serverMessage(pgErr.Message))
 	case "55P03": // lock_not_available
-		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", pgErr.Message)
+		return fmt.Errorf("the table is locked by something else, so the read gave up — %s", serverMessage(pgErr.Message))
 	case "42601": // syntax_error; "cannot insert multiple commands" lands here
 		if strings.Contains(pgErr.Message, "multiple commands") {
 			return errors.New("one statement at a time — the browser runs a single statement")
 		}
 	case "28P01", "28000":
-		return fmt.Errorf("the database refused the app's own credentials — %s", pgErr.Message)
+		return fmt.Errorf("the database refused the app's own credentials — %s", serverMessage(pgErr.Message))
 	}
-	return fmt.Errorf("%s", pgErr.Message)
+	return fmt.Errorf("%s", serverMessage(pgErr.Message))
 }

@@ -22,7 +22,10 @@
 INSERT INTO domains (owner_id, app_id, host, tls, state, managed, generated)
 VALUES (@owner_id, @app_id, lower(@host), @tls, 'routed', true, @generated)
 ON CONFLICT (app_id) WHERE managed
-DO UPDATE SET host = lower(@host), tls = @tls, generated = @generated
+DO UPDATE SET host = lower(@host), tls = @tls, generated = @generated,
+    -- A new name is a new holding; the same one, reissued, is not.
+    host_since = CASE WHEN domains.host = lower(@host)
+                      THEN domains.host_since ELSE now() END
 RETURNING *;
 
 -- name: ListDomainsByApp :many
@@ -85,7 +88,29 @@ LIMIT 1;
 --
 -- The schedule arrives already computed rather than being worked out in SQL, so
 -- the backoff can be tested against an injected clock instead of against now().
+--
+-- A domain leaving a routable state takes its app's config version up in the
+-- same statement. The routable-hosts query no longer carries the name, and the
+-- app reconciler applies every version it has not seen until the cluster
+-- carries it, so the withdrawal is as durable as the state: neither is
+-- written without the other, and nothing after this has to remember to ask.
+--
+-- before is not FOR UPDATE: a row locked in a WITH and updated by the same
+-- statement leaves the WITH's join seeing nothing, and the version unmoved.
+-- Two checks racing on one row at worst both move it, which costs an apply.
 -- name: RecordDomainCheck :execrows
+WITH before AS (
+    SELECT b.app_id, b.owner_id, b.state FROM domains b
+    WHERE b.id = @id
+), withdrawn AS (
+    UPDATE apps
+    SET config_version = apps.config_version + 1, updated_at = now()
+    FROM before
+    WHERE apps.id = before.app_id AND apps.owner_id = before.owner_id
+      AND before.state IN ('verified', 'routed')
+      AND @state::text NOT IN ('verified', 'routed')
+    RETURNING apps.id
+)
 UPDATE domains
 SET state = @state,
     observed = @observed,
@@ -100,7 +125,7 @@ SET state = @state,
         WHEN @state::text IN ('verified', 'routed') AND verified_at IS NULL THEN @checked_at
         ELSE verified_at
     END
-WHERE id = @id;
+WHERE domains.id = @id;
 
 -- Claims the domains whose next check is due, and leases them.
 --
@@ -190,5 +215,12 @@ WHERE owner_id = @owner_id AND id = @id AND NOT managed;
 -- lives here rather than in a caller that might forget it.
 -- name: RoutableHostsForApp :many
 SELECT host FROM domains
+WHERE app_id = @app_id AND (managed OR verified)
+ORDER BY managed DESC, host;
+
+-- RoutableHostsForApp, with when the app came to hold each: what an app's
+-- HTTP log is bounded by, so it never shows a previous holder's requests.
+-- name: RoutableHostsHeldByApp :many
+SELECT host, host_since FROM domains
 WHERE app_id = @app_id AND (managed OR verified)
 ORDER BY managed DESC, host;

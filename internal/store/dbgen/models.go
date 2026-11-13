@@ -204,6 +204,7 @@ type Build struct {
 	FinishedAt   pgtype.Timestamptz
 	JobName      string
 	BuildArgs    []string
+	LogTruncated bool
 }
 
 type CapacityPolicy struct {
@@ -355,6 +356,7 @@ type Domain struct {
 	CheckAttempts int32
 	Verified      bool
 	Generated     bool
+	HostSince     time.Time
 }
 
 type Environment struct {

@@ -244,7 +244,8 @@ func TestCapacitySaysWhenToAddANode(t *testing.T) {
 // ------------------------------------------------ against a real database
 
 // The Admin area belongs to whoever runs the install: with no operators named,
-// that is the team's owner, and a member gets neither the pages nor the links.
+// that is the install's own team's owner, and a member gets neither the pages
+// nor the links.
 func TestTheAdminPagesAreTheOperators(t *testing.T) {
 	rt := newRoleTeam(t, "web-role-admin-area", "admin-area-app")
 
