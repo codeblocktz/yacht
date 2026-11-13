@@ -310,7 +310,7 @@ func (s *Server) apiDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := s.deploymentView(r.Context(), a, d)
-	if b, err := s.logs.BuildForDeployment(r.Context(), a.OwnerID, d.ID); err == nil {
+	if b, err := s.logs.BuildMetaForDeployment(r.Context(), a.OwnerID, d.ID); err == nil {
 		v.Build = &apiBuild{ID: b.ID.String(), Status: b.Status, Commit: b.CommitSHA, Message: b.Message}
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -334,19 +334,23 @@ func (s *Server) apiBuildLog(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 	ctx, cancel := context.WithTimeout(r.Context(), maxStreamAge)
 	defer cancel()
-	sent := 0
+	// Read from where the last read ended, so a follower is sent what is new
+	// rather than the engine loading the whole log every second to send it.
+	from := 0
 	for {
-		b, err := s.logs.BuildForDeployment(ctx, a.OwnerID, d.ID)
-		if err == nil && len(b.Log) > sent {
-			_, _ = io.WriteString(w, b.Log[sent:])
-			sent = len(b.Log)
+		part, err := s.logs.BuildLogFrom(ctx, a.OwnerID, d.ID, from)
+		if err == nil && part.Text != "" {
+			_, _ = io.WriteString(w, part.Text)
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
+		if err == nil {
+			from = part.Next
+		}
 		// Done when the build is, or — for a deploy that has not started
 		// building yet — when the deploy itself has finished without one.
-		finished := err == nil && !b.Running()
+		finished := err == nil && !part.Running
 		if !finished && errors.Is(err, app.ErrNotFound) {
 			if cur, derr := s.logs.Deployment(ctx, a.OwnerID, a.Name, d.ID); derr == nil && cur.FinishedAt != nil {
 				finished = true
@@ -712,10 +716,16 @@ func (s *Server) apiCLILoginPoll(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiFailed(w http.ResponseWriter, r *http.Request, err error) {
 	var upErr app.UploadError
 	var rebuild app.UploadRebuildError
+	var refusal *app.AdmitRefusal
 	switch {
+	case errors.As(err, &refusal):
+		// The wrapper's sentence, as it wrote it: it is for the person.
+		writeAPIError(w, http.StatusForbidden, "refused", refusal.Message)
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, app.ErrVariableNotFound),
 		errors.Is(err, app.ErrProjectNotFound):
 		writeAPIError(w, http.StatusNotFound, "not_found", failureReason(err.Error()))
+	case errors.Is(err, app.ErrAdmissionUnavailable):
+		writeAPIError(w, http.StatusServiceUnavailable, "admission_unavailable", failureReason(err.Error()))
 	case errors.Is(err, app.ErrOperationInFlight):
 		writeAPIError(w, http.StatusConflict, "deploy_in_flight",
 			"a deploy is already in flight — wait for it to finish, or cancel it")

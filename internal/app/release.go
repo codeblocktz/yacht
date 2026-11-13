@@ -199,6 +199,29 @@ func pinImage(ref, digest string) string {
 	return ref + "@" + digest
 }
 
+// releaseDigest pins the app's current image for a release. Separate from
+// writing the release, so a caller that writes it under a row lock asks the
+// registry before taking the lock rather than while holding it.
+func (s *Service) releaseDigest(ctx context.Context, a App) (string, error) {
+	// Every path to a deploy passes here, so a bucket stops here whichever
+	// one forgot to ask.
+	if !a.Source.Workload() {
+		return "", ErrNoWorkload
+	}
+	if s.manifests == nil {
+		return "", ErrNoManifestResolver
+	}
+	if a.Image == PendingImage {
+		return "", fmt.Errorf("%w: %s has not produced an image yet",
+			ErrNoManifestResolver, a.Name)
+	}
+	digest, err := s.manifests.ResolveDigest(ctx, a.Image)
+	if err != nil {
+		return "", fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
+	}
+	return digest, nil
+}
+
 // createRelease resolves the current image before writing an immutable row.
 // Callers invoke it before any cluster apply. Configuration may already be
 // saved — a failed release-owned edit remains visible desired state — but a
@@ -206,21 +229,9 @@ func pinImage(ref, digest string) string {
 func (s *Service) createRelease(
 	ctx context.Context, q *dbgen.Queries, a App, sourceRevision string,
 ) (Release, error) {
-	// Every path to a deploy passes here, so a bucket stops here whichever
-	// one forgot to ask.
-	if !a.Source.Workload() {
-		return Release{}, ErrNoWorkload
-	}
-	if s.manifests == nil {
-		return Release{}, ErrNoManifestResolver
-	}
-	if a.Image == PendingImage {
-		return Release{}, fmt.Errorf("%w: %s has not produced an image yet",
-			ErrNoManifestResolver, a.Name)
-	}
-	digest, err := s.manifests.ResolveDigest(ctx, a.Image)
+	digest, err := s.releaseDigest(ctx, a)
 	if err != nil {
-		return Release{}, fmt.Errorf("app: resolve %s for release: %w", a.Image, err)
+		return Release{}, err
 	}
 	// Whatever deploys next carries every edit saved for it: a redeploy or a
 	// push as much as the staged-changes bar. See staged.go.
@@ -368,4 +379,47 @@ func toRelease(row dbgen.AppRelease) Release {
 		ConfigVersion: row.ConfigVersion, CreatedAt: row.CreatedAt,
 		Origin: row.Origin,
 	}
+}
+
+// rescaleRelease records a release that is r with another replica count, at
+// the app's current config version: what a scale deploys. Its variables are
+// the app's deployed ones, as every release's are — never the staged ones,
+// which only a deploy of them moves across — and every setting is r's, not
+// the app row's, which holds the staged settings.
+func (s *Service) rescaleRelease(
+	ctx context.Context, q *dbgen.Queries, r Release, replicas int32, configVersion int64,
+) (Release, error) {
+	plain, secretKeys, err := releaseVariables(ctx, q, r.AppID)
+	if err != nil {
+		return Release{}, err
+	}
+	env, err := json.Marshal(plain)
+	if err != nil {
+		return Release{}, fmt.Errorf("app: encode release variables: %w", err)
+	}
+	row, err := q.CreateAppRelease(ctx, dbgen.CreateAppReleaseParams{
+		OwnerID: r.OwnerID, AppID: r.AppID,
+		ImageRef: r.ImageRef, ImageDigest: r.ImageDigest,
+		Source: string(r.Source), SourceRevision: r.SourceRevision,
+		Replicas: replicas, Port: r.Port,
+		CpuRequest: r.CPURequest, CpuLimit: r.CPULimit,
+		MemoryRequest: r.MemoryRequest, MemoryLimit: r.MemoryLimit,
+		Internal:  r.Internal,
+		RunAsUser: r.RunAsUser, FsGroup: r.FSGroup,
+		ScratchPaths:           append([]string{}, r.ScratchPaths...),
+		Args:                   append([]string{}, r.Args...),
+		WritableRootFilesystem: r.WritableRootFilesystem,
+		HealthPath:             r.HealthPath, HealthLiveness: r.Liveness,
+		StartCommand: r.StartCommand, PreDeployCommand: r.PreDeployCommand,
+		CronSchedule:         r.CronSchedule,
+		RestartPolicy:        string(cmp.Or(r.RestartPolicy, orchestrator.RestartOnFailure)),
+		RestartMaxRetries:    r.RestartMaxRetries,
+		HealthTimeoutSeconds: r.HealthTimeoutSeconds,
+		Env:                  env, SecretKeys: append([]string{}, secretKeys...),
+		ConfigVersion: configVersion, Origin: "deployment",
+	})
+	if err != nil {
+		return Release{}, fmt.Errorf("app: record release: %w", err)
+	}
+	return toRelease(row), nil
 }

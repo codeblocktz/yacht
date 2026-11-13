@@ -52,8 +52,9 @@ func (o *Orchestrator) RunJob(ctx context.Context, spec orchestrator.JobSpec) er
 	}
 
 	if spec.Volume != nil {
+		// One pod, the job's, mounts it: made if it is not there.
 		if err := o.applyVolumes(ctx, orchestrator.AppSpec{
-			Ref: spec.Ref, Volumes: []orchestrator.VolumeSpec{*spec.Volume},
+			Ref: spec.Ref, Replicas: 1, Volumes: []orchestrator.VolumeSpec{*spec.Volume},
 		}); err != nil {
 			return err
 		}

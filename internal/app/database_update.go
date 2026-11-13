@@ -42,6 +42,11 @@ func (s *Service) UpdateDatabase(ctx context.Context, ownerID, name, actor strin
 	if err != nil {
 		return DatabaseUpdate{}, err
 	}
+	// Asked before the backup it may wait on, so a refused update starts
+	// nothing. The deploy after the backup is asked again when it comes.
+	if ctx, err = s.askAdmission(ctx, admitRequest(a, AdmitUpdate)); err != nil {
+		return DatabaseUpdate{}, err
+	}
 	if u.Backup {
 		if _, err := s.startBackup(ctx, a, BackupBeforeUpdate, actor, &u); err != nil {
 			return DatabaseUpdate{}, err

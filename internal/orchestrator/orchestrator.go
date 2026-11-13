@@ -1034,6 +1034,11 @@ type BuildRequest struct {
 	// pushes, reading the layout as data. Nil means a Dockerfile build cannot
 	// be pushed, and fails saying so; a buildpacks build does not use it.
 	PushLayout func(ctx context.Context, image, digest string, layout LayoutFiles, logf func(string)) error
+
+	// Created, when set, is called once the build's Job exists, before the
+	// build is waited on. A cancellation that arrived while the Job was being
+	// made found nothing to delete; this is where the caller looks again.
+	Created func()
 }
 
 // LayoutFiles is an OCI image layout a build left where only the orchestrator
